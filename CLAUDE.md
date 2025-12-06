@@ -38,7 +38,8 @@ mintlify broken-links
 ### Content Structure
 - **Root pages**: `index.mdx`, `quickstart.mdx`, `innovation.mdx`, `development.mdx`
 - **Guide pages**: `/guide/` - Core product guides (connections, agents, workspaces, etc.)
-- **Learning resources**: `/learn/` - Use cases, blogs, release notes, FAQ
+- **Blog posts**: `/blog/` - Technical blog articles
+- **Learning resources**: `/learn/` - FAQ and learning materials
 - **API reference**: `/api-reference/` - OpenAPI documentation
 - **Essentials**: `/essentials/` - Mintlify documentation features
 - **Assets**: `/images/`, `/logo/`, `/snippets/`
