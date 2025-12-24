@@ -1,0 +1,310 @@
+---
+title: Kubernetes
+description: "Connect Kubernetes clusters to CloudThinker"
+icon: dharmachakra
+---
+
+# Kubernetes
+
+Connect your Kubernetes clusters to enable Kai (Kubernetes Engineer) to analyze workloads, optimize resources, and manage cluster operations.
+
+---
+
+## Supported Platforms
+
+| Platform | Support |
+|----------|---------|
+| **Amazon EKS** | All versions |
+| **Google GKE** | Standard, Autopilot |
+| **Azure AKS** | All versions |
+| **Self-managed** | Kubernetes 1.24+ |
+| **Rancher** | RKE, RKE2 |
+| **OpenShift** | 4.x |
+
+---
+
+## Setup Methods
+
+<Tabs>
+  <Tab title="Via Cloud Provider (Recommended)">
+    ### Auto-Discovery from Cloud Connections
+
+    If you've already connected AWS, GCP, or Azure, your managed Kubernetes clusters are automatically discovered.
+
+    <Steps>
+      <Step title="Connect Cloud Provider">
+        Set up [AWS](/guide/connections/aws), [GCP](/guide/connections/gcp), or [Azure](/guide/connections/azure) connection
+      </Step>
+      <Step title="Clusters Auto-Discovered">
+        EKS, GKE, or AKS clusters appear automatically in CloudThinker
+      </Step>
+      <Step title="Enable Cluster Access">
+        Select which clusters to enable for analysis
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Direct Kubeconfig">
+    ### Manual Setup with Service Account
+
+    For self-managed clusters or additional access:
+
+    <Steps>
+      <Step title="Create Namespace (Optional)">
+        Create a dedicated namespace:
+        ```yaml
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: cloudthinker
+        ```
+      </Step>
+      <Step title="Create Service Account">
+        Create a service account for CloudThinker:
+        ```yaml
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: cloudthinker-readonly
+          namespace: cloudthinker
+        ```
+      </Step>
+      <Step title="Create ClusterRole">
+        Define read-only permissions:
+        ```yaml
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        metadata:
+          name: cloudthinker-readonly
+        rules:
+        - apiGroups: [""]
+          resources: ["*"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: ["apps", "extensions"]
+          resources: ["*"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: ["autoscaling"]
+          resources: ["*"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: ["metrics.k8s.io"]
+          resources: ["pods", "nodes"]
+          verbs: ["get", "list"]
+        ```
+      </Step>
+      <Step title="Create ClusterRoleBinding">
+        Bind the role to the service account:
+        ```yaml
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: cloudthinker-readonly
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: cloudthinker-readonly
+        subjects:
+        - kind: ServiceAccount
+          name: cloudthinker-readonly
+          namespace: cloudthinker
+        ```
+      </Step>
+      <Step title="Create Long-Lived Token">
+        Starting from Kubernetes 1.24, create a Secret for long-lived tokens:
+        ```yaml
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: cloudthinker-readonly-token
+          namespace: cloudthinker
+          annotations:
+            kubernetes.io/service-account.name: cloudthinker-readonly
+        type: kubernetes.io/service-account-token
+        ```
+
+        Apply with:
+        ```bash
+        kubectl apply -f cloudthinker-token-secret.yaml
+        ```
+      </Step>
+      <Step title="Retrieve Token">
+        Get the long-lived token from the Secret:
+        ```bash
+        kubectl get secret cloudthinker-readonly-token -n cloudthinker \
+          -o jsonpath='{.data.token}' | base64 --decode
+        ```
+      </Step>
+      <Step title="Get Cluster Info">
+        Get your cluster endpoint:
+        ```bash
+        kubectl cluster-info
+        ```
+
+        Extract the CA certificate:
+        ```bash
+        kubectl get secret cloudthinker-readonly-token -n cloudthinker \
+          -o jsonpath='{.data.ca\.crt}' | base64 --decode
+        ```
+      </Step>
+      <Step title="Add Connection in CloudThinker">
+        Navigate to **Connections → Kubernetes** and enter:
+        - Cluster API endpoint
+        - Service account token
+        - CA certificate (for self-signed)
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+---
+
+## Kubeconfig Format
+
+```yaml
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    certificate-authority-data: <base64-encoded-ca-cert>
+    server: https://your-cluster-endpoint:6443
+  name: your-cluster
+contexts:
+- context:
+    cluster: your-cluster
+    user: cloudthinker-readonly
+  name: cloudthinker-context
+current-context: cloudthinker-context
+users:
+- name: cloudthinker-readonly
+  user:
+    token: <your-service-account-token>
+```
+
+---
+
+## Required Permissions
+
+### Minimum (Read-Only)
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cloudthinker-readonly
+rules:
+- apiGroups: [""]
+  resources: ["pods", "nodes", "services", "namespaces", "events", "configmaps"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods", "nodes"]
+  verbs: ["get", "list"]
+```
+
+### Recommended (Full Analysis)
+
+```yaml
+# Use built-in ClusterRole
+kind: ClusterRoleBinding
+roleRef:
+  kind: ClusterRole
+  name: view  # Built-in read-only role
+```
+
+---
+
+## Agent Capabilities
+
+Once connected, Kai can:
+
+| Capability | Description |
+|------------|-------------|
+| **Resource Analysis** | Pod CPU/memory usage, requests vs limits |
+| **Node Health** | Node status, capacity, allocatable resources |
+| **Workload Optimization** | Right-sizing recommendations, HPA tuning |
+| **Troubleshooting** | CrashLoopBackOff, OOMKilled, pending pods |
+| **Security Audit** | RBAC review, pod security, network policies |
+
+### Example Prompts
+
+```bash
+@kai analyze pod resource utilization in production namespace
+@kai identify nodes with <30% CPU utilization
+@kai investigate crash loops in payment service
+@kai #recommend HPA policies for web deployments
+```
+
+---
+
+## Prerequisites
+
+For full functionality, ensure:
+
+| Component | Purpose |
+|-----------|---------|
+| **Metrics Server** | Required for resource metrics |
+| **kube-state-metrics** | Enhanced cluster metrics (optional) |
+| **Network access** | CloudThinker must reach API server |
+
+### Install Metrics Server
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+```
+
+---
+
+## Troubleshooting
+
+<Accordion title="Cannot connect to cluster">
+- Verify API server endpoint is accessible from internet
+- Check firewall/security groups allow CloudThinker IPs
+- For private clusters: Set up VPN or bastion access
+- Confirm API server certificate is valid
+</Accordion>
+
+<Accordion title="Unauthorized errors">
+- Verify service account token is correct
+- Check ClusterRoleBinding is applied
+- Ensure token hasn't expired
+- Confirm service account exists in correct namespace
+</Accordion>
+
+<Accordion title="No metrics data">
+- Verify Metrics Server is installed: `kubectl top nodes`
+- Check Metrics Server pods are running
+- Ensure `metrics.k8s.io` API is available
+</Accordion>
+
+<Accordion title="Missing namespaces">
+- Verify ClusterRole has namespace list permission
+- Check if RBAC restricts access to certain namespaces
+- Confirm service account binding is cluster-wide
+</Accordion>
+
+---
+
+## Security Best Practices
+
+- **Read-only access** - Never grant write permissions to CloudThinker
+- **Namespace isolation** - Keep service account in dedicated namespace
+- **Token rotation** - Rotate service account tokens periodically
+- **Network policies** - Restrict API server access to CloudThinker IPs
+- **Audit logging** - Enable Kubernetes audit logs
+
+---
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Kai Agent" icon="dharmachakra" href="/guide/agents/kai">
+    Kubernetes-focused optimization agent
+  </Card>
+  <Card title="AWS Connection" icon="aws" href="/guide/connections/aws">
+    Connect AWS for EKS auto-discovery
+  </Card>
+</CardGroup>

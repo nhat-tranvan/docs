@@ -1,0 +1,216 @@
+---
+title: PostgreSQL
+description: "Connect PostgreSQL databases to CloudThinker"
+icon: database
+---
+
+# PostgreSQL
+
+Connect your PostgreSQL databases to enable Tony (Database Engineer) to analyze queries, optimize performance, and monitor database health.
+
+---
+
+## Supported Platforms
+
+| Platform | Support |
+|----------|---------|
+| **Self-hosted PostgreSQL** | 12.x, 13.x, 14.x, 15.x, 16.x |
+| **AWS RDS PostgreSQL** | All versions |
+| **AWS Aurora PostgreSQL** | All versions |
+| **Google Cloud SQL** | All PostgreSQL versions |
+| **Azure Database for PostgreSQL** | Flexible Server, Single Server |
+
+---
+
+## Setup
+
+<Steps>
+  <Step title="Connect as Admin">
+    Connect to your PostgreSQL instance using an admin account:
+    ```bash
+    psql -h your-host -U postgres -d your-database
+    ```
+  </Step>
+  <Step title="Create Read-Only User">
+    Create a dedicated user for CloudThinker:
+    ```sql
+    CREATE USER cloudthinker_readonly WITH PASSWORD 'your-secure-password';
+    ```
+  </Step>
+  <Step title="Grant Connection">
+    Allow connection to the database:
+    ```sql
+    GRANT CONNECT ON DATABASE your_database TO cloudthinker_readonly;
+    ```
+  </Step>
+  <Step title="Grant Schema Usage">
+    Grant usage on schemas:
+    ```sql
+    GRANT USAGE ON SCHEMA public TO cloudthinker_readonly;
+    GRANT USAGE ON SCHEMA information_schema TO cloudthinker_readonly;
+    ```
+  </Step>
+  <Step title="Grant Select Permissions">
+    Grant SELECT on all tables and views:
+    ```sql
+    GRANT SELECT ON ALL TABLES IN SCHEMA public TO cloudthinker_readonly;
+    GRANT SELECT ON ALL TABLES IN SCHEMA information_schema TO cloudthinker_readonly;
+
+    -- Grant access to future tables
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT SELECT ON TABLES TO cloudthinker_readonly;
+    ```
+  </Step>
+  <Step title="Enable pg_stat_statements">
+    This extension is required for query analysis:
+    ```sql
+    -- Enable extension (requires superuser)
+    CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+
+    -- Grant access to the user
+    GRANT SELECT ON pg_stat_statements TO cloudthinker_readonly;
+    ```
+
+    For RDS/Aurora, add to parameter group:
+    ```
+    shared_preload_libraries = 'pg_stat_statements'
+    ```
+  </Step>
+  <Step title="Configure Network Access">
+    Ensure CloudThinker can reach your database:
+    - Add CloudThinker IPs to security group / firewall
+    - For RDS: Enable public access or use VPC peering
+  </Step>
+  <Step title="Add Connection in CloudThinker">
+    Navigate to **Connections → PostgreSQL** and enter:
+    - Host
+    - Port (default: 5432)
+    - Database name
+    - Username: `cloudthinker_readonly`
+    - Password
+    - SSL mode (recommended: require)
+  </Step>
+</Steps>
+
+---
+
+## Connection String Format
+
+```
+postgresql://cloudthinker_readonly:your-secure-password@your-host:5432/your-database
+```
+
+**Example:**
+```
+postgresql://cloudthinker_readonly:mypassword123@db.example.com:5432/production
+```
+
+---
+
+## Required Permissions
+
+### Minimum
+
+```sql
+GRANT CONNECT ON DATABASE dbname TO cloudthinker_readonly;
+GRANT USAGE ON SCHEMA public TO cloudthinker_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO cloudthinker_readonly;
+```
+
+### Recommended (Full Analysis)
+
+```sql
+-- All of the above, plus:
+GRANT SELECT ON pg_stat_statements TO cloudthinker_readonly;
+GRANT SELECT ON pg_stat_activity TO cloudthinker_readonly;
+GRANT SELECT ON pg_stat_user_tables TO cloudthinker_readonly;
+GRANT SELECT ON pg_stat_user_indexes TO cloudthinker_readonly;
+GRANT SELECT ON pg_statio_user_tables TO cloudthinker_readonly;
+GRANT pg_read_all_stats TO cloudthinker_readonly;  -- PostgreSQL 14+
+```
+
+---
+
+## Agent Capabilities
+
+Once connected, Tony can:
+
+| Capability | Description |
+|------------|-------------|
+| **Query Analysis** | Identify slow queries, analyze execution plans |
+| **Index Recommendations** | Find missing indexes, identify unused indexes |
+| **Performance Metrics** | Monitor connections, I/O, cache hit rates |
+| **Table Statistics** | Analyze table bloat, dead tuples, vacuum status |
+| **Replication Monitoring** | Check lag, streaming status (if replica) |
+
+### Example Prompts
+
+```bash
+@tony analyze slow queries on production PostgreSQL
+@tony #dashboard database performance metrics
+@tony recommend index optimizations for the orders table
+@tony check replication lag on the read replica
+```
+
+---
+
+## Connection Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| **SSL Mode** | `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full` | `require` |
+| **Connection Timeout** | Seconds to wait for connection | 10 |
+| **Statement Timeout** | Max query execution time (ms) | 30000 |
+
+---
+
+## Troubleshooting
+
+<Accordion title="Connection refused">
+- Verify host and port are correct
+- Check security group / firewall allows CloudThinker IPs
+- For RDS: Ensure "Publicly accessible" is enabled or use VPC peering
+- Confirm PostgreSQL is listening on the correct interface
+</Accordion>
+
+<Accordion title="Authentication failed">
+- Verify username and password are correct
+- Check `pg_hba.conf` allows the connection method
+- Ensure user has CONNECT privilege on the database
+</Accordion>
+
+<Accordion title="Missing pg_stat_statements">
+- Verify extension is installed: `SELECT * FROM pg_extension WHERE extname = 'pg_stat_statements';`
+- Check `shared_preload_libraries` includes `pg_stat_statements`
+- Restart PostgreSQL after changing `shared_preload_libraries`
+- For RDS: Modify parameter group and reboot
+</Accordion>
+
+<Accordion title="Permission denied">
+- Verify user has SELECT on required tables
+- Grant `pg_read_all_stats` role for PostgreSQL 14+
+- Check schema permissions with `\dn+` in psql
+</Accordion>
+
+---
+
+## Security Best Practices
+
+- **Strong passwords** - Use complex, unique passwords
+- **SSL encryption** - Always use SSL mode `require` or higher
+- **Network restrictions** - Limit access to CloudThinker IPs only
+- **Minimal permissions** - Grant only SELECT, never write access
+- **Credential rotation** - Rotate passwords every 90 days
+
+---
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Tony Agent" icon="database" href="/guide/agents/tony">
+    Database-focused optimization agent
+  </Card>
+  <Card title="MySQL Connection" icon="database" href="/guide/connections/mysql">
+    Similar setup for MySQL databases
+  </Card>
+</CardGroup>

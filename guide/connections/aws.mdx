@@ -1,0 +1,264 @@
+---
+title: AWS
+description: "Connect Amazon Web Services to CloudThinker"
+icon: aws
+---
+
+# AWS
+
+Connect your AWS accounts to enable CloudThinker agents to analyze costs, optimize resources, audit security, and manage infrastructure.
+
+---
+
+## Setup Methods
+
+CloudThinker supports two authentication methods. **Role-Based authentication is strongly recommended**.
+
+<Tabs>
+  <Tab title="Role-Based (Recommended)">
+    ### IAM Role with AssumeRole
+
+    This method creates an IAM role that CloudThinker assumes to access your resources. Benefits:
+    - No long-term credentials shared or stored
+    - Uses AWS STS for temporary, auto-rotated credentials
+    - External ID protects against confused deputy attacks
+    - Easy to audit and revoke access
+
+    #### Quick Setup via CloudShell
+
+    <Steps>
+      <Step title="Open AWS CloudShell">
+        Log in to [AWS Console](https://console.aws.amazon.com/) and open **CloudShell** from the top nav
+      </Step>
+      <Step title="Run Setup Script">
+        In CloudThinker's connection dialog, click **Copy Script** and paste into CloudShell. The script will:
+        - Validate `CloudThinkerAccessRole` doesn't exist
+        - Create the IAM role with read-only permissions
+        - Attach trust policy with your External ID
+      </Step>
+      <Step title="Copy Role ARN">
+        Copy the Role ARN from output:
+        ```
+        arn:aws:iam::123456789012:role/CloudThinkerAccessRole
+        ```
+      </Step>
+      <Step title="Complete Connection">
+        Paste Role ARN into CloudThinker and select your region
+      </Step>
+    </Steps>
+
+    #### Expected Output
+
+    ```
+    Starting CloudThinker IAM Role setup...
+    ✅ Role does not exist, proceeding...
+    ✅ Role created successfully
+    ✅ Policy attached successfully
+    ==========================================
+    ✅ Setup Complete!
+    ==========================================
+    Copy this Role ARN:
+    arn:aws:iam::123456789012:role/CloudThinkerAccessRole
+    ```
+
+    #### Manual Role Creation
+
+    If you prefer manual setup:
+
+    **Trust Policy:**
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Principal": {
+            "AWS": "arn:aws:iam::CLOUDTHINKER_ACCOUNT_ID:root"
+          },
+          "Action": "sts:AssumeRole",
+          "Condition": {
+            "StringEquals": {
+              "sts:ExternalId": "YOUR_EXTERNAL_ID"
+            }
+          }
+        }
+      ]
+    }
+    ```
+
+    **Permission Policy:**
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "ec2:Describe*",
+            "rds:Describe*",
+            "s3:GetBucket*",
+            "s3:List*",
+            "cloudwatch:GetMetric*",
+            "cloudwatch:List*",
+            "ce:GetCost*",
+            "ce:GetReservation*",
+            "iam:GetRole",
+            "iam:ListRoles"
+          ],
+          "Resource": "*"
+        }
+      ]
+    }
+    ```
+  </Tab>
+
+  <Tab title="Access Keys (Alternative)">
+    ### IAM User with Access Keys
+
+    Use this only when AssumeRole is not feasible.
+
+    <Warning>
+    AWS recommends IAM roles over long-term access keys. Rotate keys regularly if using this method.
+    </Warning>
+
+    <Steps>
+      <Step title="Create IAM User">
+        Go to [IAM Console](https://console.aws.amazon.com/iam/) → **Users** → **Create user**
+
+        Name: `cloudthinker-readonly`
+      </Step>
+      <Step title="Attach Policies">
+        Choose **Attach policies directly** and add:
+        - `ReadOnlyAccess` (comprehensive), or
+        - Specific policies like `AmazonEC2ReadOnlyAccess`, `AmazonS3ReadOnlyAccess`
+      </Step>
+      <Step title="Create Access Key">
+        Select user → **Security credentials** → **Create access key**
+
+        Choose **Third-party service** as use case
+      </Step>
+      <Step title="Save Credentials">
+        Copy and securely store:
+        - Access Key ID
+        - Secret Access Key
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+---
+
+## Required Permissions
+
+### Minimum (Read-Only Analysis)
+
+```
+ec2:Describe*
+rds:Describe*
+s3:GetBucket*, s3:List*
+cloudwatch:GetMetric*, cloudwatch:List*
+ce:GetCost*, ce:GetReservation*
+iam:GetRole, iam:ListRoles
+```
+
+### Recommended (Full Analysis)
+
+```
+# All minimum permissions, plus:
+elasticloadbalancing:Describe*
+autoscaling:Describe*
+lambda:List*, lambda:GetFunction*
+ecs:Describe*, ecs:List*
+eks:Describe*, eks:List*
+securityhub:Get*, securityhub:List*
+guardduty:Get*, guardduty:List*
+config:Describe*, config:Get*
+cloudtrail:Describe*, cloudtrail:Get*
+```
+
+---
+
+## Agent Capabilities
+
+Once connected, agents can:
+
+| Agent | AWS Capabilities |
+|-------|------------------|
+| **Alex** | Cost analysis, EC2 right-sizing, Reserved Instance recommendations, resource optimization |
+| **Oliver** | Security Hub findings, IAM audits, compliance checks, vulnerability assessment |
+| **Tony** | RDS performance analysis, Aurora optimization, DynamoDB tuning |
+| **Kai** | EKS cluster management, Fargate optimization, container analysis |
+
+---
+
+## Multi-Account Setup
+
+For organizations with multiple AWS accounts:
+
+<Steps>
+  <Step title="Create Role in Each Account">
+    Deploy the IAM role using CloudFormation StackSets
+  </Step>
+  <Step title="Use AWS Organizations">
+    Connect management account for organization-wide visibility
+  </Step>
+  <Step title="Add Each Account">
+    Add account connections individually in CloudThinker
+  </Step>
+</Steps>
+
+<Card title="Multi-Account Guide" icon="building" href="/guide/use-cases/multi-aws-accounts">
+  Detailed guide for managing multiple AWS accounts
+</Card>
+
+---
+
+## Troubleshooting
+
+<Accordion title="Access Denied errors">
+- Verify IAM role has required permissions
+- Check trust policy includes CloudThinker's account
+- Confirm External ID matches exactly
+- Ensure role ARN is correct
+</Accordion>
+
+<Accordion title="Missing cost data">
+- Enable Cost Explorer in AWS Console (takes 24h to activate)
+- Verify `ce:GetCost*` permissions are granted
+- Check billing preferences allow programmatic access
+</Accordion>
+
+<Accordion title="Missing metrics">
+- Verify CloudWatch metrics are being collected
+- Check region selection includes all relevant regions
+- Confirm services are running and generating data
+</Accordion>
+
+<Accordion title="Connection timeout">
+- Check network connectivity to AWS APIs
+- Verify no VPC endpoints blocking access
+- Try connecting from a different region
+</Accordion>
+
+---
+
+## Security Best Practices
+
+- **Use Role-Based auth** - Avoid long-term access keys
+- **Minimal permissions** - Grant only what's needed
+- **Enable CloudTrail** - Audit all API calls
+- **Regular review** - Audit permissions quarterly
+- **External ID** - Always use for cross-account roles
+
+---
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Alex Agent" icon="cloud" href="/guide/agents/alex">
+    AWS-focused cloud optimization agent
+  </Card>
+  <Card title="Multi-Account Setup" icon="building" href="/guide/use-cases/multi-aws-accounts">
+    Managing multiple AWS accounts
+  </Card>
+</CardGroup>
