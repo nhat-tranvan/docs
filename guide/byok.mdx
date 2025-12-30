@@ -110,36 +110,20 @@ Before configuring BYOK, you must request access to Claude models in your AWS ac
 
 ---
 
-## Required IAM Permissions
+## IAM Credentials Setup
 
-Your AWS IAM user or role must have permissions to invoke Bedrock models. Create an IAM policy with the following permissions:
+Your AWS IAM user must have permissions to invoke Bedrock models. Follow these steps to create an IAM user with the required permissions using AWS CLI.
 
-### Minimum Required Policy
+### Step 1: Create IAM User
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "bedrock:InvokeModel",
-        "bedrock:InvokeModelWithResponseStream"
-      ],
-      "Resource": [
-        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0",
-        "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-5-20251101-v1:0"
-      ]
-    }
-  ]
-}
+```bash
+aws iam create-user --user-name bedrock-byok-user
 ```
 
-### Policy with Inference Profiles
+### Step 2: Create Policy File
 
-If you plan to use inference profiles (global, us, eu, apac), include additional resource ARNs:
-
-```json
+```bash
+cat > bedrock-policy.json << 'EOF'
 {
   "Version": "2012-10-17",
   "Statement": [
@@ -161,19 +145,7 @@ If you plan to use inference profiles (global, us, eu, apac), include additional
         "arn:aws:bedrock:*:*:inference-profile/apac.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "arn:aws:bedrock:*:*:inference-profile/apac.anthropic.claude-opus-4-5-20251101-v1:0"
       ]
-    }
-  ]
-}
-```
-
-### Additional Permissions for Token Refresh
-
-If using long-term credentials (AKIA prefix), CloudThinker can automatically refresh session tokens. Add STS permissions:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
+    },
     {
       "Effect": "Allow",
       "Action": ["sts:GetSessionToken"],
@@ -181,7 +153,43 @@ If using long-term credentials (AKIA prefix), CloudThinker can automatically ref
     }
   ]
 }
+EOF
 ```
+
+### Step 3: Attach Policy to User
+
+```bash
+aws iam put-user-policy \
+  --user-name bedrock-byok-user \
+  --policy-name BedrockInvokePolicy \
+  --policy-document file://bedrock-policy.json
+```
+
+### Step 4: Create Access Keys
+
+```bash
+aws iam create-access-key --user-name bedrock-byok-user
+```
+
+Save the `AccessKeyId` and `SecretAccessKey` from the output - you'll need these for CloudThinker.
+
+### Step 5: Verify Credentials
+
+Configure a local profile to test the credentials:
+
+```bash
+aws configure --profile bedrock-byok-user
+```
+
+Enter the access key ID and secret access key when prompted. Then verify:
+
+```bash
+aws sts get-caller-identity --profile bedrock-byok-user
+```
+
+<Info>
+These commands require an AWS profile with IAM administrative permissions (`iam:CreateUser`, `iam:PutUserPolicy`, `iam:CreateAccessKey`). Alternatively, you can create the IAM user via the [AWS Console](https://console.aws.amazon.com/iam/).
+</Info>
 
 ---
 
@@ -198,24 +206,24 @@ Once you have AWS Bedrock model access and IAM credentials configured, set up BY
     Choose **AWS Bedrock** as your provider
   </Step>
   <Step title="Enter Credentials">
-    Provide your AWS credentials: - **Access Key ID** - Your AWS access key
-    (AKIA or ASIA prefix) - **Secret Access Key** - Your AWS secret key -
-    **Session Token** (optional) - Required only for temporary credentials
+    Provide your AWS credentials:
+    - **Access Key ID** - Your AWS access key
+      (AKIA or ASIA prefix)
+    - **Secret Access Key** - Your AWS secret key
+    - **Session Token** (optional) - Required only for temporary credentials
   </Step>
   <Step title="Select Inference Profile">
-    Choose an inference profile: - **Global** - Routes to any commercial AWS
-    region (~10% cost savings) - **US** - Routes within US regions only - **EU**
-    - Routes within EU regions only (data residency) - **APAC** - Routes within
-    APAC regions only - **Regional** - Single region (requires explicit region
-    selection)
-  </Step>
-  <Step title="Select Region (if Regional)">
-    If you selected "Regional" profile, choose your AWS region from the dropdown
-  </Step>
+    Choose an inference profile:
+    - **Global** - Routes to any commercial AWS region
+    - **US** - Routes within US regions only
+    - **EU** - Routes within EU regions only (data residency)
+    - **APAC** - Routes within APAC regions only
+  </Step>  
   <Step title="Test Connection">
-    Click **Test Connection** to verify: - Credentials are valid - Both Sonnet
-    4.5 and Opus 4.5 models are accessible - Permissions are correctly
-    configured
+    Click **Test Connection** to verify:
+    - Credentials are valid
+    - Both Sonnet 4.5 and Opus 4.5 models are accessible
+    - Permissions are correctly configured
   </Step>
   <Step title="Save Configuration">
     After successful test, click **Save** to store your BYOK configuration
@@ -239,10 +247,9 @@ Bedrock inference profiles control how requests are routed across AWS regions. C
 | **US**       | Routes within US regions only for US data residency                 |
 | **EU**       | Routes within EU regions only for GDPR compliance                   |
 | **APAC**     | Routes within APAC regions only for regional data residency         |
-| **Regional** | Routes to a single AWS region for strict data residency             |
 
 <Info>
-  The Regional profile provides the most control but may have higher latency and cost compared to inference profiles that can route across multiple regions. For supported regions, refer to the [AWS Bedrock Supported Regions and Models documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html).
+  For supported regions and inference profile details, refer to the [AWS Bedrock Supported Regions and Models documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html).
 </Info>
 
 ---
