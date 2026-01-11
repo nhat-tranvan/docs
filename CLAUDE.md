@@ -175,7 +175,7 @@ Use the `<Frame>` component for consistent styling and responsiveness:
 ### Step 1: Analyze Resources
 
 ```
-@alex dashboard
+@alex #dashboard
 Generate a comprehensive AWS cost dashboard
 ```
 
