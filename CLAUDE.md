@@ -114,4 +114,90 @@ mintlify broken-links
 3. Validate links with `mintlify broken-links`
 4. Preview changes with `mintlify dev`
 
+### Adding Images to MDX Files
+
+#### Image Naming Convention
+
+Use descriptive kebab-case names with a numeric prefix to indicate position:
+
+```
+01-context-name.jpg
+02-filter-pane.png
+03-results-summary.jpg
+```
+
+- Preserve leading number as-is (01, 02, 03, etc.)
+- Convert rest to concise, kebab-case descriptions
+- Names should hint at where they're used in the document
+- Supported formats: `.jpg`, `.png`, `.gif`, `.svg`, `.webp`
+
+#### File Placement
+
+1. Create subdirectory in `/images/` matching the content location
+   - Example: `/images/use-cases/kubernetes-health-monitoring/`
+2. Place all related images in this directory
+3. Update image references in MDX if renaming
+
+#### MDX Image Syntax
+
+Use the `<Frame>` component for consistent styling and responsiveness:
+
+```mdx
+<Frame>
+  <img src="/images/use-cases/example/01-image-name.jpg" alt="Descriptive alt text for accessibility" />
+</Frame>
+<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Visible caption text</p>
+```
+
+**Components explained:**
+- `<Frame>`: Mintlify wrapper for proper image rendering
+- `src`: Absolute path starting with `/images/`
+- `alt`: Accessibility text (not visible but required)
+- `<p>`: Visible caption below image (optional but recommended)
+  - Centered alignment: `textAlign: 'center'`
+  - Small font: `fontSize: '0.9em'`
+  - Subtle color: `color: '#666'`
+  - Spacing above: `marginTop: '8px'` (prevents overlap)
+
+#### Alt Text Guidelines
+
+- Descriptive: Explains what the image shows in plain language
+- Action-oriented: Includes UI elements or actions being demonstrated
+- Length: 3-15 words typically
+- Examples:
+  - "AWS cost dashboard with spending trends and cost drivers"
+  - "Pod resource utilization analysis showing CPU and memory usage patterns"
+  - "Security code review creating Jira ticket with vulnerability details"
+
+#### Complete Example
+
+```mdx
+### Step 1: Analyze Resources
+
+```
+@alex #dashboard
+Generate a comprehensive AWS cost dashboard
+```
+
+<Frame>
+  <img src="/images/use-cases/dashboards/01-aws-cost-dashboard.jpg" alt="AWS cost dashboard with spending trends and cost drivers" />
+</Frame>
+<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>AWS cost dashboard with spending trends and cost drivers</p>
+
+The dashboard shows your current spending patterns...
+```
+
+#### Batch Image Updates
+
+When updating multiple image references:
+
+1. Rename files with descriptive names (preserving numeric prefix)
+2. Update all MDX files using those images:
+   ```bash
+   # Example: Find all references to old filenames
+   grep -r "/images/old-pattern" guide/use-cases/
+   ```
+3. Replace each reference with `<Frame>` component + visible caption
+4. Test with `mintlify dev` to verify rendering
+
 @./docs-writing-workflow.md
