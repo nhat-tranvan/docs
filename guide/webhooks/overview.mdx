@@ -1,0 +1,350 @@
+---
+title: Webhooks
+description: "Send CloudThinker events to external systems with configurable webhooks"
+icon: webhook
+---
+
+Webhooks allow CloudThinker to push events to your external systems in real-time, enabling automation, integration, and custom workflows.
+
+## How Webhooks Work
+
+<Steps>
+  <Step title="Configure">
+    Create a webhook endpoint with your target URL and select events to subscribe to
+  </Step>
+  <Step title="Trigger">
+    When subscribed events occur, CloudThinker prepares a webhook payload
+  </Step>
+  <Step title="Deliver">
+    CloudThinker sends an HTTP POST request to your endpoint with the event data
+  </Step>
+  <Step title="Process">
+    Your system receives and processes the webhook, returning a success response
+  </Step>
+</Steps>
+
+---
+
+## Creating Webhooks
+
+### From the Console
+
+1. Navigate to **Settings > Webhooks**
+2. Click **Create Webhook**
+3. Configure the webhook:
+   - **Name**: Descriptive identifier
+   - **URL**: Your endpoint URL (must be HTTPS)
+   - **Events**: Select events to subscribe to
+   - **Secret**: Optional signing secret for verification
+4. Save and test
+
+### Webhook Configuration
+
+| Field | Description | Required |
+|-------|-------------|----------|
+| **Name** | Friendly name for identification | Yes |
+| **URL** | HTTPS endpoint to receive events | Yes |
+| **Events** | Event types to subscribe to | Yes |
+| **Secret** | Shared secret for payload signing | Recommended |
+| **Headers** | Custom headers to include | No |
+| **Active** | Enable/disable the webhook | Yes |
+
+---
+
+## Event Types
+
+Subscribe to events across CloudThinker:
+
+### Recommendation Events
+
+| Event | Trigger |
+|-------|---------|
+| `recommendation.created` | New recommendation generated |
+| `recommendation.updated` | Recommendation status changed |
+| `recommendation.implemented` | Recommendation marked complete |
+| `recommendation.comment` | Comment added to recommendation |
+
+### Incident Events
+
+| Event | Trigger |
+|-------|---------|
+| `incident.created` | New incident created |
+| `incident.updated` | Incident details changed |
+| `incident.resolved` | Incident marked resolved |
+| `incident.comment` | Comment added to incident |
+
+### Security Events
+
+| Event | Trigger |
+|-------|---------|
+| `finding.created` | New security finding detected |
+| `finding.resolved` | Security finding resolved |
+| `compliance.changed` | Compliance status changed |
+
+### Task Events
+
+| Event | Trigger |
+|-------|---------|
+| `task.started` | Scheduled task began execution |
+| `task.completed` | Task finished successfully |
+| `task.failed` | Task encountered an error |
+
+### Agent Events
+
+| Event | Trigger |
+|-------|---------|
+| `conversation.completed` | Agent conversation finished |
+| `approval.requested` | Agent requests approval for action |
+| `approval.granted` | User approved agent action |
+
+### Resource Events
+
+| Event | Trigger |
+|-------|---------|
+| `resource.discovered` | New cloud resource found |
+| `resource.changed` | Resource configuration changed |
+| `resource.deleted` | Resource no longer exists |
+
+---
+
+## Webhook Payload
+
+Each webhook includes a standardized payload:
+
+```json
+{
+  "id": "evt_abc123",
+  "type": "recommendation.created",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "workspace_id": "ws_xyz789",
+  "data": {
+    "id": "rec_def456",
+    "title": "Right-size EC2 instance i-0abc123",
+    "potential_savings": 150.00,
+    "effort": "low",
+    "risk": "low",
+    "status": "pending"
+  }
+}
+```
+
+### Payload Fields
+
+| Field | Description |
+|-------|-------------|
+| `id` | Unique event identifier |
+| `type` | Event type (e.g., `recommendation.created`) |
+| `timestamp` | ISO 8601 timestamp |
+| `workspace_id` | Workspace where event occurred |
+| `data` | Event-specific payload |
+
+---
+
+## Security
+
+### Signature Verification
+
+When you configure a webhook secret, CloudThinker signs each payload:
+
+```
+X-CloudThinker-Signature: sha256=<signature>
+```
+
+Verify the signature in your endpoint:
+
+```python
+import hmac
+import hashlib
+
+def verify_signature(payload, signature, secret):
+    expected = hmac.new(
+        secret.encode(),
+        payload.encode(),
+        hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(f"sha256={expected}", signature)
+```
+
+### IP Allowlisting
+
+CloudThinker webhooks originate from known IP ranges. Contact support for the current IP list to configure firewall rules.
+
+### HTTPS Only
+
+Webhook URLs must use HTTPS. Self-signed certificates are not supported in production.
+
+---
+
+## Retry Logic
+
+CloudThinker retries failed webhook deliveries:
+
+### Retry Schedule
+
+| Attempt | Delay |
+|---------|-------|
+| 1 | Immediate |
+| 2 | 1 minute |
+| 3 | 5 minutes |
+| 4 | 30 minutes |
+| 5 | 2 hours |
+| 6 | 8 hours |
+
+### Success Criteria
+
+A delivery is successful when your endpoint returns:
+- HTTP 2xx status code
+- Response within 30 seconds
+
+### Failure Handling
+
+After all retries fail:
+- Event is marked as failed
+- Notification sent (if configured)
+- Event available in webhook logs
+
+---
+
+## Webhook Management
+
+### Testing Webhooks
+
+Test webhook delivery before going live:
+
+1. Select a webhook in settings
+2. Click **Send Test Event**
+3. Choose an event type
+4. Review delivery status and payload
+
+### Viewing Logs
+
+Monitor webhook activity:
+
+1. Navigate to **Settings > Webhooks > Logs**
+2. View delivery attempts
+3. See request/response details
+4. Filter by status, event type, date
+
+### Pausing Webhooks
+
+Temporarily disable a webhook:
+
+1. Select the webhook
+2. Toggle **Active** to off
+3. Events during pause are not queued
+
+---
+
+## Webhook Templates
+
+Use templates for common integrations:
+
+### Slack
+
+Post events to Slack channels:
+
+```json
+{
+  "url": "https://hooks.slack.com/services/...",
+  "events": ["recommendation.created", "incident.created"],
+  "transform": {
+    "text": "New {{type}}: {{data.title}}"
+  }
+}
+```
+
+### Jira
+
+Create Jira tickets from CloudThinker events:
+
+```json
+{
+  "url": "https://your-org.atlassian.net/...",
+  "events": ["recommendation.created"],
+  "headers": {
+    "Authorization": "Basic <base64_credentials>"
+  }
+}
+```
+
+### PagerDuty
+
+Trigger PagerDuty incidents:
+
+```json
+{
+  "url": "https://events.pagerduty.com/v2/enqueue",
+  "events": ["incident.created"],
+  "headers": {
+    "Content-Type": "application/json"
+  }
+}
+```
+
+---
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Always Verify Signatures">
+    Use webhook secrets and verify signatures to ensure requests originate from CloudThinker.
+  </Accordion>
+
+  <Accordion title="Respond Quickly">
+    Return a 2xx response immediately, then process the event asynchronously. Long processing delays cause timeouts.
+  </Accordion>
+
+  <Accordion title="Handle Duplicates">
+    Webhook deliveries may occasionally duplicate. Use the event `id` to deduplicate on your end.
+  </Accordion>
+
+  <Accordion title="Monitor Failures">
+    Set up alerts for webhook failures. Investigate and fix issues promptly to avoid missing events.
+  </Accordion>
+
+  <Accordion title="Use Specific Subscriptions">
+    Only subscribe to events you need. Reduces noise and processing overhead.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Integration Examples
+
+### GitHub Actions
+
+Trigger workflows from CloudThinker events:
+
+```yaml
+# .github/workflows/cloudthinker.yml
+on:
+  repository_dispatch:
+    types: [recommendation-created]
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Process recommendation
+        run: |
+          echo "New recommendation: ${{ github.event.client_payload.title }}"
+```
+
+### AWS Lambda
+
+Process webhooks with serverless functions:
+
+```python
+def lambda_handler(event, context):
+    body = json.loads(event['body'])
+
+    if body['type'] == 'recommendation.created':
+        # Process new recommendation
+        process_recommendation(body['data'])
+
+    return {'statusCode': 200}
+```
+
+<Card title="Incident Webhooks" icon="siren-on" href="/guide/incident/webhook-integrations">
+  Learn about incident-specific webhook integrations
+</Card>
