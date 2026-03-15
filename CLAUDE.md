@@ -80,6 +80,45 @@ mintlify broken-links
 - Logos in `/logo/` (light.svg, dark.svg for theme variants)
 - Reference images with `/images/filename` in MDX
 
+## LLM Helper Files (`llms.txt`)
+
+This site uses the [llms.txt standard](https://llmstxt.org) to make documentation consumable by LLMs.
+
+### How it works
+
+| File | Source | Purpose |
+|------|--------|---------|
+| `/llms.txt` | **Custom** (checked into repo) | Curated index with sections, links, and descriptions |
+| `/llms-full.txt` | **Auto-generated** by Mintlify | Full documentation content inlined into one file |
+| `/.well-known/llms-full.txt` | **Auto-generated** by Mintlify | Same as above, alternate path for tool compatibility |
+
+### Maintaining `llms.txt`
+
+The custom `llms.txt` at the project root **must be kept in sync** with the documentation. Update it whenever you:
+
+1. **Add a new page**: Add a corresponding entry in the appropriate section:
+   ```
+   - [Page Title](https://docs.cloudthinker.io/path/to/page.md): Brief description
+   ```
+2. **Remove a page**: Remove its entry from `llms.txt`
+3. **Rename/move a page**: Update the URL and title in `llms.txt`
+4. **Add a new navigation section**: Add a corresponding `## Section Name` with its page entries
+
+### `llms.txt` format rules
+
+- H1 heading = site name (do not change)
+- Blockquote = platform summary (update if core product description changes)
+- H2 headings = sections (mirror `docs.json` navigation groups)
+- Links use format: `- [Title](https://docs.cloudthinker.io/path.md): Description`
+- URLs must point to `.md` versions of pages
+- The `## Optional` section signals LLMs can skip those pages for shorter context
+- Descriptions should be concise (under 300 characters), drawn from page frontmatter `description`
+
+### What Mintlify auto-generates
+
+- `llms-full.txt` is auto-generated from your MDX content — do **not** create a custom one (Mintlify's rendering is cleaner than shell-based MDX stripping)
+- The auto-generated version uses `description` from each page's frontmatter, so **every `.mdx` file must have a `description` in its front matter**
+
 ## Prerequisites
 
 - **Node.js version 19 or higher** required for Mintlify CLI
@@ -97,9 +136,10 @@ mintlify broken-links
 ### Adding New Pages
 
 1. Create `.mdx` file in appropriate directory
-2. Add front matter with title and description
+2. Add front matter with `title` and `description` (required — used by `llms.txt` auto-generation)
 3. Update `docs.json` navigation structure
-4. Test locally with `mintlify dev`
+4. Add entry to `llms.txt` in the matching section
+5. Test locally with `mintlify dev`
 
 ### Updating Navigation
 

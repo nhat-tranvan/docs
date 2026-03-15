@@ -28,8 +28,18 @@
 - Use Mintlify components consistently; place images with the renamed files and clear alt text.
 - Keep language concise, action-oriented, and consistent with existing guides.
 
-6. Quick checks
+6. Update `llms.txt`
+
+- Add a new entry for the page in the matching section of `/llms.txt`:
+  ```
+  - [Page Title](https://docs.cloudthinker.io/path/to/page.md): Brief description from frontmatter
+  ```
+- If adding a new section/group, add a corresponding `## Section Name` heading.
+- If removing or renaming a page, update or remove its entry.
+
+7. Quick checks
 
 - Verify all image paths and alt text.
 - Skim for clarity and consistency with the example.
+- Confirm the new page has an entry in `llms.txt`.
 - If possible, run `mintlify broken-links` when link changes are involved.
