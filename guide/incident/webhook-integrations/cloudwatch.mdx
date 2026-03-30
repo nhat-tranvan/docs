@@ -1,0 +1,336 @@
+---
+title: AWS CloudWatch
+description: "Set up AWS CloudWatch alarms to automatically create incidents in CloudThinker via Amazon EventBridge"
+icon: aws
+---
+
+Connect AWS CloudWatch alarms to CloudThinker so that alarm state changes automatically create incidents with AI-powered root cause analysis. The recommended approach uses **Amazon EventBridge** to route CloudWatch alarm events directly to your CloudThinker webhook URL — no Lambda function required.
+
+---
+
+## Architecture Overview
+
+```
+CloudWatch Alarm → EventBridge Rule → API Destination → CloudThinker Webhook
+```
+
+When a CloudWatch alarm changes state (e.g., OK → ALARM), EventBridge captures the event and forwards it to CloudThinker via an API Destination. CloudThinker parses the event, creates an incident, and optionally triggers automatic root cause analysis.
+
+<Note>
+  **Why EventBridge?** EventBridge sends clean JSON directly to your webhook with built-in retry logic, dead-letter queues, and IAM-based security. No subscription confirmation handshake is needed (unlike SNS), and no Lambda function is required to transform the payload.
+</Note>
+
+---
+
+## Prerequisites
+
+- An AWS account with permissions to create EventBridge rules, API destinations, and connections
+- A CloudWatch alarm configured for the metric you want to monitor
+- A CloudThinker webhook URL (created in the steps below)
+
+---
+
+## Setup Guide
+
+<Steps>
+  <Step title="Create a CloudThinker Webhook">
+    1. In CloudThinker, go to **Incidents** → **Settings** → **Integrations**
+    2. Click **Connect** on the **AWS CloudWatch** card
+    3. Enter a name (e.g., "Production CloudWatch Alerts")
+    4. Review the pre-configured field mappings — these are set for EventBridge format:
+
+    | Incident Field | JSONPath | Extracts |
+    |----------------|----------|----------|
+    | Title | `$.detail.alarmName` | Alarm name |
+    | Description | `$.detail.state.reason` | State change reason |
+    | Severity | `$.detail.state.value` | Alarm state (`ALARM`, `OK`, `INSUFFICIENT_DATA`) |
+    | Services | `$.detail.configuration.metrics[0].metricStat.metric.namespace` | AWS service namespace (e.g., `AWS/EC2`) |
+
+    5. Configure severity mapping and auto-trigger settings as needed
+    6. Click **Create** and copy the webhook URL
+
+    <Warning>
+      Authentication is handled via the webhook URL token. Do not configure a separate auth method — the URL itself contains the authentication credential.
+    </Warning>
+  </Step>
+
+  <Step title="Create an EventBridge Connection">
+    1. In the AWS Console, go to **Amazon EventBridge** → **Integration** → **Connections**
+    2. Click **Create connection**
+    3. Configure the connection:
+       - **Name:** `cloudthinker-webhook`
+       - **Authorization type:** Other
+
+    <Note>
+      CloudThinker authenticates via the URL token embedded in the webhook URL. No additional authorization headers are required in the EventBridge connection.
+    </Note>
+  </Step>
+
+  <Step title="Create an API Destination">
+    1. Go to **Amazon EventBridge** → **Integration** → **API destinations**
+    2. Click **Create API destination**
+    3. Configure:
+       - **Name:** `cloudthinker-incidents`
+       - **API destination endpoint:** Paste your CloudThinker webhook URL
+       - **HTTP method:** `POST`
+       - **Connection:** Select the `cloudthinker-webhook` connection created above
+       - **Invocation rate limit:** `100` per second (adjust as needed)
+  </Step>
+
+  <Step title="Create an EventBridge Rule">
+    1. Go to **Amazon EventBridge** → **Rules**
+    2. Select the **default** event bus
+    3. Click **Create rule**
+    4. Configure:
+       - **Name:** `cloudwatch-alarms-to-cloudthinker`
+       - **Description:** Route CloudWatch alarm state changes to CloudThinker
+       - **Event bus:** default
+       - **Rule type:** Rule with an event pattern
+
+    5. Define the **event pattern**:
+
+    ```json
+    {
+      "source": ["aws.cloudwatch"],
+      "detail-type": ["CloudWatch Alarm State Change"]
+    }
+    ```
+
+    You can also filter by specific alarms or states:
+
+    ```json
+    {
+      "source": ["aws.cloudwatch"],
+      "detail-type": ["CloudWatch Alarm State Change"],
+      "detail": {
+        "state": {
+          "value": ["ALARM"]
+        }
+      }
+    }
+    ```
+
+    6. Select target:
+       - **Target type:** EventBridge API destination
+       - **API destination:** Select `cloudthinker-incidents`
+       - **Execution role:** Create a new role or use an existing one with `events:InvokeApiDestination` permissions
+
+    7. Click **Create rule**
+  </Step>
+
+  <Step title="Test the Integration">
+    Use the AWS CLI to simulate an alarm state change:
+
+    ```bash
+    aws cloudwatch set-alarm-state \
+      --alarm-name "YourAlarmName" \
+      --state-value ALARM \
+      --state-reason "Testing CloudThinker integration"
+    ```
+
+    Within a few seconds, you should see a new incident created in CloudThinker with the alarm details.
+
+    To reset the alarm back to normal:
+
+    ```bash
+    aws cloudwatch set-alarm-state \
+      --alarm-name "YourAlarmName" \
+      --state-value OK \
+      --state-reason "Test complete"
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Event Payload
+
+EventBridge delivers CloudWatch alarm events in the following format. CloudThinker's field mappings extract incident data from this structure automatically.
+
+```json
+{
+  "version": "0",
+  "id": "abcd1234-ef56-gh78-ij90-klmnopqrstuv",
+  "detail-type": "CloudWatch Alarm State Change",
+  "source": "aws.cloudwatch",
+  "account": "123456789012",
+  "time": "2024-01-15T10:30:00Z",
+  "region": "us-east-1",
+  "detail": {
+    "alarmName": "HighCPUUtilization",
+    "state": {
+      "value": "ALARM",
+      "reason": "Threshold Crossed: 1 out of the last 1 datapoints [85.0 (15/01/24 10:25:00)] was greater than the threshold (80.0)",
+      "reasonData": "{\"version\":\"1.0\",\"queryDate\":\"2024-01-15T10:30:00.000+0000\",\"startDate\":\"2024-01-15T10:25:00.000+0000\",\"statistic\":\"Average\",\"period\":300,\"recentDatapoints\":[85.0],\"threshold\":80.0,\"evaluatedDatapoints\":[{\"timestamp\":\"2024-01-15T10:25:00.000+0000\",\"sampleCount\":5.0,\"value\":85.0}]}",
+      "timestamp": "2024-01-15T10:30:00.000+0000"
+    },
+    "previousState": {
+      "value": "OK",
+      "reason": "Threshold Crossed: 1 out of the last 1 datapoints [65.0 (15/01/24 10:20:00)] was not greater than the threshold (80.0)",
+      "timestamp": "2024-01-15T10:20:00.000+0000"
+    },
+    "configuration": {
+      "description": "CPU utilization exceeded 80%",
+      "metrics": [
+        {
+          "id": "m1",
+          "metricStat": {
+            "metric": {
+              "namespace": "AWS/EC2",
+              "name": "CPUUtilization",
+              "dimensions": {
+                "InstanceId": "i-0123456789abcdef0"
+              }
+            },
+            "period": 300,
+            "stat": "Average"
+          },
+          "returnData": true
+        }
+      ]
+    }
+  }
+}
+```
+
+---
+
+## Severity Mapping
+
+CloudWatch alarm states map to CloudThinker severity levels. The default mapping is:
+
+| CloudWatch State | CloudThinker Severity |
+|-----------------|----------------------|
+| `ALARM` | Critical |
+| `INSUFFICIENT_DATA` | Medium |
+| `OK` | Info |
+
+You can customize this mapping in the webhook configuration under **Severity Mapping**.
+
+---
+
+## Filtering Alarms
+
+You can control which alarms trigger incidents by refining the EventBridge rule's event pattern.
+
+**By alarm name prefix:**
+
+```json
+{
+  "source": ["aws.cloudwatch"],
+  "detail-type": ["CloudWatch Alarm State Change"],
+  "detail": {
+    "alarmName": [{ "prefix": "prod-" }]
+  }
+}
+```
+
+**By specific alarm states:**
+
+```json
+{
+  "source": ["aws.cloudwatch"],
+  "detail-type": ["CloudWatch Alarm State Change"],
+  "detail": {
+    "state": {
+      "value": ["ALARM", "INSUFFICIENT_DATA"]
+    }
+  }
+}
+```
+
+**By metric namespace:**
+
+```json
+{
+  "source": ["aws.cloudwatch"],
+  "detail-type": ["CloudWatch Alarm State Change"],
+  "detail": {
+    "configuration": {
+      "metrics": {
+        "metricStat": {
+          "metric": {
+            "namespace": ["AWS/EC2", "AWS/RDS"]
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+---
+
+## Multi-Region Setup
+
+CloudWatch events are regional — alarms only emit events to the EventBridge bus in their own region. For multi-region monitoring:
+
+1. **Option A: Cross-region event forwarding** — Create an EventBridge rule in each source region that forwards CloudWatch alarm events to a central region's event bus, then route from there to CloudThinker.
+
+2. **Option B: Per-region rules** — Create an API destination and rule in each region pointing to the same CloudThinker webhook URL. This is simpler but requires maintaining rules across regions.
+
+---
+
+## Troubleshooting
+
+<Accordion title="No incidents are being created">
+  1. **Check the EventBridge rule** — Go to EventBridge → Rules → select your rule → Monitoring tab. Verify the rule is matching events (`Invocations` metric > 0)
+  2. **Check the API destination** — Go to API destinations → select yours → verify the endpoint URL matches your CloudThinker webhook URL
+  3. **Check CloudThinker logs** — Go to Incidents → Settings → Integrations → select your webhook → Logs tab for delivery history
+  4. **Test with CLI** — Run `aws cloudwatch set-alarm-state` to simulate an alarm and verify the full chain
+</Accordion>
+
+<Accordion title="Events are received but fields are missing">
+  Verify the field mappings match the EventBridge event format. CloudWatch events routed through EventBridge use the `$.detail.*` prefix:
+
+  - Title: `$.detail.alarmName` (not `$.AlarmName`)
+  - Severity: `$.detail.state.value` (not `$.NewStateValue`)
+  - Description: `$.detail.state.reason` (not `$.NewStateReason`)
+
+  If you previously used SNS, update the field mappings to the EventBridge format.
+</Accordion>
+
+<Accordion title="Rule not matching any events">
+  - Ensure the event pattern uses `"detail-type": ["CloudWatch Alarm State Change"]` (exact string, case-sensitive)
+  - Ensure the rule is on the **default** event bus — CloudWatch sends events to the default bus
+  - Verify the alarm is in the same region as the EventBridge rule
+</Accordion>
+
+<Accordion title="API destination returning errors">
+  - **401/403**: Verify the webhook URL includes the authentication token
+  - **422**: The payload format may not match expected field mappings — check the event payload structure
+  - **429**: You've exceeded the webhook rate limit — increase the rate limit in CloudThinker webhook settings
+</Accordion>
+
+---
+
+## Alternative: SNS Route
+
+CloudThinker also supports receiving CloudWatch alarms via SNS. This path is useful if you already have SNS topics configured for your alarms.
+
+```
+CloudWatch Alarm → SNS Topic → CloudThinker Webhook
+```
+
+When using the SNS route, CloudThinker automatically:
+- Confirms the SNS subscription (no manual confirmation needed)
+- Unwraps the SNS notification envelope to extract the alarm payload
+
+To set up: add your CloudThinker webhook URL as an **HTTPS subscription** on your SNS topic. The subscription will be auto-confirmed within seconds.
+
+<Note>
+  The EventBridge route is recommended over SNS because it provides a cleaner event format, native filtering, and doesn't require a subscription handshake.
+</Note>
+
+---
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Webhook Integrations Overview" icon="webhook" href="/guide/incident/webhook-integrations/overview">
+    Learn about all supported platforms and general webhook configuration.
+  </Card>
+  <Card title="Root Cause Analysis" icon="magnifying-glass" href="/guide/incident/root-cause-analysis">
+    Configure automatic AI-powered investigation for CloudWatch incidents.
+  </Card>
+</CardGroup>
