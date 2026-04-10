@@ -1,0 +1,198 @@
+---
+title: MongoDB
+description: "Connect MongoDB databases to CloudThinker"
+icon: leaf
+---
+
+# MongoDB
+
+Connect your MongoDB databases to enable [Tony](/guide/agents/tony) (Database Engineer) to analyze queries, optimize performance, and monitor database health.
+
+---
+
+## Supported Platforms
+
+| Platform | Support |
+|----------|---------|
+| **Self-hosted MongoDB** | 4.x, 5.x, 6.x, 7.x |
+| **MongoDB Atlas** | All versions |
+
+---
+
+## Setup
+
+Select your MongoDB platform for specific connection instructions:
+
+<Tabs>
+  <Tab title="Self-hosted MongoDB">
+    <Steps>
+      <Step title="Connect as Admin">
+        Connect to your MongoDB instance using the Mongo shell (`mongosh`) with administrative privileges. 
+        
+        *Replace `<admin-user>`, `<admin-password>`, and `<your-host>` with your credentials. The `/admin` database is required.*
+        
+        ```bash
+        mongosh "mongodb://<admin-user>:<admin-password>@<your-host>:27017/admin"
+        ```
+      </Step>
+      <Step title="Switch to Admin Database">
+        Ensure you are on the `admin` database where users are created:
+        ```javascript
+        use admin
+        ```
+      </Step>
+      <Step title="Create Read-Only User">
+        Create a dedicated user for CloudThinker using standard MongoDB built-in roles:
+        ```javascript
+        db.createUser({
+          user: "<cloudthinker_user>",
+          pwd: "<secure-password>",
+          roles: [
+            { role: "readAnyDatabase", db: "admin" },
+            { role: "clusterMonitor", db: "admin" }
+          ]
+        })
+        ```
+        The `clusterMonitor` role is recommended for performance metrics analysis.
+      </Step>
+      <Step title="Configure Network Access">
+        Ensure CloudThinker can reach your database:
+        - Add CloudThinker IPs to your firewall or security group.
+        - Ensure MongoDB is bound to an accessible IP address in `mongod.conf`.
+      </Step>
+      <Step title="Get Connection String">
+        Your connection string will follow this format:
+        ```
+        mongodb://<cloudthinker_user>:<secure-password>@<your-host>:27017/admin?tls=true&appName=CloudThinker
+        ```
+        *Note: Include `tls=true` if your deployment enforces TLS encryption in transit.*
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="MongoDB Atlas">
+    <Steps>
+      <Step title="Navigate to Database Access">
+        Log in to your MongoDB Atlas dashboard at [cloud.mongodb.com/v2](https://cloud.mongodb.com/v2).
+        
+        From the left sidebar, scroll down to the **Security** section and select **Database Access**.
+      </Step>
+      <Step title="Add New Database User">
+        Click **Add New Database User** and configure the following:
+        - **Authentication Method:** Password
+        - **Username:** `<cloudthinker_user>`
+        - **Password:** `<secure-password>` (Generate a secure password)
+        - **Database User Privileges:** Select **Built-in Role** and choose **Read Any Database**.
+      </Step>
+      <Step title="Configure Network Access">
+        Navigate to **Network Access** under the **Security** section on the left sidebar:
+        - Click **IP Access List**.
+        - Click **+ Add IP Address**.
+        - **Access List Entry:** Enter the CloudThinker static IP addresses provided in the CloudThinker connection setup screen. If you are just testing, you can enter `0.0.0.0/0` (allows access from anywhere), though this is not recommended for production.
+        - **Comment:** Enter a descriptive name like `"CloudThinker Agent Access"` for future auditing.
+        - Click **Confirm**.
+      </Step>
+      <Step title="Get Connection String">
+        Navigate to the **Databases** tab (under Deployment), click **Connect** on your cluster, and choose **Drivers**:
+        
+        Atlas provides a string that looks like this:
+        ```
+        mongodb+srv://<username>:<password>@<cluster-name>.<cluster-hash>.mongodb.net/?appName=<ClusterName>
+        ```
+        
+        **CloudThinker Requires / Recommends:**
+        ```
+        mongodb+srv://<cloudthinker_user>:<secure-password>@<cluster-name>.<cluster-hash>.mongodb.net/admin?appName=CloudThinker&tls=true&retryWrites=false
+        ```
+        
+        *Explanation of changes:*
+        - Replace `<cloudthinker_user>`, `<secure-password>`, `<cluster-name>`, and `<cluster-hash>` with your specific details.
+        - Added `/admin` to explicitly specify the authentication database.
+        - Changed to `appName=CloudThinker` for easy identification in your database logs.
+        - Added `tls=true` to enforce encryption in transit (Security Best Practice).
+        - Added `retryWrites=false` since this read-only user will not be performing writes.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+---
+
+## Add Connection in CloudThinker
+
+Back in the CloudThinker App, navigate to **Connections → MongoDB**, add your customized Connection String, and finish.
+
+---
+
+## Required Permissions
+
+To get the most out of Tony's analysis, the following standard MongoDB built-in roles are recommended:
+
+*   `readAnyDatabase`: Required to analyze queries and index usage across your collections.
+*   `clusterMonitor`: Recommended. Provides access to `serverStatus`, `replSetGetStatus`, and other diagnostic commands for performance metrics without granting write access.
+
+---
+
+## Agent Capabilities
+
+Once connected, [Tony](/guide/agents/tony) can:
+
+| Capability | Description |
+|------------|-------------|
+| **Query Analysis** | Identify slow queries, analyze execution plans (`explain()`) |
+| **Index Recommendations** | Find missing indexes, identify unused indexes |
+| **Performance Metrics** | Monitor connections, memory usage, replication lag |
+
+### Example Prompts
+
+```bash
+@tony analyze slow queries on production MongoDB
+@tony recommend index optimizations for the users collection
+@tony check replication lag on the secondary nodes
+```
+
+---
+
+## Connection Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| **TLS/SSL** | Require TLS for the connection | `true` |
+| **Read Preference** | Which nodes to route read operations to | `primary` |
+| **Connection Timeout** | Seconds to wait for connection | 10 |
+
+---
+
+## Troubleshooting
+
+<Accordion title="Authentication failed">
+- Verify username and password are correct.
+- Ensure the user is created on the `admin` database, or append `?authSource=admin` to your connection string.
+- If using Atlas, ensure the user was created with the correct privileges under Database Access.
+</Accordion>
+
+<Accordion title="Connection refused or Timeout">
+- Check if CloudThinker IPs are added to your Atlas Network Access list or your firewall.
+- For local MongoDB, ensure `bindIp` in `mongod.conf` is not set to only `127.0.0.1`.
+</Accordion>
+
+---
+
+## Security Best Practices
+
+- **Strong passwords** - Use complex, unique passwords for the database user.
+- **TLS encryption** - Always encrypt data in transit (`tls=true`).
+- **Network restrictions** - Restrict database access to CloudThinker IPs via firewalls or Atlas Network Access.
+- **Minimal permissions** - Never grant write or admin roles to the CloudThinker user.
+
+---
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Tony Agent" icon="database" href="/guide/agents/tony">
+    Database-focused optimization agent
+  </Card>
+  <Card title="PostgreSQL Connection" icon="database" href="/guide/connections/postgresql">
+    Setup instructions for PostgreSQL databases
+  </Card>
+</CardGroup>
