@@ -25,62 +25,34 @@ Select your Kafka platform for specific connection instructions:
 
 <Tabs>
   <Tab title="Self-hosted Kafka">
+    For local development or secure internal networks using unauthenticated Kafka (e.g., Confluent Local via Docker), no server-side configuration or user creation is required.
+
     <Steps>
-      <Step title="Create Read-Only User">
-        Connect to your Kafka cluster and create a dedicated user for CloudThinker:
-        ```bash
-        kafka-configs.sh --bootstrap-server <localhost>:9092 \
-          --entity-type users --entity-name cloudthinker \
-          --alter --add-config 'SCRAM-SHA-256=[password=<secure-password>]'
-        ```
-        For development clusters without authentication, skip to Step 2.
+      <Step title="Ensure Network Access">
+        Ensure the CloudThinker application can reach your Kafka broker at `<broker-name>.<your-domain>:9092`.
       </Step>
-      <Step title="Configure ACLs">
-        Grant read-only permissions:
-        ```bash
-        kafka-acls.sh --bootstrap-server <localhost>:9092 \
-          --add --allow-principal User:cloudthinker \
-          --operation Describe --cluster --topic '*' --group '*'
+      <Step title="Add Connection in CloudThinker">
+        Navigate to **Connections → Kafka** in the CloudThinker dashboard and enter your endpoints. No credentials are required for unauthenticated clusters.
 
-        kafka-acls.sh --bootstrap-server <localhost>:9092 \
-          --add --allow-principal User:cloudthinker \
-          --operation Read --topic __consumer_offsets
-        ```
-      </Step>
-      <Step title="Configure Network Access">
-        - Add CloudThinker IPs to your firewall/security group.
-        - Verify `advertised.listeners` in `server.properties` is accessible.
-        - Open port 9093 for TLS connections.
-      </Step>
-      <Step title="Get Connection String">
-        **No Authentication (Development):**
-        ```
-        <localhost>:9092
+        ```json
+        {
+          "BOOTSTRAP_SERVERS": "<broker-name>.<your-domain>:9092"
+        }
         ```
 
-        **SASL/SCRAM with TLS:**
-        ```
-        <localhost>:9093
+        For clusters with Schema Registry, add the endpoint:
+        ```json
+        {
+          "BOOTSTRAP_SERVERS": "<broker-name>.<your-domain>:9092",
+          "SCHEMA_REGISTRY_ENDPOINT": "http://<schema-registry-host>:<port>"
+        }
         ```
 
-        Additional properties for CloudThinker:
-        - `security.protocol`: `SASL_SSL`
-        - `sasl.mechanism`: `SCRAM-SHA-256`
-        - `sasl.jaas.config`: `org.apache.kafka.common.security.scram.ScramLoginModule required username="cloudthinker" password="<secure-password>";`
+        <Note>
+        Schema Registry is only required if you are actively using it to manage data schemas.
+        </Note>
       </Step>
     </Steps>
-
-    ## Minimal Connection Template
-
-    For self-hosted Kafka, only `BOOTSTRAP_SERVERS` is required:
-
-    ```json
-    {
-      "BOOTSTRAP_SERVERS": "<localhost>:9092"
-    }
-    ```
-
-    For authenticated connections, add the security properties above.
   </Tab>
   <Tab title="Confluent Cloud">
     <Steps>
@@ -243,25 +215,6 @@ For **Confluent Cloud**, you can leave optional scope fields empty and add them 
 
 ---
 
-## Required Permissions
-
-To get the most out of Alex and Tony's analysis, the following permissions are recommended:
-
-| Permission | Purpose |
-|------------|---------|
-| **Describe Cluster** | View broker metadata, cluster health |
-| **Describe Topics** | List topics, view configurations, partition counts |
-| **Describe Consumer Groups** | Monitor consumer lag, group membership |
-| **Read (offsets topic)** | Access `__consumer_offsets` for lag analysis |
-
-**Never grant:**
-- `Create` or `Delete` on topics
-- `Write` on any topic
-- `Alter` on cluster or topics
-- `ClusterAction` (admin operations)
-
----
-
 ## Agent Capabilities
 
 Once connected, [Alex](/guide/agents/alex) and [Tony](/guide/agents/tony) can:
@@ -277,51 +230,19 @@ Once connected, [Alex](/guide/agents/alex) and [Tony](/guide/agents/tony) can:
 
 ```bash
 @alex check consumer lag for the orders-service group
-@alex analyze topic health for payment-events
-@alex show broker disk usage and partition distribution
 @alex identify under-replicated partitions
+@tony analyze message throughput trends for the events topic
+@tony check data retention policies across all topics
 ```
-
----
-
-## Connection Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| **Bootstrap Servers** | Comma-separated list of `host:port` | Required |
-| **Security Protocol** | `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, `SASL_SSL` | `PLAINTEXT` |
-| **SASL Mechanism** | `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512` | `PLAIN` |
-| **Request Timeout** | Milliseconds to wait for responses | 30000 |
-| **Session Timeout** | Consumer group session timeout | 10000 |
 
 ---
 
 ## Troubleshooting
 
 <Accordion title="Connection refused or Timeout">
+- Verify the Kafka cluster is running and accepting connections.
+- Check that the broker port (default 9092) is open and not blocked by firewall.
 - Verify bootstrap servers are correct and reachable from CloudThinker.
-- Check that the security group/firewall allows inbound traffic from CloudThinker IPs.
-- Ensure `advertised.listeners` in Kafka config matches an accessible address.
-- For TLS connections, verify the correct port (usually 9093 or 9096) is used.
-</Accordion>
-
-<Accordion title="Authentication failed">
-- Verify username and password/API key and secret are correct.
-- Check that `sasl.mechanism` matches your cluster configuration.
-- For SCRAM, ensure the user exists: `kafka-configs.sh --describe --entity-type users --entity-name <username>`.
-- Verify `security.protocol` matches your cluster (use `SASL_SSL` for authenticated TLS).
-</Accordion>
-
-<Accordion title="Authorization failed (ACL error)">
-- Confirm the user has `Describe` permissions on cluster, topics, and groups.
-- For consumer lag analysis, ensure `Read` permission on `__consumer_offsets` topic.
-- Check ACLs: `kafka-acls.sh --bootstrap-server <host>:<port> --list`.
-</Accordion>
-
-<Accordion title="SSL/TLS handshake failed">
-- Verify the broker certificate is valid and not expired.
-- For self-signed certificates, ensure `ssl.endpoint.identification.algorithm` is set appropriately.
-- Check that the client truststore contains the CA that signed the broker certificate.
 </Accordion>
 
 <Accordion title="Confluent Cloud partial scope fields">
@@ -358,12 +279,9 @@ When using partial scope onboarding, **remove the entire key-value pair** for un
 
 ## Security Best Practices
 
-- **TLS encryption** - Always use `SASL_SSL` or `SSL` in production. Never use `PLAINTEXT` over public networks.
-- **Dedicated credentials** - Create a dedicated user/API key for CloudThinker with minimal read-only permissions.
 - **Network restrictions** - Restrict Kafka access to CloudThinker IPs via security groups or firewalls.
-- **SCRAM over PLAIN** - Prefer `SCRAM-SHA-256` or `SCRAM-SHA-512` over `PLAIN` for password-based auth.
+- **Dedicated credentials** - Create a dedicated user/API key for CloudThinker with minimal read-only permissions.
 - **Regular credential rotation** - Rotate API keys and passwords periodically.
-- **Audit ACLs** - Regularly review and prune unnecessary permissions.
 
 ### Confluent Cloud Security Notes
 
