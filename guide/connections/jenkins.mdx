@@ -1,0 +1,256 @@
+---
+title: Jenkins
+description: "Connect self-hosted Jenkins with MCP Server to CloudThinker"
+icon: server
+---
+
+# Jenkins
+
+Connect your self-hosted Jenkins CI/CD server to enable CloudThinker agents to monitor builds, analyze test results, review pipeline logs, and manage job operations.
+
+<Info>
+This guide covers self-hosted Jenkins on Kubernetes with the [MCP Server Plugin](https://github.com/jenkinsci/mcp-server-plugin). Cloud-hosted Jenkins services (Jenkins Cloud) are not supported as they cannot install custom plugins.
+</Info>
+
+---
+
+## Prerequisites
+
+- Kubernetes cluster with `kubectl` access
+- Helm 3.x installed
+- Admin access to configure Jenkins root URL
+
+---
+
+## Deploy Jenkins
+
+<Steps>
+  <Step title="Create Namespace">
+    Create a dedicated namespace for Jenkins:
+    ```bash
+    kubectl create namespace jenkins
+    ```
+  </Step>
+  <Step title="Deploy Jenkins with Helm">
+    Install Jenkins with the MCP Server plugin and optional dependencies:
+    ```bash
+    helm repo add jenkinsci https://charts.jenkins.io && helm repo update
+    helm install jenkins jenkinsci/jenkins -n jenkins \
+      --set "controller.installPlugins={mcp-server,git,junit,workflow-aggregator}" \
+      --set controller.resources.requests.memory=512Mi \
+      --set controller.resources.requests.cpu=250m \
+      --set persistence.size=5Gi
+    ```
+  </Step>
+  <Step title="Wait for Ready">
+    Wait for the Jenkins pod to be ready:
+    ```bash
+    kubectl -n jenkins wait --for=condition=Ready pod -l app.kubernetes.io/name=jenkins --timeout=300s
+    ```
+  </Step>
+  <Step title="Get Admin Password">
+    Retrieve the generated admin password:
+    ```bash
+    kubectl exec --namespace jenkins -it svc/jenkins -c jenkins \
+      -- /bin/cat /run/secrets/additional/chart-admin-password && echo
+    ```
+  </Step>
+  <Step title="Port-Forward">
+    Forward Jenkins to your local machine:
+    ```bash
+    kubectl port-forward svc/jenkins -n jenkins 9090:8080 --address 0.0.0.0
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Configure Root URL
+
+This step is required for the MCP server to return job results. Configure via Jenkins Script Console:
+
+```bash
+COOKIE_JAR=/tmp/jenkins_cookies
+CRUMB=$(curl -s -c $COOKIE_JAR -u "admin:<password>" \
+  'http://localhost:9090/crumbIssuer/api/json' | python3 -c "import json,sys; print(json.load(sys.stdin)['crumb'])")
+
+curl -s -X POST "http://localhost:9090/scriptText" \
+  -b $COOKIE_JAR -u "admin:<password>" -H "Jenkins-Crumb: $CRUMB" \
+  --data-urlencode "script=
+import jenkins.model.JenkinsLocationConfiguration
+def loc = JenkinsLocationConfiguration.get()
+loc.setUrl('http://<host-ip>:9090/')
+loc.save()
+println('Root URL set to: ' + loc.getUrl())
+"
+```
+
+Replace `<password>` with the admin password and `<host-ip>` with your machine's IP address (run `hostname -I | awk '{print $1}'` to find it).
+
+---
+
+## Connection Details
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| **JENKINS_URL** | Your Jenkins URL | `http://<host-ip>:9090` |
+| **JENKINS_USER** | Jenkins username | `admin` |
+| **JENKINS_API_TOKEN** | Admin password or API token | From Step 4 |
+
+<Info>
+Use your host IP instead of `localhost` because the MCP server runs inside a container and cannot reach localhost on your machine.
+</Info>
+
+---
+
+## Add Connection in CloudThinker
+
+Navigate to **Connections → Jenkins** and enter:
+- **Name**: Descriptive name for the connection
+- **URL**: `http://<host-ip>:9090` (use your host IP, not localhost)
+- **Username**: `admin`
+- **API Token**: The admin password from deployment
+
+---
+
+## Verify MCP Endpoint
+
+Test the connection before adding to CloudThinker:
+
+```bash
+# Health check (no auth needed)
+curl -s http://localhost:9090/mcp-health/
+
+# MCP initialize (with auth)
+curl -s -X POST http://localhost:9090/mcp-server/mcp \
+  -u "admin:<password>" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
+```
+
+You should receive a JSON response with server information.
+
+---
+
+## Required Permissions
+
+The admin user (or a dedicated service account) needs these permissions:
+
+### Minimum (Read-Only)
+- **Overall**: Read
+- **Job**: Read, Discover
+- **View**: Read
+
+This allows agents to list jobs, view builds, and read logs.
+
+### Recommended (Full Operations)
+- **Overall**: Read
+- **Job**: Read, Discover, Build, Cancel
+- **Run**: Update, Replay (for Pipeline jobs)
+
+This enables triggering builds and replaying Pipelines.
+
+---
+
+## Agent Capabilities
+
+Once connected, agents can:
+
+| Capability | Description |
+|------------|-------------|
+| **Build Monitoring** | List jobs, check build status, view history |
+| **Log Analysis** | Retrieve and search build logs |
+| **Test Results** | View test outcomes and flaky failures (requires JUnit plugin) |
+| **Pipeline Replay** | Re-run builds with modified scripts (requires Pipeline plugin) |
+| **SCM Integration** | View Git changes and commits (requires Git plugin) |
+| **Job Management** | Trigger builds, check queue status |
+
+### Example Prompts
+
+```bash
+@alex list all Jenkins jobs and their last build status
+@alex show test results for recent builds
+@alex search build logs for errors
+@alex check queue status and identify stuck builds
+```
+
+---
+
+## Plugin Dependencies
+
+| Jenkins Plugin | Required For |
+|---|---|
+| `mcp-server` | Core operations (required) |
+| `git` | SCM features |
+| `junit` | Test results and flaky detection |
+| `workflow-aggregator` | Pipeline replay |
+
+To add plugins after initial install:
+```bash
+helm upgrade jenkins jenkinsci/jenkins -n jenkins \
+  --set "controller.installPlugins={mcp-server,git,junit,workflow-aggregator}"
+```
+
+---
+
+## MCP Endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `/mcp-server/mcp` | Primary MCP interface (Streamable HTTP) |
+| `/mcp-server/sse` | SSE transport fallback |
+| `/mcp-server/stateless` | Stateless HTTP |
+| `/mcp-health` | Health check (no auth) |
+
+---
+
+## Troubleshooting
+
+<Accordion title="Connection timeout">
+- Verify Jenkins pod is running: `kubectl -n jenkins get pods`
+- Check port-forward is active
+- Confirm network connectivity from CloudThinker
+- Use host IP instead of localhost
+</Accordion>
+
+<Accordion title="Empty job list">
+- Ensure root URL is configured via Script Console
+- Check Jenkins location configuration
+- Verify the MCP server has API access
+</Accordion>
+
+<Accordion title="Authentication failed">
+- Verify admin password is correct
+- Check user has Overall/Read permission
+- Try regenerating the token
+</Accordion>
+
+<Accordion title="Port-forward lost">
+- Re-run the port-forward command
+- Consider using a more persistent connection method for production
+</Accordion>
+
+---
+
+## Security Best Practices
+
+- **Dedicated user** - Create a dedicated Jenkins user for CloudThinker in production
+- **Token rotation** - Rotate API tokens periodically
+- **Minimal permissions** - Grant only required permissions
+- **Network isolation** - Use VPN or private endpoints for production Jenkins
+- **HTTPS** - Configure TLS for production deployments
+- **Audit logging** - Enable Jenkins audit logs
+
+---
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="MCP Connections" icon="plug" href="/guide/connections/mcp">
+    Connect custom tools via Model Context Protocol
+  </Card>
+  <Card title="Kubernetes" icon="dharmachakra" href="/guide/connections/kubernetes">
+    Connect Kubernetes clusters
+  </Card>
+</CardGroup>
