@@ -21,172 +21,99 @@ Connect your ArgoCD instances to enable [Kai](/guide/agents/kai) (Kubernetes Eng
 
 ## Setup
 
-Select your ArgoCD platform for specific connection instructions:
+Select your ArgoCD platform:
 
 <Tabs>
   <Tab title="Self-hosted ArgoCD">
-    For ArgoCD running on your own Kubernetes cluster.
+
+    For ArgoCD already running on your cluster.
 
     <Steps>
-      <Step title="Deploy ArgoCD (if not already running)">
-        Create the namespace and apply the ArgoCD manifest:
-        ```bash
-        kubectl create namespace argocd
-        kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
-        ```
+      <Step title="Get Connection Details">
+        Ensure ArgoCD is accessible. The default port is `8888`.
 
-        Wait for pods to be ready:
-        ```bash
-        kubectl -n argocd wait --for=condition=Ready pod -l app.kubernetes.io/name=argocd-server --timeout=180s
-        ```
-      </Step>
-      <Step title="Access ArgoCD Server">
-        Port-forward the server to make it accessible:
-        ```bash
-        kubectl port-forward svc/argocd-server -n argocd 8888:443 --address 0.0.0.0
-        ```
+        Get your host IP address:
 
-        For CloudThinker connectivity, use your host IP address instead of `localhost` (the MCP server runs in an isolated network namespace).
         ```bash
         hostname -I | awk '{print $1}'
         ```
-      </Step>
-      <Step title="Get Initial Admin Password">
-        Retrieve the auto-generated admin password:
-        ```bash
-        kubectl -n argocd get secret argocd-initial-admin-secret \
-          -o jsonpath="{.data.password}" | base64 -d
-        ```
-      </Step>
-      <Step title="Install ArgoCD CLI">
-        Install the CLI tool for token generation:
+
+        Ensure ArgoCD CLI is installed:
+
         ```bash
         brew install argocd
         ```
       </Step>
-      <Step title="Enable API Key Capability">
-        By default, the admin account only has `login` capability. Patch the ConfigMap to add `apiKey`:
-        ```bash
-        kubectl -n argocd patch configmap argocd-cm --type merge \
-          -p '{"data":{"accounts.admin":"apiKey, login"}}'
-        ```
-      </Step>
-      <Step title="Login and Generate Token">
-        Login to ArgoCD:
-        ```bash
-        argocd login <host-ip>:8888 --username admin \
-          --password '<password-from-step-3>' --insecure
-        ```
+      <Step title="Generate API Token">
+        Enable apiKey and generate token:
 
-        Generate the API token:
         ```bash
+        kubectl -n argocd patch configmap argocd-cm --type merge -p '{"data":{"accounts.admin":"apiKey, login"}}'
+        argocd login <host-ip>:8888 --username admin --password '<password>' --insecure
         argocd account generate-token --account admin --insecure
         ```
-      </Step>
-      <Step title="Verify Connection">
-        Test the token works:
-        ```bash
-        curl -sk https://<host-ip>:8888/api/v1/session/userinfo \
-          -H "Authorization: Bearer <token>"
-        ```
-
-        Expected response: `{"loggedIn":true,"username":"admin","iss":"argocd"}`
       </Step>
       <Step title="Configure CloudThinker Connection">
         In CloudThinker, navigate to **Connections → ArgoCD** and enter:
 
         - **Base URL**: `https://<host-ip>:8888`
-        - **API Token**: Token from Step 6
-        - **TLS Verification**: Disable (self-signed certificate)
-        - **Read-only Mode**: Enable for safety
+        - **API Token**: Token from previous step
+        - **TLS Verification**: Disable
+        - **Read-only Mode**: Enable
       </Step>
     </Steps>
+
   </Tab>
 
   <Tab title="Akuity Platform">
+
     For managed ArgoCD via Akuity Platform.
 
     <Steps>
-      <Step title="Install Required CLIs">
+      <Step title="Install CLI">
         Install ArgoCD CLI:
+
         ```bash
         brew install argocd
         ```
 
         Install Akuity CLI:
+
         ```bash
         curl -sSL -o /tmp/akuity \
-          "https://dl.akuity.io/akuity-cli/$(curl -sL https://dl.akuity.io/akuity-cli/stable.txt)/linux/amd64/akuity"
+          "https://dl.akuity.io/akuity-cli/$(curl -sL https://dl.akuity.io/akuity-cli/stable.txt)/$(uname)/$(uname -m)/akuity"
         chmod +x /tmp/akuity
         sudo mv /tmp/akuity /usr/local/bin/akuity
         ```
       </Step>
-      <Step title="Create Akuity API Key">
+      <Step title="Create Admin Account">
         In the [Akuity Portal](https://akuity.cloud):
 
-        1. Navigate to **Organization** → **API Keys**
-        2. Click **Create API Key**
-        3. Set role to **Owner** (Member role cannot manage instances)
-        4. Save the `AKUITY_API_KEY_ID` and `AKUITY_API_KEY_SECRET`
-
-        Verify the key:
-        ```bash
-        export AKUITY_API_KEY_ID=<your-key-id>
-        export AKUITY_API_KEY_SECRET=<your-key-secret>
-        export AKUITY_SERVER_URL=https://akuity.cloud
-        akuity argocd instance list --organization-id <your-org-id>
-        ```
+        1. Navigate to **Organization** → **API Keys** → Click **Create API Key** (role: Owner)
+        2. Under your ArgoCD instance → **Settings** → **System Accounts**
+        3. Click **Add Account** → Name: `admin`
+        4. Enable both **login** and **apiKey** capabilities
+        5. Set a password
       </Step>
-      <Step title="Create ArgoCD Instance">
-        In the Akuity Portal:
+      <Step title="Generate API Token">
+        Login and generate token:
 
-        1. Under **Deploy**, go to **ArgoCD** → **Create Instance**
-        2. Name your instance (e.g., `production`)
-        3. Note the instance URL: `<instance-id>.cd.akuity.cloud`
-      </Step>
-      <Step title="Configure Admin Account">
-        In the Akuity Portal:
-
-        1. Go to your ArgoCD instance → **Settings** → **System Accounts**
-        2. Click **Add Account** → Name: `admin`
-        3. Enable both **login** and **apiKey** capabilities
-        4. Set a secure password
-      </Step>
-      <Step title="Login and Generate Token">
-        Login to your Akuity-managed ArgoCD:
         ```bash
         argocd login <instance-id>.cd.akuity.cloud --grpc-web \
           --username admin --password '<your-password>'
-        ```
-
-        Verify account capabilities:
-        ```bash
-        argocd account get --account admin --grpc-web
-        ```
-
-        Generate the API token:
-        ```bash
         argocd account generate-token --account admin --grpc-web
         ```
-      </Step>
-      <Step title="Verify Connection">
-        Test the token:
-        ```bash
-        curl -s https://<instance-id>.cd.akuity.cloud/api/v1/session/userinfo \
-          -H "Authorization: Bearer <token>"
-        ```
-
-        Expected response: `{"loggedIn":true,"username":"admin","iss":"argocd"}`
       </Step>
       <Step title="Configure CloudThinker Connection">
         In CloudThinker, navigate to **Connections → ArgoCD** and enter:
 
         - **Base URL**: `https://<instance-id>.cd.akuity.cloud`
-        - **API Token**: Token from Step 5
-        - **TLS Verification**: Enable (Akuity provides valid TLS certificates)
-        - **Read-only Mode**: Enable for safety
+        - **API Token**: Token from previous step
+        - **TLS Verification**: Enable
+        - **Read-only Mode**: Enable
       </Step>
     </Steps>
+
   </Tab>
 </Tabs>
 
@@ -196,19 +123,15 @@ Select your ArgoCD platform for specific connection instructions:
 
 | Option | Description | Self-hosted | Akuity |
 |--------|-------------|-------------|--------|
-| **TLS Verification** | Validate server certificate | Disabled (self-signed) | Enabled |
-| **API Key Setup** | Enable `apiKey` capability | Patch `argocd-cm` ConfigMap | Portal UI → System Accounts |
-| **Admin Password** | Initial authentication | From `argocd-initial-admin-secret` | Set in Portal UI |
-| **CLI Flags** | Required ArgoCD CLI flags | `--insecure` | `--grpc-web` |
-| **Network Access** | How to reach the server | Use host IP, not localhost | Public URL, no port-forward |
+| **TLS Verification** | Validate server certificate | Disable | Enable |
+| **API Key Setup** | Enable `apiKey` capability | Patch `argocd-cm` | Portal UI |
+| **CLI Flags** | ArgoCD CLI flags | `--insecure` | `--grpc-web` |
 
 ---
 
 ## Required Permissions
 
-### Minimum (Read-Only Analysis)
-
-The CloudThinker user needs these ArgoCD RBAC permissions:
+The CloudThinker user needs ArgoCD RBAC permissions:
 
 ```yaml
 apiVersion: v1
@@ -219,26 +142,20 @@ metadata:
 data:
   policy.default: role:readonly
   policy.csv: |
-    p, role:cloudthinker, applications, get, */*, allow
-    p, role:cloudthinker, applications, list, */*, allow
-    p, role:cloudthinker, repositories, get, *, allow
-    p, role:cloudthinker, repositories, list, *, allow
-    p, role:cloudthinker, clusters, get, *, allow
-    p, role:cloudthinker, clusters, list, *, allow
-    g, cloudthinker, role:cloudthinker
+    p, role:cloudthinker-readonly, applications, get, */*, allow
+    p, role:cloudthinker-readonly, applications, list, */*, allow
+    p, role:cloudthinker-readonly, repositories, get, *, allow
+    p, role:cloudthinker-readonly, repositories, list, *, allow
+    p, role:cloudthinker-readonly, clusters, get, *, allow
+    p, role:cloudthinker-readonly, clusters, list, *, allow
+    g, cloudthinker-readonly, role:cloudthinker-readonly
 ```
 
-Apply the RBAC policy:
+Apply:
+
 ```bash
 kubectl apply -f argocd-rbac.yaml
 ```
-
-### Capabilities Required
-
-| Capability | Purpose |
-|------------|---------|
-| **login** | Authenticate to ArgoCD |
-| **apiKey** | Generate long-lived API tokens |
 
 ---
 
@@ -248,11 +165,11 @@ Once connected, [Kai](/guide/agents/kai) can:
 
 | Capability | Description |
 |------------|-------------|
-| **Application Status** | View sync status, health state, and last sync time |
-| **Deployment Analysis** | Identify out-of-sync applications and failed deployments |
-| **Repository Insights** | Analyze Git repository state and commit history |
-| **Sync Operations** | Trigger manual syncs and monitor progress |
-| **Health Monitoring** | Track application health and resource degradation |
+| **Application Status** | View sync status, health state, last sync time |
+| **Deployment Analysis** | Identify out-of-sync and failed deployments |
+| **Repository Insights** | Analyze Git repository state and commits |
+| **Sync Operations** | Trigger manual syncs |
+| **Health Monitoring** | Track application health |
 
 ### Example Prompts
 
@@ -260,8 +177,8 @@ Once connected, [Kai](/guide/agents/kai) can:
 @kai show me all out-of-sync applications in ArgoCD
 @kai analyze deployment failures for the payment service
 @kai sync the frontend application to latest commit
-@kai check health status of all apps in the production namespace
-@kai list applications with degraded health for the past 24 hours
+@kai check health status of all apps in production
+@kai list applications with degraded health
 ```
 
 ---
@@ -269,40 +186,37 @@ Once connected, [Kai](/guide/agents/kai) can:
 ## Troubleshooting
 
 <Accordion title="Cannot connect to ArgoCD server">
-- **Self-hosted**: Ensure you're using the host IP (not `localhost`) in the Base URL
-- Verify the port-forward is running: `kubectl port-forward svc/argocd-server -n argocd 8888:443 --address 0.0.0.0`
-- Check firewall rules allow CloudThinker IPs
-- For private clusters: Set up VPN or bastion access
+- **Self-hosted**: Use host IP (not localhost) in Base URL
+- Verify port-forward: `kubectl port-forward svc/argocd-server -n argocd 8888:443 --address 0.0.0.0`
+- Check firewall rules
 </Accordion>
 
-<Accordion title="401 Unauthorized errors">
-- Verify the API token is correct and not expired
-- Ensure the admin account has both `login` and `apiKey` capabilities enabled
-- For self-hosted: Confirm the `argocd-cm` ConfigMap was patched correctly
-- For Akuity: Verify the System Account has both capabilities ticked in the Portal
+<Accordion title="401 Unauthorized">
+- Verify API token is correct
+- Ensure admin has `login` + `apiKey` capabilities
+- Self-hosted: Check `argocd-cm` ConfigMap patched
+- Akuity: Check System Account capabilities
 </Accordion>
 
 <Accordion title="Cannot generate API token">
-- Check that `apiKey` capability is enabled for the account
-- Verify you're logged in: `argocd account get`
-- For self-hosted: Ensure the `argocd-cm` patch was applied: `kubectl get cm argocd-cm -n argocd -o yaml`
+- Check `apiKey` capability enabled
+- Run: `argocd account get`
 </Accordion>
 
 <Accordion title="TLS certificate errors">
-- **Self-hosted**: Disable TLS verification in CloudThinker (uses self-signed cert)
-- **Akuity**: Enable TLS verification (uses valid certificates)
-- Check certificate validity: `openssl s_client -connect <host>:<port> -servername <host>`
+- Self-hosted: Disable TLS verification
+- Akuity: Enable TLS verification
 </Accordion>
 
 ---
 
 ## Security Best Practices
 
-- **Read-only access** - Use read-only RBAC policies for CloudThinker
-- **Token rotation** - Rotate API tokens periodically
-- **Network isolation** - Restrict ArgoCD server access to CloudThinker IPs
-- **Audit logging** - Enable ArgoCD audit logs for all API access
-- **Least privilege** - Grant only `get` and `list` permissions, avoid `create`, `update`, `delete`
+- **Read-only access** - Use read-only RBAC
+- **Token rotation** - Rotate periodically
+- **Network isolation** - Restrict server access
+- **Audit logging** - Enable ArgoCD audit logs
+- **Least privilege** - Grant only `get`/`list`
 
 ---
 
@@ -310,9 +224,9 @@ Once connected, [Kai](/guide/agents/kai) can:
 
 <CardGroup cols={2}>
   <Card title="Kai Agent" icon="dharmachakra" href="/guide/agents/kai">
-    Kubernetes and GitOps-focused optimization agent
+    Kubernetes and GitOps agent
   </Card>
   <Card title="Kubernetes Connection" icon="dharmachakra" href="/guide/connections/kubernetes">
-    Connect Kubernetes clusters for deeper workload analysis
+    Connect clusters
   </Card>
 </CardGroup>
