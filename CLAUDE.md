@@ -135,11 +135,21 @@ The custom `llms.txt` at the project root **must be kept in sync** with the docu
 
 ### Adding New Pages
 
-1. Create `.mdx` file in appropriate directory
-2. Add front matter with `title` and `description` (required — used by `llms.txt` auto-generation)
-3. Update `docs.json` navigation structure
-4. Add entry to `llms.txt` in the matching section
-5. Test locally with `mintlify dev`
+1. **Mirror the nearest sibling page.** Before writing, open an existing page in the same category and follow its section order, Mintlify components, frontmatter, and tone — do not invent a new structure. Match the most complete sibling, not the sparsest.
+2. Create `.mdx` file in appropriate directory
+3. Add front matter with `title` and `description` (required — used by `llms.txt` auto-generation)
+4. Update `docs.json` navigation structure
+5. Add entry to `llms.txt` in the matching section (description drawn from frontmatter)
+6. Test locally with `mintlify dev`
+
+### Adding a Connection Guide (`guide/connections/`)
+
+Mirror an existing connection of the **same auth style**, then keep the canonical section flow:
+
+- **Token/API-key connections** (Vercel, Coralogix, Datadog, Cloudflare) → copy `guide/connections/coralogix.mdx`.
+- **OAuth connections** (Neon) → copy `guide/connections/neon.mdx`.
+
+Canonical section flow: intro (capabilities + auth mechanism) → `Prerequisites` (`<Info>`) → `Setup` (`<Steps>` + `<Warning>`) → `Connection Details` (table) → `Required Permissions` (`<Tip>`) → `Agent Capabilities` (table + `Example Prompts`) → `Troubleshooting` (`<Accordion>`) → `Security Best Practices` → `Related` (`<CardGroup>`). Also add an icon at `images/icons/<name>.svg` and register the page in both `docs.json` and `llms.txt`.
 
 ### Updating Navigation
 
