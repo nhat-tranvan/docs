@@ -1,0 +1,195 @@
+---
+title: RabbitMQ
+description: "Connect RabbitMQ to CloudThinker via the Management HTTP API for queue depth, consumer lag, DLQ analysis, cluster and node health, and alarm monitoring"
+icon: "/images/icons/rabbitmq.svg"
+---
+
+Connect your RabbitMQ brokers to enable [Tony](/guide/agents/tony) (Database Engineer) to monitor queue depths, analyze consumer lag, inspect dead-letter queues, and track cluster and node health.
+
+RabbitMQ authenticates with a **username and password** over the **Management HTTP API**. CloudThinker connects to the management port (default `15672`) — the same API the RabbitMQ management UI uses — so no AMQP client setup is required.
+
+---
+
+## Supported Platforms
+
+| Platform | Support |
+|----------|---------|
+| **Self-hosted RabbitMQ** | 3.8+ with the management plugin enabled |
+| **Managed RabbitMQ** | CloudAMQP and other providers exposing the Management HTTP API |
+
+---
+
+## Prerequisites
+
+- A **RabbitMQ broker** reachable from CloudThinker on its management port (default `15672`, or `15671` for HTTPS).
+- The **management plugin enabled**. On self-hosted brokers:
+  ```bash
+  rabbitmq-plugins enable rabbitmq_management
+  ```
+- A **broker user** with the `monitoring` or `administrator` tag, so the Management HTTP API returns queue, node, and cluster data.
+
+<Info>
+The `monitoring` tag is enough for all read and health-check capabilities. Only grant `administrator` if you want the agent to run the gated write operations (purge/delete queues, delete exchanges, update definitions) — these always require in-app approval. See [Required Permissions](#required-permissions).
+</Info>
+
+---
+
+## Setup
+
+<Steps>
+  <Step title="Enable the Management Plugin">
+    On a self-hosted broker, enable the management plugin and confirm it is listening:
+    ```bash
+    rabbitmq-plugins enable rabbitmq_management
+    curl -u <user>:<password> http://localhost:15672/api/overview
+    ```
+    Managed providers such as CloudAMQP expose the Management HTTP API by default — skip to the next step.
+  </Step>
+  <Step title="Create a Monitoring User">
+    Create a dedicated user for CloudThinker and tag it `monitoring`:
+    ```bash
+    rabbitmqctl add_user cloudthinker <strong-password>
+    rabbitmqctl set_user_tags cloudthinker monitoring
+    rabbitmqctl set_permissions -p / cloudthinker "" "" ".*"
+    ```
+    The `monitoring` tag grants read access to all queues, exchanges, nodes, and cluster health across virtual hosts.
+  </Step>
+  <Step title="Confirm Network Access">
+    Ensure CloudThinker can reach the broker at `<host>:15672` (or `<host>:15671` for TLS). Open the management port on your firewall or security group for CloudThinker's egress.
+  </Step>
+  <Step title="Add Connection in CloudThinker">
+    Navigate to **Connections → RabbitMQ** and enter:
+    - **Username**: the broker user (e.g. `cloudthinker`)
+    - **Password**: the user's password
+    - **Host**: the broker hostname or IP (host only — no scheme or port)
+    - **Management Port**: the management API port (default `15672`)
+    - **Use TLS**: enable for an HTTPS management API and AMQPS
+    - **Log Level**: connector log verbosity (`info` by default)
+
+    Click **Connect**. CloudThinker verifies the credentials against the Management HTTP API and shows a **Connected** status.
+  </Step>
+</Steps>
+
+<Warning>
+Set **Host** to the hostname only — do not include `http://`, `https://`, or the port. Use the **Use TLS** toggle to select HTTP vs. HTTPS, and **Management Port** for the port.
+</Warning>
+
+---
+
+## Connection Details
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| **RABBITMQ_USERNAME** | Broker user with the `monitoring` or `administrator` tag | — |
+| **RABBITMQ_PASSWORD** | Password for the broker user | — |
+| **RABBITMQ_HOST** | Broker hostname or IP (no scheme, no port) | — |
+| **RABBITMQ_MANAGEMENT_PORT** | Management HTTP API port | `15672` |
+| **RABBITMQ_USE_TLS** | `Disabled` for HTTP + AMQP, `Enabled` for HTTPS + AMQPS | `Disabled` |
+| **LOG_LEVEL** | Connector log verbosity: `debug`, `info`, `warn`, `error` | `info` |
+
+<Note>
+The management API listens on `15672` for HTTP and `15671` for HTTPS. When you enable **Use TLS**, set **Management Port** to your TLS management port.
+</Note>
+
+---
+
+## Required Permissions
+
+The connecting user needs a management tag so the HTTP API returns broker data:
+
+| Tag | What It Unlocks |
+|-----|-----------------|
+| `monitoring` | Read access to queues, exchanges, bindings, connections, channels, nodes, cluster, and health checks — covers all monitoring and diagnostic capabilities. |
+| `administrator` | Everything `monitoring` provides, plus the gated write operations (purge/delete queue, delete exchange, update definition). |
+
+<Tip>
+Follow least privilege: the `monitoring` tag is enough for queue, consumer-lag, DLQ, and cluster-health investigation. Only use `administrator` if you intend to run the gated write operations described below.
+</Tip>
+
+### Write Operations Require Approval
+
+This connection has four mutative tools enabled. They are always gated behind **in-app approval** — the agent must request your confirmation before any of them run:
+
+- `delete_queue` — delete a queue
+- `purge_queue` — drop all messages in a queue
+- `delete_exchange` — delete an exchange
+- `update_definition` — modify broker definitions
+
+All other capabilities are read-only. Destructive operations also require the broker user to hold the `administrator` tag with write permissions on the target virtual host.
+
+---
+
+## Agent Capabilities
+
+Once connected, [Tony](/guide/agents/tony) can:
+
+| Capability | Description |
+|------------|-------------|
+| **Queue Depth & Message Rates** | Snapshot queue depth, ready vs. unacked, and publish/deliver rates |
+| **Consumer Lag** | Identify queues with high consumer lag or zero consumers |
+| **Dead-Letter Analysis** | Inspect dead-letter queues for poison messages and error patterns |
+| **Cluster & Node Health** | Check node status, local and global alarms, and quorum-critical queues |
+| **Alarm & Certificate Checks** | Detect brokers in alarm and certificates nearing expiration |
+| **Gated Write Operations** | Purge or delete queues, delete exchanges, and update definitions — each requires in-app approval |
+
+### Example Prompts
+
+```bash
+@tony check all queues for abnormal depth or zero-consumer conditions and #alert on any queue growing faster than 500 msg/s
+@tony identify queues with high consumer lag and inspect their dead-letter queues for poison messages, then #recommend remediation steps
+@tony check cluster node status, alarms, quorum-critical queues, and certificate expiration; #alert on any node down or in alarm
+@tony pull a snapshot of all queues and #dashboard the top 10 busiest queues with trend analysis over the last hour
+```
+
+---
+
+## Troubleshooting
+
+<Accordion title="Connection refused or timeout">
+- Verify the broker is reachable from CloudThinker at `<host>:15672` (or your TLS management port).
+- Confirm the management port — not the AMQP port `5672` — is open on your firewall or security group.
+- For self-hosted brokers, ensure RabbitMQ is bound to an accessible interface, not just `127.0.0.1`.
+</Accordion>
+
+<Accordion title="404 Not Found on the management API">
+The management plugin is not enabled. Run `rabbitmq-plugins enable rabbitmq_management` and retry. On managed providers, confirm the Management HTTP API is exposed for your instance.
+</Accordion>
+
+<Accordion title="401 Unauthorized">
+- Verify the username and password.
+- Confirm the user has the `monitoring` or `administrator` tag: `rabbitmqctl set_user_tags <user> monitoring`.
+- A user with no management tag can authenticate to AMQP but is rejected by the Management HTTP API.
+</Accordion>
+
+<Accordion title="TLS handshake or certificate errors">
+- Make sure **Use TLS** matches the broker: enable it only when the management API serves HTTPS (typically port `15671`).
+- If **Use TLS** is enabled but the port serves plain HTTP (or vice versa), the connection fails — align the toggle and **Management Port**.
+</Accordion>
+
+<Accordion title="Empty or partial results">
+- The `monitoring` user may lack permissions on some virtual hosts. Grant read permissions on the vhosts you want visible: `rabbitmqctl set_permissions -p <vhost> <user> "" "" ".*"`.
+</Accordion>
+
+---
+
+## Security Best Practices
+
+- **Least-privilege tag** — Use a `monitoring`-tagged user for read-only investigation; reserve `administrator` for when gated writes are needed.
+- **Dedicated user** — Create a separate CloudThinker user instead of reusing the `guest` or admin account.
+- **Strong passwords** — Use a complex, unique password and rotate it regularly.
+- **TLS encryption** — Enable **Use TLS** so management API traffic is encrypted in transit.
+- **Network restrictions** — Restrict the management port to CloudThinker's egress via firewall rules or security groups; keep brokers off the public internet.
+- **Approval-gated writes** — Destructive operations always require in-app approval; review each request before confirming.
+
+---
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Tony Agent" icon="database" href="/guide/agents/tony">
+    Database-focused monitoring and optimization agent
+  </Card>
+  <Card title="Kafka Connection" icon="/images/icons/kafka.svg" href="/guide/connections/kafka">
+    Setup instructions for Apache Kafka streaming
+  </Card>
+</CardGroup>
