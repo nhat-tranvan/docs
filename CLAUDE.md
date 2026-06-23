@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-This is a **Mintlify-based documentation site** for CloudThinker, a Multi-Agent System (MAS) orchestration platform for cloud operations. The documentation is written in MDX format and uses Mintlify's tooling for development and deployment.
+This is a **Mintlify-based documentation site** for CloudThinker, an **autonomous AI cloud operations platform** (the **AgenticOps** category) where specialized AI agents manage infrastructure, review code, resolve incidents, and optimize costs across AWS, Azure, GCP, and Kubernetes. The documentation is written in MDX format and uses Mintlify's tooling for development and deployment.
+
+**Canonical naming** (keep docs consistent with the app and landing page; the in-product values in the app are the source of truth when sources disagree):
+
+- **Category**: "Autonomous Cloud Operations" / "AgenticOps" — not "Multi-Agent System (MAS) orchestration".
+- **Module names**: Code Review · Deep Response Engine · CostOps (not "Cost Optimization" as a product name — lowercase "cost optimization" is fine for the activity) · SecOps · ChatOps · Skills. CloudKeepers is shown as "Keepers" in the app sidebar.
 
 ## Development Commands
 
@@ -54,9 +59,9 @@ mintlify broken-links
 
 - **Alex**: Cloud Engineer (infrastructure, cost optimization)
 - **Oliver**: Security Professional (compliance, vulnerability assessment)
-- **Tony**: Database Administrator (performance tuning)
-- **Kai**: Kubernetes Administrator (container orchestration)
-- **Anna**: Technology Leader (strategy, transformation)
+- **Tony**: Database Engineer (performance tuning)
+- **Kai**: Kubernetes Engineer (container orchestration)
+- **Anna**: General Manager (multi-agent orchestration, executive reporting)
 
 **Multi-cloud support**: AWS, Azure, GCP with unified operations interface
 
