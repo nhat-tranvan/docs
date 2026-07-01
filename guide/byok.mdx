@@ -4,7 +4,7 @@ description: "Use your own AWS Bedrock credentials for unlimited LLM usage"
 icon: key
 ---
 
-Bring Your Own Key (BYOK) allows Business and Enterprise plan users to use their own AWS Bedrock credentials for LLM operations. This enables unlimited usage without consuming platform credits, provides cost control through your own AWS billing, and supports data residency requirements.
+Bring Your Own Key (BYOK) allows Scale and above plan users to use their own AWS Bedrock credentials for LLM operations. This enables unlimited usage without consuming platform credits, provides cost control through your own AWS billing, and supports data residency requirements.
 
 ---
 
@@ -24,17 +24,88 @@ Enterprise teams often have requirements that shared LLM infrastructure can't me
 
 ## Benefits
 
-- **Unlimited Usage** - No credit restrictions when using your own credentials
-- **Cost Control** - Charges appear on your AWS bill, giving you full visibility and control
-- **Data Residency** - Route requests through specific AWS regions (US, EU, APAC) for compliance
-- **Automatic Model Selection** - System automatically chooses optimal models
-- **Seamless Fallback** - Automatically falls back to platform credentials if your credentials fail
+- **Unlimited Usage** — No credit restrictions when using your own credentials
+- **Cost Control** — Charges appear on your AWS bill, giving you full visibility and control
+- **Data Residency** — Route requests through specific AWS regions (US, EU, APAC) for compliance
+- **Automatic Model Selection** — System automatically chooses optimal models
+- **Configurable Fallback** — Optional fallback to platform credentials if yours fail; **disabled by default for Enterprise tenants** and can be turned off per workspace (see [Fallback behavior](#fallback-behavior) below)
+
+---
+
+## Fallback behavior
+
+CloudThinker can fall back to platform-managed Bedrock credentials when a BYOK call fails (expired session token, throttling, model access lost). This is convenient for development tenants and unacceptable for some regulated deployments — so the behavior is **opt-in per workspace** and disabled by default for Enterprise and BYOC plans.
+
+### When fallback would trigger (if enabled)
+
+A BYOK call falls back to the platform path only when **all three** are true:
+
+1. The error is retryable — credential expiration, throttling, transient 5xx — not a content or policy violation
+2. The agent operation has been marked **fallback-eligible** (most read operations; never autonomous write actions in production)
+3. The workspace's fallback setting is **Allow** (not the default for Enterprise)
+
+If any condition fails, the agent surfaces the error to the user instead of routing the request through a different path.
+
+### What happens during a fallback
+
+The request is re-sent to the platform-managed Bedrock account in **the same region** as the original BYOK call — never silently routed to a different jurisdiction. If your BYOK is configured for `eu-west-1`, a fallback runs against the platform's `eu-west-1` Bedrock endpoint or fails closed; it does not transparently fall back to `us-east-1`.
+
+Every fallback emits an audit event with:
+
+- The original BYOK error code
+- The platform endpoint that served the retry
+- The user, workspace, and conversation that triggered it
+- The model invoked and the token count
+
+Audit events are surfaced in **Admin Settings → Audit log** and can be exported to your SIEM via [webhooks](/guide/webhooks/overview).
+
+### Disable fallback (regulated workspaces)
+
+Enterprise admins can enforce that **no request ever leaves the BYOK boundary**:
+
+<Steps>
+  <Step title="Open the BYOK settings">
+    **Admin Settings → BYOK → Fallback policy**
+  </Step>
+  <Step title="Set the policy to 'Strict'">
+    Three policy options:
+
+    | Policy | Behavior on BYOK failure | Typical use |
+    |---|---|---|
+    | **Allow** | Retry on platform credentials in-region | Dev / sandbox tenants |
+    | **Warn** | Retry on platform credentials in-region, but require explicit user re-confirmation on the next session | Mid-market with mixed workloads |
+    | **Strict** *(recommended for Enterprise / BYOC)* | Surface the error; never retry on a different credential | Banks, FSI, healthcare, BYOC deployments |
+  </Step>
+  <Step title="Lock the policy at the org level (optional)">
+    Toggle **Enforce across all workspaces** to prevent workspace admins from changing the policy locally. Only org owners with the `byok:admin` permission can flip this toggle.
+  </Step>
+</Steps>
+
+<Warning>
+**Strict mode trade-off:** when BYOK credentials are misconfigured or temporarily revoked, agent operations fail outright until the credentials are fixed. This is the intended behavior for regulated environments — *no inference leaves your boundary* takes precedence over availability — but plan operationally for credential rotation, expiry, and quota management. Set up [notifications](/guide/notifications) on BYOK health to catch credential issues before they block on-call work.
+</Warning>
+
+### What data is sent during inference
+
+Regardless of fallback policy, every BYOK inference call sends to Bedrock:
+
+- The agent's system prompt and tool definitions
+- The conversation history relevant to the current turn
+- Any retrieved context (topology, memory, runbooks) the agent is reasoning over
+
+It does **not** send:
+
+- Raw cloud credentials (the agent calls your cloud APIs separately under their own scoped credentials)
+- Other workspaces' data
+- Customer PII if a tokenization layer is configured in front of the model boundary
+
+For BYOC and self-hosted deployments, the tokenization boundary runs inside your trust boundary; for SaaS BYOK, tokenization is configured per workspace in **Admin Settings → Data Protection**.
 
 ---
 
 ## Prerequisites
 
-- **Business or Enterprise subscription plan** - BYOK is only available for Business and Enterprise tier users
+- **Scale, Scale +, or Enterprise subscription plan** - BYOK is only available on Scale and above (see [Pricing & Plans](/guide/billing/pricing))
 - **AWS account** with Amazon Bedrock access enabled
 - **IAM credentials** with Bedrock permissions (access key ID and secret access key)
 - **Model access** - Both Claude Sonnet 4.5 and Opus 4.5 models must be enabled in your AWS account
@@ -247,7 +318,7 @@ Once you have AWS Bedrock model access and IAM credentials configured, set up BY
 
 <Warning>
   Credentials are encrypted and stored securely. They are never exposed in API
-  responses or logs. Only Business and Enterprise plan users can configure BYOK.
+  responses or logs. Only Scale and above plan users can configure BYOK.
 </Warning>
 
 ---
@@ -327,7 +398,7 @@ If your BYOK credentials fail (due to rate limits, expired tokens, or permission
 <Accordion title="BYOK not working in workspace">
   - Verify workspace owner has configured BYOK
   - Check that BYOK is enabled (not disabled) in settings
-  - Confirm workspace owner's plan is Business or Enterprise
+  - Confirm workspace owner's plan is Scale, Scale +, or Enterprise
   - Check workspace owner's credentials are still valid
 </Accordion>
 
