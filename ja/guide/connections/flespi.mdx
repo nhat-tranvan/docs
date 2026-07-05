@@ -1,0 +1,227 @@
+---
+title: Flespi
+description: "FlespiのIoTテレマティクスをCloudThinkerに接続し、GPSデバイス管理・フリートテレメトリ・IoTデータ分析を行います"
+icon: "/images/icons/flespi.svg"
+---
+
+import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+
+Flespiアカウントを接続することで、CloudThinkerエージェントがGPSデバイスの管理、テレメトリの監視、チャンネルとストリームの検査、Flespi MCPサーバーを通じたフリートインフラストラクチャの操作を行えるようになります。
+
+Flespiは、Flespiパネルで生成した**APIトークン**（StandardまたはACLタイプ）で認証します。
+
+---
+
+## 対応プラットフォーム
+
+| プラットフォーム | サポート |
+|----------|---------|
+| **Flespi Free** | 月1,000 AIクレジット |
+| **Flespi Commercial** | 月1,000 AIクレジット + 有料超過分 |
+
+---
+
+## 前提条件
+
+- [flespi.io](https://flespi.io/#/) の **Flespiアカウント**。
+- APIトークンを作成・管理するためのFlespiパネルへのアクセス。
+- 本番ワークロードの場合、CloudThinkerが必要とするモジュールにスコープされた権限を持つACLトークン。
+
+---
+
+## セットアップ
+
+CloudThinkerはFlespi APIトークンを使用して、Flespiの公式MCPサーバー経由でFlespiに接続します。
+
+<Steps>
+  <Step title="Flespiアカウントを作成">
+    アカウントをお持ちでない場合は、[flespi.io](https://flespi.io/#/) でサインアップしてください。
+  </Step>
+  <Step title="APIトークンを生成">
+    Flespiパネルで左メニューの **Tokens** に移動し、**「+」** ボタンをクリックします:
+    - **Name**: `CloudThinker Agent`
+    - **Type**: Standard（開発用）またはACL（本番用）
+    - **TTL**: 有効期限を設定（例: `7776000`（90日））。FlespiはすべてのトークンにTTLまたは有効期限の設定を必須としています。
+
+    64バイトのトークンをすぐにコピーします。
+  </Step>
+  <Step title="CloudThinkerで接続を追加">
+    **Connections → Flespi** に移動し、生成したトークンを入力します。
+  </Step>
+  <Step title="接続をテスト">
+    **Connect** をクリックします。CloudThinkerがトークンを検証し、**Connected** ステータスを表示します。
+  </Step>
+</Steps>
+
+<Warning>
+Flespiは認証プレフィックスとして `Bearer` ではなく `FlespiToken` を使用します。CloudThinkerはこれを自動的に処理しますが、APIコールを手動でデバッグする際には留意してください。
+</Warning>
+
+---
+
+## 接続の詳細
+
+| フィールド | 説明 | 例 |
+|-------|-------------|---------|
+| **Flespi Token** | FlespiのAPIトークン（64バイト） | `7Bf3...xK9z` |
+
+---
+
+## 必要な権限
+
+### トークンタイプ
+
+| タイプ | アクセスレベル | 使用場面 |
+|------|-------------|-------------|
+| **Standard** | すべてのTelematicsエンティティ（デバイス、チャンネル、ストリーム、プラグイン、ジオフェンス、カリキュレーター）へのフルCRUD | 開発・テスト |
+| **ACL** | 細粒度 — デフォルトで全拒否、モジュール/メソッド/アイテム単位で付与 | **本番推奨** |
+| **Master** | プラットフォームAPIを含む完全な管理者権限 | **AIエージェントでは絶対に使用しない** |
+
+### トークンの有効期限
+
+Flespiはすべてのトークンに有効期限の設定を**必須**としています。以下のいずれかを設定してください:
+
+- **`ttl`** — 非活動状態になってからの有効期限（秒）（APIコールごとにリセット）
+- **`expire`** — ハード有効期限のUnixタイムスタンプ
+
+<Tip>
+長期的な統合には `ttl`（例: 7776000 = 90日）を使用してください。タイマーはAPIコールのたびにリセットされるため、アクティブなトークンが予期せず期限切れになることはありません。
+</Tip>
+
+### 推奨ACL権限（本番用）
+
+**読み取り専用（最小）:**
+
+| モジュール | メソッド | 目的 |
+|--------|---------|---------|
+| `gw/devices` | GET | デバイス一覧、ステータス、テレメトリ、メッセージ |
+| `gw/channels` | GET | チャンネル一覧、設定、ステータス |
+| `gw/streams` | GET | ストリーム一覧、ヘルス、デリバリー統計 |
+| `gw/calculators` | GET | カリキュレーター設定 |
+| `ai` | POST | MCPツールコールに必要 |
+
+**読み取り/書き込み（書き込み操作が必要な場合）:**
+
+| モジュール | メソッド | 目的 |
+|--------|---------|---------|
+| `gw/devices` | GET, POST, PUT | デバイスの作成/更新 |
+| `gw/channels` | GET, POST, PUT | チャンネルの作成/更新 |
+| `gw/streams` | GET, POST, PUT, DELETE | ストリームのフル管理 |
+
+<Info>
+ACLトークンはデフォルトですべてを拒否します。明示的に付与された権限のみが許可されます。`gw/devices` にPOSTが付与されたトークンは、GETも別途付与されない限りGETを持ちません。
+</Info>
+
+---
+
+## エージェント機能
+
+接続後、エージェントは次のことができます:
+
+| 機能 | 説明 |
+|------------|-------------|
+| **デバイス管理** | デバイスの一覧表示、ステータス確認、テレメトリとメッセージ履歴の読み取り |
+| **チャンネル監視** | チャンネルの設定、ステータス、接続プロトコルの検査 |
+| **ストリームヘルス** | ストリームのデリバリー統計とヘルスの監視 |
+| **フリートテレメトリ** | デバイス横断でGPS位置、速度、燃料、センサーデータをクエリ |
+| **ジオフェンス** | ジオフェンスゾーンとトリガーの表示・管理 |
+| **カリキュレーター** | 走行検出、燃料消費などのカリキュレーター設定を検査 |
+
+### 利用可能なMCPツール
+
+**無料ツール（0クレジット）:**
+
+| ツール | 説明 |
+|------|-------------|
+| `search-api-methods` | 自然言語クエリでflespi REST APIメソッドを探索 |
+| `get-api-schema` | 特定APIメソッドの完全なSwaggerスキーマを取得 |
+| `flespi-api-read` | flespi REST APIへの読み取り専用GETリクエストを実行 |
+| `flespi-api-write` | 書き込み操作（POST/PUT/PATCH/DELETE）を実行 |
+
+**有料ツール:**
+
+| ツール | クレジット | 説明 |
+|------|---------|-------------|
+| `search-flespi-documentation` | 5 | flespiプラットフォームドキュメントを検索 |
+| `search-device-documentation` | 10 | デバイス/プロトコルメーカーのドキュメントを検索 |
+| `generate-flespi-expression` | 2 | セレクターやカリキュレーター用のflespi式を生成 |
+| `generate-pvm-code` | 10 | PVM（Protocol Virtual Machine）コードを生成 |
+| `consult-flespi-account` | 30 | アカウント読み取りアクセス付きのflespi AIエキスパートに複雑な分析を委任 |
+
+### AIクレジット
+
+| プラン | 月間無料クレジット | 超過分 |
+|------|-------------------|---------|
+| Free | 1,000 | 翌月まで利用不可 |
+| Commercial | 1,000 | 追加100クレジットあたり€1 |
+
+使用量はFlespiパネルの **AIタイル**、`GET /ai/logs` API、またはMQTTトピック `flespi/log/ai/#` で監視できます。
+
+### 接続を確認
+
+```text
+@alex list all Flespi devices and report their last known positions
+```
+
+### プロンプト例
+
+```text
+@alex check stream health and identify any delivery failures
+@alex query telemetry for device 12345 over the last 24 hours
+@alex list geofences and check which devices are inside zone "warehouse-01"
+```
+
+---
+
+## トラブルシューティング
+
+<Accordion title="アクセストークンが無効または期限切れ">
+- トークンが期限切れになっている可能性があります。Flespiパネルでの TTL と有効期限の設定を確認してください。
+- 新しいトークンを作成して、CloudThinkerの接続を更新してください。
+- 期限切れのトークンはflespiによって**自動的に削除**されます。
+</Accordion>
+
+<Accordion title="ACLでアクションが許可されていない">
+- ACLトークンに必要なモジュール + HTTPメソッドの組み合わせが不足しています。
+- トークンのACLを更新して、必要な権限を付与してください。
+- ACLはデフォルトで全拒否です。各権限を明示的に付与する必要があります。
+</Accordion>
+
+<Accordion title="AIツールでHTTP 403">
+- 月間AIクレジットが枯渇しています。
+- Freeプランの場合: 翌月まで待ちます。Commercialプランの場合: 超過設定を確認してください。
+- クレジット使用量は `GET /ai/logs` またはイベントコード `1710` で監視できます。
+</Accordion>
+
+<Accordion title="HTTP 429レート制限">
+- Flespiは1分あたりのAPI + MQTT + トラフィックの合計使用量を計算します。
+- リクエスト頻度を下げるかバッチ処理を行ってください。
+- 使用量が最も多いトークンが最初にブロックされます。他のトークンは引き続き動作します。
+</Accordion>
+
+<Accordion title="許可されていない場所からのトークン使用">
+- トークンにIPホワイトリストが設定されているが、サーバーIPが含まれていません。
+- FlespiパネルでトークンのIPホワイトリストを更新してください: **Token settings → IPs whitelist**。
+</Accordion>
+
+---
+
+## セキュリティ
+
+<ConnectionSecurity />
+
+- **専用トークン** — CloudThinker用に別個のトークンを作成し、統合間で共有したり、Masterトークンを使用したりしないでください
+- **本番環境ではACL** — 必要最低限の権限のみを持つACLトークンを使用してください。ACLトークンはデフォルトで全拒否です
+
+---
+
+## 関連情報
+
+<CardGroup cols={2}>
+  <Card title="MCP 接続" icon="/images/icons/mcp.svg" href="/ja/guide/connections/mcp">
+    カスタムMCP統合
+  </Card>
+  <Card title="Kubernetes 接続" icon="/images/icons/kubernetes.svg" href="/ja/guide/connections/kubernetes">
+    IoTワークロード向けコンテナオーケストレーション
+  </Card>
+</CardGroup>

@@ -1,0 +1,365 @@
+---
+title: Webhooks
+description: "設定可能な Webhook を使って CloudThinker のイベントを外部システムに送信します"
+icon: webhook
+---
+
+Webhook を使うと、CloudThinker がリアルタイムで外部システムにイベントをプッシュでき、自動化・連携・カスタムワークフローを実現できます。
+
+## Webhook の仕組み
+
+<Steps>
+  <Step title="設定">
+    送信先 URL と受信するイベントを選択して Webhook エンドポイントを作成する
+  </Step>
+  <Step title="トリガー">
+    購読したイベントが発生すると、CloudThinker が Webhook ペイロードを準備する
+  </Step>
+  <Step title="配信">
+    CloudThinker がイベントデータを含む HTTP POST リクエストをエンドポイントに送信する
+  </Step>
+  <Step title="処理">
+    システムが Webhook を受信・処理し、成功レスポンスを返す
+  </Step>
+</Steps>
+
+---
+
+## Webhook の作成
+
+### コンソールから
+
+1. **設定 > Webhooks** に移動する
+2. **Webhook を作成** をクリックする
+3. Webhook を設定する：
+   - **名前**：識別しやすい名称
+   - **URL**：エンドポイント URL（HTTPS 必須）
+   - **イベント**：購読するイベントを選択
+   - **シークレット**：検証用の署名シークレット（任意）
+4. 保存してテストする
+
+### Webhook の設定項目
+
+| フィールド | 説明 | 必須 |
+|-------|-------------|----------|
+| **名前** | 識別用のわかりやすい名前 | はい |
+| **URL** | イベントを受信する HTTPS エンドポイント | はい |
+| **イベント** | 購読するイベントタイプ | はい |
+| **シークレット** | ペイロード署名用の共有シークレット | 推奨 |
+| **ヘッダー** | 追加するカスタムヘッダー | いいえ |
+| **有効** | Webhook の有効・無効の切り替え | はい |
+
+---
+
+## イベントタイプ
+
+CloudThinker 全体のイベントを購読できます。
+
+### 推奨事項イベント
+
+| イベント | トリガー |
+|-------|---------|
+| `recommendation.created` | 新しい推奨事項が生成された |
+| `recommendation.updated` | 推奨事項のステータスが変更された |
+| `recommendation.implemented` | 推奨事項が完了としてマークされた |
+| `recommendation.comment` | 推奨事項にコメントが追加された |
+
+### インシデントイベント
+
+| イベント | トリガー |
+|-------|---------|
+| `incident.created` | 新しいインシデントが作成された |
+| `incident.updated` | インシデントの詳細が変更された |
+| `incident.resolved` | インシデントが解決済みとしてマークされた |
+| `incident.comment` | インシデントにコメントが追加された |
+
+### セキュリティイベント
+
+| イベント | トリガー |
+|-------|---------|
+| `finding.created` | 新しいセキュリティ検出事項が発見された |
+| `finding.resolved` | セキュリティ検出事項が解決された |
+| `compliance.changed` | コンプライアンスステータスが変更された |
+
+### タスクイベント
+
+| イベント | トリガー |
+|-------|---------|
+| `task.started` | スケジュールされたタスクの実行が開始された |
+| `task.completed` | タスクが正常に完了した |
+| `task.failed` | タスクでエラーが発生した |
+
+### エージェントイベント
+
+| イベント | トリガー |
+|-------|---------|
+| `conversation.completed` | エージェントとの会話が終了した |
+| `approval.requested` | エージェントがアクションの承認を要求した |
+| `approval.granted` | ユーザーがエージェントのアクションを承認した |
+
+### リソースイベント
+
+| イベント | トリガー |
+|-------|---------|
+| `resource.discovered` | 新しいクラウドリソースが検出された |
+| `resource.changed` | リソースの設定が変更された |
+| `resource.deleted` | リソースが存在しなくなった |
+
+---
+
+## Webhook ペイロード
+
+各 Webhook には標準化されたペイロードが含まれます。
+
+```json
+{
+  "id": "evt_abc123",
+  "type": "recommendation.created",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "workspace_id": "ws_xyz789",
+  "data": {
+    "id": "rec_def456",
+    "title": "Right-size EC2 instance i-0abc123",
+    "potential_savings": 150.00,
+    "effort": "low",
+    "risk": "low",
+    "status": "pending"
+  }
+}
+```
+
+### ペイロードフィールド
+
+| フィールド | 説明 |
+|-------|-------------|
+| `id` | 一意のイベント識別子 |
+| `type` | イベントタイプ（例：`recommendation.created`） |
+| `timestamp` | ISO 8601 タイムスタンプ |
+| `workspace_id` | イベントが発生したワークスペース |
+| `data` | イベント固有のペイロード |
+
+---
+
+## セキュリティ
+
+### 署名検証
+
+Webhook シークレットを設定すると、CloudThinker が各ペイロードに署名します。
+
+```
+X-CloudThinker-Signature: sha256=<signature>
+```
+
+エンドポイントで署名を検証します：
+
+```python
+import hmac
+import hashlib
+
+def verify_signature(payload, signature, secret):
+    expected = hmac.new(
+        secret.encode(),
+        payload.encode(),
+        hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(f"sha256={expected}", signature)
+```
+
+### IP 許可リスト
+
+CloudThinker の Webhook は既知の IP アドレス範囲から発信されます。ファイアウォールルールを設定するための最新の IP リストについては、サポートにお問い合わせください。
+
+### HTTPS のみ
+
+Webhook URL は HTTPS を使用する必要があります。本番環境では自己署名証明書はサポートされていません。
+
+---
+
+## 再試行ロジック
+
+CloudThinker は失敗した Webhook 配信を再試行します。
+
+### 再試行スケジュール
+
+| 試行回数 | 遅延 |
+|---------|-------|
+| 1 | 即時 |
+| 2 | 1分後 |
+| 3 | 5分後 |
+| 4 | 30分後 |
+| 5 | 2時間後 |
+| 6 | 8時間後 |
+
+### 成功条件
+
+次の場合に配信が成功とみなされます：
+- HTTP 2xx ステータスコード
+- 30秒以内のレスポンス
+
+### 失敗時の処理
+
+すべての再試行が失敗した場合：
+- イベントは失敗としてマークされる
+- 通知が送信される（設定されている場合）
+- Webhook ログでイベントを確認できる
+
+---
+
+## Webhook の管理
+
+### Webhook のテスト
+
+本番稼働前に Webhook 配信をテストします：
+
+1. 設定で Webhook を選択する
+2. **テストイベントを送信** をクリックする
+3. イベントタイプを選択する
+4. 配信ステータスとペイロードを確認する
+
+### ログの確認
+
+Webhook のアクティビティを監視します：
+
+1. **設定 > Webhooks > ログ** に移動する
+2. 配信の試行を確認する
+3. リクエスト/レスポンスの詳細を確認する
+4. ステータス、イベントタイプ、日付でフィルタリングする
+
+### Webhook の一時停止
+
+Webhook を一時的に無効にします：
+
+1. Webhook を選択する
+2. **有効** をオフに切り替える
+3. 一時停止中のイベントはキューに蓄積されません
+
+---
+
+## Webhook テンプレート
+
+一般的な連携用のテンプレートを使用します。
+
+### Slack
+
+Slack チャンネルにイベントを投稿する：
+
+```json
+{
+  "url": "https://hooks.slack.com/services/...",
+  "events": ["recommendation.created", "incident.created"],
+  "transform": {
+    "text": "New {{type}}: {{data.title}}"
+  }
+}
+```
+
+### Jira
+
+CloudThinker イベントから Jira チケットを作成する：
+
+```json
+{
+  "url": "https://your-org.atlassian.net/...",
+  "events": ["recommendation.created"],
+  "headers": {
+    "Authorization": "Basic <base64_credentials>"
+  }
+}
+```
+
+### PagerDuty
+
+PagerDuty インシデントをトリガーする：
+
+```json
+{
+  "url": "https://events.pagerduty.com/v2/enqueue",
+  "events": ["incident.created"],
+  "headers": {
+    "Content-Type": "application/json"
+  }
+}
+```
+
+---
+
+## ベストプラクティス
+
+<AccordionGroup>
+  <Accordion title="必ず署名を検証する">
+    Webhook シークレットを使用し、リクエストが CloudThinker から発信されたことを確認するために署名を検証してください。
+  </Accordion>
+
+  <Accordion title="素早くレスポンスを返す">
+    すぐに 2xx レスポンスを返してから、イベントを非同期で処理してください。処理に時間がかかるとタイムアウトが発生します。
+  </Accordion>
+
+  <Accordion title="重複を処理する">
+    Webhook の配信が重複することがあります。イベントの `id` を使って受信側で重複排除してください。
+  </Accordion>
+
+  <Accordion title="失敗を監視する">
+    Webhook の失敗に対するアラートを設定してください。イベントの欠落を防ぐため、問題を迅速に調査して修正してください。
+  </Accordion>
+
+  <Accordion title="必要なイベントのみ購読する">
+    必要なイベントのみ購読してください。ノイズと処理オーバーヘッドを削減できます。
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## 連携例
+
+### GitHub Actions
+
+CloudThinker イベントからワークフローをトリガーする：
+
+```yaml
+# .github/workflows/cloudthinker.yml
+on:
+  repository_dispatch:
+    types: [recommendation-created]
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Process recommendation
+        run: |
+          echo "New recommendation: ${{ github.event.client_payload.title }}"
+```
+
+### AWS Lambda
+
+サーバーレス関数で Webhook を処理する：
+
+```python
+def lambda_handler(event, context):
+    body = json.loads(event['body'])
+
+    if body['type'] == 'recommendation.created':
+        # Process new recommendation
+        process_recommendation(body['data'])
+
+    return {'statusCode': 200}
+```
+
+---
+
+## 関連
+
+<CardGroup cols={2}>
+  <Card title="インシデント Webhook" icon="siren-on" href="/ja/guide/incident/webhook-integrations">
+    PagerDuty、Datadog、Prometheus などからの受信 Webhook で RCA を自動トリガーする
+  </Card>
+  <Card title="タスクとスケジューリング" icon="calendar-check" href="/ja/guide/automation/tasks">
+    定期操作のスケジュール設定とイベント駆動ワークフローの作成
+  </Card>
+  <Card title="通知" icon="bell" href="/ja/guide/notifications">
+    推奨事項、インシデント、セキュリティ検出事項のアラートルーティングを設定する
+  </Card>
+  <Card title="自律エージェント" icon="robot" href="/ja/guide/automation/autonomous-agents">
+    手動レビューなしに Webhook イベントに基づいてエージェントが自動的に行動する
+  </Card>
+</CardGroup>

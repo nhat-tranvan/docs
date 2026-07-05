@@ -1,0 +1,180 @@
+---
+title: Azure
+description: "マルチクラウド運用、コスト分析、コンプライアンス監視のためにMicrosoft AzureをCloudThinkerに接続します"
+icon: "/images/icons/azure.svg"
+---
+
+import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+
+Azureサブスクリプションを接続して、CloudThinkerエージェントがコスト分析、コンプライアンス監査、Microsoft Azure全体のインフラ管理を実行できるようにします。
+
+Azureの認証は**サービスプリンシパル**（アプリ登録 + クライアントシークレット + テナントID）で行います。プリンシパルのロール割り当てが各エージェントの読み取り範囲を決定します。
+
+---
+
+## 前提条件
+
+- OwnerまたはUser Access AdministratorアクセスのあるAzureサブスクリプション。
+- Azure Active Directoryでアプリ登録を作成する権限。
+- ターゲットサブスクリプションでロールを割り当てる権限。
+
+<Info>
+Readerロールで、コスト分析、セキュリティ監査、リソース検査が可能です。Azureリソースに対してエージェントがアクションを実行する必要がある場合にのみ、書き込みレベルのロールを付与してください。
+</Info>
+
+---
+
+## セットアップ
+
+<Steps>
+  <Step title="アプリケーションを登録">
+    [Azure Portal](https://portal.azure.com/)に移動し、**Azure Active Directory → App registrations → New registration** に進みます：
+    - **名前**：`CloudThinker-ReadOnly`
+    - **サポートされるアカウントの種類**：この組織ディレクトリのみのアカウント
+    - **Register** をクリック
+  </Step>
+  <Step title="アプリケーション詳細をメモ">
+    アプリの概要から次の値をコピーして保存します：
+    - **Application（クライアント）ID**
+    - **Directory（テナント）ID**
+  </Step>
+  <Step title="クライアントシークレットを作成">
+    アプリ登録で **Certificates & secrets → New client secret** に移動します。説明を追加し、有効期限を設定（推奨：12ヶ月）して **Add** をクリックします。シークレット値をすぐにコピーしてください — 再度表示されません。
+  </Step>
+  <Step title="Readerロールを割り当て">
+    **Subscriptions → Your Subscription → Access control (IAM) → Add → Add role assignment** に移動します。**Reader** ロールを選択し、アプリ登録を検索して選択し、**Save** をクリックします。
+  </Step>
+  <Step title="CloudThinkerに接続を追加">
+    **Connections → Azure** に移動して次を入力します：
+    - **Client ID**（Application ID）
+    - **Client Secret**（コピーしたシークレット値）
+    - **Tenant ID**（Directory ID）
+    - **Subscription ID**
+
+    **Connect** をクリックします。CloudThinkerが認証情報を確認し、**Connected** ステータスに変わります。
+  </Step>
+</Steps>
+
+<Warning>
+クライアントシークレットは作成直後にコピーしてください。Azureは再表示せず、紛失した場合は新しいシークレットを作成する必要があります。
+</Warning>
+
+### マルチサブスクリプションのセットアップ
+
+複数のAzureサブスクリプションを持つ組織向け：
+
+<Steps>
+  <Step title="Management Groupアクセスを使用">
+    Management GroupレベルでReaderロールを割り当て、スコープ内のすべてのサブスクリプションをカバーします。
+  </Step>
+  <Step title="Cost Managementアクセスを追加">
+    クロスサブスクリプションのコスト分析のため、請求アカウントレベルで **Cost Management Reader** を付与します。
+  </Step>
+  <Step title="CloudThinkerで設定">
+    すべてのサブスクリプションIDを追加するか、接続設定で「All Subscriptions」を選択します。
+  </Step>
+</Steps>
+
+---
+
+## 接続詳細
+
+| フィールド | 説明 | 例 |
+|-------|-------------|---------|
+| **Client ID** | アプリ登録のApplication（クライアント）ID | `00000000-0000-0000-0000-000000000000` |
+| **Client Secret** | Certificates & secretsで作成したシークレット値 | — |
+| **Tenant ID** | Azure ADのDirectory（テナント）ID | `00000000-0000-0000-0000-000000000000` |
+| **Subscription ID** | 接続するAzureサブスクリプションID | `00000000-0000-0000-0000-000000000000` |
+
+---
+
+## 必要な権限
+
+### 最小（読み取り専用分析）
+
+```
+Reader                          # Basic read access to resources
+Cost Management Reader          # Cost and billing data
+```
+
+### 推奨（完全分析）
+
+```
+# All of the above, plus:
+Security Reader                 # Security Center access
+Log Analytics Reader            # Log Analytics workspace access
+Monitoring Reader               # Azure Monitor access
+```
+
+<Tip>
+ContributorではなくReaderロールを使用してください。CloudThinkerの読み取り操作に書き込みアクセスは不要です。クライアントシークレットのローテーションスケジュールを設定し、「Never」の有効期限オプションは避けてください。
+</Tip>
+
+---
+
+## エージェントの機能
+
+接続後、エージェントはAzureリソースの分析と最適化を実行できます。
+
+| エージェント | Azureの機能 |
+|-------|-------------------|
+| **[Alex](/ja/guide/agents/alex)** | コスト分析、VMの適正サイズ調整、リザーブドインスタンスの推奨、リソース最適化 |
+| **[Oliver](/ja/guide/agents/oliver)** | Security Centerのファインディング、Azure AD監査、コンプライアンスチェック、ポリシー違反 |
+| **[Tony](/ja/guide/agents/tony)** | SQL Databaseパフォーマンス、Cosmos DB最適化、PostgreSQLチューニング |
+| **[Kai](/ja/guide/agents/kai)** | AKSクラスター管理、コンテナ最適化、ワークロード分析 |
+
+### 接続を確認する
+
+```text
+@alex run an Azure account check and list the connected subscriptions and resource groups
+```
+
+### プロンプト例
+
+```text
+@alex analyze Azure VM costs over the last 30 days and #recommend right-sizing opportunities
+@oliver audit Azure Security Center findings and flag high-severity policy violations
+@kai check AKS cluster health and #report any failing pods or resource pressure
+```
+
+---
+
+## トラブルシューティング
+
+<Accordion title="認証失敗">
+Tenant ID、Client ID、Client Secretが正しいことを確認します。クライアントシークレットが期限切れでないこと、アプリ登録が正しいAzure ADテナントにあることを確認してください。条件付きアクセスポリシーが認証をブロックしていないことも確認してください。
+</Accordion>
+
+<Accordion title="クライアントシークレットの期限切れ">
+**Azure AD → App registrations → Your app → Certificates & secrets** に移動し、新しいクライアントシークレットを作成して、CloudThinkerの接続設定でシークレットを更新してください。
+</Accordion>
+
+<Accordion title="リソースがない">
+Readerロールが正しいサブスクリプションに割り当てられていることを確認します。リソースが別のサブスクリプションにないか確認し、アプリがすべての必要なサブスクリプションにアクセスできることを確認してください。
+</Accordion>
+
+<Accordion title="コストデータがない">
+**Cost Management Reader** ロールが割り当てられていることを確認します。Cost Management + Billingのアクセスを確認し、EA/MCAの請求アカウントアクセスが必要な場合は設定されていることを確認してください。
+</Accordion>
+
+---
+
+## セキュリティ
+
+<ConnectionSecurity />
+
+- **シークレットの有効期限を設定** — クライアントシークレットには常に有効期限を設定してください（「Never」は避ける）。期限前にローテーションするためのカレンダーリマインダーを設定してください。
+- **Readerロールを使用** — ContributorではなくReaderを割り当ててください。CloudThinkerの読み取り操作に書き込みアクセスは不要です。
+
+---
+
+## 関連
+
+<CardGroup cols={2}>
+  <Card title="AWS接続" icon="/images/icons/aws.svg" href="/ja/guide/connections/aws">
+    Amazon Web Servicesを接続
+  </Card>
+  <Card title="Oliverエージェント" icon="shield-check" href="/ja/guide/agents/oliver">
+    Azureコンプライアンス向けセキュリティエージェント
+  </Card>
+</CardGroup>

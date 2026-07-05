@@ -67,6 +67,8 @@ mintlify broken-links
 
 ## Content Guidelines
 
+**`STYLE.md` at the repo root is the binding content system**: page templates with word budgets, style rules, canonical terminology, snippet usage, and the verifier checklist. Read it before writing or editing any page. Where this file and STYLE.md overlap, STYLE.md wins.
+
 ### MDX Format
 
 - All content files use `.mdx` extension

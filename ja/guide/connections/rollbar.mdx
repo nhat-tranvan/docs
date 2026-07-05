@@ -1,0 +1,135 @@
+---
+title: Rollbar
+description: "CloudThinker と Rollbar を接続して、エラートリアージ、上位エラーの追跡、デプロイと相関した調査を実現する"
+icon: "/images/icons/rollbar.svg"
+---
+
+import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+
+Rollbar プロジェクトを接続することで、CloudThinker エージェントが 1 つまたは複数のプロジェクトにわたってエラーのトリアージ、上位の問題のランク付け、デプロイのレビュー、セッションリプレイコンテキストの取得、アイテムの更新を行えるようになります。Rollbar は**プロジェクトアクセストークン**で認証します。調査には読み取りスコープのトークンで十分です。承認ゲートが必要なアイテム更新には書き込みスコープのトークンが追加で必要です。
+
+## 前提条件
+
+- CloudThinker に参照させたいプロジェクトへのアクセスがある **Rollbar アカウント**。
+- 各プロジェクトの**プロジェクトアクセストークン**（調査には読み取りスコープで十分）。
+- アイテム状態の更新をエージェントに行わせたい場合のみ、**書き込みスコープのトークン**（承認ゲート）。
+
+<Info>
+Rollbar のトークンは**プロジェクトごとにスコープ**されます。CloudThinker は 1 つの接続で複数のプロジェクトをサポートします。含めたいプロジェクトごとに 1 つのトークンを入力してください。
+</Info>
+
+## セットアップ
+
+<Steps>
+  <Step title="プロジェクトアクセストークンを作成する">
+    Rollbar でプロジェクトを開き、**read** スコープの**プロジェクトアクセストークン**を作成（またはコピー）します。アイテムを更新させたい場合は **write** スコープのトークンも追加してください。トークンと設定の詳細については Rollbar の [MCP Server Setup](https://docs.rollbar.com/docs/mcp-server-setup#configuration) を参照してください。
+  </Step>
+  <Step title="CloudThinker で接続を追加する">
+    **Connections → Rollbar** に移動して以下を入力します。
+    - **Project config (JSON)**: `projects` 配列。各 Rollbar プロジェクトのエントリに `name` と `token` を記載する
+
+    **Connect** をクリックします。CloudThinker が認証情報を検証し、**Connected** ステータスを表示します。
+  </Step>
+</Steps>
+
+## 接続の詳細
+
+| フィールド | 説明 | 例 |
+|-------|-------------|---------|
+| **ROLLBAR_CONFIG_JSON** | 各 Rollbar プロジェクトをアクセストークンにマッピングする `projects` 配列。各エントリに `name` と `token` が含まれる | 以下参照 |
+
+```json
+{
+  "projects": [
+    { "name": "backend",  "token": "tok_abc123" },
+    { "name": "frontend", "token": "tok_xyz789" }
+  ]
+}
+```
+
+<Info>
+トークンフィールドは `token`（`access_token` ではない）で、`projects` は配列です。フォーマットは Rollbar の [MCP マルチプロジェクト設定](https://docs.rollbar.com/docs/mcp-server-setup#configuration)に準拠しています。
+</Info>
+
+## 必要な権限
+
+読み取り操作（プロジェクト一覧、アイテム、上位エラー、デプロイ、バージョン、リプレイ）は**read** スコープのプロジェクトアクセストークンで機能します。アイテム更新には**write** スコープのトークン **および** CloudThinker での明示的な[承認](/ja/guide/approval)が必要です。
+
+<Tip>
+最小権限の原則に従ってください。調査には読み取りスコープのトークンを使用し、エージェントがアイテム状態を更新する必要があるプロジェクトにのみ書き込みスコープのトークンを追加してください。
+</Tip>
+
+## エージェントの機能
+
+接続後、エージェントは設定されたプロジェクト全体でエラーの調査と対応を行えます。
+
+### 読み取り機能
+
+| カテゴリ | エージェントができること |
+|----------|----------------------|
+| **プロジェクト** | 設定済みの Rollbar プロジェクトを一覧表示し、単一プロジェクトに自動スコープする |
+| **エラーアイテム** | 現在のアクティブアイテムを一覧表示し、アイテムの詳細と発生シグナルを調査する |
+| **上位エラー** | 最も影響の大きいエラーと現在の本番エラーの状態を表示する |
+| **デプロイ** | プロジェクトごとの最近のデプロイをレビューする |
+| **リリースとバージョン** | バージョンコンテキストを取得し、リリースとエラーアクティビティを相関付ける |
+| **セッションリプレイ** | 記録済みリプレイを持つアイテムのリプレイコンテキストを取得する |
+
+### 書き込み機能
+
+| カテゴリ | エージェントができること |
+|----------|----------------------|
+| **アイテム更新** | アイテムの状態を変更する（例: 解決、ミュート）— **承認が必要** |
+
+<Warning>
+アイテム更新は実行前に明示的なユーザー承認が必要であり、プロジェクト、アイテム、希望する変更を指定する必要があります。
+</Warning>
+
+### 接続の確認
+
+```text
+@alex list my Rollbar projects and show the current top errors
+```
+
+### プロンプト例
+
+```text
+@alex triage current Rollbar items and rank them by impact #recommend
+@alex show the top errors that appeared after the latest deployment
+@alex review recent deployments and correlate them with new error activity
+```
+
+## トラブルシューティング
+
+<Accordion title="認証が失敗するかクエリが空で返る">
+貼り付けたプロジェクト設定が無効な JSON か、リクエストされたプロジェクト名が含まれていないか、プロジェクトが期限切れのトークンにマッピングされています。アイテムやデプロイが「データなし」として扱う前に、まず設定済みプロジェクトを一覧表示してください。
+</Accordion>
+
+<Accordion title="エージェントがどのプロジェクトを使用するか確認してくる">
+複数のプロジェクトが設定されている場合に発生します。エージェントがクエリをスコープできるよう、プロンプトにプロジェクト名を指定してください（例: 「my-app の場合」）。
+</Accordion>
+
+<Accordion title="アイテムにリプレイが存在しない">
+セッションリプレイコンテキストは記録済みリプレイを持つアイテムにのみ存在します。リプレイのないアイテムはリプレイデータを返しません。これは予期された動作であり、エラーではありません。
+</Accordion>
+
+<Accordion title="アイテム更新がブロックされる">
+更新は承認ゲートであり、**write** スコープのトークンが必要です。そのプロジェクトのトークンに書き込みスコープがあることを確認し、プロンプトが表示されたらアクションを承認してください。
+</Accordion>
+
+## セキュリティ
+
+<ConnectionSecurity />
+
+- **最小権限のトークン** — 調査には読み取りスコープのプロジェクトトークンを使用し、エージェントがアイテム状態を更新する必要があるプロジェクトにのみ書き込みスコープを追加してください。
+- **ローテーション** — プロジェクトアクセストークンを定期的にローテーションし、CloudThinker で更新してください。
+
+## 関連情報
+
+<CardGroup cols={2}>
+  <Card title="Datadog 接続" icon="/images/icons/datadog.svg" href="/ja/guide/connections/datadog">
+    ログ、メトリクス、インシデント調査
+  </Card>
+  <Card title="承認" icon="shield-check" href="/ja/guide/approval">
+    承認ゲートアクションの仕組み
+  </Card>
+</CardGroup>

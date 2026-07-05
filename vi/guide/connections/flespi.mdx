@@ -1,0 +1,227 @@
+---
+title: Flespi
+description: "Kết nối Flespi IoT telematics với CloudThinker để quản lý thiết bị GPS, theo dõi telemetry đội xe và phân tích dữ liệu IoT"
+icon: "/images/icons/flespi.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối tài khoản Flespi của bạn để cho phép các agent CloudThinker quản lý thiết bị GPS, giám sát telemetry, kiểm tra channel và stream, và vận hành hạ tầng đội xe thông qua Flespi MCP server.
+
+Flespi xác thực bằng **API token** (loại Standard hoặc ACL) được tạo trong Flespi panel.
+
+---
+
+## Nền tảng hỗ trợ
+
+| Nền tảng | Hỗ trợ |
+|----------|--------|
+| **Flespi Free** | 1.000 AI credit/tháng |
+| **Flespi Commercial** | 1.000 AI credit/tháng + tính phí vượt mức |
+
+---
+
+## Điều kiện tiên quyết
+
+- Tài khoản **Flespi** tại [flespi.io](https://flespi.io/#/).
+- Quyền truy cập Flespi panel để tạo và quản lý API token.
+- Với môi trường production, ACL token có quyền giới hạn cho các module CloudThinker cần.
+
+---
+
+## Thiết lập
+
+CloudThinker kết nối với Flespi qua MCP server chính thức của họ bằng API token của Flespi.
+
+<Steps>
+  <Step title="Tạo tài khoản Flespi">
+    Đăng ký tại [flespi.io](https://flespi.io/#/) nếu bạn chưa có tài khoản.
+  </Step>
+  <Step title="Tạo API token">
+    Trong flespi panel, điều hướng đến **Tokens** trong menu bên trái và nhấn nút **"+"**:
+    - **Name**: `CloudThinker Agent`
+    - **Type**: Standard (development) hoặc ACL (production)
+    - **TTL**: Đặt thời gian hết hạn — ví dụ: `7776000` (90 ngày). Flespi yêu cầu tất cả token phải có TTL hoặc ngày hết hạn.
+
+    Sao chép ngay token 64 byte.
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Điều hướng đến **Connections → Flespi** và nhập token bạn vừa tạo.
+  </Step>
+  <Step title="Kiểm tra kết nối">
+    Nhấn **Connect**. CloudThinker xác minh token và hiển thị trạng thái **Connected**.
+  </Step>
+</Steps>
+
+<Warning>
+Flespi dùng `FlespiToken` — không phải `Bearer` — làm tiền tố xác thực. CloudThinker xử lý điều này tự động, nhưng hãy ghi nhớ khi debug API call thủ công.
+</Warning>
+
+---
+
+## Chi tiết kết nối
+
+| Trường | Mô tả | Ví dụ |
+|--------|-------|-------|
+| **Flespi Token** | API token Flespi (64 byte) | `7Bf3...xK9z` |
+
+---
+
+## Quyền yêu cầu
+
+### Loại token
+
+| Loại | Mức truy cập | Khi nào dùng |
+|------|-------------|-------------|
+| **Standard** | CRUD đầy đủ trên tất cả thực thể Telematics (device, channel, stream, plugin, geofence, calculator) | Development và testing |
+| **ACL** | Chi tiết — từ chối tất cả theo mặc định, cấp theo module/method/item | **Khuyến nghị cho production** |
+| **Master** | Admin đầy đủ bao gồm platform API | **Không bao giờ dùng với AI agent** |
+
+### Thời hạn token
+
+Flespi **yêu cầu** tất cả token phải hết hạn. Đặt ít nhất một trong hai:
+
+- **`ttl`** — giây không hoạt động trước khi hết hạn (đặt lại sau mỗi lần gọi API)
+- **`expire`** — Unix timestamp cho thời điểm hết hạn cứng
+
+<Tip>
+Với tích hợp chạy lâu dài, dùng `ttl` (ví dụ: 7776000 = 90 ngày). Bộ đếm đặt lại sau mỗi lần gọi API, nên token đang hoạt động sẽ không hết hạn bất ngờ.
+</Tip>
+
+### Quyền ACL khuyến nghị (production)
+
+**Chỉ đọc (tối thiểu):**
+
+| Module | Method | Mục đích |
+|--------|--------|---------|
+| `gw/devices` | GET | Danh sách thiết bị, trạng thái, telemetry, message |
+| `gw/channels` | GET | Danh sách channel, cấu hình, trạng thái |
+| `gw/streams` | GET | Danh sách stream, sức khỏe, thống kê gửi |
+| `gw/calculators` | GET | Cấu hình calculator |
+| `ai` | POST | Bắt buộc cho MCP tool call |
+
+**Đọc-ghi (nếu cần thao tác ghi):**
+
+| Module | Method | Mục đích |
+|--------|--------|---------|
+| `gw/devices` | GET, POST, PUT | Tạo/cập nhật thiết bị |
+| `gw/channels` | GET, POST, PUT | Tạo/cập nhật channel |
+| `gw/streams` | GET, POST, PUT, DELETE | Quản lý stream đầy đủ |
+
+<Info>
+ACL token từ chối tất cả theo mặc định. Chỉ các quyền được cấp rõ ràng mới được phép. Token với POST trên `gw/devices` sẽ **không** có GET trừ khi cũng được cấp.
+</Info>
+
+---
+
+## Khả năng của agent
+
+Sau khi kết nối, các agent có thể:
+
+| Khả năng | Mô tả |
+|----------|-------|
+| **Quản lý thiết bị** | Liệt kê thiết bị, xem trạng thái, đọc telemetry và lịch sử message |
+| **Giám sát channel** | Kiểm tra cấu hình channel, trạng thái và protocol đã kết nối |
+| **Sức khỏe stream** | Giám sát thống kê gửi stream và sức khỏe |
+| **Telemetry đội xe** | Truy vấn vị trí GPS, tốc độ, nhiên liệu và dữ liệu cảm biến trên các thiết bị |
+| **Geofence** | Xem và quản lý vùng geofence và trigger |
+| **Calculator** | Kiểm tra cấu hình calculator để phát hiện chuyến đi, mức tiêu thụ nhiên liệu, v.v. |
+
+### Công cụ MCP có sẵn
+
+**Công cụ miễn phí (0 credit):**
+
+| Công cụ | Mô tả |
+|---------|-------|
+| `search-api-methods` | Khám phá các phương thức Flespi REST API theo truy vấn ngôn ngữ tự nhiên |
+| `get-api-schema` | Lấy Swagger schema đầy đủ cho một phương thức API cụ thể |
+| `flespi-api-read` | Thực thi yêu cầu GET chỉ đọc đến flespi REST API |
+| `flespi-api-write` | Thực thi thao tác ghi (POST/PUT/PATCH/DELETE) |
+
+**Công cụ trả phí:**
+
+| Công cụ | Credit | Mô tả |
+|---------|--------|-------|
+| `search-flespi-documentation` | 5 | Tìm kiếm tài liệu nền tảng flespi |
+| `search-device-documentation` | 10 | Tìm kiếm tài liệu nhà sản xuất thiết bị/protocol |
+| `generate-flespi-expression` | 2 | Tạo flespi expression cho selector, calculator |
+| `generate-pvm-code` | 10 | Tạo mã PVM (Protocol Virtual Machine) |
+| `consult-flespi-account` | 30 | Ủy quyền phân tích phức tạp cho chuyên gia AI của flespi với quyền đọc tài khoản |
+
+### AI credit
+
+| Gói | Credit miễn phí/tháng | Vượt mức |
+|-----|----------------------|---------|
+| Free | 1.000 | Bị chặn đến tháng sau |
+| Commercial | 1.000 | €1 mỗi 100 credit bổ sung |
+
+Theo dõi mức sử dụng qua **AI tile** trong flespi panel, API `GET /ai/logs`, hoặc MQTT topic `flespi/log/ai/#`.
+
+### Xác minh kết nối
+
+```text
+@alex list all Flespi devices and report their last known positions
+```
+
+### Ví dụ prompt
+
+```text
+@alex check stream health and identify any delivery failures
+@alex query telemetry for device 12345 over the last 24 hours
+@alex list geofences and check which devices are inside zone "warehouse-01"
+```
+
+---
+
+## Xử lý sự cố
+
+<Accordion title="Access token không hợp lệ hoặc đã hết hạn">
+- Token có thể đã hết hạn — kiểm tra cài đặt TTL và ngày hết hạn trong flespi panel.
+- Tạo token mới và cập nhật kết nối trong CloudThinker.
+- Token hết hạn sẽ bị flespi **tự động xóa**.
+</Accordion>
+
+<Accordion title="Hành động không được phép bởi ACL">
+- ACL token của bạn thiếu tổ hợp module + HTTP method bắt buộc.
+- Cập nhật ACL token để cấp quyền cần thiết.
+- Nhớ rằng: ACL từ chối tất cả theo mặc định — mỗi quyền phải được cấp rõ ràng.
+</Accordion>
+
+<Accordion title="HTTP 403 trên AI tools">
+- AI credit hàng tháng đã cạn kiệt.
+- Gói Free: chờ đến tháng sau. Gói Commercial: kiểm tra cài đặt vượt mức.
+- Theo dõi mức sử dụng credit qua `GET /ai/logs` hoặc mã sự kiện `1710`.
+</Accordion>
+
+<Accordion title="HTTP 429 rate limit">
+- flespi tính tổng mức sử dụng API + MQTT + lưu lượng mỗi phút.
+- Giảm tần suất yêu cầu hoặc gộp thao tác.
+- Token có mức sử dụng cao nhất bị chặn trước; các token khác tiếp tục hoạt động.
+</Accordion>
+
+<Accordion title="Dùng token từ vị trí không được phép">
+- Danh sách trắng IP được cấu hình trên token nhưng IP máy chủ của bạn chưa được thêm.
+- Cập nhật danh sách trắng IP của token trong flespi panel: **Token settings → IPs whitelist**.
+</Accordion>
+
+---
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Token riêng biệt** — tạo token riêng cho CloudThinker; không bao giờ chia sẻ nó giữa các tích hợp hoặc dùng Master token
+- **ACL cho production** — sử dụng ACL token với chỉ các quyền tối thiểu cần thiết; ACL token từ chối tất cả theo mặc định
+
+---
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Kết nối MCP" icon="/images/icons/mcp.svg" href="/vi/guide/connections/mcp">
+    Tích hợp MCP tùy chỉnh
+  </Card>
+  <Card title="Kết nối Kubernetes" icon="/images/icons/kubernetes.svg" href="/vi/guide/connections/kubernetes">
+    Điều phối container cho workload IoT
+  </Card>
+</CardGroup>

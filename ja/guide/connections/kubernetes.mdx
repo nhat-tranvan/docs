@@ -1,0 +1,321 @@
+---
+title: Kubernetes
+description: "Kubernetes クラスターを CloudThinker に接続してワークロード分析、リソース最適化、クラスター運用を実現"
+icon: "/images/icons/kubernetes.svg"
+---
+
+import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+
+Kubernetes クラスターを接続して、[Kai](/ja/guide/agents/kai) がワークロードを分析し、リソースを最適化し、クラスター運用を管理できるようにします。
+
+Kubernetes は、**クラウドプロバイダーによる自動検出**（EKS・GKE・AKS の場合）または、セルフマネージドクラスター向けの**サービスアカウントトークン**とクラスターエンドポイント情報を使って接続します。
+
+---
+
+## 前提条件
+
+接続前に Metrics Server をインストールしてください。Pod とノードのリソースメトリクスに必要です：
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+```
+
+| コンポーネント | 用途 |
+|-----------|---------|
+| **Metrics Server** | Pod とノードのリソースメトリクスに必要 |
+| **kube-state-metrics** | 拡張クラスターメトリクス（任意） |
+| **ネットワークアクセス** | CloudThinker がクラスター API サーバーに到達できる必要があります |
+
+### 対応プラットフォーム
+
+| プラットフォーム | サポート |
+|----------|---------|
+| **Amazon EKS** | 全バージョン |
+| **Google GKE** | Standard、Autopilot |
+| **Azure AKS** | 全バージョン |
+| **セルフマネージド** | Kubernetes 1.24+ |
+| **Rancher** | RKE、RKE2 |
+| **OpenShift** | 4.x |
+
+---
+
+## セットアップ
+
+<Tabs>
+  <Tab title="クラウドプロバイダー経由（推奨）">
+    ### クラウド接続からの自動検出
+
+    AWS・GCP・Azure をすでに接続している場合、マネージド Kubernetes クラスターは自動的に検出されます。
+
+    <Steps>
+      <Step title="クラウドプロバイダーを接続する">
+        まず [AWS](/ja/guide/connections/aws)、[GCP](/ja/guide/connections/gcp)、または [Azure](/ja/guide/connections/azure) の接続を設定します。
+      </Step>
+      <Step title="クラスターが自動検出される">
+        EKS・GKE・AKS クラスターが CloudThinker に自動的に表示されます。分析を有効にするクラスターを選択してください。有効化された各クラスターに **Connected** ステータスが表示されます。
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="直接 Kubeconfig">
+    ### サービスアカウントを使った手動セットアップ
+
+    セルフマネージドクラスター、またはクラウドプロバイダー接続で提供される範囲を超えたアクセスが必要な場合：
+
+    <Steps>
+      <Step title="名前空間を作成する（任意）">
+        専用の名前空間を作成します：
+        ```yaml
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: cloudthinker
+        ```
+      </Step>
+      <Step title="サービスアカウントを作成する">
+        ```yaml
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: cloudthinker-readonly
+          namespace: cloudthinker
+        ```
+      </Step>
+      <Step title="ClusterRole を作成する">
+        ```yaml
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        metadata:
+          name: cloudthinker-readonly
+        rules:
+        - apiGroups: [""]
+          resources: ["*"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: ["apps", "extensions"]
+          resources: ["*"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: ["autoscaling"]
+          resources: ["*"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: ["metrics.k8s.io"]
+          resources: ["pods", "nodes"]
+          verbs: ["get", "list"]
+        ```
+      </Step>
+      <Step title="ClusterRoleBinding を作成する">
+        ```yaml
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: cloudthinker-readonly
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: cloudthinker-readonly
+        subjects:
+        - kind: ServiceAccount
+          name: cloudthinker-readonly
+          namespace: cloudthinker
+        ```
+      </Step>
+      <Step title="長期トークンを作成する">
+        Kubernetes 1.24 以降では、長期トークン用の Secret を作成します：
+        ```yaml
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: cloudthinker-readonly-token
+          namespace: cloudthinker
+          annotations:
+            kubernetes.io/service-account.name: cloudthinker-readonly
+        type: kubernetes.io/service-account-token
+        ```
+
+        以下で適用します：
+        ```bash
+        kubectl apply -f cloudthinker-token-secret.yaml
+        ```
+      </Step>
+      <Step title="トークンを取得する">
+        ```bash
+        kubectl get secret cloudthinker-readonly-token -n cloudthinker \
+          -o jsonpath='{.data.token}' | base64 --decode
+        ```
+      </Step>
+      <Step title="クラスター情報を取得する">
+        クラスターエンドポイントを確認します：
+        ```bash
+        kubectl cluster-info
+        ```
+
+        CA 証明書を抽出します：
+        ```bash
+        kubectl get secret cloudthinker-readonly-token -n cloudthinker \
+          -o jsonpath='{.data.ca\.crt}' | base64 --decode
+        ```
+      </Step>
+      <Step title="CloudThinker に接続を追加する">
+        **Connections → Kubernetes** に移動し、以下を入力します：
+        - クラスター API エンドポイント
+        - サービスアカウントトークン
+        - CA 証明書（自己署名クラスターの場合）
+
+        **Connect** をクリックします。CloudThinker はアクセスを確認し、**Connected** ステータスを表示します。
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+---
+
+## 接続詳細
+
+直接接続で CloudThinker が使用する kubeconfig の形式：
+
+```yaml
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    certificate-authority-data: <base64-encoded-ca-cert>
+    server: https://your-cluster-endpoint:6443
+  name: your-cluster
+contexts:
+- context:
+    cluster: your-cluster
+    user: cloudthinker-readonly
+  name: cloudthinker-context
+current-context: cloudthinker-context
+users:
+- name: cloudthinker-readonly
+  user:
+    token: <your-service-account-token>
+```
+
+---
+
+## 必要な権限
+
+### 最小権限（読み取り専用）
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cloudthinker-readonly
+rules:
+- apiGroups: [""]
+  resources: ["pods", "nodes", "services", "namespaces", "events", "configmaps"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods", "nodes"]
+  verbs: ["get", "list"]
+```
+
+### 推奨（フル分析）
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cloudthinker-full-analysis
+rules:
+- apiGroups: [""]
+  resources: ["pods", "nodes", "services", "namespaces", "events", "configmaps", "secrets", "persistentvolumeclaims", "resourcequotas", "limitranges", "replicationcontrollers"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses", "networkpolicies"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods", "nodes"]
+  verbs: ["get", "list"]
+```
+
+<Tip>
+まず最小権限の ClusterRole から始め、より広い機能セットが必要になった場合にのみフル分析ロールに拡張してください。書き込みの verb を付与しないでください。get・list・watch だけで Kai の全機能に対応できます。
+</Tip>
+
+---
+
+## エージェントの機能
+
+接続後、[Kai](/ja/guide/agents/kai) はクラスターを検査・最適化できます。
+
+| 機能 | 説明 |
+|------------|-------------|
+| **リソース分析** | Pod の CPU・メモリ使用量、requests と limits の比較 |
+| **ノードの健全性** | ノードの状態、キャパシティ、割り当て可能なリソース |
+| **ワークロード最適化** | サイジング推奨、HPA チューニング |
+| **トラブルシューティング** | CrashLoopBackOff・OOMKilled・ペンディング Pod |
+| **セキュリティ監査** | RBAC レビュー、Pod セキュリティ、ネットワークポリシー |
+
+### 接続を確認する
+
+```text
+@kai check the cluster connection and list all namespaces and node count
+```
+
+### プロンプト例
+
+```text
+@kai analyze pod resource utilization in the production namespace and #report the top CPU and memory consumers
+@kai investigate crash loops in the payment service and #recommend a fix
+@kai check node resource pressure across the cluster and #alert if any node is near capacity
+```
+
+---
+
+## トラブルシューティング
+
+<Accordion title="クラスターに接続できない">
+API サーバーのエンドポイントがインターネットからアクセス可能か確認してください。ファイアウォールルールとセキュリティグループが CloudThinker の IP を許可しているか確認してください。プライベートクラスターの場合は VPN またはバスティオンアクセスを設定し、API サーバー証明書が有効であることを確認してください。
+</Accordion>
+
+<Accordion title="認証エラー">
+サービスアカウントトークンが正しいか確認してください。ClusterRoleBinding が適用されていること、トークンが期限切れでないことを確認してください。サービスアカウントが正しい名前空間に存在することも確認してください。
+</Accordion>
+
+<Accordion title="メトリクスデータがない">
+`kubectl top nodes` を実行して Metrics Server がインストールされているか確認してください。Metrics Server の Pod が動作していること、`metrics.k8s.io` API が利用可能であることを確認してください。
+</Accordion>
+
+<Accordion title="名前空間が見つからない">
+ClusterRole に名前空間の一覧取得権限が含まれているか確認してください。RBAC で特定の名前空間へのアクセスが制限されていないか確認し、サービスアカウントのバインディングがクラスター全体に適用されていることを確認してください。
+</Accordion>
+
+---
+
+## セキュリティ
+
+<ConnectionSecurity />
+
+- **読み取り専用アクセス** — CloudThinker サービスアカウントに書き込みの verb を付与しないでください。get・list・watch だけで全エージェント機能に対応できます。
+- **名前空間の分離** — サービスアカウントを専用の名前空間（例：`cloudthinker`）に置くことで、監査と失効管理を簡素化できます。
+
+---
+
+## 関連
+
+<CardGroup cols={2}>
+  <Card title="Kai Agent" icon="dharmachakra" href="/ja/guide/agents/kai">
+    Kubernetes 特化の最適化エージェント
+  </Card>
+  <Card title="AWS 接続" icon="/images/icons/aws.svg" href="/ja/guide/connections/aws">
+    EKS 自動検出のための AWS 接続
+  </Card>
+</CardGroup>

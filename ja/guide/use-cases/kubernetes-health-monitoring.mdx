@@ -1,0 +1,97 @@
+---
+title: "Kubernetesヘルスモニタリング"
+description: "Kai を使ってEKSクラスターの健全性を監視し、リソースの無駄を発見し、問題が本番に到達する前にHPA推奨事項を取得する。"
+icon: heart-pulse
+---
+
+Kai はAmazon EKSクラスターを継続的に監視し、過剰にプロビジョニングされたポッド、活用不足のノード、オートスケーリングポリシーの欠落を、障害が発生する前に発見します。
+
+## シナリオ
+
+あるプラットフォームチームが複数のネームスペースにまたがる本番EKSクラスターを運用しています。CPUアラートは断続的に発生していますが、調査は遅い——エンジニアが何百ものポッドに対して手動で `kubectl` コマンドを実行し、ログ・メトリクス・イベントを相関させる必要があるからです。
+
+<Frame>
+  <img src="/images/use-cases/kubernetes-health-monitoring/01-manual-troubleshooting-challenges.jpg" alt="ネームスペースとリソースをまたいだKubernetesの手動トラブルシューティングの課題" />
+</Frame>
+<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Kubernetesの手動トラブルシューティングの課題</p>
+
+チームはKai にクラスター全体のエンドツーエンドの評価、リソースの無駄の特定、オートスケーリングポリシーが欠けている箇所への推奨を依頼します。
+
+## ウォークスルー
+
+<Steps>
+
+### Kai をクラスターに接続する
+
+[Kubernetes接続ガイド](/ja/guide/connections/kubernetes)に従い、Kai にEKSクラスターへのアクセス権を付与します。接続が**Connected**と表示されたら、Kai はクラスターを直接クエリできます。
+
+### ポッドのリソース使用率を分析する
+
+```text
+@kai #report analyze pod resource utilization in production namespace
+```
+
+<Frame>
+  <img src="/images/use-cases/kubernetes-health-monitoring/02-pod-resource-utilization.jpg" alt="CPUとメモリの使用パターンを示すポッドリソース使用率分析" />
+</Frame>
+<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>ポッドリソース使用率分析</p>
+
+<Frame>
+  <img src="/images/use-cases/kubernetes-health-monitoring/03-pod-analysis-visualization.jpg" alt="パフォーマンス推奨事項を伴うポッド分析の可視化" />
+</Frame>
+<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>パフォーマンス推奨事項を伴うポッド分析の可視化</p>
+
+Kai は3つの知見を表面化します。auth-serviceとnotification-workerは過剰プロビジョニング（CPU使用率18〜21%）、api-gatewayとcache-redisは適切なサイズ、そしてpayment-processorはCPU 80〜86%・メモリ 88〜94%と危険なほど過小プロビジョニングされており、OOMキルとサービス障害の高リスク状態にあります。
+
+### 活用不足のノードを特定する
+
+```text
+@kai #chart identify nodes with <30% CPU utilization
+```
+
+<Frame>
+  <img src="/images/use-cases/kubernetes-health-monitoring/04-node-cpu-utilization.jpg" alt="活用不足のインスタンスとコストの無駄を示すノードCPU使用率分析" />
+</Frame>
+<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>活用不足のインスタンスを示すノードCPU使用率分析</p>
+
+Kai は平均CPU使用率が30%未満（最低12〜15%のものもある）の5つのノードを発見し、月額約573ドルを無駄にしていることを特定します。軽量ワークロードで動作する過大サイズのt3.xlargeインスタンスと不適切なポッドスケジューリングの組み合わせにより、一部のノードにはポッドが2〜3個しかない一方、他のノードには8〜9個が集中しています。
+
+### HPA推奨事項を取得する
+
+```text
+@kai #recommend HPA policies for web deployments
+```
+
+<Frame>
+  <img src="/images/use-cases/kubernetes-health-monitoring/05-hpa-policy-recommendations.jpg" alt="Webデプロイメントのオートスケーリング設定に対するHPAポリシー推奨事項" />
+</Frame>
+<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>オートスケーリングのためのHPAポリシー推奨事項</p>
+
+Kai はpayment-processorをクリティカルリスクとして特定します——レプリカが2つのみでCPU使用率は80〜86%、オートスケーリングは未設定です。api-gatewayにはトラフィックスパイクに対応するHPAの追加を推奨し、user-serviceとauth-serviceからは余剰キャパシティの削除を推奨します。
+
+</Steps>
+
+## 成果の要因
+
+- **[Kai](/ja/guide/agents/kai)** がクラスターAPIを直接クエリし、手動の `kubectl` セッションとツール切り替えを置き換えます。
+- **クロスレイヤー相関**により、ポッドの使用率・ノードキャパシティ・スケジューリングパターンを単一の分析パスでリンクします。
+- **[`#report`](/ja/guide/language) と [`#chart`](/ja/guide/language)** が、Kai が知見を表面化する前に推論できる構造化された出力を生成します。
+- **[`#recommend`](/ja/guide/language)** が生のメトリクスダンプではなく、実行可能なHPAポリシー変更を生成します。
+- **[CloudKeepers](/ja/guide/infrastructure/cloudkeepers)** がこの分析をスケジュール実行することで、オンコールエンジニアがページを受け取る前に知見が届きます。
+
+## 試してみる
+
+<CardGroup cols={2}>
+  <Card title="Kai エージェントリファレンス" icon="robot" href="/ja/guide/agents/kai">
+    KubernetesエンジニアエージェントKai の全機能
+  </Card>
+  <Card title="Kubernetes接続" icon="/images/icons/kubernetes.svg" href="/ja/guide/connections/kubernetes">
+    CloudThinkerをEKSクラスターに接続するステップバイステップガイド
+  </Card>
+  <Card title="Topology Explorer" icon="diagram-project" href="/ja/guide/infrastructure/topology">
+    Kubernetesサービスの依存関係をマップし、インシデントの根本原因分析を迅速化
+  </Card>
+  <Card title="CloudKeepers" icon="radar" href="/ja/guide/infrastructure/cloudkeepers">
+    Kubernetesワークロード全体で継続的なヘルスチェックを自動実行
+  </Card>
+</CardGroup>

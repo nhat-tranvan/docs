@@ -1,0 +1,221 @@
+---
+title: ArgoCD
+description: "Kết nối ArgoCD với CloudThinker để thực hiện các thao tác GitOps và quản lý ứng dụng"
+icon: "/images/icons/argocd.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối các instance ArgoCD của bạn để cho phép [Kai](/vi/guide/agents/kai) (Kỹ sư Kubernetes) phân tích các deployment, quản lý ứng dụng và xử lý sự cố các quy trình GitOps. ArgoCD xác thực bằng **API token** — quy trình thiết lập khác nhau giữa các instance tự lưu trữ và Akuity Platform.
+
+---
+
+## Điều kiện tiên quyết
+
+- Một instance ArgoCD có thể truy cập từ CloudThinker: tự lưu trữ (cổng mặc định `8888`) hoặc được quản lý qua [Akuity Platform](https://akuity.cloud).
+- **ArgoCD CLI** đã cài đặt (`brew install argocd`); Akuity Platform cũng yêu cầu [Akuity CLI](https://docs.akuity.io/akuity-platform/akuity-cli).
+- Quyền quản trị viên trên ArgoCD để bật khả năng `apiKey` và tạo token.
+
+---
+
+## Thiết lập
+
+Chọn nền tảng ArgoCD của bạn:
+
+<Tabs>
+  <Tab title="ArgoCD tự lưu trữ">
+
+    <Steps>
+      <Step title="Lấy thông tin kết nối">
+        Đảm bảo ArgoCD đang chạy và có thể truy cập. Lấy địa chỉ IP của máy chủ:
+
+        ```bash
+        hostname -I | awk '{print $1}'
+        ```
+      </Step>
+      <Step title="Tạo API token">
+        Bật khả năng `apiKey` và tạo token cho tài khoản admin:
+
+        ```bash
+        kubectl -n argocd patch configmap argocd-cm --type merge -p '{"data":{"accounts.admin":"apiKey, login"}}'
+        argocd login <host-ip>:8888 --username admin --password '<password>' --insecure
+        argocd account generate-token --account admin --insecure
+        ```
+      </Step>
+      <Step title="Thêm kết nối trong CloudThinker">
+        Điều hướng đến **Connections → ArgoCD** và nhập:
+
+        - **Base URL**: `https://<host-ip>:8888`
+        - **API Token**: token từ bước trước
+        - **TLS Verification**: Tắt
+        - **Read-only Mode**: Bật
+
+        Nhấp **Connect**. CloudThinker xác minh thông tin xác thực và hiển thị trạng thái **Connected**.
+      </Step>
+    </Steps>
+
+  </Tab>
+
+  <Tab title="Akuity Platform">
+
+    <Steps>
+      <Step title="Cài đặt CLI">
+        Cài đặt ArgoCD CLI:
+
+        ```bash
+        brew install argocd
+        ```
+
+        Cài đặt Akuity CLI:
+
+        ```bash
+        curl -sSL -o /tmp/akuity \
+          "https://dl.akuity.io/akuity-cli/$(curl -sL https://dl.akuity.io/akuity-cli/stable.txt)/$(uname)/$(uname -m)/akuity"
+        chmod +x /tmp/akuity
+        sudo mv /tmp/akuity /usr/local/bin/akuity
+        ```
+      </Step>
+      <Step title="Tạo tài khoản admin">
+        Trong [Akuity Portal](https://akuity.cloud):
+
+        1. Điều hướng đến **Organization** → **API Keys** → nhấp **Create API Key** (vai trò: Owner).
+        2. Trong instance ArgoCD của bạn → **Settings** → **System Accounts**.
+        3. Nhấp **Add Account** → tên: `admin`.
+        4. Bật cả hai khả năng **login** và **apiKey** và đặt mật khẩu.
+      </Step>
+      <Step title="Tạo API token">
+        Đăng nhập và tạo token:
+
+        ```bash
+        argocd login <instance-id>.cd.akuity.cloud --grpc-web \
+          --username admin --password '<your-password>'
+        argocd account generate-token --account admin --grpc-web
+        ```
+      </Step>
+      <Step title="Thêm kết nối trong CloudThinker">
+        Điều hướng đến **Connections → ArgoCD** và nhập:
+
+        - **Base URL**: `https://<instance-id>.cd.akuity.cloud`
+        - **API Token**: token từ bước trước
+        - **TLS Verification**: Bật
+        - **Read-only Mode**: Bật
+
+        Nhấp **Connect**. CloudThinker xác minh thông tin xác thực và hiển thị trạng thái **Connected**.
+      </Step>
+    </Steps>
+
+  </Tab>
+</Tabs>
+
+---
+
+## Chi tiết kết nối
+
+| Trường | Mô tả | Ví dụ |
+|-------|-------------|---------|
+| **Base URL** | Địa chỉ máy chủ ArgoCD | `https://192.168.1.100:8888` (tự lưu trữ); `https://<id>.cd.akuity.cloud` (Akuity) |
+| **API Token** | Token được tạo cho tài khoản admin ArgoCD | — |
+| **TLS Verification** | Bật cho Akuity; tắt cho instance tự lưu trữ có chứng chỉ tự ký | — |
+| **Read-only Mode** | Bật để ngăn các thao tác ghi không được phê duyệt | — |
+
+---
+
+## Quyền hạn cần thiết
+
+Áp dụng chính sách RBAC sau trong ArgoCD để cấp quyền truy cập chỉ đọc cho CloudThinker:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-rbac-cm
+  namespace: argocd
+data:
+  policy.default: role:readonly
+  policy.csv: |
+    p, role:cloudthinker-readonly, applications, get, */*, allow
+    p, role:cloudthinker-readonly, applications, list, */*, allow
+    p, role:cloudthinker-readonly, repositories, get, *, allow
+    p, role:cloudthinker-readonly, repositories, list, *, allow
+    p, role:cloudthinker-readonly, clusters, get, *, allow
+    p, role:cloudthinker-readonly, clusters, list, *, allow
+    g, cloudthinker-readonly, role:cloudthinker-readonly
+```
+
+```bash
+kubectl apply -f argocd-rbac.yaml
+```
+
+<Tip>
+Tuân thủ nguyên tắc đặc quyền tối thiểu: chỉ cấp các hành động `get` và `list` trên applications, repositories và clusters.
+</Tip>
+
+---
+
+## Khả năng của agent
+
+Sau khi kết nối, Kai có thể điều tra và hành động trên các ứng dụng ArgoCD của bạn.
+
+| Khả năng | Mô tả |
+|------------|-------------|
+| **Trạng thái ứng dụng** | Xem trạng thái đồng bộ, tình trạng sức khỏe và thời gian đồng bộ gần nhất |
+| **Phân tích deployment** | Xác định các deployment mất đồng bộ và bị lỗi |
+| **Thông tin repository** | Phân tích trạng thái repository Git và các commit |
+| **Giám sát sức khỏe** | Theo dõi tình trạng sức khỏe của ứng dụng trên tất cả các app |
+| **Thao tác đồng bộ** | Kích hoạt đồng bộ thủ công — **yêu cầu phê duyệt** |
+
+### Xác minh kết nối
+
+```text
+@kai list all ArgoCD applications and show their sync and health status
+```
+
+### Các lệnh mẫu
+
+```text
+@kai show all out-of-sync ArgoCD applications and #report the details
+@kai analyze deployment failures for the payment service and #recommend fixes
+@kai check the health status of all applications in production
+```
+
+---
+
+## Xử lý sự cố
+
+<Accordion title="Không thể kết nối tới máy chủ ArgoCD">
+Với các instance tự lưu trữ, sử dụng địa chỉ IP của máy chủ (không phải `localhost`) trong Base URL. Nếu máy chủ nằm sau port-forward, chạy `kubectl port-forward svc/argocd-server -n argocd 8888:443 --address 0.0.0.0`. Kiểm tra quy tắc tường lửa nếu máy chủ vẫn không thể truy cập.
+</Accordion>
+
+<Accordion title="401 Unauthorized">
+Xác minh API token là chính xác và tài khoản admin đã bật cả hai khả năng `login` và `apiKey`. Với instance tự lưu trữ, xác nhận `argocd-cm` đã được vá; với Akuity, kiểm tra khả năng System Account trong portal.
+</Accordion>
+
+<Accordion title="Không thể tạo API token">
+Khả năng `apiKey` chưa được bật cho tài khoản. Chạy `argocd account get` để kiểm tra các khả năng của tài khoản, sau đó bật `apiKey` và thử lại.
+</Accordion>
+
+<Accordion title="Lỗi chứng chỉ TLS">
+Với các instance tự lưu trữ, tắt xác minh TLS trong cài đặt kết nối (tương đương với flag `--insecure` của CLI). Với Akuity, xác minh TLS phải được giữ bật.
+</Accordion>
+
+---
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **RBAC chỉ đọc** — áp dụng chính sách `role:cloudthinker-readonly` trong `argocd-rbac-cm` và bật chế độ chỉ đọc trong kết nối để ngăn các thao tác ghi không được phê duyệt.
+- **Xoay vòng token** — định kỳ xoay vòng API token ArgoCD và cập nhật trong CloudThinker.
+
+---
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Kai Agent" icon="dharmachakra" href="/vi/guide/agents/kai">
+    Agent Kubernetes và GitOps
+  </Card>
+  <Card title="Kết nối Kubernetes" icon="/images/icons/kubernetes.svg" href="/vi/guide/connections/kubernetes">
+    Kết nối các cluster Kubernetes
+  </Card>
+</CardGroup>

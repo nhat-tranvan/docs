@@ -1,0 +1,339 @@
+---
+title: AWS CloudWatch
+description: "Amazon EventBridge를 통해 AWS CloudWatch 알람이 CloudThinker에서 자동으로 인시던트를 생성하도록 설정합니다"
+icon: "/images/icons/integrations/aws-cloudwatch.svg"
+---
+
+AWS CloudWatch 알람을 CloudThinker에 연결하면 알람 상태 변경 시 AI 기반 근본 원인 분석과 함께 인시던트가 자동으로 생성됩니다. 권장 방법은 **Amazon EventBridge**를 사용하여 CloudWatch 알람 이벤트를 CloudThinker 웹훅 URL로 직접 라우팅하는 것입니다 — Lambda 함수가 필요하지 않습니다.
+
+---
+
+## 아키텍처 개요
+
+```
+CloudWatch Alarm → EventBridge Rule → API Destination → CloudThinker Webhook
+```
+
+CloudWatch 알람이 상태를 변경하면(예: OK → ALARM), EventBridge가 이벤트를 캡처하고 API Destination을 통해 CloudThinker로 전달합니다. CloudThinker는 이벤트를 파싱하고, 인시던트를 생성하며, 선택적으로 자동 근본 원인 분석을 트리거합니다.
+
+<Note>
+  **왜 EventBridge인가요?** EventBridge는 내장 재시도 로직, 데드 레터 큐, IAM 기반 보안을 갖추고 웹훅에 깨끗한 JSON을 직접 전송합니다. 구독 확인 핸드셰이크가 필요하지 않으며(SNS와 달리), 페이로드 변환을 위한 Lambda 함수도 필요하지 않습니다.
+</Note>
+
+---
+
+## 사전 요구 사항
+
+- EventBridge 규칙, API 대상, 연결을 생성할 권한이 있는 AWS 계정
+- 모니터링할 메트릭에 대해 구성된 CloudWatch 알람
+- CloudThinker 웹훅 URL (아래 단계에서 생성)
+
+---
+
+## 설정 가이드
+
+<Steps>
+  <Step title="CloudThinker 웹훅 생성">
+    1. CloudThinker에서 **Deep Response Engine** → **Settings** → **Integrations**로 이동합니다
+    2. **AWS CloudWatch** 카드에서 **Connect**를 클릭합니다
+    3. 이름을 입력합니다 (예: "Production CloudWatch Alerts")
+    4. 미리 구성된 필드 매핑을 검토합니다 — EventBridge 형식에 맞게 설정되어 있습니다:
+
+    | 인시던트 필드 | JSONPath | 추출 내용 |
+    |----------------|----------|----------|
+    | Title | `$.detail.alarmName` | 알람 이름 |
+    | Description | `$.detail.state.reason` | 상태 변경 이유 |
+    | Severity | `$.detail.state.value` | 알람 상태 (`ALARM`, `OK`, `INSUFFICIENT_DATA`) |
+    | Services | `$.detail.configuration.metrics[0].metricStat.metric.namespace` | AWS 서비스 네임스페이스 (예: `AWS/EC2`) |
+
+    5. 기본 인증 방법은 헤더 `x-api-key`가 있는 **API Key**입니다 — EventBridge 연결 설정과 일치합니다
+    6. 필요에 따라 심각도 매핑 및 자동 트리거 설정을 구성합니다
+    7. **Create**를 클릭하고 **Secret Key를 저장합니다** — EventBridge 연결에 필요합니다
+
+    <Warning>
+      비밀 키는 생성 중에 한 번만 표시됩니다. 즉시 복사하세요 — EventBridge 연결에서 API 키 값으로 붙여넣을 것입니다.
+    </Warning>
+  </Step>
+
+  <Step title="EventBridge 연결 생성">
+    1. AWS 콘솔에서 **Amazon EventBridge** → **Integration** → **Connections**로 이동합니다
+    2. **Create connection**을 클릭합니다
+    3. 연결을 구성합니다:
+       - **Name:** `cloudthinker-webhook`
+       - **Authorization type:** API Key
+       - **API key name:** `x-api-key`
+       - **API key value:** CloudThinker 웹훅 생성 대화 상자의 **Secret Key** 붙여넣기
+
+    <Warning>
+      웹훅 생성 중 비밀 키를 저장하세요 — 한 번만 표시됩니다. 이 키는 CloudThinker에 대한 EventBridge 요청을 인증합니다.
+    </Warning>
+  </Step>
+
+  <Step title="API 대상 생성">
+    1. **Amazon EventBridge** → **Integration** → **API destinations**로 이동합니다
+    2. **Create API destination**을 클릭합니다
+    3. 구성합니다:
+       - **Name:** `cloudthinker-incidents`
+       - **API destination endpoint:** CloudThinker 웹훅 URL 붙여넣기
+       - **HTTP method:** `POST`
+       - **Connection:** 위에서 생성한 `cloudthinker-webhook` 연결 선택
+       - **Invocation rate limit:** 초당 `100` (필요에 따라 조정)
+  </Step>
+
+  <Step title="EventBridge 규칙 생성">
+    1. **Amazon EventBridge** → **Rules**로 이동합니다
+    2. **default** 이벤트 버스를 선택합니다
+    3. **Create rule**을 클릭합니다
+    4. 구성합니다:
+       - **Name:** `cloudwatch-alarms-to-cloudthinker`
+       - **Description:** Route CloudWatch alarm state changes to CloudThinker
+       - **Event bus:** default
+       - **Rule type:** Rule with an event pattern
+
+    5. **이벤트 패턴**을 정의합니다:
+
+    ```json
+    {
+      "source": ["aws.cloudwatch"],
+      "detail-type": ["CloudWatch Alarm State Change"]
+    }
+    ```
+
+    특정 알람 또는 상태로 필터링할 수도 있습니다:
+
+    ```json
+    {
+      "source": ["aws.cloudwatch"],
+      "detail-type": ["CloudWatch Alarm State Change"],
+      "detail": {
+        "state": {
+          "value": ["ALARM"]
+        }
+      }
+    }
+    ```
+
+    6. 대상을 선택합니다:
+       - **Target type:** EventBridge API destination
+       - **API destination:** `cloudthinker-incidents` 선택
+       - **Execution role:** `events:InvokeApiDestination` 권한이 있는 새 역할 생성 또는 기존 역할 사용
+
+    7. **Create rule**을 클릭합니다
+  </Step>
+
+  <Step title="통합 테스트">
+    AWS CLI를 사용하여 알람 상태 변경을 시뮬레이션합니다:
+
+    ```bash
+    aws cloudwatch set-alarm-state \
+      --alarm-name "YourAlarmName" \
+      --state-value ALARM \
+      --state-reason "Testing CloudThinker integration"
+    ```
+
+    몇 초 내에 CloudThinker에 알람 세부 정보가 포함된 새 인시던트가 생성되는 것을 확인할 수 있습니다.
+
+    알람을 정상 상태로 재설정하려면:
+
+    ```bash
+    aws cloudwatch set-alarm-state \
+      --alarm-name "YourAlarmName" \
+      --state-value OK \
+      --state-reason "Test complete"
+    ```
+  </Step>
+</Steps>
+
+---
+
+## 이벤트 페이로드
+
+EventBridge는 다음 형식으로 CloudWatch 알람 이벤트를 전달합니다. CloudThinker의 필드 매핑이 이 구조에서 인시던트 데이터를 자동으로 추출합니다.
+
+```json
+{
+  "version": "0",
+  "id": "abcd1234-ef56-gh78-ij90-klmnopqrstuv",
+  "detail-type": "CloudWatch Alarm State Change",
+  "source": "aws.cloudwatch",
+  "account": "123456789012",
+  "time": "2024-01-15T10:30:00Z",
+  "region": "us-east-1",
+  "detail": {
+    "alarmName": "HighCPUUtilization",
+    "state": {
+      "value": "ALARM",
+      "reason": "Threshold Crossed: 1 out of the last 1 datapoints [85.0 (15/01/24 10:25:00)] was greater than the threshold (80.0)",
+      "reasonData": "{\"version\":\"1.0\",\"queryDate\":\"2024-01-15T10:30:00.000+0000\",\"startDate\":\"2024-01-15T10:25:00.000+0000\",\"statistic\":\"Average\",\"period\":300,\"recentDatapoints\":[85.0],\"threshold\":80.0,\"evaluatedDatapoints\":[{\"timestamp\":\"2024-01-15T10:25:00.000+0000\",\"sampleCount\":5.0,\"value\":85.0}]}",
+      "timestamp": "2024-01-15T10:30:00.000+0000"
+    },
+    "previousState": {
+      "value": "OK",
+      "reason": "Threshold Crossed: 1 out of the last 1 datapoints [65.0 (15/01/24 10:20:00)] was not greater than the threshold (80.0)",
+      "timestamp": "2024-01-15T10:20:00.000+0000"
+    },
+    "configuration": {
+      "description": "CPU utilization exceeded 80%",
+      "metrics": [
+        {
+          "id": "m1",
+          "metricStat": {
+            "metric": {
+              "namespace": "AWS/EC2",
+              "name": "CPUUtilization",
+              "dimensions": {
+                "InstanceId": "i-0123456789abcdef0"
+              }
+            },
+            "period": 300,
+            "stat": "Average"
+          },
+          "returnData": true
+        }
+      ]
+    }
+  }
+}
+```
+
+---
+
+## 심각도 매핑
+
+CloudWatch 알람 상태는 CloudThinker 심각도 수준에 매핑됩니다. 기본 매핑은 다음과 같습니다:
+
+| CloudWatch 상태 | CloudThinker 심각도 |
+|-----------------|----------------------|
+| `ALARM` | Critical |
+| `INSUFFICIENT_DATA` | Medium |
+| `OK` | Info |
+
+웹훅 구성의 **Severity Mapping** 아래에서 이 매핑을 커스터마이징할 수 있습니다.
+
+---
+
+## 알람 필터링
+
+EventBridge 규칙의 이벤트 패턴을 세밀하게 조정하여 어떤 알람이 인시던트를 트리거할지 제어할 수 있습니다.
+
+**알람 이름 접두사 기준:**
+
+```json
+{
+  "source": ["aws.cloudwatch"],
+  "detail-type": ["CloudWatch Alarm State Change"],
+  "detail": {
+    "alarmName": [{ "prefix": "prod-" }]
+  }
+}
+```
+
+**특정 알람 상태 기준:**
+
+```json
+{
+  "source": ["aws.cloudwatch"],
+  "detail-type": ["CloudWatch Alarm State Change"],
+  "detail": {
+    "state": {
+      "value": ["ALARM", "INSUFFICIENT_DATA"]
+    }
+  }
+}
+```
+
+**메트릭 네임스페이스 기준:**
+
+```json
+{
+  "source": ["aws.cloudwatch"],
+  "detail-type": ["CloudWatch Alarm State Change"],
+  "detail": {
+    "configuration": {
+      "metrics": {
+        "metricStat": {
+          "metric": {
+            "namespace": ["AWS/EC2", "AWS/RDS"]
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+---
+
+## 멀티 리전 설정
+
+CloudWatch 이벤트는 리전별입니다 — 알람은 자신이 있는 리전의 EventBridge 버스에만 이벤트를 내보냅니다. 멀티 리전 모니터링의 경우:
+
+1. **옵션 A: 리전 간 이벤트 포워딩** — 각 소스 리전에 CloudWatch 알람 이벤트를 중앙 리전의 이벤트 버스로 포워딩하는 EventBridge 규칙을 만든 다음, 그곳에서 CloudThinker로 라우팅합니다.
+
+2. **옵션 B: 리전별 규칙** — 동일한 CloudThinker 웹훅 URL을 가리키는 API 대상과 규칙을 각 리전에 만듭니다. 더 간단하지만 리전 전반에 걸쳐 규칙을 유지 관리해야 합니다.
+
+---
+
+## 문제 해결
+
+<Accordion title="인시던트가 생성되지 않는 경우">
+  1. **EventBridge 규칙 확인** — EventBridge → Rules → 규칙 선택 → Monitoring 탭으로 이동합니다. 규칙이 이벤트와 일치하는지 확인합니다(`Invocations` 메트릭 > 0)
+  2. **API 대상 확인** — API destinations → 선택 → 엔드포인트 URL이 CloudThinker 웹훅 URL과 일치하는지 확인합니다
+  3. **CloudThinker 로그 확인** — Deep Response Engine → Settings → Integrations → 웹훅 선택 → 전달 기록을 위한 Logs 탭
+  4. **CLI로 테스트** — `aws cloudwatch set-alarm-state`를 실행하여 알람을 시뮬레이션하고 전체 체인을 확인합니다
+</Accordion>
+
+<Accordion title="이벤트는 수신되지만 필드가 누락된 경우">
+  필드 매핑이 EventBridge 이벤트 형식과 일치하는지 확인합니다. EventBridge를 통해 라우팅된 CloudWatch 이벤트는 `$.detail.*` 접두사를 사용합니다:
+
+  - Title: `$.detail.alarmName` (`$.AlarmName`이 아님)
+  - Severity: `$.detail.state.value` (`$.NewStateValue`가 아님)
+  - Description: `$.detail.state.reason` (`$.NewStateReason`이 아님)
+
+  이전에 SNS를 사용했다면, 필드 매핑을 EventBridge 형식으로 업데이트하세요.
+</Accordion>
+
+<Accordion title="규칙이 이벤트와 일치하지 않는 경우">
+  - 이벤트 패턴이 `"detail-type": ["CloudWatch Alarm State Change"]`를 사용하는지 확인합니다 (정확한 문자열, 대소문자 구분)
+  - 규칙이 **default** 이벤트 버스에 있는지 확인합니다 — CloudWatch는 default 버스에 이벤트를 보냅니다
+  - 알람이 EventBridge 규칙과 동일한 리전에 있는지 확인합니다
+</Accordion>
+
+<Accordion title="API 대상에서 오류가 반환되는 경우">
+  - **401/403**: EventBridge 연결의 API 키 값이 웹훅의 비밀 키와 일치하는지, 키 이름이 `x-api-key`인지 확인합니다
+  - **422**: 페이로드 형식이 예상된 필드 매핑과 일치하지 않을 수 있습니다 — 이벤트 페이로드 구조를 확인합니다
+  - **429**: 웹훅 전송률 제한을 초과했습니다 — CloudThinker 웹훅 설정에서 전송률 제한을 높입니다
+</Accordion>
+
+---
+
+## 대안: SNS 라우트
+
+CloudThinker는 SNS를 통한 CloudWatch 알람 수신도 지원합니다. 이 경로는 알람에 대한 SNS 토픽이 이미 구성되어 있는 경우 유용합니다.
+
+```
+CloudWatch Alarm → SNS Topic → CloudThinker Webhook
+```
+
+SNS 라우트를 사용할 때 CloudThinker는 자동으로:
+- SNS 구독을 확인합니다 (수동 확인 불필요)
+- SNS 알림 봉투를 언래핑하여 알람 페이로드를 추출합니다
+
+설정하려면: SNS 토픽에 CloudThinker 웹훅 URL을 **HTTPS 구독**으로 추가합니다. 구독은 몇 초 내에 자동으로 확인됩니다.
+
+<Note>
+  EventBridge 라우트는 더 깨끗한 이벤트 형식, 네이티브 필터링을 제공하고 구독 핸드셰이크가 필요하지 않기 때문에 SNS보다 권장됩니다.
+</Note>
+
+---
+
+## 관련 문서
+
+<CardGroup cols={2}>
+  <Card title="웹훅 통합 개요" icon="webhook" href="/ko/guide/incident/webhook-integrations/overview">
+    지원되는 모든 플랫폼과 일반 웹훅 구성에 대해 알아봅니다.
+  </Card>
+  <Card title="근본 원인 분석" icon="magnifying-glass" href="/ko/guide/incident/root-cause-analysis">
+    CloudWatch 인시던트를 위한 자동 AI 기반 조사를 구성합니다.
+  </Card>
+</CardGroup>

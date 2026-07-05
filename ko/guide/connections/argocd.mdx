@@ -1,0 +1,221 @@
+---
+title: ArgoCD
+description: "ArgoCD를 CloudThinker에 연결하여 GitOps 운영 및 애플리케이션 관리를 수행합니다"
+icon: "/images/icons/argocd.svg"
+---
+
+import ConnectionSecurity from '/snippets/ko/connection-security.mdx';
+
+ArgoCD 인스턴스를 연결하면 [Kai](/ko/guide/agents/kai)(Kubernetes 엔지니어)가 배포를 분석하고, 애플리케이션을 관리하며, GitOps 워크플로를 트러블슈팅할 수 있습니다. ArgoCD는 **API 토큰**으로 인증하며, 설정 방식은 자체 호스팅 인스턴스와 Akuity Platform에 따라 다릅니다.
+
+---
+
+## 사전 요구사항
+
+- CloudThinker에서 접근 가능한 ArgoCD 인스턴스: 자체 호스팅(기본 포트 `8888`) 또는 [Akuity Platform](https://akuity.cloud)으로 관리되는 인스턴스.
+- **ArgoCD CLI** 설치 (`brew install argocd`); Akuity Platform의 경우 [Akuity CLI](https://docs.akuity.io/akuity-platform/akuity-cli)도 필요합니다.
+- `apiKey` 기능 활성화 및 토큰 생성을 위한 ArgoCD 관리자 권한.
+
+---
+
+## 설정
+
+ArgoCD 플랫폼을 선택하세요:
+
+<Tabs>
+  <Tab title="자체 호스팅 ArgoCD">
+
+    <Steps>
+      <Step title="연결 정보 확인">
+        ArgoCD가 실행 중이고 접근 가능한지 확인합니다. 호스트 IP 주소를 가져옵니다:
+
+        ```bash
+        hostname -I | awk '{print $1}'
+        ```
+      </Step>
+      <Step title="API 토큰 생성">
+        `apiKey` 기능을 활성화하고 admin 계정의 토큰을 생성합니다:
+
+        ```bash
+        kubectl -n argocd patch configmap argocd-cm --type merge -p '{"data":{"accounts.admin":"apiKey, login"}}'
+        argocd login <host-ip>:8888 --username admin --password '<password>' --insecure
+        argocd account generate-token --account admin --insecure
+        ```
+      </Step>
+      <Step title="CloudThinker에서 연결 추가">
+        **Connections → ArgoCD**로 이동하여 다음을 입력합니다:
+
+        - **Base URL**: `https://<host-ip>:8888`
+        - **API Token**: 이전 단계에서 생성한 토큰
+        - **TLS Verification**: 비활성화
+        - **Read-only Mode**: 활성화
+
+        **Connect**를 클릭합니다. CloudThinker가 자격 증명을 확인하고 **Connected** 상태를 표시합니다.
+      </Step>
+    </Steps>
+
+  </Tab>
+
+  <Tab title="Akuity Platform">
+
+    <Steps>
+      <Step title="CLI 설치">
+        ArgoCD CLI를 설치합니다:
+
+        ```bash
+        brew install argocd
+        ```
+
+        Akuity CLI를 설치합니다:
+
+        ```bash
+        curl -sSL -o /tmp/akuity \
+          "https://dl.akuity.io/akuity-cli/$(curl -sL https://dl.akuity.io/akuity-cli/stable.txt)/$(uname)/$(uname -m)/akuity"
+        chmod +x /tmp/akuity
+        sudo mv /tmp/akuity /usr/local/bin/akuity
+        ```
+      </Step>
+      <Step title="admin 계정 생성">
+        [Akuity Portal](https://akuity.cloud)에서:
+
+        1. **Organization** → **API Keys** → **Create API Key** 클릭 (역할: Owner).
+        2. ArgoCD 인스턴스 → **Settings** → **System Accounts**로 이동합니다.
+        3. **Add Account** 클릭 → 이름: `admin`.
+        4. **login**과 **apiKey** 기능을 모두 활성화하고 비밀번호를 설정합니다.
+      </Step>
+      <Step title="API 토큰 생성">
+        로그인하고 토큰을 생성합니다:
+
+        ```bash
+        argocd login <instance-id>.cd.akuity.cloud --grpc-web \
+          --username admin --password '<your-password>'
+        argocd account generate-token --account admin --grpc-web
+        ```
+      </Step>
+      <Step title="CloudThinker에서 연결 추가">
+        **Connections → ArgoCD**로 이동하여 다음을 입력합니다:
+
+        - **Base URL**: `https://<instance-id>.cd.akuity.cloud`
+        - **API Token**: 이전 단계에서 생성한 토큰
+        - **TLS Verification**: 활성화
+        - **Read-only Mode**: 활성화
+
+        **Connect**를 클릭합니다. CloudThinker가 자격 증명을 확인하고 **Connected** 상태를 표시합니다.
+      </Step>
+    </Steps>
+
+  </Tab>
+</Tabs>
+
+---
+
+## 연결 세부 정보
+
+| 필드 | 설명 | 예시 |
+|-------|-------------|---------|
+| **Base URL** | ArgoCD 서버 주소 | `https://192.168.1.100:8888` (자체 호스팅); `https://<id>.cd.akuity.cloud` (Akuity) |
+| **API Token** | ArgoCD admin 계정에 생성한 토큰 | — |
+| **TLS Verification** | Akuity의 경우 활성화; 자체 서명 인증서를 사용하는 자체 호스팅의 경우 비활성화 | — |
+| **Read-only Mode** | 허가되지 않은 쓰기 작업 방지를 위해 활성화 | — |
+
+---
+
+## 필요 권한
+
+CloudThinker에 읽기 전용 접근 권한을 부여하려면 ArgoCD에서 다음 RBAC 정책을 적용합니다:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-rbac-cm
+  namespace: argocd
+data:
+  policy.default: role:readonly
+  policy.csv: |
+    p, role:cloudthinker-readonly, applications, get, */*, allow
+    p, role:cloudthinker-readonly, applications, list, */*, allow
+    p, role:cloudthinker-readonly, repositories, get, *, allow
+    p, role:cloudthinker-readonly, repositories, list, *, allow
+    p, role:cloudthinker-readonly, clusters, get, *, allow
+    p, role:cloudthinker-readonly, clusters, list, *, allow
+    g, cloudthinker-readonly, role:cloudthinker-readonly
+```
+
+```bash
+kubectl apply -f argocd-rbac.yaml
+```
+
+<Tip>
+최소 권한 원칙을 따르세요: 애플리케이션, 레포지토리, 클러스터에 대해 `get`과 `list` 작업만 허용합니다.
+</Tip>
+
+---
+
+## 에이전트 기능
+
+연결 후 Kai는 ArgoCD 애플리케이션을 조사하고 작업할 수 있습니다.
+
+| 기능 | 설명 |
+|------------|-------------|
+| **애플리케이션 상태** | 동기화 상태, 헬스 상태, 마지막 동기화 시간 확인 |
+| **배포 분석** | 동기화 불일치 및 실패한 배포 식별 |
+| **레포지토리 인사이트** | Git 레포지토리 상태 및 커밋 분석 |
+| **헬스 모니터링** | 모든 앱의 애플리케이션 헬스 추적 |
+| **동기화 작업** | 수동 동기화 트리거 — **승인 필요** |
+
+### 연결 확인
+
+```text
+@kai list all ArgoCD applications and show their sync and health status
+```
+
+### 예시 프롬프트
+
+```text
+@kai show all out-of-sync ArgoCD applications and #report the details
+@kai analyze deployment failures for the payment service and #recommend fixes
+@kai check the health status of all applications in production
+```
+
+---
+
+## 트러블슈팅
+
+<Accordion title="ArgoCD 서버에 연결할 수 없음">
+자체 호스팅 인스턴스의 경우, Base URL에 `localhost` 대신 호스트 IP 주소를 사용하세요. 서버가 포트 포워드 뒤에 있는 경우, `kubectl port-forward svc/argocd-server -n argocd 8888:443 --address 0.0.0.0`을 실행합니다. 호스트가 여전히 접근 불가능하면 방화벽 규칙을 확인하세요.
+</Accordion>
+
+<Accordion title="401 Unauthorized">
+API 토큰이 올바른지, admin 계정에 `login`과 `apiKey` 기능이 모두 활성화되어 있는지 확인합니다. 자체 호스팅의 경우 `argocd-cm`이 패치되었는지 확인하고, Akuity의 경우 포털에서 System Account 기능을 확인하세요.
+</Accordion>
+
+<Accordion title="API 토큰을 생성할 수 없음">
+계정에 `apiKey` 기능이 활성화되어 있지 않습니다. `argocd account get`을 실행하여 계정 기능을 확인한 후, `apiKey`를 활성화하고 다시 시도하세요.
+</Accordion>
+
+<Accordion title="TLS 인증서 오류">
+자체 호스팅 인스턴스의 경우, 연결 설정에서 TLS 검증을 비활성화합니다(CLI의 `--insecure` 플래그와 동일). Akuity의 경우 TLS 검증을 활성화 상태로 유지해야 합니다.
+</Accordion>
+
+---
+
+## 보안
+
+<ConnectionSecurity />
+
+- **읽기 전용 RBAC** — `argocd-rbac-cm`에 `role:cloudthinker-readonly` 정책을 적용하고 연결에서 읽기 전용 모드를 활성화하여 허가되지 않은 쓰기를 방지합니다.
+- **토큰 로테이션** — ArgoCD API 토큰을 주기적으로 교체하고 CloudThinker에서 업데이트합니다.
+
+---
+
+## 관련 항목
+
+<CardGroup cols={2}>
+  <Card title="Kai 에이전트" icon="dharmachakra" href="/ko/guide/agents/kai">
+    Kubernetes 및 GitOps 에이전트
+  </Card>
+  <Card title="Kubernetes 연결" icon="/images/icons/kubernetes.svg" href="/ko/guide/connections/kubernetes">
+    Kubernetes 클러스터 연결
+  </Card>
+</CardGroup>

@@ -1,0 +1,178 @@
+---
+title: 'クイックスタート'
+description: "登録して AWS を接続し、接続を確認し、最初の AI によるコスト分析を実行する — すべてのステップに明確な成功状態があります。"
+icon: bolt
+---
+
+import PromptSyntaxBasics from '/snippets/ja/prompt-syntax-basics.mdx';
+
+このクイックスタートでは、ゼロから実際に確認できる結果 — アイドル状態の EC2 インスタンスのリストと月間節約見込み額 — を、実際の AWS アカウントを読み取る AI エージェントが返すまでを案内します。**約 10 分**ほどかかります。ほとんどの時間は AWS のモデルアクセス付与と CloudThinker によるリソースインベントリ作成に充てられます。
+
+<Info>
+**必要なもの:** メールアドレス、ロールを作成するための管理者権限 (または十分な IAM 権限) を持つ AWS アカウント、エージェントが返す内容を読むための数分間。
+</Info>
+
+---
+
+## 30 秒で覚える構文
+
+<PromptSyntaxBasics />
+
+---
+
+<Steps>
+  <Step title="登録する">
+    [app.cloudthinker.io](https://app.cloudthinker.io/auth/register) でサインアップします。
+
+    1. 名前、業務用メールアドレス、パスワードを入力する
+    2. 受信トレイに届いた確認リンクをクリックする
+    3. プロフィールを確認する
+
+    **成功状態:** デフォルトのワークスペースが準備された個人組織に移動します。左サイドバーの上部に **New chat**、**Skills**、**Artifacts** が表示され、右側に空の会話パネルが表示されます。
+
+    <Tip>
+    14 日間の無料トライアル — 15 日目まで課金されません。プランの制限については [料金](/ja/guide/billing/pricing) をご確認ください。
+    </Tip>
+  </Step>
+
+  <Step title="AWS を接続する">
+    **Settings → Connections → New Connection → AWS** に移動し、認証方法を選択します:
+
+    | 方法 | 使用する場面 | 必要なもの |
+    |---|---|---|
+    | **IAM ロール** *(推奨)* | 本番アカウント。長期的なキーより安全 | 作成するロールへの信頼ポリシー + アクセス許可ポリシー |
+    | **アクセスキー** | クイックデモまたはサンドボックスアカウント | プログラムによるアクセスを持つ IAM ユーザー。アクセスキー ID + シークレット |
+
+    IAM ロールの方法では、CloudThinker が信頼ポリシーに貼り付ける **External ID** と、アタッチする [最小権限](/ja/guide/connections/aws#required-permissions) を表示します。AWS Console での完全なウォークスルー — CloudShell コマンドと信頼ポリシーの JSON を含む — は [AWS 接続ガイド](/ja/guide/connections/aws) にあります。
+
+    **デフォルトで安全:** 推奨されるスターターポリシーは読み取り専用です。書き込み操作 (適正サイズ化、インスタンス終了、セキュリティグループの変更) には別のポリシーが必要であり、[承認ワークフロー](/ja/guide/approval) のもとで実行されます — 最初の実行でエージェントがあなたの承認なしに変更を適用することはありません。
+
+    **成功状態:** 接続カードが緑のドット付きの **Connected** に変わります。ディスカバリーが自動的に開始され、約 2 分以内にカードにゼロ以外のリソース数 (インスタンス、RDS、S3 など) が表示されます。ディスカバリーがゼロのままの場合は、下の [トラブルシューティング](#troubleshooting) をご確認ください。
+  </Step>
+
+  <Step title="ディスカバリーを確認する">
+    左サイドバーの **Infrastructure** タブを開きます。
+
+    以下が表示されているはずです:
+
+    - ゼロ以外のリソース数を持つリージョンのリスト
+    - EC2 インスタンス、S3 バケット、RDS データベース、Lambda 関数のうち少なくとも一つ
+    - サービスの関係を示すトポロジービュー (グラフアイコンをクリック)
+
+    **成功状態:** リソース数がアカウントで予想される数とほぼ一致します。EC2 が 5 台のサンドボックスを接続して 5 台と表示された場合 — 完了です。ゼロが表示されたり数が合わない場合は [トラブルシューティング](#troubleshooting) をご確認ください。
+  </Step>
+
+  <Step title="最初のプロンプトを実行する">
+    **New chat** をクリックして以下を貼り付けます:
+
+    ```text
+    @alex give me a summary of my AWS resources — count by service, top regions, and any obviously idle instances
+    ```
+
+    Alex が CloudWatch の使用率メトリクスを照会し、リソースインベントリと結合して、構造化されたサマリーを返します。
+
+    **期待される出力:** 約 30 秒以内に以下を含むレスポンスが届きます:
+
+    - **リソース数** — リージョン別の EC2、RDS、S3、Lambda など
+    - **アイドル候補** — 過去 30 日間で CPU 使用率が `<20%` に維持されたインスタンス
+    - **節約見込み額** — アイドルリソースへの支払いを続けた場合の月間コスト
+    - **インライン推論** — *「過去 30 日間の CloudWatch の `CPUUtilization` メトリクスを確認し、95 パーセンタイルが 20% を下回るインスタンスをフィルタリングしました」*
+
+    任意の行をドリルダウンできます: インスタンスをクリックすると、タグ、リージョン、オーナー、Alex が参照したメトリクス履歴の全体が表示されます。
+  </Step>
+
+  <Step title="ツールコマンドを試す">
+    より豊富な出力形式を得るには、プロンプトに `#tool` をプレフィックスとして付けます:
+
+    ```text
+    @alex #dashboard EC2 cost breakdown by instance type over the last 30 days
+    ```
+
+    Alex はテキストの回答ではなく、インタラクティブなダッシュボード (並べ替え / フィルタリング可能なグラフ) を返します。
+
+    接続後に試す価値のある他のツール:
+
+    ```text
+    @alex #recommend right-sizing options for the over-provisioned instances above
+    @alex #report monthly AWS cost narrative I can share with finance
+    ```
+
+    **成功状態:** ダッシュボードがインラインでレンダリングされ、推奨事項には変更と月間コスト削減見込みの両方が含まれます。
+  </Step>
+</Steps>
+
+---
+
+## 完了の確認
+
+- [x] Infrastructure タブで AWS リソース数を確認でき、実態と一致している
+- [x] `@alex` が実際に認識できるインスタンスやサービスを名指ししたサマリーを返した
+- [x] Alex がアイドルリソースを見つけるために何をしたか、チームメンバーにインライン推論を読んで説明できる
+
+3 つすべてが当てはまれば、最初の成功フローは完了です。
+
+---
+
+## トラブルシューティング
+
+<AccordionGroup>
+  <Accordion title="AWS 接続が「Pending」または「Failed」のままになる" icon="circle-exclamation">
+    **考えられる原因:** 信頼ポリシーに External ID がない、またはロールのアクセス許可ポリシーが狭すぎる。
+
+    **確認事項:**
+    1. AWS Console → IAM → Roles → 対象のロール → Trust relationships で、`sts:ExternalId` の条件が CloudThinker に表示されたものと完全に一致しているか確認します (余分なスペースがないか)。
+    2. ロールのアクセス許可ポリシーに最低限 `ec2:Describe*`、`rds:Describe*`、`s3:List*`、`cloudwatch:GetMetricStatistics` が含まれているか確認します。完全なリスト: [AWS 接続の最小権限](/ja/guide/connections/aws#required-permissions)。
+    3. ロールの max-session-duration が 1 時間以上であるか確認します。
+
+    **修正:** 信頼ポリシー / 権限を修正し、接続カードの **Reconnect** をクリックします。ディスカバリーが自動的に再開されます。
+  </Accordion>
+
+  <Accordion title="接続済みだがリソース数がゼロのまま" icon="magnifying-glass">
+    **考えられる原因:** ロールは引き受けられるが、アカウントが実際に使用しているリージョン / サービスに対して `Describe` 権限がない、またはアカウントが有効化されていないリージョンにある。
+
+    **確認事項:**
+    - **Connection details → Discovery log** に移動します。試行された各リージョンの結果が表示されます。`AccessDenied` エラーが、拒否された API 呼び出しを正確に示します。
+    - アカウントにロールが見えるリージョンに少なくとも 1 つのリソースが実際にあるか確認します。
+
+    **修正:** アクセス許可ポリシーを拡張して失敗した API をカバーするか、接続のリージョンスコープで該当リージョンを有効にします。
+  </Accordion>
+
+  <Accordion title="Alex が「I don't have access to AWS yet」と言う" icon="user-slash">
+    **考えられる原因:** 接続が現在のワークスペースにバインドされていません。各接続は 1 つのワークスペースに属しており、別のワークスペースでチャットしている可能性があります。
+
+    **修正:** ワークスペースセレクター (サイドバーの上部) が AWS を追加したワークスペースと同じを示しているか確認します。ワークスペースを切り替えるか、チャット中のワークスペースで接続を再追加します。
+  </Accordion>
+
+  <Accordion title="最初のプロンプトが自分のデータではなく一般的なベストプラクティスを返す" icon="comment-slash">
+    **考えられる原因:** Alex がツール (CloudWatch、Cost Explorer) にアクセスできなかった — 通常は権限の不足。具体的なデータが利用できない場合、一般的な回答がフォールバックとして返されます。
+
+    **確認事項:** Alex の返答の一番下までスクロールします。**Tools used** セクションに試みたすべての API 呼び出しと成否が表示されます。失敗した呼び出しには AWS エラーが表示されます。
+
+    **修正:** ロールに不足している権限を追加し (CloudWatch 読み取りは使用率向け、Cost Explorer 読み取りは費用向け)、再接続してからプロンプトを再実行します。
+  </Accordion>
+
+  <Accordion title="最初のプロンプトのレスポンスが遅い、またはタイムアウトする" icon="hourglass-half">
+    **考えられる原因:** 初期ディスカバリーがまだ実行中 — Alex はインベントリが完了するまで待ってから推論します。その後のプロンプトははるかに速くなります。
+
+    **修正:** Infrastructure タブにゼロ以外のリソース数が表示されるまで待ち、プロンプトを再実行します。ディスカバリーは通常、500 リソース未満のアカウントで 2〜5 分で完了します。
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## 次のステップ
+
+<CardGroup cols={2}>
+  <Card title="ロール別 AgenticOps クイックウィン" icon="comments" href="/ja/guide/tutorial/agenticops">
+    自分のロールを選び、プロンプトをコピーして、1 分以内に実際の結果を得る
+  </Card>
+  <Card title="さらにツールを接続する" icon="plug" href="/ja/guide/connections/overview">
+    Datadog、GitHub、Kubernetes、Postgres、Slack を追加 — 接続が増えるにつれてエージェントが有効化されます
+  </Card>
+  <Card title="チームを招待する" icon="user-plus" href="/ja/guide/workspace-users">
+    Owner、Admin、Developer、Viewer ロールでチームメンバーを追加し、ワークスペースアクセスを割り当てます
+  </Card>
+  <Card title="プランをアップグレードする" icon="credit-card" href="/ja/guide/billing/subscription">
+    チームの準備ができたらシートを追加してトライアルからアップグレード — シートごとの課金、いつでもアップグレード可能
+  </Card>
+</CardGroup>

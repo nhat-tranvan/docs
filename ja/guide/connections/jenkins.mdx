@@ -1,0 +1,152 @@
+---
+title: Jenkins
+description: "CloudThinker と Jenkins CI/CD サーバーを接続して、ビルドパイプラインの監視、ジョブ分析、デプロイ追跡を実現する"
+icon: "/images/icons/jenkins.svg"
+---
+
+import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+
+セルフホスト Jenkins サーバーを接続することで、CloudThinker エージェントがビルドの監視、テスト結果の分析、パイプラインログのレビュー、ジョブ操作の管理を行えるようになります。Jenkins は Jenkins MCP Server Plugin を通じて**ユーザー名と API トークン**で認証します。
+
+---
+
+## 前提条件
+
+- バージョン 2.x 以降の**セルフホスト Jenkins** インスタンス（クラウドホスト Jenkins はサポートされていません）。
+- サーバーにインストールされた **[Jenkins MCP Server Plugin](https://github.com/jenkinsci/mcp-server-plugin)**。デフォルト MCP ポートは `9090` です。
+- ルート URL の設定と認証情報の作成に必要な Jenkins の管理者アクセス。
+
+<Info>
+クラウドホスト Jenkins サービスはサポートされていません。この接続には Jenkins MCP Server Plugin が必要です。
+</Info>
+
+---
+
+## セットアップ
+
+<Steps>
+  <Step title="ルート URL を設定する">
+    MCP Server Plugin は Jenkins がルート URL を設定していることを要求し、正しいジョブリンクを返します。Jenkins スクリプトコンソールで以下を実行します。
+
+    ```bash
+    COOKIE_JAR=/tmp/jenkins_cookies
+    CRUMB=$(curl -s -c $COOKIE_JAR -u "admin:<password>" \
+      'http://<host-ip>:9090/crumbIssuer/api/json' | python3 -c "import json,sys; print(json.load(sys.stdin)['crumb'])")
+
+    curl -s -X POST "http://<host-ip>:9090/scriptText" \
+      -b $COOKIE_JAR -u "admin:<password>" -H "Jenkins-Crumb: $CRUMB" \
+      --data-urlencode "script=
+    import jenkins.model.JenkinsLocationConfiguration
+    def loc = JenkinsLocationConfiguration.get()
+    loc.setUrl('http://<host-ip>:9090/')
+    loc.save()
+    println('Root URL set to: ' + loc.getUrl())
+    "
+    ```
+  </Step>
+  <Step title="MCP エンドポイントを確認する">
+    接続前にプラグインが稼働しているか確認します。
+
+    ```bash
+    curl -s http://<host-ip>:9090/mcp-health/
+    ```
+  </Step>
+  <Step title="CloudThinker で接続を追加する">
+    **Connections → Jenkins** に移動して以下を入力します。
+    - **URL**: `http://<host-ip>:9090`
+    - **Username**: `admin`
+    - **API Token**: Jenkins 管理者パスワードまたは API トークン
+
+    **Connect** をクリックします。CloudThinker が認証情報を検証し、**Connected** ステータスを表示します。
+  </Step>
+</Steps>
+
+---
+
+## 接続の詳細
+
+| フィールド | 説明 | 例 |
+|-------|-------------|---------|
+| **URL** | Jenkins インスタンスのベース URL | `http://192.168.1.100:9090` |
+| **Username** | Jenkins ユーザー名 | `admin` |
+| **API Token** | Jenkins 管理者パスワードまたは API トークン | — |
+
+---
+
+## 必要な権限
+
+Jenkins ユーザーに以下の権限を付与してください。
+
+- **Overall**: Read
+- **Job**: Read, Discover
+- **View**: Read
+
+<Tip>
+CloudThinker 専用の Jenkins ユーザーをこれらの権限のみで作成してください。書き込み操作（ビルドのトリガー、パイプラインの再実行）は承認ゲートに保ってください。
+</Tip>
+
+---
+
+## エージェントの機能
+
+接続後、エージェントは Jenkins パイプラインの監視と調査を行えます。
+
+| 機能 | 説明 |
+|------------|-------------|
+| **ビルド監視** | ジョブの一覧表示とビルド状態の確認 |
+| **ログ分析** | ビルドログの取得と検索 |
+| **テスト結果** | テスト結果の確認 |
+| **SCM 統合** | Git の変更とコミットの確認 |
+| **ジョブコントロール** | ビルドのトリガーとパイプラインの再実行 — **承認が必要** |
+
+### 接続の確認
+
+```text
+@alex list all Jenkins jobs and show the last build status for each
+```
+
+### プロンプト例
+
+```text
+@alex search Jenkins build logs for errors in the last 10 builds and #recommend fixes
+@alex show test results for the main project's recent builds and #report failures
+@alex check the Jenkins build queue and identify any stuck jobs
+```
+
+---
+
+## トラブルシューティング
+
+<Accordion title="接続タイムアウト">
+Jenkins が稼働しており、CloudThinker からポート 9090 にアクセスできるか確認してください。URL フィールドには `localhost` ではなくホスト IP アドレスを使用してください。
+</Accordion>
+
+<Accordion title="ジョブリストが空">
+ルート URL が設定されていないか、スクリプトコンソールコマンドが失敗しています。セットアップのスクリプトコンソールコマンドを再実行して再接続してください。
+</Accordion>
+
+<Accordion title="認証が失敗する">
+ユーザー名または API トークンが間違っているか、ユーザーに必要な権限がありません。認証情報を確認し、Jenkins ユーザーが Overall Read、Job Read、View Read アクセスを持っているか確認してください。
+</Accordion>
+
+---
+
+## セキュリティ
+
+<ConnectionSecurity />
+
+- **専用ユーザー** — 必要なジョブとビューのみにスコープした CloudThinker 専用の Jenkins ユーザーを作成してください。
+- **ネットワーク分離** — Jenkins ポート 9090 を CloudThinker の IP 範囲に制限するか VPN を使用してください。Jenkins UI を公共インターネットに公開しないようにしてください。
+
+---
+
+## 関連情報
+
+<CardGroup cols={2}>
+  <Card title="MCP 接続" icon="/images/icons/mcp.svg" href="/ja/guide/connections/mcp">
+    Model Context Protocol でカスタムツールを接続する
+  </Card>
+  <Card title="Kubernetes 接続" icon="/images/icons/kubernetes.svg" href="/ja/guide/connections/kubernetes">
+    Kubernetes クラスターを接続する
+  </Card>
+</CardGroup>

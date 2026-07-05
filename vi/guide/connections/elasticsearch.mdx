@@ -1,0 +1,193 @@
+---
+title: Elasticsearch
+description: "Kết nối Elasticsearch với CloudThinker để phân tích log, quản lý index và tối ưu hiệu suất tìm kiếm"
+icon: "/images/icons/elasticsearch.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối các cluster Elasticsearch của bạn để cho phép các agent CloudThinker tìm kiếm log, phân tích dữ liệu quan sát và điều tra sự cố.
+
+Elasticsearch xác thực bằng **API key** được giới hạn phạm vi theo index và quyền cluster cụ thể.
+
+---
+
+## Điều kiện tiên quyết
+
+- Một cluster **Elasticsearch** (7.x, 8.x), **OpenSearch** (1.x, 2.x), **AWS OpenSearch Service**, hoặc **Elastic Cloud** có thể truy cập từ CloudThinker.
+- Quyền admin trên Kibana (**Stack Management → Security → API Keys**) hoặc Elasticsearch API để tạo API key.
+- URL endpoint của cluster.
+
+---
+
+## Thiết lập
+
+<Steps>
+  <Step title="Mở Kibana">
+    Truy cập vào Kibana và đăng nhập với quyền admin.
+  </Step>
+  <Step title="Điều hướng đến API Keys">
+    Vào **Stack Management → Security → API Keys**.
+  </Step>
+  <Step title="Tạo API key">
+    Nhấn **Create API key** và nhập:
+    - **Name**: `cloudthinker-readonly`
+  </Step>
+  <Step title="Thiết lập quyền">
+    Thêm role descriptor cho quyền chỉ đọc (xem [Quyền yêu cầu](#required-permissions) để biết JSON đầy đủ). Tối thiểu, cấp `monitor` trên cluster và `read` + `view_index_metadata` trên các index pattern bạn cần.
+  </Step>
+  <Step title="Tạo và sao chép">
+    Nhấn **Create API key** và sao chép ngay key đã mã hóa — Elasticsearch sẽ không hiển thị lại key này.
+  </Step>
+  <Step title="Ghi chú endpoint của cluster">
+    Sao chép endpoint Elasticsearch của bạn:
+    - Self-hosted: `https://elasticsearch.your-domain.com:9200`
+    - Elastic Cloud: tìm trong cài đặt deployment
+    - AWS OpenSearch: domain endpoint từ AWS console
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Điều hướng đến **Connections → Elasticsearch** và nhập:
+    - **Cluster URL**: endpoint Elasticsearch của bạn
+    - **API Key**: key đã mã hóa bạn vừa sao chép
+    - **Index patterns**: các pattern cần truy cập (ví dụ: `logs-*`)
+
+    Nhấn **Connect**. CloudThinker xác minh thông tin xác thực và hiển thị trạng thái **Connected**.
+  </Step>
+</Steps>
+
+<Warning>
+Sao chép API key ngay sau khi tạo. Elasticsearch sẽ không hiển thị lại key này, và bạn sẽ cần tạo key mới nếu bị mất.
+</Warning>
+
+---
+
+## Chi tiết kết nối
+
+| Trường | Mô tả | Ví dụ |
+|--------|-------|-------|
+| **ES_URL** | URL cluster Elasticsearch | `https://your-cluster.es.region.cloud.es.io:9243` |
+| **ES_API_KEY** | API key được mã hóa Base64 | `VnVhQk...` |
+
+Các index pattern phổ biến để cấu hình:
+
+| Pattern | Trường hợp sử dụng |
+|---------|-------------------|
+| `logs-*` | Log ứng dụng |
+| `filebeat-*` | Log thu thập qua Filebeat |
+| `metricbeat-*` | Metric hạ tầng |
+| `apm-*` | Dữ liệu hiệu suất ứng dụng |
+| `kubernetes-*` | Log cluster Kubernetes |
+
+---
+
+## Quyền yêu cầu
+
+### Tối thiểu
+
+```json
+{
+  "cluster": ["monitor"],
+  "indices": [
+    {
+      "names": ["logs-*", "metrics-*"],
+      "privileges": ["read"]
+    }
+  ]
+}
+```
+
+### Khuyến nghị
+
+```json
+{
+  "cluster": ["monitor", "read_ilm"],
+  "indices": [
+    {
+      "names": ["*"],
+      "privileges": ["read", "view_index_metadata"]
+    }
+  ]
+}
+```
+
+<Tip>
+Chỉ cấp quyền `read` trên các index pattern mà CloudThinker thực sự cần. Không bao giờ cấp quyền `write` hoặc cluster-admin cho API key của CloudThinker.
+</Tip>
+
+---
+
+## Khả năng của agent
+
+Sau khi kết nối, các agent có thể:
+
+| Khả năng | Mô tả |
+|----------|-------|
+| **Tìm kiếm log** | Tìm kiếm log ứng dụng và hạ tầng |
+| **Phân tích lỗi** | Tìm kiếm mẫu lỗi và bất thường |
+| **Điều tra sự cố** | Tương quan sự kiện giữa các dịch vụ |
+| **Truy vấn metric** | Truy vấn dữ liệu metric đã lưu trữ |
+
+### Xác minh kết nối
+
+```text
+@oliver search Elasticsearch for application errors in the last hour
+```
+
+### Ví dụ prompt
+
+```text
+@oliver search logs for authentication failures in the last 24 hours
+@alex find error patterns in application logs for the api-gateway service
+@kai search for pod crash events in Kubernetes logs
+```
+
+---
+
+## Xử lý sự cố
+
+<Accordion title="Kết nối bị từ chối">
+- Xác minh URL cluster chính xác và có thể truy cập từ CloudThinker.
+- Kiểm tra rằng firewall cho phép IP egress của CloudThinker.
+- Với AWS OpenSearch, bật quyền truy cập công khai hoặc cấu hình VPC endpoint.
+- Xác nhận Elasticsearch đang chạy và chấp nhận yêu cầu.
+</Accordion>
+
+<Accordion title="Xác thực thất bại">
+- Xác minh API key chính xác và chưa hết hạn.
+- Xác nhận key có đủ quyền index và cluster.
+- Với AWS OpenSearch, kiểm tra IAM role hoặc access policy được cấu hình đúng.
+</Accordion>
+
+<Accordion title="API key hết hạn">
+- Điều hướng đến **Stack Management → Security → API Keys**.
+- Tạo key mới với các quyền tương tự.
+- Cập nhật key trong cài đặt kết nối CloudThinker.
+</Accordion>
+
+<Accordion title="Không có dữ liệu trả về">
+- Xác minh index pattern khớp với các index tồn tại trong cluster.
+- Kiểm tra API key có quyền `read` trên các index đó.
+- Đảm bảo các index chứa dữ liệu trong khoảng thời gian yêu cầu.
+</Accordion>
+
+---
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Xoay vòng API key** — xoay API key mỗi 90 ngày; đặt ngày hết hạn khi tạo key
+- **Giới hạn index** — hạn chế key chỉ cho các index pattern mà CloudThinker thực sự cần thay vì cấp quyền trên `*`
+
+---
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Agent Oliver" icon="shield-check" href="/vi/guide/agents/oliver">
+    Phân tích log bảo mật
+  </Card>
+  <Card title="Kết nối Grafana" icon="/images/icons/grafana.svg" href="/vi/guide/connections/grafana">
+    Trực quan hóa dữ liệu Elasticsearch
+  </Card>
+</CardGroup>
