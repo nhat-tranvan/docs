@@ -1,0 +1,194 @@
+---
+title: FortiGate
+description: "Connect a Fortinet FortiGate firewall to CloudThinker via the FortiOS REST API for device and system status, license and subscription health, per-interface traffic and bandwidth, and approval-gated FortiOS config changes"
+icon: "/images/icons/fortigate.svg"
+---
+
+Connect your Fortinet FortiGate firewall to enable [Alex](/guide/agents/alex) (Cloud Engineer) and [Oliver](/guide/agents/oliver) (Security Professional) to read device and system status, license and subscription health, and per-interface traffic and bandwidth — and to create, update, or delete FortiOS configuration objects when you approve each change.
+
+FortiGate authenticates with a **REST API bearer token** issued to a **REST API Administrator** account. CloudThinker calls the **FortiOS REST API** directly (`/api/v2/monitor` and `/api/v2/cmdb`) — no MCP server or agent software runs on the appliance. Reads are auto-approved; every configuration write requires **in-app approval** before it runs.
+
+---
+
+## Supported Platforms
+
+| Platform | Support |
+|----------|---------|
+| **FortiGate appliance** | FortiOS 7.x with the REST API enabled (HTTPS admin access) |
+| **FortiGate-VM** | Virtual and cloud FortiGate deployments exposing the FortiOS REST API |
+
+---
+
+## Prerequisites
+
+- A **FortiGate firewall** running FortiOS 7.x, reachable from CloudThinker on its HTTPS admin port (default `443`).
+- A **REST API Administrator** account with an admin profile:
+  - a **read-only** profile is enough for all monitoring and health capabilities;
+  - a **read-write** profile is required only if you want the agent to run the approval-gated configuration writes.
+- The **API token** generated for that account (shown once at creation).
+
+<Info>
+Grant a read-only administrator profile for monitoring. Only assign a read-write profile if you intend to run the gated write operations (create/update/delete FortiOS config objects) — these always require in-app approval. See [Required Permissions](#required-permissions).
+</Info>
+
+---
+
+## Setup
+
+<Steps>
+  <Step title="Create a REST API Administrator">
+    In FortiOS, go to **System → Administrators → Create New → REST API Admin**. Enter a username (e.g. `cloudthinker`) and select an **Administrator Profile**:
+    - a **read-only** profile for monitoring only, or
+    - a **read-write** profile if you want the agent to run the approval-gated config writes.
+
+    Leave **PKI Group** disabled to use token authentication.
+  </Step>
+  <Step title="Restrict Trusted Hosts">
+    Set **Trusted Hosts** to CloudThinker's egress IP range so the token is only accepted from CloudThinker. FortiGate rejects REST API calls from any source outside the trusted-host list.
+  </Step>
+  <Step title="Copy the API Token">
+    On save, FortiGate generates an **API key (bearer token)** and displays it **once**. Copy it immediately — it cannot be retrieved again. If you lose it, regenerate the key from the administrator entry.
+  </Step>
+  <Step title="Confirm REST API Access">
+    Ensure the HTTPS admin service is reachable from CloudThinker and the token authorizes the monitor endpoint:
+    ```bash
+    curl -k -H "Authorization: Bearer <api-token>" \
+      "https://<fortigate-host>:443/api/v2/monitor/system/status"
+    ```
+    A `200` response with device status confirms the token and network path. Use `-k` only for FortiGate's default self-signed certificate.
+  </Step>
+  <Step title="Add Connection in CloudThinker">
+    Navigate to **Connections → FortiGate** and enter:
+    - **Host**: the FortiGate hostname or IP (host only — no scheme or port)
+    - **Port**: the HTTPS admin port (default `443`)
+    - **API Token**: the bearer token from the REST API Administrator
+    - **VDOM**: the virtual domain to operate in (default `root`)
+    - **Verify SSL**: `Skip SSL verification` for the default self-signed certificate, or `Verify SSL certificate` when the firewall presents a trusted CA-signed certificate
+
+    Click **Connect**. CloudThinker verifies the token against `/api/v2/monitor/system/status` and shows a **Connected** status.
+  </Step>
+</Steps>
+
+<Warning>
+Set **Host** to the hostname or IP only — do not include `https://` or the port. Use the **Verify SSL** toggle to match the firewall's certificate: keep it disabled for FortiGate's default self-signed cert, and enable it only when the appliance serves a trusted CA-signed certificate.
+</Warning>
+
+---
+
+## Connection Details
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| **FORTIGATE_HOST** | FortiGate hostname or IP (no scheme, no port) | — |
+| **FORTIGATE_PORT** | HTTPS admin / REST API port | `443` |
+| **FORTIGATE_API_TOKEN** | Bearer token from the REST API Administrator account | — |
+| **FORTIGATE_VDOM** | Virtual domain (VDOM) the agent operates in | `root` |
+| **FORTIGATE_VERIFY_SSL** | `false` to skip TLS verification (self-signed cert), `true` to verify a CA-signed cert | `false` |
+
+<Note>
+Authentication uses an `Authorization: Bearer <token>` header. Do not use the deprecated URL-token form (`?access_token=...`) — FortiOS 7.4+ rejects URL tokens with `401 invalid_token` by default.
+</Note>
+
+---
+
+## Required Permissions
+
+The REST API Administrator's admin profile determines what the agent can do:
+
+| Admin Profile | What It Unlocks |
+|---------------|-----------------|
+| **Read-only** | Read access to device/system status, license and subscription state, and per-interface traffic — covers all monitoring and health capabilities. |
+| **Read-write** | Everything read-only provides, plus the approval-gated configuration writes (create/update/delete FortiOS `cmdb` objects). |
+
+<Tip>
+Follow least privilege: a read-only profile is enough for device, license, and interface-traffic investigation. Only assign a read-write profile if you intend to run the gated write operations described below.
+</Tip>
+
+### Write Operations Require Approval
+
+Configuration writes go through a separate, approval-gated tool. The agent must request your confirmation **before every mutation**, and each write targets a single FortiOS `cmdb` object:
+
+- **Create** a `cmdb` config object (`POST`)
+- **Update** a `cmdb` config object (`PUT`)
+- **Delete** a `cmdb` config object (`DELETE`)
+
+Writes are restricted to `/api/v2/cmdb` and never touch the read-only monitor API. Because these changes hit a live security appliance, review each request carefully — editing or deleting interface, admin, or policy objects can lock out management access or open the firewall. All other capabilities are read-only.
+
+---
+
+## Agent Capabilities
+
+Once connected, [Alex](/guide/agents/alex) and [Oliver](/guide/agents/oliver) can:
+
+| Capability | Description |
+|------------|-------------|
+| **Device & System Status** | Report model, serial number, FortiOS version, and firmware build, plus CPU, memory, and session load |
+| **License & Subscription Health** | Check license status and subscription entitlements, and flag services nearing expiry |
+| **Per-Interface Traffic** | Snapshot tx/rx bytes and bandwidth per interface to surface usage and capacity signals |
+| **Capacity Signals** | Identify the busiest interfaces and interfaces approaching bandwidth limits |
+| **Gated Config Changes** | Create, update, or delete FortiOS `cmdb` config objects — each requires in-app approval |
+
+### Example Prompts
+
+```bash
+@alex pull FortiGate device status, license state, and per-interface traffic, then #summarize model, serial, version, and the top interfaces by bandwidth
+@alex check FortiGate license and subscription entitlements and #alert on any service expiring within 30 days
+@alex identify the busiest FortiGate interfaces by tx/rx bytes and #dashboard bandwidth usage across all interfaces
+@oliver review FortiGate device and firmware status and #recommend whether the FortiOS build is current
+@oliver create a new firewall address object on FortiGate for 10.20.0.0/16 — request my approval before applying the change
+```
+
+---
+
+## Troubleshooting
+
+<Accordion title="401 Unauthorized or invalid_token">
+- Verify the API token is correct and was copied in full at creation.
+- Confirm CloudThinker's egress IP is in the administrator's **Trusted Hosts** list — FortiGate rejects tokens presented from any other source.
+- Ensure the token is sent as a bearer header, not in the URL. FortiOS 7.4+ rejects the deprecated `?access_token=...` form with `401 invalid_token`.
+- If the token was lost or rotated, regenerate the API key from the REST API Administrator entry and reconnect.
+</Accordion>
+
+<Accordion title="Connection refused or timeout">
+- Confirm the HTTPS admin service is enabled and reachable from CloudThinker at `<host>:443`.
+- Check that CloudThinker's egress IP is allowed by the interface's administrative access settings and trusted-host list.
+- Verify no upstream firewall or security group blocks the admin port.
+</Accordion>
+
+<Accordion title="TLS handshake or certificate errors">
+- FortiGate ships a **self-signed certificate** by default. Set **Verify SSL** to `Skip SSL verification` for the default cert.
+- Enable **Verify SSL** only when the appliance presents a trusted CA-signed certificate; if it's enabled against a self-signed cert, the connection fails.
+</Accordion>
+
+<Accordion title="Empty or partial results">
+- Confirm the **VDOM** matches where your objects live. If VDOMs are enabled, data outside the configured VDOM is not returned.
+- Verify the admin profile grants read access to the relevant configuration and monitor scopes.
+</Accordion>
+
+<Accordion title="403 Forbidden on a config write">
+The administrator profile is read-only. Assign a **read-write** profile to the REST API Administrator to allow the approval-gated `cmdb` write operations.
+</Accordion>
+
+---
+
+## Security Best Practices
+
+- **Least-privilege profile** — Use a read-only administrator profile for monitoring; reserve a read-write profile for when gated writes are needed.
+- **Trusted hosts** — Restrict the REST API Administrator's trusted hosts to CloudThinker's egress range so the token is only accepted from CloudThinker.
+- **Dedicated account** — Create a separate REST API Administrator for CloudThinker instead of reusing an interactive admin account.
+- **Rotate the token** — Regenerate the API key periodically and after any suspected exposure; the token is redacted from CloudThinker logs.
+- **TLS verification** — Enable **Verify SSL** once the firewall presents a trusted CA-signed certificate so REST API traffic is verified end to end.
+- **Approval-gated writes** — Configuration changes always require in-app approval; review the exact object and change before confirming, since writes hit a live security appliance.
+
+---
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Alex Agent" icon="cloud" href="/guide/agents/alex">
+    Cloud engineering agent for infrastructure and capacity monitoring
+  </Card>
+  <Card title="Oliver Agent" icon="shield-halved" href="/guide/agents/oliver">
+    Security-focused agent for compliance and hardening
+  </Card>
+</CardGroup>
