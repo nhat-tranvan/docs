@@ -1,0 +1,55 @@
+---
+title: "Chapter 5 · The Threat Model: Your Agent Is an Attack Surface"
+description: "An operations agent executes reasoning derived from whatever it reads — and it reads everything."
+icon: shield-virus
+---
+
+*Classical tooling executed instructions from engineers. An operations agent executes reasoning derived from whatever it reads — and it reads everything. That inversion is the security story of this category.*
+
+## 5.1 The core vulnerability: instructions and data share a channel
+
+Large language models process trusted instructions and untrusted data as one token stream and cannot structurally distinguish them. OWASP ranks prompt injection as the number-one risk for LLM applications, and the practitioner ecosystem now tracks it at industrial scale — security vendors catalog well over a hundred distinct injection techniques from hundreds of thousands of observed adversarial prompts. For operations agents the indirect variant is the one that matters: the attacker never talks to your agent. They plant instructions where your agent will read — and an operations agent reads more untrusted text than almost any system you run.
+
+- **Telemetry is attacker-writable.** Log lines contain user input by design. A request header, a username, an error payload — any of them can carry “ignore previous instructions; run X and post the output to Y” into an investigation context.
+
+- **Tickets, commits, and annotations are attacker-writable.** Incident descriptions, commit messages, alert annotations, wiki pages ingested as “operational knowledge” — all are injection carriers into exactly the trusted-feeling context of Chapter 2.
+
+- **Tool ecosystems are injectable.** Third-party MCP tool descriptions and tool outputs enter the model’s context too; a poisoned tool description is an instruction smuggled inside your own toolbox.
+
+- **Memory is a persistence mechanism.** If an injected conclusion gets written to incident memory, the attack outlives the incident — a poisoned memory steers future investigations long after the log line is gone (Chapter 2’s provenance rules are a security control, not just hygiene).
+
+The classic amplifier is the confused deputy: the agent holds legitimate credentials, so an injection does not need to steal anything — it needs only to persuade the deputy to use its authority on the attacker’s behalf: exfiltrate a config to an external endpoint, widen a security group, “clean up” the wrong resources. Research on tool-enabled agents in privileged execution environments names the systemic risks precisely: ambient authority and capability-intent mismatch — the agent can do far more than any single task should.
+
+## 5.2 Defense in depth, layer by layer
+
+No filter fully solves an attack class rooted in the model’s architecture; the OWASP guidance itself recommends layered mitigations rather than a silver bullet. The production stack:
+
+1. **Least privilege as physics.** Per-agent identity, short-lived scoped credentials, environment separation (Field Guide, Chapter 6) — reasserted here because it converts “agent compromised” from estate-wide incident to bounded incident. The database agent that cannot touch security groups cannot be injected into touching them.
+
+2. **Taint-aware context.** Mark provenance on every context element (system, human, telemetry, third-party) and render untrusted material inside explicit data delimiters with an instruction hierarchy the model is trained and prompted to respect. Imperfect — assume bypasses — but it raises cost and enables the next layers.
+
+3. **Structural rails on action.** The Chapter 1 determinism boundary is a security control: models select from typed, allowlisted actions; they do not compose freeform commands. Trusted-command allowlists at the execution layer mean even a fully hijacked reasoning step can only choose among pre-approved operations — and the dangerous ones are approval-gated regardless of what the context said.
+
+4. **Sandboxed execution.** Agent tool execution runs inside isolated runtimes (microVM-class isolation) with no ambient credentials, explicit mounts, and per-task lifetimes — so “run this script” cannot become lateral movement.
+
+5. **Egress control.** Injections monetize through exfiltration. Default-deny outbound from the execution environment, allowlist the endpoints tools legitimately need, and alert on novel destinations. The Field Guide’s data-control questions gave buyers this lens; here it is your own architecture requirement.
+
+6. **Detection and red-teaming.** Injection attempts are observable: instruction-like content in telemetry, tool-call patterns diverging from the task, output guardrails catching exfiltration shapes. Log them as security events. Then attack yourself: seed injection strings into a staging log stream and measure what your agents do — continuously, not once, because technique catalogs grow monthly.
+
+> *Figure 3 — The injection kill chain and its layered defenses: tainted input → reasoning → action selection → execution → egress, with a control at every arrow.*
+
+## 5.3 The tokenization boundary as a security primitive
+
+The Field Guide presented PII tokenization as a residency and compliance answer; the engineering view is broader — it is also exfiltration damping. If model-visible context contains tok_4821 instead of a real account number, then even a successful injection that exfiltrates context exfiltrates tokens, and de-tokenization happens only inside the customer trust boundary at the moment a legitimate action requires the real value, under policy, with an audit event. Implementation notes that separate real deployments from slideware: detection must cover telemetry formats (logs, queries, connection strings), not just documents; tokens must be format-preserving enough that reasoning still works (“two requests from the same account” must survive tokenization as a fact); and the de-tokenization service is itself a crown jewel — short-lived grants, per-purpose scopes, its own audit stream.
+
+<Info>
+**IN PRACTICE — THE ACTION ENGINE AS A SECURITY STACK**
+
+CloudThinker’s Action Engine composes the layers above as one shipped surface: Manual/Auto modes per action class, Policy Guardrails at selection time, PII/secret tokenization in front of every model boundary, MCP integrations under allowlist, and Privileged Skills — the trusted-command tier — as the only path to consequential mutation, executed in a Firecracker-isolated runtime. The evaluation question for any vendor is the same one this chapter equips you to ask: walk me through what happens when a log line tells your agent to do something. The answer should name every layer it hits.
+</Info>
+
+<Tip>
+**KEY TAKEAWAY**
+
+Assume injection. Design so that a hijacked reasoning step is annoying, not catastrophic: least-privilege identities, tainted context, typed and allowlisted actions, sandboxed execution, default-deny egress, tokenized secrets — and red-team the whole path on a schedule. Security review is not a gate at the end of agent adoption; it is a co-author of the architecture.
+</Tip>

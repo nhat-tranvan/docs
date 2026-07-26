@@ -44,7 +44,7 @@ Source-of-truth hierarchy for facts: **app UI (screenshots in repo) → confirme
    - Callouts max 1 per section, 4 per page (Troubleshooting excluded). `Warning` only for data-loss/lockout/cost risk.
 6. **Code blocks**: prompts fenced ` ```text `, shell ` ```bash `, JSON ` ```json `. Prompt caps: 5 blocks per reference page, 4 per scenario, 2 per connection page, ≤3 prompts per block. Every prompt names a real agent + real tool tag + verifiable output.
 7. **Frontmatter**: `title` unique site-wide; `description` verb-first, 50–150 chars, states what the reader accomplishes, never restates the title.
-8. **Endings**: every guide page ends with exactly one CardGroup — `## Next steps` (sequential content) or `## Related` (reference/concept), `cols={2}`, 2–4 linked cards. Exempt: `learn/aio/*`, `api-reference/*`.
+8. **Endings**: every guide page ends with exactly one CardGroup — `## Next steps` (sequential content) or `## Related` (reference/concept), `cols={2}`, 2–4 linked cards. Exempt: `learn/aio/*`, `learn/aio-engineer/*`, `api-reference/*`.
 9. **Links**: root-relative (`/guide/...`); first mention of another feature is a link, later mentions plain text.
 10. **Marketing**: allowed ONLY in `index.mdx` "Why CloudThinker" (≤120 words) and one ≤80-word "why" paragraph per module overview. Banned everywhere and always: competitor comparison tables, third-party statistics, unsourced percentages, "democratizing/revolutionizing/game-changing".
 
