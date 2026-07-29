@@ -1,0 +1,224 @@
+---
+title: Keycloak
+description: "Keycloak を CloudThinker に接続してアイデンティティとアクセス管理の運用を実現"
+icon: "/images/icons/keycloak.svg"
+---
+
+import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+
+Keycloak レルムを接続して、[Oliver](/ja/guide/agents/oliver)（セキュリティプロフェッショナル）がレルムの検査、クライアントの監査、ユーザーとロールの確認、アイデンティティとアクセス設定の分析を行えるようにします。
+
+Keycloak は、対象レルムで `realm-management` ロールを持つ**コンフィデンシャルなサービスアカウントクライアント**を使って認証します。
+
+## 対応プラットフォーム
+
+| プラットフォーム | サポート |
+|----------|---------|
+| **セルフホスト Keycloak** | 全バージョン |
+| **Phase Two** | マネージド Keycloak サービス |
+
+## 前提条件
+
+- CloudThinker で検査する **Keycloak レルム**。
+- コンフィデンシャルクライアントの作成とサービスアカウントロールの割り当てに必要な**管理者アクセス** — `kcadm.sh`（セルフホスト）またはレルムコンソール（Phase Two）。
+- レルムの**ベース URL** と**レルム名**。
+
+<Info>
+接続のスコープは `cloudthinker-svc` サービスアカウントに付与したロールに制限されます。CloudThinker が必要とする範囲をカバーする最小権限の `realm-management` ロールを割り当ててください。
+</Info>
+
+## セットアップ
+
+どちらの方法でも同じ成果物を作成します：対象レルムのサービスアカウントに `realm-management` ロールが付与された `cloudthinker-svc` コンフィデンシャルクライアントです。セルフホストは `kcadm.sh` を使い、Phase Two はレルムコンソールを使います。
+
+<Tabs>
+  <Tab title="セルフホスト Keycloak">
+
+    Keycloak の管理 CLI である `kcadm.sh` でクライアントをプロビジョニングします。利用可能な任意のシェルから実行してください。
+
+    <Steps>
+      <Step title="認証する">
+        ```bash
+        kcadm.sh config credentials \
+          --server http://localhost:8080 --realm master \
+          --user admin --password '<admin-password>'
+        ```
+      </Step>
+      <Step title="クライアントを作成する">
+        ```bash
+        kcadm.sh create clients -r <your-realm> \
+          -s clientId=cloudthinker-svc \
+          -s publicClient=false \
+          -s serviceAccountsEnabled=true \
+          -s standardFlowEnabled=false \
+          -s directAccessGrantsEnabled=false \
+          -s 'redirectUris=[]'
+        ```
+      </Step>
+      <Step title="realm-management ロールを割り当てる">
+        ```bash
+        kcadm.sh add-roles -r <your-realm> \
+          --uusername service-account-cloudthinker-svc \
+          --cclientid realm-management \
+          --rolename realm-admin
+        ```
+
+        最小権限が必要な場合は、より限定的なロール（例：`view-realm`・`view-users`）を使用してください。
+      </Step>
+      <Step title="クライアントシークレットを取得する">
+        ```bash
+        CID=$(kcadm.sh get clients -r <your-realm> \
+          -q clientId=cloudthinker-svc --fields id --format csv --noquotes | tail -n1)
+
+        kcadm.sh get clients/$CID/client-secret -r <your-realm> \
+          --fields value --format csv --noquotes | tail -n1
+        ```
+      </Step>
+      <Step title="CloudThinker に接続を追加する">
+        **Connections → Keycloak** に移動し、以下を入力します：
+
+        - **KEYCLOAK_URL**：`http://<host-ip>:8080`
+        - **KEYCLOAK_REALM**：レルム名
+        - **KEYCLOAK_CLIENT_ID**：`cloudthinker-svc`
+        - **KEYCLOAK_CLIENT_SECRET**：前のステップで取得したシークレット
+
+        **Connect** をクリックします。成功すると CloudThinker は **Connected** ステータスを表示します。
+      </Step>
+    </Steps>
+
+  </Tab>
+
+  <Tab title="Phase Two">
+
+    [Phase Two](https://dash.phasetwo.io/realms) 経由のマネージド Keycloak 向けです。
+
+    <Steps>
+      <Step title="レルムコンソールを開く">
+        [Phase Two ダッシュボード](https://dash.phasetwo.io/realms)で、接続するレルムのコンソールを開きます。
+      </Step>
+      <Step title="クライアントを作成する">
+        **Clients** タブ → **Create client** に移動し、以下を設定します：
+
+        - **Client ID**：`cloudthinker-svc`
+        - **Next** をクリック
+        - **Client authentication** と **Authorization** を有効化
+        - **Next** → **Save** をクリック
+      </Step>
+      <Step title="realm-management ロールを割り当てる">
+        作成したクライアントを開き、**Service account roles** → **Assign roles** に移動します。
+
+        `realm-management` を検索して、CloudThinker に使用させたいロールを割り当てます。見落としを防ぐため、すべての `realm-management` ロールを割り当てることを推奨します（両方のページを確認してください）。
+      </Step>
+      <Step title="クライアントシークレットを取得する">
+        同じクライアントで **Credentials** を開き、**Client Secret** の値をコピーします。
+      </Step>
+      <Step title="レルム URL を取得する">
+        [https://dash.phasetwo.io/realms](https://dash.phasetwo.io/realms) に戻り、レルムカードを開いて **Details** をクリックします。**Host** の値（例：`https://<region>.auth.ac/auth`）をコピーします。
+      </Step>
+      <Step title="CloudThinker に接続を追加する">
+        **Connections → Keycloak** に移動し、以下を入力します：
+
+        - **KEYCLOAK_URL**：レルム詳細の Host URL（例：`https://<region>.auth.ac/auth`）
+        - **KEYCLOAK_REALM**：レルム名
+        - **KEYCLOAK_CLIENT_ID**：`cloudthinker-svc`
+        - **KEYCLOAK_CLIENT_SECRET**：Credentials ステップで取得したシークレット
+
+        **Connect** をクリックします。成功すると CloudThinker は **Connected** ステータスを表示します。
+      </Step>
+    </Steps>
+
+  </Tab>
+</Tabs>
+
+## 接続詳細
+
+| フィールド | 説明 | 例 |
+|-------|-------------|---------|
+| **KEYCLOAK_URL** | Keycloak のベース URL | `http://<host-ip>:8080` |
+| **KEYCLOAK_REALM** | 対象レルム名 | `my-realm` |
+| **KEYCLOAK_CLIENT_ID** | サービスアカウントのクライアント ID | `cloudthinker-svc` |
+| **KEYCLOAK_CLIENT_SECRET** | Credentials ステップで取得したクライアントシークレット | — |
+
+## 必要な権限
+
+`cloudthinker-svc` サービスアカウントには対象レルムの `realm-management` ロールが必要です。主なロール：
+
+| ロール | 用途 |
+|------|---------|
+| `view-realm` | レルム設定の読み取り |
+| `view-users` | ユーザーの一覧表示と検査 |
+| `view-clients` | クライアントの一覧表示と検査 |
+| `query-users`・`query-clients`・`query-groups` | ルックアップクエリの実行 |
+| `manage-users`・`manage-clients`・`manage-realm` | 変更操作（必要な場合のみ割り当て） |
+
+<Tip>
+読み取り専用分析には `view-*` と `query-*` ロールのみを割り当ててください。Oliver に変更操作を行わせる場合にのみ `manage-*` ロールを追加してください。
+</Tip>
+
+## エージェントの機能
+
+接続後、Oliver は以下を実行できます：
+
+| 機能 | 説明 |
+|------------|-------------|
+| **レルム検査** | レルム設定と構成の確認 |
+| **クライアント監査** | クライアントの一覧表示、フローと認可設定のレビュー |
+| **ユーザー管理** | ユーザー・セッション・クレデンシャル状態の表示 |
+| **ロールとグループのレビュー** | ロール・コンポジット・グループ階層の検査 |
+| **アクセス分析** | 過剰権限のサービスアカウントや古いクライアントの特定 |
+
+### 接続を確認する
+
+```text
+@oliver #report list all clients in the realm to verify the Keycloak connection
+```
+
+### プロンプト例
+
+```text
+@oliver #report list all clients in the realm and flag any with direct access grants enabled
+@oliver #report show service accounts with realm-admin and review whether each is needed
+@oliver #recommend audit users without 2FA enabled
+```
+
+## トラブルシューティング
+
+<Accordion title="401 Unauthorized">
+- クライアントシークレットが正しくコピーされているか確認してください
+- クライアントで **Client authentication** が有効になっているか確認してください
+- サービスアカウントに `realm-management` ロールが割り当てられているか確認してください
+</Accordion>
+
+<Accordion title="レルム操作で 403 Forbidden">
+- サービスアカウントがその操作に必要な `realm-management` ロールを持っていません
+- セルフホスト：不足しているロールで `add-roles` を再実行してください
+- Phase Two：ロール割り当てリストの両ページを再確認してください
+</Accordion>
+
+<Accordion title="Keycloak URL に到達できない">
+- セルフホスト：ベース URL が Keycloak のホスト名と一致しているか確認してください
+- Phase Two：レルムの **Details → Host** フィールドから URL を正確にコピーしてください
+</Accordion>
+
+<Accordion title="クライアントシークレットが空">
+- クライアントはコンフィデンシャルである必要があります — `publicClient=false`（セルフホスト）または **Client authentication** が有効（Phase Two）
+- パブリッククライアントにはシークレットがありません
+</Accordion>
+
+## セキュリティ
+
+<ConnectionSecurity />
+
+- **専用クライアント** — `cloudthinker-svc` を共有の管理クライアントではなく、専用のサービスアカウントクライアントとして使用してください。
+- **シークレットのローテーション** — **Credentials** タブからクライアントシークレットを定期的にローテーションしてください。
+
+## 関連
+
+<CardGroup cols={2}>
+  <Card title="Oliver Agent" icon="shield-halved" href="/ja/guide/agents/oliver">
+    セキュリティとコンプライアンスエージェント
+  </Card>
+  <Card title="接続の概要" icon="plug" href="/ja/guide/connections/overview">
+    利用可能な全接続
+  </Card>
+</CardGroup>

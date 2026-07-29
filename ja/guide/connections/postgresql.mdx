@@ -1,0 +1,208 @@
+---
+title: PostgreSQL
+description: "PostgreSQL データベースを CloudThinker に接続してクエリ分析、インデックス最適化、パフォーマンス監視を実現"
+icon: "/images/icons/postgresql.svg"
+---
+
+import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+
+PostgreSQL データベースを接続して、[Tony](/ja/guide/agents/tony)（データベースエンジニア）がクエリを分析し、パフォーマンスを最適化し、データベースの健全性を監視できるようにします。
+
+## 対応プラットフォーム
+
+| プラットフォーム | サポート |
+|----------|---------|
+| **セルフホスト PostgreSQL** | 12.x・13.x・14.x・15.x・16.x |
+| **AWS RDS PostgreSQL** | 全バージョン |
+| **AWS Aurora PostgreSQL** | 全バージョン |
+| **Google Cloud SQL** | 全 PostgreSQL バージョン |
+| **Azure Database for PostgreSQL** | Flexible Server・Single Server |
+
+## 前提条件
+
+- CloudThinker からネットワーク経由で到達可能な PostgreSQL インスタンス。
+- 専用ユーザーの作成と権限付与に必要な管理者アクセス。
+- クエリレベルの分析が必要な場合は `pg_stat_statements` 拡張のインストール（低速クエリデータに必要）。
+
+## セットアップ
+
+<Steps>
+  <Step title="管理者として接続する">
+    管理者アカウントで PostgreSQL インスタンスに接続します：
+    ```bash
+    psql -h your-host -U postgres -d your-database
+    ```
+  </Step>
+  <Step title="読み取り専用ユーザーを作成する">
+    CloudThinker 専用のユーザーを作成します：
+    ```sql
+    CREATE USER cloudthinker_readonly WITH PASSWORD 'your-secure-password';
+    ```
+  </Step>
+  <Step title="接続とスキーマのアクセスを付与する">
+    接続とスキーマの使用を許可します：
+    ```sql
+    GRANT CONNECT ON DATABASE your_database TO cloudthinker_readonly;
+    GRANT USAGE ON SCHEMA public TO cloudthinker_readonly;
+    GRANT USAGE ON SCHEMA information_schema TO cloudthinker_readonly;
+    ```
+  </Step>
+  <Step title="SELECT 権限を付与する">
+    既存および今後作成されるすべてのテーブルとビューに SELECT を付与します：
+    ```sql
+    GRANT SELECT ON ALL TABLES IN SCHEMA public TO cloudthinker_readonly;
+    GRANT SELECT ON ALL TABLES IN SCHEMA information_schema TO cloudthinker_readonly;
+
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT SELECT ON TABLES TO cloudthinker_readonly;
+    ```
+  </Step>
+  <Step title="pg_stat_statements を有効化する">
+    この拡張はクエリ分析に必要です：
+    ```sql
+    -- 拡張を有効化（スーパーユーザーが必要）
+    CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+
+    -- ユーザーにアクセスを付与
+    GRANT SELECT ON pg_stat_statements TO cloudthinker_readonly;
+    ```
+
+    RDS/Aurora の場合はパラメータグループに追加します：
+    ```
+    shared_preload_libraries = 'pg_stat_statements'
+    ```
+  </Step>
+  <Step title="ネットワークアクセスを設定する">
+    CloudThinker がデータベースに到達できるよう設定します：
+    - CloudThinker の IP をセキュリティグループまたはファイアウォールに追加
+    - RDS の場合：パブリックアクセスを有効化するか VPC ピアリングを使用
+  </Step>
+  <Step title="CloudThinker に接続を追加する">
+    **Connections → PostgreSQL** に移動し、以下を入力します：
+    - **Host**：データベースのホスト名または IP
+    - **Port**：データベースポート（デフォルト：`5432`）
+    - **Database**：データベース名
+    - **Username**：`cloudthinker_readonly`
+    - **Password**：上記で設定したパスワード
+    - **SSL mode**：`require`（推奨）
+
+    **Connect** をクリックします。成功すると CloudThinker は **Connected** ステータスを表示します。
+  </Step>
+</Steps>
+
+## 接続詳細
+
+| フィールド | 説明 | デフォルト |
+|-------|-------------|---------|
+| **Host** | データベースのホスト名または IP | — |
+| **Port** | PostgreSQL ポート | `5432` |
+| **Database** | データベース名 | — |
+| **Username** | 専用ユーザー（例：`cloudthinker_readonly`） | — |
+| **Password** | ユーザーパスワード | — |
+| **SSL mode** | `disable`・`allow`・`prefer`・`require`・`verify-ca`・`verify-full` | `require` |
+| **Connection timeout** | 接続待機秒数 | `10` |
+| **Statement timeout** | クエリ実行の最大時間（ミリ秒） | `30000` |
+
+接続文字列の形式：
+
+```
+postgresql://cloudthinker_readonly:your-secure-password@your-host:5432/your-database
+```
+
+## 必要な権限
+
+### 最小権限
+
+```sql
+GRANT CONNECT ON DATABASE dbname TO cloudthinker_readonly;
+GRANT USAGE ON SCHEMA public TO cloudthinker_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO cloudthinker_readonly;
+```
+
+### 推奨（フル分析）
+
+```sql
+-- 上記すべてに加えて：
+GRANT SELECT ON pg_stat_statements TO cloudthinker_readonly;
+GRANT SELECT ON pg_stat_activity TO cloudthinker_readonly;
+GRANT SELECT ON pg_stat_user_tables TO cloudthinker_readonly;
+GRANT SELECT ON pg_stat_user_indexes TO cloudthinker_readonly;
+GRANT SELECT ON pg_statio_user_tables TO cloudthinker_readonly;
+GRANT pg_read_all_stats TO cloudthinker_readonly;  -- PostgreSQL 14+
+```
+
+<Tip>
+まず最小権限から始め、クエリレベルの分析とキャッシュヒットレポートを解放するために推奨の統計情報権限を追加してください。
+</Tip>
+
+## エージェントの機能
+
+接続後、Tony は以下を実行できます：
+
+| 機能 | 説明 |
+|------------|-------------|
+| **クエリ分析** | 低速クエリの特定、実行計画の分析 |
+| **インデックス推奨** | 不足しているインデックスの発見、未使用インデックスの特定 |
+| **パフォーマンスメトリクス** | 接続数・I/O・キャッシュヒット率の監視 |
+| **テーブル統計** | テーブルの膨張・デッドタプル・Vacuum 状態の分析 |
+| **レプリケーション監視** | レプリカのラグとストリーミング状態の確認 |
+
+### 接続を確認する
+
+```text
+@tony #report check PostgreSQL connection health and list active database sessions
+```
+
+### プロンプト例
+
+```text
+@tony #report analyze slow queries on the production PostgreSQL instance
+@tony #recommend find missing indexes on the orders table
+@tony #dashboard show database performance metrics including cache hit rates
+```
+
+## トラブルシューティング
+
+<Accordion title="接続が拒否される">
+- ホストとポートが正しいか確認してください
+- セキュリティグループまたはファイアウォールが CloudThinker の IP を許可しているか確認してください
+- RDS の場合：「Publicly accessible」が有効になっているか、VPC ピアリングを使用しているか確認してください
+- PostgreSQL が正しいインターフェースでリッスンしているか確認してください
+</Accordion>
+
+<Accordion title="認証に失敗した">
+- ユーザー名とパスワードが正しいか確認してください
+- `pg_hba.conf` が接続方式を許可しているか確認してください
+- ユーザーがデータベースに `CONNECT` 権限を持っているか確認してください
+</Accordion>
+
+<Accordion title="pg_stat_statements が見つからない">
+- 拡張がインストールされているか確認：`SELECT * FROM pg_extension WHERE extname = 'pg_stat_statements';`
+- `shared_preload_libraries` に `pg_stat_statements` が含まれているか確認してください
+- `shared_preload_libraries` 変更後は PostgreSQL を再起動してください
+- RDS の場合：パラメータグループを変更してインスタンスを再起動してください
+</Accordion>
+
+<Accordion title="権限が拒否された">
+- ユーザーが必要なテーブルに `SELECT` 権限を持っているか確認してください
+- PostgreSQL 14+ では `pg_read_all_stats` ロールを付与してください
+- psql で `\dn+` を使ってスキーマ権限を確認してください
+</Accordion>
+
+## セキュリティ
+
+<ConnectionSecurity />
+
+- **SSL 必須** — 転送中のデータを暗号化するために、常に SSL モード `require` 以上を使用してください。
+- **最小権限** — CloudThinker ユーザーには `SELECT` のみを付与し、書き込みアクセスは絶対に付与しないでください。
+
+## 関連
+
+<CardGroup cols={2}>
+  <Card title="Tony Agent" icon="database" href="/ja/guide/agents/tony">
+    データベース特化の最適化エージェント
+  </Card>
+  <Card title="MySQL 接続" icon="/images/icons/mysql.svg" href="/ja/guide/connections/mysql">
+    MySQL データベースの同様のセットアップ
+  </Card>
+</CardGroup>

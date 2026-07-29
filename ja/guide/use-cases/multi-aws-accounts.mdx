@@ -1,0 +1,96 @@
+---
+title: 'マルチAWSアカウントの運用'
+description: 'IAM AssumeRoleショートカットを使ってアカウントコンテキストをオンデマンドで切り替えながら、単一のワークスペースから複数のAWSアカウントを運用する'
+icon: layer-group
+---
+
+本番・開発・ステージングのAWSアカウントを管理するプラットフォームチームが、単一のCloudThinkerワークスペースからすべてのアカウントのコストを照会し、セキュリティを監査し、インシデントを調査できます。
+
+## シナリオ
+
+あなたの組織は本番・開発・ステージング用に別々のAWSアカウントを維持しています。一元化されたプラットフォームチームは、全員に本番アクセスを与えることなく、またワークスペースを切り替えてコンテキストを失い続けることなく、クロスアカウントの可視性が必要です。解決策は、CloudThinkerをプライマリAWSアカウントに接続し、各ターゲットアカウントにIAMロールを作成し、[Alex](/ja/guide/agents/alex)にどのアカウントで操作するかを指示するショートカットを定義することです——すべて単一のワークスペースから行います。
+
+## ウォークスルー
+
+<Steps>
+  <Step title="プライマリAWSアカウントを接続する">
+    **Connections** でプライマリAWSアカウントを[ロールベース認証](/ja/guide/connections/aws)を使って追加します。これはハブアカウントです——すべてのクロスアカウントリクエストはこのIAM IDから発信されます。
+
+    **成功の確認：** ConnectionsパネルでConnections が**Connected**ステータスを表示していること。
+  </Step>
+
+  <Step title="クロスアカウントIAMロールを作成する">
+    各ターゲットAWSアカウントに、以下の信頼ポリシーを持つIAMロールを作成します。`PRIMARY_ACCOUNT_ID`をハブアカウントのAWSアカウントIDに置き換えてください。
+
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Principal": {
+            "AWS": "arn:aws:iam::PRIMARY_ACCOUNT_ID:root"
+          },
+          "Action": "sts:AssumeRole"
+        }
+      ]
+    }
+    ```
+
+    権限を最小限に抑えるため、ロールに `ReadOnlyAccess`（またはスコープを絞った読み取り専用ポリシー）をアタッチします。
+
+    **成功の確認：** プライマリアカウントから `aws sts assume-role` を実行して、各ロールが引き受け可能であることを確認できること。
+  </Step>
+
+  <Step title="アカウント切り替えショートカットを定義する">
+    **Shortcuts**パネル（任意のワークスペースの右上）を開き、ターゲットアカウントごとに1つのショートカットを作成します。**Init Step**に、プロンプトが実行される前にターゲットロールARNをエージェントに引き受けるよう指示する内容を設定します。
+
+    <Frame>
+      <img src="/images/use-cases/01-shortcut-assume-role.png" alt="アカウント切り替えショートカットを表示するCloudThinker Shortcutsパネル" />
+    </Frame>
+    <p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>AssumeRoleのInit Stepを持つShortcutsパネル</p>
+
+    | ショートカット名 | Init Step |
+    |---|---|
+    | `/switch-to-prod` | `Please assume arn:aws:iam::111111111111:role/CloudThinkerAccessRole and use the STS token for this session.` |
+    | `/switch-to-dev` | `Please assume arn:aws:iam::222222222222:role/CloudThinkerAccessRole and use the STS token for this session.` |
+    | `/switch-to-staging` | `Please assume arn:aws:iam::333333333333:role/CloudThinkerAccessRole and use the STS token for this session.` |
+
+    **成功の確認：** `/`を入力したときに、各ショートカット名がShortcartsのオートコンプリートリストに表示されること。
+  </Step>
+
+  <Step title="クロスアカウント操作を実行する">
+    プロンプトの先頭にショートカット名を付けます。Alex は行動する前にターゲットロールを引き受けるため、すべての結果はそのアカウントにスコープされます。
+
+    ```text
+    /switch-to-prod @alex #dashboard Build an AWS daily cost report
+    ```
+
+    Alex は本番ロールを引き受け、そのアカウントのCost ExplorerとCloudWatchをクエリし、本番にスコープされたコストダッシュボードを返します。
+
+    ```text
+    /switch-to-dev @alex #report Summarize unused EC2 instances in the dev account
+    ```
+
+    **成功の確認：** Alex の応答がハブではなくターゲットアカウントのリソースを参照していること。
+  </Step>
+</Steps>
+
+## 成果の要因
+
+- **[ロールベース認証](/ja/guide/connections/aws)** — ハブアカウントのIAM IDが `sts:AssumeRole` 呼び出しを実行するため、各ターゲットアカウントの長期的な認証情報を共有・保存する必要がありません。
+- **IAM最小権限** — 各クロスアカウントロールに `ReadOnlyAccess` をアタッチすることで、ショートカットが誤用された場合でもエージェントが実行できる操作を制限します。セキュリティポリシーで許可される場合は `:root` の代わりに特定のプリンシパルARNを使用してください。
+- **Shortcuts** — プロンプトの前に挿入されるInit Stepが、ロールARNを毎回入力することなくアカウントコンテキストを設定します。Shortcutsを使えばアカウントごとにナレッジや指示をスコープすることもできます。
+- **[Alex（クラウドエンジニア）](/ja/guide/agents/alex)** — ロールコンテキストが設定されれば、AWSアカウント全体のコスト分析・リソース監査・インフラクエリを処理します。
+- **[ワークスペース](/ja/guide/workspaces)** — チームがアカウントごとに完全な分離（別々のナレッジベース、監査証跡、またはアクセス制御）を必要とする場合は、ショートカットを使う代わりにアカウントごとにワークスペースを作成してください。
+
+## 試してみる
+
+<CardGroup cols={2}>
+  <Card title="AWSアカウントを接続する" icon="/images/icons/aws.svg" href="/ja/guide/connections/aws">
+    Alex がアカウント間でロールを引き受けられるようロールベース認証を設定する。
+  </Card>
+  <Card title="ワークスペース" icon="layer-group" href="/ja/guide/workspaces">
+    アカウント間の完全な分離が必要な場合に専用ワークスペースを作成する。
+  </Card>
+</CardGroup>

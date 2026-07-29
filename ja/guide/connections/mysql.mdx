@@ -1,0 +1,198 @@
+---
+title: MySQL
+description: "MySQL データベースを CloudThinker に接続してクエリ分析、パフォーマンス監視、データベース最適化を実現"
+icon: "/images/icons/mysql.svg"
+---
+
+import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+
+MySQL データベースを接続して、[Tony](/ja/guide/agents/tony)（データベースエンジニア）がクエリを分析し、パフォーマンスを最適化し、データベースの健全性を監視できるようにします。
+
+## 対応プラットフォーム
+
+| プラットフォーム | サポート |
+|----------|---------|
+| **セルフホスト MySQL** | 5.7・8.0・8.1+ |
+| **MariaDB** | 10.x |
+| **AWS RDS MySQL** | 全バージョン |
+| **AWS Aurora MySQL** | 全バージョン |
+| **Google Cloud SQL** | 全 MySQL バージョン |
+| **Azure Database for MySQL** | Flexible Server |
+
+## 前提条件
+
+- CloudThinker からネットワーク経由で到達可能な MySQL インスタンス。
+- 専用ユーザーの作成と権限付与に必要な管理者または root アクセス。
+- Performance Schema が有効になっていること（MySQL 5.7+ ではデフォルト。接続前に確認してください）。
+
+## セットアップ
+
+<Steps>
+  <Step title="root として接続する">
+    root または管理者ユーザーで MySQL に接続します：
+    ```bash
+    mysql -h your-host -u root -p
+    ```
+  </Step>
+  <Step title="読み取り専用ユーザーを作成する">
+    CloudThinker ユーザーを作成します：
+    ```sql
+    CREATE USER 'cloudthinker_readonly'@'%' IDENTIFIED BY 'your-secure-password';
+    ```
+  </Step>
+  <Step title="読み取り権限を付与する">
+    SELECT と監視権限を付与します：
+    ```sql
+    GRANT SELECT ON *.* TO 'cloudthinker_readonly'@'%';
+    GRANT SHOW DATABASES ON *.* TO 'cloudthinker_readonly'@'%';
+    GRANT PROCESS ON *.* TO 'cloudthinker_readonly'@'%';
+    ```
+  </Step>
+  <Step title="Performance Schema へのアクセスを付与する">
+    クエリ分析に必要です：
+    ```sql
+    GRANT SELECT ON performance_schema.* TO 'cloudthinker_readonly'@'%';
+    FLUSH PRIVILEGES;
+    ```
+  </Step>
+  <Step title="Performance Schema が有効か確認する">
+    ```sql
+    SHOW VARIABLES LIKE 'performance_schema';
+    -- 返り値: ON
+    ```
+
+    無効の場合は `my.cnf` に追加して再起動します：
+    ```ini
+    [mysqld]
+    performance_schema = ON
+    ```
+  </Step>
+  <Step title="ネットワークアクセスを設定する">
+    CloudThinker がデータベースに到達できるよう設定します：
+    - CloudThinker の IP をセキュリティグループまたはファイアウォールに追加
+    - RDS の場合：パブリックアクセスを有効化するか VPC ピアリングを使用
+  </Step>
+  <Step title="CloudThinker に接続を追加する">
+    **Connections → MySQL** に移動し、以下を入力します：
+    - **Host**：データベースのホスト名または IP
+    - **Port**：データベースポート（デフォルト：`3306`）
+    - **Database**：データベース名
+    - **Username**：`cloudthinker_readonly`
+    - **Password**：上記で設定したパスワード
+    - **SSL**：有効（推奨）
+
+    **Connect** をクリックします。成功すると CloudThinker は **Connected** ステータスを表示します。
+  </Step>
+</Steps>
+
+## 接続詳細
+
+| フィールド | 説明 | デフォルト |
+|-------|-------------|---------|
+| **Host** | データベースのホスト名または IP | — |
+| **Port** | MySQL ポート | `3306` |
+| **Database** | データベース名 | — |
+| **Username** | 専用ユーザー（例：`cloudthinker_readonly`） | — |
+| **Password** | ユーザーパスワード | — |
+| **SSL** | SSL/TLS 暗号化を有効化 | 有効 |
+| **Connection timeout** | 接続待機秒数 | `10` |
+| **Read timeout** | クエリ結果の最大待機秒数 | `30` |
+
+接続文字列の形式：
+
+```
+mysql://cloudthinker_readonly:your-secure-password@your-host:3306/database-name
+```
+
+## 必要な権限
+
+### 最小権限
+
+```sql
+GRANT SELECT ON your_database.* TO 'cloudthinker_readonly'@'%';
+GRANT PROCESS ON *.* TO 'cloudthinker_readonly'@'%';
+```
+
+### 推奨（フル分析）
+
+```sql
+-- 上記すべてに加えて：
+GRANT SELECT ON performance_schema.* TO 'cloudthinker_readonly'@'%';
+GRANT SELECT ON mysql.* TO 'cloudthinker_readonly'@'%';
+GRANT REPLICATION CLIENT ON *.* TO 'cloudthinker_readonly'@'%';
+```
+
+<Tip>
+まず最小権限から始めてください。低速クエリデータとレプリケーション監視を解放するには `performance_schema` と `REPLICATION CLIENT` を追加してください。
+</Tip>
+
+## エージェントの機能
+
+接続後、Tony は以下を実行できます：
+
+| 機能 | 説明 |
+|------------|-------------|
+| **クエリ分析** | スロークエリログと Performance Schema から低速クエリを特定 |
+| **インデックス推奨** | 不足しているインデックスの発見、冗長なインデックスの特定 |
+| **パフォーマンスメトリクス** | 接続数・バッファプール・クエリキャッシュの監視 |
+| **テーブル統計** | テーブルサイズ・断片化・エンジン状態の分析 |
+| **レプリケーション監視** | レプリカの状態・ラグ・エラーの確認 |
+
+### 接続を確認する
+
+```text
+@tony #report check MySQL connection health and show current active sessions
+```
+
+### プロンプト例
+
+```text
+@tony #report analyze slow queries on the production MySQL instance
+@tony #recommend find missing indexes for high-frequency queries
+@tony #dashboard show buffer pool usage and connection statistics
+```
+
+## トラブルシューティング
+
+<Accordion title="接続が拒否される">
+- ホストとポートが正しいか確認してください
+- セキュリティグループまたはファイアウォールが CloudThinker の IP を許可しているか確認してください
+- RDS の場合：「Publicly accessible」が有効になっているか、VPC ピアリングを使用しているか確認してください
+- MySQL が正しいインターフェースでリッスンしているか確認してください（`my.cnf` の `bind-address`）
+</Accordion>
+
+<Accordion title="アクセスが拒否された">
+- ユーザー名とパスワードが正しいか確認してください
+- ユーザーのホスト指定が正しいか確認してください（`'user'@'%'` と `'user'@'localhost'` の違い）
+- `GRANT` ステートメントの後に `FLUSH PRIVILEGES` が実行されているか確認してください
+</Accordion>
+
+<Accordion title="Performance Schema が無効">
+- 確認方法：`SHOW VARIABLES LIKE 'performance_schema';`
+- `my.cnf` で有効化して MySQL を再起動してください
+- RDS の場合：パラメータグループを変更してインスタンスを再起動してください
+</Accordion>
+
+<Accordion title="スロークエリデータが見つからない">
+- スロークエリログを有効化：`SET GLOBAL slow_query_log = 'ON';`
+- しきい値を設定：`SET GLOBAL long_query_time = 1;`
+- RDS の場合：パラメータグループを変更してください
+</Accordion>
+
+## セキュリティ
+
+<ConnectionSecurity />
+
+- **SSL 必須** — 転送中のデータを暗号化するために、常に SSL を有効にしてください。
+- **最小権限** — CloudThinker ユーザーには `SELECT` のみを付与し、書き込みアクセスは絶対に付与しないでください。
+
+## 関連
+
+<CardGroup cols={2}>
+  <Card title="Tony Agent" icon="database" href="/ja/guide/agents/tony">
+    データベース特化の最適化エージェント
+  </Card>
+  <Card title="PostgreSQL 接続" icon="/images/icons/postgresql.svg" href="/ja/guide/connections/postgresql">
+    PostgreSQL データベースの同様のセットアップ
+  </Card>
+</CardGroup>

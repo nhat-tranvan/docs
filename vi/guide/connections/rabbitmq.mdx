@@ -1,0 +1,200 @@
+---
+title: RabbitMQ
+description: "Kết nối RabbitMQ với CloudThinker qua Management HTTP API để giám sát độ sâu queue, consumer lag, phân tích DLQ, sức khỏe cluster và node, cùng theo dõi alarm"
+icon: "/images/icons/rabbitmq.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối các broker RabbitMQ của bạn để cho phép [Tony](/vi/guide/agents/tony) (Kỹ sư Cơ sở dữ liệu) giám sát độ sâu queue, phân tích consumer lag, kiểm tra dead-letter queue và theo dõi sức khỏe cluster và node.
+
+RabbitMQ xác thực bằng **tên người dùng và mật khẩu** qua Management HTTP API (port mặc định `15672`) — cùng API mà giao diện quản lý RabbitMQ sử dụng, nên không cần thiết lập AMQP client.
+
+---
+
+## Nền tảng hỗ trợ
+
+| Nền tảng | Hỗ trợ |
+|----------|--------|
+| **Self-hosted RabbitMQ** | 3.8+ với management plugin đã bật |
+| **Managed RabbitMQ** | CloudAMQP và các nhà cung cấp khác có expose Management HTTP API |
+
+---
+
+## Điều kiện tiên quyết
+
+- Một **RabbitMQ broker** có thể truy cập từ CloudThinker trên management port (mặc định `15672`, hoặc `15671` cho HTTPS).
+- **Management plugin đã được bật**. Trên broker tự lưu trữ:
+  ```bash
+  rabbitmq-plugins enable rabbitmq_management
+  ```
+- Một **broker user** với tag `monitoring` hoặc `administrator`, để Management HTTP API trả về dữ liệu queue, node và cluster.
+
+<Info>
+Tag `monitoring` là đủ cho tất cả các khả năng đọc và kiểm tra sức khỏe. Chỉ cấp `administrator` nếu bạn muốn agent chạy các thao tác ghi có kiểm soát (purge/xóa queue, xóa exchange, cập nhật definition) — những thao tác này luôn yêu cầu phê duyệt trong ứng dụng. Xem [Quyền yêu cầu](#required-permissions).
+</Info>
+
+---
+
+## Thiết lập
+
+<Steps>
+  <Step title="Bật management plugin">
+    Trên broker tự lưu trữ, bật management plugin và xác nhận nó đang lắng nghe:
+    ```bash
+    rabbitmq-plugins enable rabbitmq_management
+    curl -u <user>:<password> http://localhost:15672/api/overview
+    ```
+    Các nhà cung cấp managed như CloudAMQP đã expose Management HTTP API theo mặc định — bỏ qua và đến bước tiếp theo.
+  </Step>
+  <Step title="Tạo user giám sát">
+    Tạo user riêng cho CloudThinker và gán tag `monitoring`:
+    ```bash
+    rabbitmqctl add_user cloudthinker <strong-password>
+    rabbitmqctl set_user_tags cloudthinker monitoring
+    rabbitmqctl set_permissions -p / cloudthinker "" "" ".*"
+    ```
+    Tag `monitoring` cấp quyền đọc tất cả queue, exchange, node và sức khỏe cluster trên các virtual host.
+  </Step>
+  <Step title="Xác nhận quyền truy cập mạng">
+    Đảm bảo CloudThinker có thể kết nối đến broker tại `<host>:15672` (hoặc `<host>:15671` cho TLS). Mở management port trên firewall hoặc security group cho egress của CloudThinker.
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Điều hướng đến **Connections → RabbitMQ** và nhập:
+    - **Username**: broker user (ví dụ: `cloudthinker`)
+    - **Password**: mật khẩu của user
+    - **Host**: tên máy chủ hoặc IP của broker (chỉ host — không có scheme hoặc port)
+    - **Management Port**: port của management API (mặc định `15672`)
+    - **Use TLS**: bật để dùng HTTPS management API và AMQPS
+    - **Log Level**: độ chi tiết log của connector (`info` theo mặc định)
+
+    Nhấn **Connect**. CloudThinker xác minh thông tin xác thực với Management HTTP API và hiển thị trạng thái **Connected**.
+  </Step>
+</Steps>
+
+<Warning>
+Đặt **Host** chỉ là tên máy chủ — không bao gồm `http://`, `https://`, hay port. Dùng nút bật/tắt **Use TLS** để chọn HTTP hay HTTPS, và **Management Port** cho port.
+</Warning>
+
+---
+
+## Chi tiết kết nối
+
+| Trường | Mô tả | Mặc định |
+|--------|-------|---------|
+| **RABBITMQ_USERNAME** | Broker user với tag `monitoring` hoặc `administrator` | — |
+| **RABBITMQ_PASSWORD** | Mật khẩu cho broker user | — |
+| **RABBITMQ_HOST** | Tên máy chủ hoặc IP của broker (không có scheme, không có port) | — |
+| **RABBITMQ_MANAGEMENT_PORT** | Port của Management HTTP API | `15672` |
+| **RABBITMQ_USE_TLS** | `Disabled` cho HTTP + AMQP, `Enabled` cho HTTPS + AMQPS | `Disabled` |
+| **LOG_LEVEL** | Độ chi tiết log connector: `debug`, `info`, `warn`, `error` | `info` |
+
+<Note>
+Management API lắng nghe trên `15672` cho HTTP và `15671` cho HTTPS. Khi bật **Use TLS**, đặt **Management Port** thành port management TLS của bạn.
+</Note>
+
+---
+
+## Quyền yêu cầu
+
+User kết nối cần có management tag để HTTP API trả về dữ liệu broker:
+
+| Tag | Tính năng mở khóa |
+|-----|------------------|
+| `monitoring` | Quyền đọc queue, exchange, binding, connection, channel, node, cluster và health check — bao gồm tất cả khả năng giám sát và chẩn đoán. |
+| `administrator` | Tất cả những gì `monitoring` cung cấp, cộng thêm các thao tác ghi có kiểm soát (purge/xóa queue, xóa exchange, cập nhật definition). |
+
+<Tip>
+Tuân thủ nguyên tắc quyền tối thiểu: tag `monitoring` là đủ cho việc điều tra queue, consumer-lag, DLQ và sức khỏe cluster. Chỉ sử dụng `administrator` nếu bạn định chạy các thao tác ghi có kiểm soát được mô tả bên dưới.
+</Tip>
+
+### Các thao tác ghi yêu cầu phê duyệt
+
+Kết nối này có bốn công cụ mutative được bật. Chúng luôn được kiểm soát bởi **phê duyệt trong ứng dụng** — agent phải yêu cầu xác nhận của bạn trước khi chạy bất kỳ thao tác nào trong số đó:
+
+- `delete_queue` — xóa một queue
+- `purge_queue` — xóa tất cả message trong một queue
+- `delete_exchange` — xóa một exchange
+- `update_definition` — sửa đổi broker definition
+
+Tất cả các khả năng khác đều chỉ đọc. Các thao tác phá hủy cũng yêu cầu broker user có tag `administrator` với quyền ghi trên virtual host mục tiêu.
+
+---
+
+## Khả năng của agent
+
+Sau khi kết nối, [Tony](/vi/guide/agents/tony) có thể:
+
+| Khả năng | Mô tả |
+|----------|-------|
+| **Độ sâu queue & tốc độ message** | Snapshot độ sâu queue, ready vs. unacked, và tốc độ publish/deliver |
+| **Consumer lag** | Xác định queue có consumer lag cao hoặc không có consumer |
+| **Phân tích dead-letter** | Kiểm tra dead-letter queue để tìm poison message và mẫu lỗi |
+| **Sức khỏe cluster & node** | Kiểm tra trạng thái node, alarm cục bộ và toàn cục, và queue quan trọng cho quorum |
+| **Kiểm tra alarm & certificate** | Phát hiện broker trong trạng thái alarm và certificate gần hết hạn |
+| **Thao tác ghi có kiểm soát** | Purge hoặc xóa queue, xóa exchange và cập nhật definition — mỗi thao tác yêu cầu phê duyệt trong ứng dụng |
+
+### Xác minh kết nối
+
+```text
+@tony show RabbitMQ cluster status and list all queues with their current depths
+```
+
+### Ví dụ prompt
+
+```text
+@tony check all queues for abnormal depth or zero-consumer conditions and #alert on any queue growing faster than 500 msg/s
+@tony identify queues with high consumer lag and inspect their dead-letter queues for poison messages, then #recommend remediation steps
+@tony check cluster node status, alarms, quorum-critical queues, and certificate expiration; #alert on any node down or in alarm
+```
+
+---
+
+## Xử lý sự cố
+
+<Accordion title="Kết nối bị từ chối hoặc timeout">
+- Xác minh broker có thể truy cập từ CloudThinker tại `<host>:15672` (hoặc management port TLS của bạn).
+- Xác nhận management port — không phải AMQP port `5672` — đang mở trên firewall hoặc security group.
+- Với broker tự lưu trữ, đảm bảo RabbitMQ được bind vào interface có thể truy cập, không chỉ `127.0.0.1`.
+</Accordion>
+
+<Accordion title="404 Not Found trên management API">
+Management plugin chưa được bật. Chạy `rabbitmq-plugins enable rabbitmq_management` và thử lại. Với nhà cung cấp managed, xác nhận Management HTTP API được expose cho instance của bạn.
+</Accordion>
+
+<Accordion title="401 Unauthorized">
+- Xác minh tên người dùng và mật khẩu.
+- Xác nhận user có tag `monitoring` hoặc `administrator`: `rabbitmqctl set_user_tags <user> monitoring`.
+- User không có management tag có thể xác thực với AMQP nhưng bị từ chối bởi Management HTTP API.
+</Accordion>
+
+<Accordion title="Lỗi TLS handshake hoặc certificate">
+- Đảm bảo **Use TLS** khớp với broker: chỉ bật khi management API phục vụ HTTPS (thường là port `15671`).
+- Nếu **Use TLS** được bật nhưng port phục vụ HTTP thuần (hoặc ngược lại), kết nối sẽ thất bại — căn chỉnh nút bật/tắt và **Management Port**.
+</Accordion>
+
+<Accordion title="Kết quả rỗng hoặc không đầy đủ">
+- User `monitoring` có thể thiếu quyền trên một số virtual host. Cấp quyền đọc trên các vhost bạn muốn hiển thị: `rabbitmqctl set_permissions -p <vhost> <user> "" "" ".*"`.
+</Accordion>
+
+---
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **User riêng biệt** — tạo broker user `cloudthinker` riêng; không bao giờ dùng lại tài khoản `guest` hoặc admin
+- **TLS trong truyền tải** — bật **Use TLS** để mã hóa lưu lượng management API giữa CloudThinker và broker
+
+---
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Agent Tony" icon="database" href="/vi/guide/agents/tony">
+    Agent giám sát và tối ưu hóa tập trung vào cơ sở dữ liệu
+  </Card>
+  <Card title="Kết nối Kafka" icon="/images/icons/kafka.svg" href="/vi/guide/connections/kafka">
+    Hướng dẫn thiết lập Apache Kafka streaming
+  </Card>
+</CardGroup>

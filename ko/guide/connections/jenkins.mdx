@@ -1,0 +1,152 @@
+---
+title: Jenkins
+description: "빌드 파이프라인 모니터링, 작업 분석, 배포 추적을 위해 Jenkins CI/CD 서버를 CloudThinker에 연결합니다"
+icon: "/images/icons/jenkins.svg"
+---
+
+import ConnectionSecurity from '/snippets/ko/connection-security.mdx';
+
+셀프 호스팅 Jenkins 서버를 연결하면 CloudThinker 에이전트가 빌드를 모니터링하고, 테스트 결과를 분석하고, 파이프라인 로그를 검토하고, 작업 운영을 관리할 수 있습니다. Jenkins는 Jenkins MCP Server Plugin을 통해 **사용자 이름 및 API 토큰**으로 인증합니다.
+
+---
+
+## 사전 요구 사항
+
+- 버전 2.x 이상의 **셀프 호스팅 Jenkins** 인스턴스 (클라우드 호스팅 Jenkins는 지원되지 않음).
+- 서버에 설치된 **[Jenkins MCP Server Plugin](https://github.com/jenkinsci/mcp-server-plugin)** — 기본 MCP 포트는 `9090`입니다.
+- 루트 URL 구성 및 자격 증명 생성을 위한 Jenkins 관리자 접근 권한.
+
+<Info>
+클라우드 호스팅 Jenkins 서비스는 지원되지 않습니다. 이 연결은 Jenkins MCP Server Plugin이 필요합니다.
+</Info>
+
+---
+
+## 설정
+
+<Steps>
+  <Step title="루트 URL 구성">
+    MCP Server Plugin은 Jenkins가 올바른 작업 링크를 반환하도록 루트 URL이 구성되어 있어야 합니다. Jenkins Script Console에서 다음을 실행합니다.
+
+    ```bash
+    COOKIE_JAR=/tmp/jenkins_cookies
+    CRUMB=$(curl -s -c $COOKIE_JAR -u "admin:<password>" \
+      'http://<host-ip>:9090/crumbIssuer/api/json' | python3 -c "import json,sys; print(json.load(sys.stdin)['crumb'])")
+
+    curl -s -X POST "http://<host-ip>:9090/scriptText" \
+      -b $COOKIE_JAR -u "admin:<password>" -H "Jenkins-Crumb: $CRUMB" \
+      --data-urlencode "script=
+    import jenkins.model.JenkinsLocationConfiguration
+    def loc = JenkinsLocationConfiguration.get()
+    loc.setUrl('http://<host-ip>:9090/')
+    loc.save()
+    println('Root URL set to: ' + loc.getUrl())
+    "
+    ```
+  </Step>
+  <Step title="MCP 엔드포인트 확인">
+    연결하기 전에 플러그인이 실행 중인지 확인합니다.
+
+    ```bash
+    curl -s http://<host-ip>:9090/mcp-health/
+    ```
+  </Step>
+  <Step title="CloudThinker에 연결 추가">
+    **Connections → Jenkins**로 이동하여 다음을 입력합니다.
+    - **URL**: `http://<host-ip>:9090`
+    - **Username**: `admin`
+    - **API Token**: Jenkins 관리자 비밀번호 또는 API 토큰
+
+    **Connect**를 클릭합니다. CloudThinker가 자격 증명을 검증하고 **Connected** 상태를 표시합니다.
+  </Step>
+</Steps>
+
+---
+
+## 연결 세부 정보
+
+| 필드 | 설명 | 예시 |
+|-------|-------------|---------|
+| **URL** | Jenkins 인스턴스 기본 URL | `http://192.168.1.100:9090` |
+| **Username** | Jenkins 사용자 이름 | `admin` |
+| **API Token** | Jenkins 관리자 비밀번호 또는 API 토큰 | — |
+
+---
+
+## 필수 권한
+
+Jenkins 사용자에게 다음 권한을 부여합니다.
+
+- **Overall**: Read
+- **Job**: Read, Discover
+- **View**: Read
+
+<Tip>
+CloudThinker 전용 Jenkins 사용자를 생성하고 이 권한만 부여하세요. 쓰기 작업(빌드 트리거, 파이프라인 재실행)은 승인이 필요한 상태로 유지하세요.
+</Tip>
+
+---
+
+## 에이전트 기능
+
+연결 후 에이전트는 Jenkins 파이프라인을 모니터링하고 조사할 수 있습니다.
+
+| 기능 | 설명 |
+|------------|-------------|
+| **빌드 모니터링** | 작업 목록 조회 및 빌드 상태 확인 |
+| **로그 분석** | 빌드 로그 조회 및 검색 |
+| **테스트 결과** | 테스트 결과 확인 |
+| **SCM 통합** | Git 변경 사항 및 커밋 확인 |
+| **작업 제어** | 빌드 트리거 및 파이프라인 재실행 — **승인 필요** |
+
+### 연결 확인
+
+```text
+@alex list all Jenkins jobs and show the last build status for each
+```
+
+### 예시 프롬프트
+
+```text
+@alex search Jenkins build logs for errors in the last 10 builds and #recommend fixes
+@alex show test results for the main project's recent builds and #report failures
+@alex check the Jenkins build queue and identify any stuck jobs
+```
+
+---
+
+## 문제 해결
+
+<Accordion title="연결 타임아웃">
+Jenkins가 실행 중인지, 포트 9090이 CloudThinker에서 접근 가능한지 확인하세요. URL 필드에서 `localhost` 대신 호스트 IP 주소를 사용하세요.
+</Accordion>
+
+<Accordion title="빈 작업 목록">
+루트 URL이 구성되지 않았거나 Script Console 명령이 실패했습니다. 설정에서 Script Console 명령을 다시 실행하고 다시 연결하세요.
+</Accordion>
+
+<Accordion title="인증 실패">
+사용자 이름 또는 API 토큰이 잘못되었거나 사용자에게 필요한 권한이 없습니다. 자격 증명을 확인하고 Jenkins 사용자에게 Overall Read, Job Read, View Read 접근 권한이 있는지 확인하세요.
+</Accordion>
+
+---
+
+## 보안
+
+<ConnectionSecurity />
+
+- **전용 사용자** — CloudThinker 전용 Jenkins 사용자를 생성하고 필요한 작업 및 뷰에만 스코프를 제한하세요.
+- **네트워크 격리** — Jenkins 포트 9090을 CloudThinker의 IP 범위로 제한하거나 VPN을 사용하세요. Jenkins UI를 공개 인터넷에 노출하지 마세요.
+
+---
+
+## 관련 항목
+
+<CardGroup cols={2}>
+  <Card title="MCP 연결" icon="/images/icons/mcp.svg" href="/ko/guide/connections/mcp">
+    Model Context Protocol을 통해 커스텀 도구 연결
+  </Card>
+  <Card title="Kubernetes 연결" icon="/images/icons/kubernetes.svg" href="/ko/guide/connections/kubernetes">
+    Kubernetes 클러스터 연결
+  </Card>
+</CardGroup>

@@ -1,0 +1,221 @@
+---
+title: HashiCorp Vault
+description: "Token または AppRole 認証で HashiCorp Vault に接続し、KV シークレットの読み取り、動的クレデンシャルの発行、ポリシー・トークン・ヘルスの監査を実現"
+icon: "/images/icons/vault.svg"
+---
+
+import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+
+HashiCorp Vault クラスターを接続して、[Oliver](/ja/guide/agents/oliver)（セキュリティプロフェッショナル）が KV シークレットの読み取り、動的なデータベースおよびクラウドクレデンシャルの取得、ポリシー・トークン・監査デバイス・クラスターヘルスの検査を、CloudThinker のセキュアサンドボックス内で動作する `vault` CLI を通じて行えるようにします。
+
+## 対応プラットフォーム
+
+| プラットフォーム | サポート |
+|----------|---------|
+| **Vault オープンソース** | セルフホスト、最近のリリース |
+| **Vault Enterprise** | ネームスペース対応 |
+| **HCP Vault Dedicated** | ネームスペースを設定（デフォルト `admin`） |
+
+## 前提条件
+
+1. **到達可能な Vault アドレス** — サンドボックスは `VAULT_ADDR` にネットワーク経由で接続します。ご自身のマシンではありません。`localhost` やプライベートアドレスではなく、パブリック DNS 名または HCP エンドポイントを使用してください。
+2. **クレデンシャル** — Vault トークン、または AppRole（`role_id` + `secret_id`）。エージェントがクエリしたいパスへの読み取りアクセスを付与したポリシーが必要です。
+3. **（Enterprise / HCP のみ）** シークレットが存在する**ネームスペース**。
+
+## セットアップ
+
+デプロイ環境に合った認証方式を選択してください。AppRole は `secret_id` を長期トークンの置き換えなしにローテーションできるため、本番環境で推奨されます。
+
+<Tabs>
+  <Tab title="Token">
+
+    <Steps>
+      <Step title="読み取りポリシーを作成する">
+        CloudThinker がアクセスすべきパスのみに読み取りアクセスを付与します：
+
+        ```bash
+        vault policy write cloudthinker-read - <<EOF
+        path "kv/data/*" {
+          capabilities = ["read", "list"]
+        }
+        path "kv/metadata/*" {
+          capabilities = ["list"]
+        }
+        EOF
+        ```
+      </Step>
+      <Step title="トークンを作成する">
+        そのポリシーにトークンをバインドします：
+
+        ```bash
+        vault token create \
+          -policy=cloudthinker-read \
+          -ttl=720h \
+          -display-name=cloudthinker
+        ```
+
+        出力の `token` 値をコピーします。
+      </Step>
+      <Step title="CloudThinker に接続を追加する">
+        **Connections → HashiCorp Vault** に移動し、以下を入力します：
+
+        - **VAULT_ADDR**：スキームとポートを含む Vault URL（例：`https://vault.example.com:8200`）
+        - **VAULT_NAMESPACE**：オープンソース Vault の場合は空白のまま。HCP（`admin`）または Enterprise ネームスペースの場合は設定
+        - **VAULT_AUTH_METHOD**：**Token**
+        - **VAULT_TOKEN**：前のステップで取得したトークン
+
+        **Connect** をクリックします。CloudThinker は `vault token lookup` でトークンを検証し、**Connected** ステータスを表示します。
+      </Step>
+    </Steps>
+
+  </Tab>
+
+  <Tab title="AppRole">
+
+    <Steps>
+      <Step title="AppRole を有効化してポリシーを作成する">
+        AppRole 認証メソッドを有効化し（すでに有効な場合はスキップ）、対象パスへの読み取りアクセスを付与します：
+
+        ```bash
+        vault auth enable approle
+
+        vault policy write cloudthinker-read - <<EOF
+        path "kv/data/*" {
+          capabilities = ["read", "list"]
+        }
+        path "kv/metadata/*" {
+          capabilities = ["list"]
+        }
+        EOF
+        ```
+      </Step>
+      <Step title="AppRole を作成する">
+        ポリシーに AppRole をバインドします：
+
+        ```bash
+        vault write auth/approle/role/cloudthinker \
+          token_policies=cloudthinker-read \
+          token_ttl=1h \
+          token_max_ttl=4h \
+          secret_id_ttl=720h
+        ```
+      </Step>
+      <Step title="role ID と secret ID を取得する">
+        ```bash
+        vault read auth/approle/role/cloudthinker/role-id
+        vault write -f auth/approle/role/cloudthinker/secret-id
+        ```
+
+        `role_id` と生成された `secret_id` をコピーします。
+      </Step>
+      <Step title="CloudThinker に接続を追加する">
+        **Connections → HashiCorp Vault** に移動し、以下を入力します：
+
+        - **VAULT_ADDR**：スキームとポートを含む Vault URL（例：`https://vault.example.com:8200`）
+        - **VAULT_NAMESPACE**：オープンソース Vault の場合は空白のまま。HCP（`admin`）または Enterprise ネームスペースの場合は設定
+        - **VAULT_AUTH_METHOD**：**AppRole**
+        - **VAULT_ROLE_ID**：`role_id`
+        - **VAULT_SECRET_ID**：`secret_id`
+
+        **Connect** をクリックします。CloudThinker は `auth/approle/login` を実行し、クライアントトークンが返ることを確認して **Connected** ステータスを表示します。
+      </Step>
+    </Steps>
+
+  </Tab>
+</Tabs>
+
+トークンと secret ID は、CloudThinker がヘルスチェック中に表示するエラーメッセージからは削除されます。
+
+## 接続詳細
+
+| フィールド | 必須 | 備考 |
+|-------|----------|-------|
+| **VAULT_ADDR** | 必須 | スキームを含む完全な URL（例：`https://vault.example.com:8200`） |
+| **VAULT_NAMESPACE** | 任意 | HCP Vault Dedicated（`admin`）および Vault Enterprise のネームスペースデプロイのみ |
+| **VAULT_AUTH_METHOD** | 必須 | `token` または `approle` |
+| **VAULT_TOKEN** | Token 認証 | 認証方式が Token の場合に表示 |
+| **VAULT_ROLE_ID** | AppRole | 認証方式が AppRole の場合に表示 |
+| **VAULT_SECRET_ID** | AppRole | 認証方式が AppRole の場合に表示 |
+
+## 必要な権限
+
+Oliver がクエリする必要があるシークレットパスに対して `read` と `list` を付与するポリシーを、トークンまたは AppRole にアタッチしてください。Vault はデフォルトで拒否するため、Oliver がクレデンシャルに付与されたポリシーを超えることはできません。
+
+<Tip>
+最小限の読み取りパスから始め、Oliver に書き込みワークフローを実行させたい場合にのみ `create`/`update` を追加してください。
+</Tip>
+
+## エージェントの機能
+
+Oliver のアクションはトークンまたは AppRole のポリシーによって制限されます。読み取り操作は自動的に実行されますが、Vault を変更する操作やリース発行が必要な操作は CloudThinker での承認が必要です。
+
+| 機能 | 説明 |
+|------------|-------------|
+| **シークレット読み取り** | KV v1/v2 シークレットパスと値の読み取り・一覧表示 |
+| **ヘルス検査** | シール状態、マウント済みシークレットエンジン、認証メソッドの確認 |
+| **ポリシー監査** | ポリシー・監査デバイス・トークンメタデータの一覧表示と読み取り |
+| **動的クレデンシャル** | 短期のデータベースおよびクラウドクレデンシャルの生成 — 承認が必要 |
+| **シークレット書き込み** | KV シークレットとバージョンの作成・更新・削除 — 承認が必要 |
+| **リース管理** | クレデンシャルリースの失効または更新 — 承認が必要 |
+
+### 接続を確認する
+
+```text
+@oliver #report list all mounted auth methods and check Vault health
+```
+
+### プロンプト例
+
+```text
+@oliver #report list all secrets under the kv mount and summarize what's there
+@oliver #report show Vault health, seal status, and version
+@oliver #recommend audit the current token — what policies and TTL does it have
+```
+
+## トラブルシューティング
+
+<Accordion title="サンドボックスから VAULT_ADDR に到達できない">
+`vault` CLI は CloudThinker のサンドボックス内で動作し、ご自身のマシン上ではありません。`localhost`・`127.0.0.1`・`host.docker.internal` はサンドボックス自体に解決され、`dial tcp ... no such host` または接続拒否で失敗します。`VAULT_ADDR` にはパブリック DNS 名または HCP Vault Dedicated エンドポイントを指定してください。ファイアウォールや VPN の背後にある Vault は、パブリックエンドポイント・許可されたエグレス・ネットワークブリッジのいずれかで公開する必要があります。
+</Accordion>
+
+<Accordion title="VAULT_ADDR のスキームが誤っている">
+`vault` にはスキームを含む完全な URL が必要です。`vault.example.com:8200`（スキームなし）は接続エラーになります。`https://vault.example.com:8200`、または開発モードのサーバーには `http://...` を使用してください。
+</Accordion>
+
+<Accordion title="403 アクセス拒否">
+トークンまたは AppRole ポリシーが、要求されたパスへのアクセスを付与していません。`vault token lookup` でポリシーを確認し、エージェントがクエリするパスをカバーしているか確認してください。たとえば `kv/data/production/*` を読み取るには、そのパスに `capabilities = ["read", "list"]` が必要です。
+</Accordion>
+
+<Accordion title="HCP / Enterprise でネームスペースが必要">
+HCP Vault Dedicated および Enterprise のマルチネームスペースデプロイでは `VAULT_NAMESPACE` が必要です。HCP のデフォルトは `admin` です。HCP または Enterprise で `no handler for route` または `permission denied` が表示される場合は、ネームスペースが設定されているか確認してください。
+</Accordion>
+
+<Accordion title="AppRole の secret_id が期限切れ">
+`secret_id` には TTL（`secret_id_ttl`）があります。期限切れになると、`invalid secret_id` で認証が失敗します。新しい secret_id を生成し、**VAULT_SECRET_ID** を更新して再接続してください：
+
+```bash
+vault write -f auth/approle/role/cloudthinker/secret-id
+```
+</Accordion>
+
+<Accordion title="Vault がシールされている">
+`vault status` に `Sealed: true` と表示され、操作が一切できません。Vault オペレーターがクラスターをアンシールする（`vault operator unseal`）必要があります。その後、エージェントは読み書きができるようになります。
+</Accordion>
+
+## セキュリティ
+
+<ConnectionSecurity />
+
+- **本番環境では AppRole を推奨** — 長期トークンを置き換えることなく `secret_id` をローテーションできます。
+- **書き込み操作のゲート** — クレデンシャルの発行と変更が常に人間の承認を経るよう、書き込みパスは承認制に保ってください。
+
+## 関連
+
+<CardGroup cols={2}>
+  <Card title="Oliver Agent" icon="shield-halved" href="/ja/guide/agents/oliver">
+    セキュリティとコンプライアンスエージェント
+  </Card>
+  <Card title="承認コントロール" icon="circle-check" href="/ja/guide/approval">
+    書き込み操作を承認制でゲート
+  </Card>
+</CardGroup>

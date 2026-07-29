@@ -1,0 +1,365 @@
+---
+title: Webhooks
+description: "Gửi sự kiện CloudThinker đến các hệ thống bên ngoài bằng webhook có thể cấu hình"
+icon: webhook
+---
+
+Webhook cho phép CloudThinker đẩy sự kiện đến các hệ thống bên ngoài của bạn theo thời gian thực, hỗ trợ tự động hóa, tích hợp và các quy trình làm việc tùy chỉnh.
+
+## Webhook hoạt động như thế nào
+
+<Steps>
+  <Step title="Cấu hình">
+    Tạo một webhook endpoint với URL đích và chọn các sự kiện cần đăng ký
+  </Step>
+  <Step title="Kích hoạt">
+    Khi các sự kiện đã đăng ký xảy ra, CloudThinker chuẩn bị payload webhook
+  </Step>
+  <Step title="Gửi đi">
+    CloudThinker gửi một HTTP POST request đến endpoint của bạn kèm dữ liệu sự kiện
+  </Step>
+  <Step title="Xử lý">
+    Hệ thống của bạn nhận và xử lý webhook, trả về phản hồi thành công
+  </Step>
+</Steps>
+
+---
+
+## Tạo webhook
+
+### Từ giao diện console
+
+1. Điều hướng đến **Settings > Webhooks**
+2. Nhấp **Create Webhook**
+3. Cấu hình webhook:
+   - **Name**: Tên định danh mô tả
+   - **URL**: URL endpoint của bạn (phải là HTTPS)
+   - **Events**: Chọn các sự kiện cần đăng ký
+   - **Secret**: Secret tùy chọn để xác minh chữ ký
+4. Lưu và kiểm tra
+
+### Cấu hình webhook
+
+| Trường | Mô tả | Bắt buộc |
+|-------|-------------|----------|
+| **Name** | Tên thân thiện để nhận dạng | Có |
+| **URL** | Endpoint HTTPS để nhận sự kiện | Có |
+| **Events** | Loại sự kiện cần đăng ký | Có |
+| **Secret** | Secret dùng chung để ký payload | Khuyến nghị |
+| **Headers** | Header tùy chỉnh để đưa vào | Không |
+| **Active** | Bật/tắt webhook | Có |
+
+---
+
+## Loại sự kiện
+
+Đăng ký các sự kiện trên CloudThinker:
+
+### Sự kiện đề xuất
+
+| Sự kiện | Kích hoạt khi |
+|-------|---------|
+| `recommendation.created` | Đề xuất mới được tạo |
+| `recommendation.updated` | Trạng thái đề xuất thay đổi |
+| `recommendation.implemented` | Đề xuất được đánh dấu hoàn thành |
+| `recommendation.comment` | Bình luận được thêm vào đề xuất |
+
+### Sự kiện sự cố
+
+| Sự kiện | Kích hoạt khi |
+|-------|---------|
+| `incident.created` | Sự cố mới được tạo |
+| `incident.updated` | Chi tiết sự cố thay đổi |
+| `incident.resolved` | Sự cố được đánh dấu đã giải quyết |
+| `incident.comment` | Bình luận được thêm vào sự cố |
+
+### Sự kiện bảo mật
+
+| Sự kiện | Kích hoạt khi |
+|-------|---------|
+| `finding.created` | Phát hiện bảo mật mới được phát hiện |
+| `finding.resolved` | Phát hiện bảo mật được giải quyết |
+| `compliance.changed` | Trạng thái tuân thủ thay đổi |
+
+### Sự kiện tác vụ
+
+| Sự kiện | Kích hoạt khi |
+|-------|---------|
+| `task.started` | Tác vụ theo lịch bắt đầu thực thi |
+| `task.completed` | Tác vụ hoàn thành thành công |
+| `task.failed` | Tác vụ gặp lỗi |
+
+### Sự kiện agent
+
+| Sự kiện | Kích hoạt khi |
+|-------|---------|
+| `conversation.completed` | Cuộc hội thoại với agent kết thúc |
+| `approval.requested` | Agent yêu cầu phê duyệt cho hành động |
+| `approval.granted` | Người dùng phê duyệt hành động của agent |
+
+### Sự kiện tài nguyên
+
+| Sự kiện | Kích hoạt khi |
+|-------|---------|
+| `resource.discovered` | Tài nguyên đám mây mới được tìm thấy |
+| `resource.changed` | Cấu hình tài nguyên thay đổi |
+| `resource.deleted` | Tài nguyên không còn tồn tại |
+
+---
+
+## Payload webhook
+
+Mỗi webhook bao gồm một payload chuẩn hóa:
+
+```json
+{
+  "id": "evt_abc123",
+  "type": "recommendation.created",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "workspace_id": "ws_xyz789",
+  "data": {
+    "id": "rec_def456",
+    "title": "Right-size EC2 instance i-0abc123",
+    "potential_savings": 150.00,
+    "effort": "low",
+    "risk": "low",
+    "status": "pending"
+  }
+}
+```
+
+### Các trường payload
+
+| Trường | Mô tả |
+|-------|-------------|
+| `id` | Định danh sự kiện duy nhất |
+| `type` | Loại sự kiện (ví dụ: `recommendation.created`) |
+| `timestamp` | Timestamp ISO 8601 |
+| `workspace_id` | Workspace nơi sự kiện xảy ra |
+| `data` | Payload đặc thù cho sự kiện |
+
+---
+
+## Bảo mật
+
+### Xác minh chữ ký
+
+Khi bạn cấu hình webhook secret, CloudThinker ký mỗi payload:
+
+```
+X-CloudThinker-Signature: sha256=<signature>
+```
+
+Xác minh chữ ký trong endpoint của bạn:
+
+```python
+import hmac
+import hashlib
+
+def verify_signature(payload, signature, secret):
+    expected = hmac.new(
+        secret.encode(),
+        payload.encode(),
+        hashlib.sha256
+    ).hexdigest()
+    return hmac.compare_digest(f"sha256={expected}", signature)
+```
+
+### Cho phép IP
+
+Webhook CloudThinker xuất phát từ các dải IP đã biết. Liên hệ hỗ trợ để lấy danh sách IP hiện tại và cấu hình quy tắc tường lửa.
+
+### Chỉ HTTPS
+
+URL webhook phải sử dụng HTTPS. Chứng chỉ tự ký không được hỗ trợ trong môi trường production.
+
+---
+
+## Logic thử lại
+
+CloudThinker thử lại các lần gửi webhook thất bại:
+
+### Lịch trình thử lại
+
+| Lần thử | Độ trễ |
+|---------|-------|
+| 1 | Ngay lập tức |
+| 2 | 1 phút |
+| 3 | 5 phút |
+| 4 | 30 phút |
+| 5 | 2 giờ |
+| 6 | 8 giờ |
+
+### Tiêu chí thành công
+
+Một lần gửi được coi là thành công khi endpoint của bạn trả về:
+- HTTP status code 2xx
+- Phản hồi trong vòng 30 giây
+
+### Xử lý thất bại
+
+Sau khi tất cả các lần thử đều thất bại:
+- Sự kiện được đánh dấu là thất bại
+- Thông báo được gửi (nếu đã cấu hình)
+- Sự kiện có sẵn trong nhật ký webhook
+
+---
+
+## Quản lý webhook
+
+### Kiểm tra webhook
+
+Kiểm tra việc gửi webhook trước khi đưa vào production:
+
+1. Chọn webhook trong cài đặt
+2. Nhấp **Send Test Event**
+3. Chọn loại sự kiện
+4. Xem lại trạng thái gửi và payload
+
+### Xem nhật ký
+
+Theo dõi hoạt động webhook:
+
+1. Điều hướng đến **Settings > Webhooks > Logs**
+2. Xem các lần gửi
+3. Xem chi tiết request/response
+4. Lọc theo trạng thái, loại sự kiện, ngày
+
+### Tạm dừng webhook
+
+Tạm thời vô hiệu hóa webhook:
+
+1. Chọn webhook
+2. Tắt **Active**
+3. Các sự kiện trong thời gian tạm dừng không được xếp hàng
+
+---
+
+## Mẫu webhook
+
+Sử dụng mẫu cho các tích hợp phổ biến:
+
+### Slack
+
+Đăng sự kiện lên các kênh Slack:
+
+```json
+{
+  "url": "https://hooks.slack.com/services/...",
+  "events": ["recommendation.created", "incident.created"],
+  "transform": {
+    "text": "New {{type}}: {{data.title}}"
+  }
+}
+```
+
+### Jira
+
+Tạo ticket Jira từ sự kiện CloudThinker:
+
+```json
+{
+  "url": "https://your-org.atlassian.net/...",
+  "events": ["recommendation.created"],
+  "headers": {
+    "Authorization": "Basic <base64_credentials>"
+  }
+}
+```
+
+### PagerDuty
+
+Kích hoạt sự cố PagerDuty:
+
+```json
+{
+  "url": "https://events.pagerduty.com/v2/enqueue",
+  "events": ["incident.created"],
+  "headers": {
+    "Content-Type": "application/json"
+  }
+}
+```
+
+---
+
+## Thực hành tốt nhất
+
+<AccordionGroup>
+  <Accordion title="Luôn xác minh chữ ký">
+    Sử dụng webhook secret và xác minh chữ ký để đảm bảo request xuất phát từ CloudThinker.
+  </Accordion>
+
+  <Accordion title="Phản hồi nhanh">
+    Trả về phản hồi 2xx ngay lập tức, sau đó xử lý sự kiện bất đồng bộ. Độ trễ xử lý kéo dài gây ra timeout.
+  </Accordion>
+
+  <Accordion title="Xử lý trùng lặp">
+    Các lần gửi webhook đôi khi có thể bị trùng. Sử dụng `id` của sự kiện để loại bỏ trùng lặp ở phía bạn.
+  </Accordion>
+
+  <Accordion title="Giám sát thất bại">
+    Thiết lập cảnh báo cho các webhook thất bại. Điều tra và khắc phục sự cố kịp thời để tránh bỏ lỡ sự kiện.
+  </Accordion>
+
+  <Accordion title="Sử dụng đăng ký cụ thể">
+    Chỉ đăng ký các sự kiện bạn cần. Giảm nhiễu và chi phí xử lý.
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Ví dụ tích hợp
+
+### GitHub Actions
+
+Kích hoạt quy trình làm việc từ sự kiện CloudThinker:
+
+```yaml
+# .github/workflows/cloudthinker.yml
+on:
+  repository_dispatch:
+    types: [recommendation-created]
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Process recommendation
+        run: |
+          echo "New recommendation: ${{ github.event.client_payload.title }}"
+```
+
+### AWS Lambda
+
+Xử lý webhook bằng serverless function:
+
+```python
+def lambda_handler(event, context):
+    body = json.loads(event['body'])
+
+    if body['type'] == 'recommendation.created':
+        # Process new recommendation
+        process_recommendation(body['data'])
+
+    return {'statusCode': 200}
+```
+
+---
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Webhook sự cố" icon="siren-on" href="/vi/guide/incident/webhook-integrations">
+    Webhook đầu vào từ PagerDuty, Datadog, Prometheus và nhiều hơn nữa để tự động kích hoạt phân tích nguyên nhân gốc rễ
+  </Card>
+  <Card title="Tasks & Scheduling" icon="calendar-check" href="/vi/guide/automation/tasks">
+    Lên lịch các hoạt động định kỳ và tạo quy trình theo sự kiện
+  </Card>
+  <Card title="Thông báo" icon="bell" href="/vi/guide/notifications">
+    Cấu hình định tuyến cảnh báo cho đề xuất, sự cố và phát hiện bảo mật
+  </Card>
+  <Card title="Agent tự trị" icon="robot" href="/vi/guide/automation/autonomous-agents">
+    Để agent tự động hành động theo sự kiện webhook mà không cần xem xét thủ công
+  </Card>
+</CardGroup>

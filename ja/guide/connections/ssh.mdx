@@ -1,0 +1,150 @@
+---
+title: SSH
+description: "鍵認証とホスト鍵検証を使って CloudThinker がシェルコマンドを実行できるよう、自分のサーバーを SSH 経由で接続"
+icon: "/images/icons/ssh.svg"
+---
+
+import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+
+SSH 経由でサーバーを接続して、[Alex](/ja/guide/agents/alex)（クラウドエンジニア）がホスト上でシェルコマンドを実行できるようにします。ディスク使用量の確認、ログの追跡、サービスの検査、問題の診断をサーバー上で直接行えます。
+
+## 前提条件
+
+| 要件 | 詳細 |
+|-------------|--------|
+| **到達可能なホスト** | サーバーが SSH ポートで CloudThinker からのインバウンド SSH を受け入れる必要があります |
+| **ログインユーザー** | シェルアクセスを持つ既存のユーザーアカウント |
+| **認証済み鍵** | そのユーザーの `~/.ssh/authorized_keys` に公開鍵が登録されていること |
+| **鍵認証の有効化** | そのユーザーに対して `sshd` が公開鍵認証を許可していること |
+
+## セットアップ
+
+<Steps>
+  <Step title="鍵ペアを準備する">
+    既存の鍵ペアを使用するか、CloudThinker 専用の鍵を生成します：
+
+    ```bash
+    ssh-keygen -t ed25519 -C "cloudthinker" -f ./cloudthinker_key
+    ```
+
+    これにより `cloudthinker_key`（秘密鍵）と `cloudthinker_key.pub`（公開鍵）が生成されます。OpenSSH 形式（`-----BEGIN OPENSSH PRIVATE KEY-----`）と PEM 形式（`-----BEGIN RSA/EC PRIVATE KEY-----`）の両方に対応しており、`ed25519`・`rsa`・`ecdsa` 鍵が使用できます。
+  </Step>
+  <Step title="公開鍵を承認する">
+    サーバー上のログインユーザーの authorized keys に公開鍵を追加します：
+
+    ```bash
+    ssh-copy-id -i ./cloudthinker_key.pub user@server.example.com
+    # または cloudthinker_key.pub を手動で ~/.ssh/authorized_keys に追記
+    ```
+  </Step>
+  <Step title="CloudThinker に接続を追加する">
+    **Connections → SSH** に移動し、以下を入力します：
+    - **Host**：ホスト名または IP（例：`server.example.com` または `10.0.0.5`）
+    - **User**：ログインユーザー（例：`ubuntu`）
+    - **Port**：SSH ポート（任意、デフォルト `22`）
+    - **Private key**：`BEGIN`/`END` 行を含む秘密鍵全体
+    - **Passphrase**：任意。秘密鍵にパスフレーズが設定されている場合のみ必要
+
+    CloudThinker は接続をテストし、成功すると **Connected** ステータスを表示します。
+  </Step>
+</Steps>
+
+### ホスト鍵の検証
+
+初回接続時、CloudThinker はサーバーのホスト鍵を記録します。以降の接続では鍵が一致しているか毎回確認されるため、サーバーの識別情報が予期せず変わった場合に警告が表示されます。
+
+鍵が変わると接続は停止し、CloudThinker は以前に信頼されていたフィンガープリントと新しいフィンガープリントの両方を表示します。これは通常、サーバーの再構築や SSH 鍵のローテーション後に発生します。変更が意図したものであると確認できたら、**Trust new host key** を選択して続行してください。
+
+<Warning>
+サーバーの識別情報が変わることを想定していなかった場合は、すぐに新しい鍵を信頼しないでください。予期しない変更は、接続が傍受されている可能性を示しています。まずサーバー側で新しいフィンガープリントを確認してください。
+</Warning>
+
+## 接続詳細
+
+| フィールド | 説明 | 例 |
+|-------|-------------|---------|
+| **Host** | 対象サーバーのホスト名または IP アドレス | `server.example.com` |
+| **User** | シェルアクセスを持つログインユーザー | `ubuntu` |
+| **Port** | SSH ポート | `22` |
+| **Private key** | `BEGIN`/`END` ヘッダーを含む秘密鍵全体 | `-----BEGIN OPENSSH PRIVATE KEY-----...` |
+| **Passphrase** | 鍵が暗号化されている場合のパスフレーズ | — |
+
+## 必要な権限
+
+Alex はログインユーザーの権限でコマンドを実行します。エージェントが特権コマンドを実行する必要がない限り、root アクセスは不要です。
+
+<Tip>
+ログインユーザーをエージェントが必要とするコマンドとパスのみに絞ってください。`authorized_keys` の `command=` および `from=` オプションを使用して、鍵で実行できる操作と接続元を制限できます。
+</Tip>
+
+## エージェントの機能
+
+接続後、Alex は SSH 経由でサーバー上のシェルコマンドを実行できます。
+
+| 機能 | 説明 |
+|------------|-------------|
+| **システム検査** | ディスク・メモリ・CPU・プロセス・サービスの状態 |
+| **ログ分析** | アプリケーションおよびシステムログの読み取りと検索 |
+| **診断** | ホスト上の障害・接続性・設定の調査 |
+| **運用確認** | 読み取り専用コマンドでサーバーの状態を報告 |
+
+### 接続を確認する
+
+```text
+@alex #report show system uptime, disk usage, and top memory processes on the server
+```
+
+### プロンプト例
+
+```text
+@alex #report check disk usage on all filesystems and flag anything above 80%
+@alex #report tail /var/log/app/error.log and summarize the last 100 error lines
+@alex #report show which processes are using the most CPU and memory right now
+```
+
+<Warning>
+コマンドはログインユーザーの権限で実行されます。エージェントが実際に必要とする操作のみにユーザーを制限してください。
+</Warning>
+
+## トラブルシューティング
+
+<Accordion title="認証に失敗した">
+- ログインユーザーの `~/.ssh/authorized_keys` に公開鍵があることを確認してください
+- **User** がその鍵で認証されているアカウントと一致しているか確認してください
+- `BEGIN`/`END` 行を含む秘密鍵全体が貼り付けられているか確認してください
+- 鍵にパスフレーズが設定されている場合は **Passphrase** を入力してください
+</Accordion>
+
+<Accordion title="ホストに到達できなかった">
+- **Host** と **Port** が正しいか確認してください
+- サーバーが CloudThinker からの SSH を受け入れているか確認してください（ファイアウォール、セキュリティグループ、許可リスト）
+- SSH デーモンが起動中でそのポートでリッスンしているか確認してください
+</Accordion>
+
+<Accordion title="ホスト鍵が変更された">
+- サーバーの再構築や SSH 鍵のローテーション後は想定内です。新しいフィンガープリントを確認して **Trust new host key** を選択してください
+- 変更が予期しないものである場合は、再信頼する前に調査してください
+</Accordion>
+
+<Accordion title="リモートコマンドが失敗した">
+- 接続は正常ですが、コマンドがゼロ以外の終了コードを返しました
+- コマンド、ユーザーの権限、リモートホスト上のパスを確認してください
+</Accordion>
+
+## セキュリティ
+
+<ConnectionSecurity />
+
+- **専用鍵** — CloudThinker 専用の鍵ペアを生成することで、独立して失効させることができます。
+- **ローテーションと検証** — 鍵を定期的に更新し、再信頼する前に必ずホスト鍵の変更を確認してください。
+
+## 関連
+
+<CardGroup cols={2}>
+  <Card title="Alex Agent" icon="cloud" href="/ja/guide/agents/alex">
+    クラウドエンジニアリングとインフラ運用
+  </Card>
+  <Card title="Kubernetes 接続" icon="/images/icons/kubernetes.svg" href="/ja/guide/connections/kubernetes">
+    ワークロード分析と運用のためのクラスター接続
+  </Card>
+</CardGroup>

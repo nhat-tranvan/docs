@@ -1,0 +1,96 @@
+---
+title: '멀티 AWS 계정 운영'
+description: 'IAM AssumeRole 단축키를 사용하여 하나의 워크스페이스에서 여러 AWS 계정을 운영하고 온디맨드로 계정 컨텍스트를 전환하세요'
+icon: layer-group
+---
+
+프로덕션, 개발, 스테이징 AWS 계정을 관리하는 플랫폼 팀이 단일 CloudThinker 워크스페이스에서 세 계정 모두에 걸쳐 비용을 쿼리하고, 보안을 감사하며, 인시던트를 조사할 수 있습니다.
+
+## 시나리오
+
+귀하의 조직은 프로덕션, 개발, 스테이징을 위한 별도의 AWS 계정을 유지하고 있습니다. 중앙화된 플랫폼 팀은 모든 사람에게 프로덕션 접근 권한을 부여하거나 워크스페이스를 전환하다가 계속해서 컨텍스트를 잃지 않고 크로스 계정 가시성이 필요합니다. 해결책: CloudThinker를 기본 AWS 계정에 연결하고, 각 대상 계정에 IAM 역할을 생성하며, [Alex](/ko/guide/agents/alex)에게 어떤 계정에서 작업할지 알려주는 단축키를 정의하면 — 모두 하나의 워크스페이스에서 처리됩니다.
+
+## 단계별 안내
+
+<Steps>
+  <Step title="기본 AWS 계정 연결">
+    **Connections**에서 [역할 기반 인증](/ko/guide/connections/aws)을 사용하여 기본 AWS 계정을 추가하세요. 이것이 허브 계정입니다 — 모든 크로스 계정 요청이 이 계정의 IAM 자격 증명에서 시작됩니다.
+
+    **성공 상태:** 연결이 Connections 패널에서 **Connected** 상태를 표시합니다.
+  </Step>
+
+  <Step title="크로스 계정 IAM 역할 생성">
+    각 대상 AWS 계정에서 다음 신뢰 정책을 가진 IAM 역할을 생성하세요. `PRIMARY_ACCOUNT_ID`를 허브 계정의 AWS 계정 ID로 교체하세요.
+
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Principal": {
+            "AWS": "arn:aws:iam::PRIMARY_ACCOUNT_ID:root"
+          },
+          "Action": "sts:AssumeRole"
+        }
+      ]
+    }
+    ```
+
+    권한을 최소로 유지하기 위해 역할에 `ReadOnlyAccess`(또는 범위가 지정된 읽기 전용 정책)를 연결하세요.
+
+    **성공 상태:** 기본 계정에서 `aws sts assume-role`을 실행하여 각 역할이 assume 가능한지 확인할 수 있습니다.
+  </Step>
+
+  <Step title="계정 전환 단축키 정의">
+    **Shortcuts** 패널(워크스페이스 오른쪽 상단)을 열고 대상 계정당 하나의 단축키를 생성하세요. 프롬프트가 실행되기 전에 에이전트가 대상 역할 ARN을 assume하도록 지시하는 **Init Step**을 설정하세요.
+
+    <Frame>
+      <img src="/images/use-cases/01-shortcut-assume-role.png" alt="계정 전환 단축키를 보여주는 CloudThinker Shortcuts 패널" />
+    </Frame>
+    <p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>AssumeRole init step이 있는 Shortcuts 패널</p>
+
+    | 단축키 이름 | Init step |
+    |---|---|
+    | `/switch-to-prod` | `Please assume arn:aws:iam::111111111111:role/CloudThinkerAccessRole and use the STS token for this session.` |
+    | `/switch-to-dev` | `Please assume arn:aws:iam::222222222222:role/CloudThinkerAccessRole and use the STS token for this session.` |
+    | `/switch-to-staging` | `Please assume arn:aws:iam::333333333333:role/CloudThinkerAccessRole and use the STS token for this session.` |
+
+    **성공 상태:** `/`를 입력하면 Shortcuts 자동완성 목록에 각 단축키 이름이 표시됩니다.
+  </Step>
+
+  <Step title="크로스 계정 작업 실행">
+    프롬프트 앞에 단축키 이름을 붙이세요. Alex가 작업하기 전에 대상 역할을 assume하므로 모든 결과는 해당 계정으로 범위가 지정됩니다.
+
+    ```text
+    /switch-to-prod @alex #dashboard Build an AWS daily cost report
+    ```
+
+    Alex가 프로덕션 역할을 assume하고, 해당 계정의 Cost Explorer와 CloudWatch를 쿼리하여 프로덕션으로 범위가 지정된 비용 대시보드를 반환합니다.
+
+    ```text
+    /switch-to-dev @alex #report Summarize unused EC2 instances in the dev account
+    ```
+
+    **성공 상태:** Alex의 응답이 허브가 아닌 대상 계정의 리소스를 참조합니다.
+  </Step>
+</Steps>
+
+## 효과적인 이유
+
+- **[역할 기반 인증](/ko/guide/connections/aws)** — 허브 계정의 IAM 자격 증명이 `sts:AssumeRole` 호출을 수행하므로, 각 대상 계정에 대해 장기 자격 증명이 공유되거나 저장되지 않습니다.
+- **IAM 최소 권한** — 각 크로스 계정 역할에 `ReadOnlyAccess`를 연결하면 단축키가 오용되더라도 에이전트가 할 수 있는 일이 제한됩니다. 보안 정책이 허용하는 경우 `:root` 대신 특정 보안 주체 ARN을 사용하세요.
+- **단축키** — 프롬프트 전에 주입되는 init step이 매번 역할 ARN을 다시 입력하지 않고도 계정 컨텍스트를 설정합니다. 단축키는 계정별로 지식이나 지침의 범위를 지정하는 데도 사용됩니다.
+- **[Alex (클라우드 엔지니어)](/ko/guide/agents/alex)** — 역할 컨텍스트가 설정되면 AWS 계정 전반의 비용 분석, 리소스 감사, 인프라 쿼리를 처리합니다.
+- **[워크스페이스](/ko/guide/workspaces)** — 팀에게 완전한 격리(계정별 별도 지식 베이스, 감사 추적, 접근 통제)가 필요할 때는 단축키 대신 계정당 하나의 워크스페이스를 생성하세요.
+
+## 직접 시도해 보기
+
+<CardGroup cols={2}>
+  <Card title="AWS 계정 연결" icon="/images/icons/aws.svg" href="/ko/guide/connections/aws">
+    Alex가 계정 전반에서 역할을 assume할 수 있도록 역할 기반 인증을 설정하세요.
+  </Card>
+  <Card title="워크스페이스" icon="layer-group" href="/ko/guide/workspaces">
+    계정 간 완전한 격리가 필요할 때 전용 워크스페이스를 생성하세요.
+  </Card>
+</CardGroup>

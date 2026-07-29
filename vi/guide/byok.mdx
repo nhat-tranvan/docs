@@ -1,0 +1,280 @@
+---
+title: "Tự Cung Cấp Khóa Mã Hóa (BYOK)"
+description: "Định tuyến suy luận LLM qua tài khoản AWS Bedrock của bạn để dùng không giới hạn, kiểm soát chi phí và lưu trú dữ liệu"
+icon: key
+---
+
+Bring Your Own Key (BYOK) cho phép workspace ở gói Scale trở lên chạy suy luận LLM qua thông tin xác thực AWS Bedrock của riêng họ thay vì tín dụng nền tảng. Chi phí sử dụng tính vào tài khoản AWS của bạn, và bạn chọn vùng nào phục vụ suy luận.
+
+---
+
+## Tại sao dùng BYOK
+
+- **Dùng không giới hạn** — hạn mức Bedrock của bạn được áp dụng, không bị giới hạn tín dụng nền tảng.
+- **Kiểm soát chi phí** — phí tính vào hóa đơn AWS của bạn, nơi bạn đã có ngân sách và thẻ phân bổ chi phí.
+- **Lưu trú dữ liệu** — định tuyến suy luận qua [hồ sơ inference](#hồ-sơ-inference) chỉ tại US, EU hoặc APAC.
+- **Tuân thủ** — bạn kiểm soát nơi suy luận diễn ra và ai có thể kiểm tra.
+- **Không cần quản lý mô hình** — CloudThinker tự động chọn Claude Sonnet 4.5 hoặc Opus 4.5 theo từng tác vụ.
+
+---
+
+## Điều kiện tiên quyết
+
+- **Gói Scale, Scale + hoặc Enterprise** — xem [Bảng giá & Gói dịch vụ](/vi/guide/billing/pricing)
+- **Tài khoản AWS** đã bật quyền truy cập Amazon Bedrock
+- **Thông tin xác thực IAM** (access key ID và secret access key) với quyền invoke Bedrock
+- **Quyền truy cập mô hình** cho cả Claude Sonnet 4.5 và Claude Opus 4.5 trong tài khoản AWS của bạn
+
+CloudThinker xác thực bằng thông tin xác thực AWS IAM: access key ID, secret access key và session token tùy chọn cho thông tin xác thực tạm thời. Khóa API Bedrock trực tiếp đang được lên kế hoạch nhưng chưa được hỗ trợ.
+
+<Info>
+Thông tin xác thực dài hạn (tiền tố AKIA) hỗ trợ tự động làm mới session token. Thông tin xác thực tạm thời (tiền tố ASIA) không thể làm mới — cần cấu hình lại khi hết hạn.
+</Info>
+
+---
+
+## Yêu cầu quyền truy cập mô hình Claude
+
+Các mô hình Claude yêu cầu điền biểu mẫu use case một lần trong console Bedrock trước khi có thể gọi. Xem [tài liệu quyền truy cập mô hình AWS Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html) để biết chi tiết.
+
+<Steps>
+  <Step title="Mở quyền truy cập mô hình trong console Bedrock">
+    Đăng nhập vào [AWS Console](https://console.aws.amazon.com/), mở [Amazon Bedrock](https://console.aws.amazon.com/bedrock/) và nhấp **Model access** trong thanh điều hướng bên trái.
+  </Step>
+  <Step title="Chỉnh sửa quyền truy cập mô hình">
+    Nhấp **Modify model access** và bật cả hai:
+    - **Claude Sonnet 4.5** (`anthropic.claude-sonnet-4-5-20250929-v1:0`)
+    - **Claude Opus 4.5** (`anthropic.claude-opus-4-5-20251101-v1:0`)
+  </Step>
+  <Step title="Gửi thông tin use case">
+    Điền biểu mẫu với mô tả use case, mẫu sử dụng dự kiến và yêu cầu tuân thủ (nếu có).
+
+    **Trạng thái thành công:** Trang Model access hiển thị cả hai mô hình là đã được cấp quyền — thường ngay sau khi gửi.
+  </Step>
+</Steps>
+
+<Info>
+Yêu cầu quyền truy cập cho **cả** Sonnet 4.5 và Opus 4.5. CloudThinker chuyển đổi giữa chúng dựa trên yêu cầu tác vụ.
+</Info>
+
+---
+
+## Tạo thông tin xác thực IAM
+
+Người dùng IAM của bạn cần quyền để invoke cả hai mô hình. Tạo bằng AWS CLI hoặc qua [AWS Console](https://console.aws.amazon.com/iam/).
+
+<Steps>
+  <Step title="Tạo người dùng IAM">
+    ```bash
+    aws iam create-user --user-name bedrock-byok-user
+    ```
+  </Step>
+  <Step title="Tạo file policy">
+    ```bash
+    cat > bedrock-policy.json << 'EOF'
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "bedrock:InvokeModel",
+            "bedrock:InvokeModelWithResponseStream"
+          ],
+          "Resource": [
+            "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-5-20251101-v1:0",
+            "arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-opus-4-5-20251101-v1:0",
+            "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-opus-4-5-20251101-v1:0",
+            "arn:aws:bedrock:*:*:inference-profile/eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "arn:aws:bedrock:*:*:inference-profile/eu.anthropic.claude-opus-4-5-20251101-v1:0",
+            "arn:aws:bedrock:*:*:inference-profile/apac.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "arn:aws:bedrock:*:*:inference-profile/apac.anthropic.claude-opus-4-5-20251101-v1:0"
+          ]
+        },
+        {
+          "Effect": "Allow",
+          "Action": ["sts:GetSessionToken"],
+          "Resource": "*"
+        }
+      ]
+    }
+    EOF
+    ```
+  </Step>
+  <Step title="Gắn policy">
+    ```bash
+    aws iam put-user-policy \
+      --user-name bedrock-byok-user \
+      --policy-name BedrockInvokePolicy \
+      --policy-document file://bedrock-policy.json
+    ```
+  </Step>
+  <Step title="Tạo access key">
+    ```bash
+    aws iam create-access-key --user-name bedrock-byok-user
+    ```
+
+    Lưu `AccessKeyId` và `SecretAccessKey` từ đầu ra — bạn sẽ nhập các giá trị này vào CloudThinker.
+  </Step>
+  <Step title="Xác minh thông tin xác thực">
+    ```bash
+    aws configure --profile bedrock-byok-user
+    aws sts get-caller-identity --profile bedrock-byok-user
+    ```
+
+    **Trạng thái thành công:** `get-caller-identity` trả về ARN của `bedrock-byok-user`.
+  </Step>
+</Steps>
+
+<Info>
+Các lệnh này yêu cầu AWS profile có quyền quản trị IAM (`iam:CreateUser`, `iam:PutUserPolicy`, `iam:CreateAccessKey`).
+</Info>
+
+---
+
+## Kết nối Bedrock trong CloudThinker
+
+<Steps>
+  <Step title="Mở cài đặt BYOK">
+    Vào **Settings → BYOK Settings** và chọn **AWS Bedrock** làm nhà cung cấp.
+  </Step>
+  <Step title="Nhập thông tin xác thực">
+    Cung cấp **Access Key ID** (tiền tố AKIA hoặc ASIA), **Secret Access Key** và — chỉ với thông tin xác thực tạm thời — **Session Token**.
+  </Step>
+  <Step title="Chọn hồ sơ inference">
+    Chọn **Global**, **US**, **EU** hoặc **APAC** tùy theo [nhu cầu lưu trú dữ liệu](#hồ-sơ-inference) của bạn.
+  </Step>
+  <Step title="Kiểm tra và lưu">
+    Nhấp **Test Connection** để xác nhận thông tin xác thực hợp lệ và cả hai mô hình có thể truy cập, sau đó nhấp **Save**.
+
+    **Trạng thái thành công:** kiểm tra thành công cho cả Sonnet 4.5 và Opus 4.5.
+  </Step>
+</Steps>
+
+Thông tin xác thực được mã hóa khi lưu trữ và không bao giờ được hiển thị trong phản hồi API hoặc nhật ký.
+
+---
+
+## Hồ sơ inference
+
+Hồ sơ inference Bedrock kiểm soát vùng AWS nào có thể phục vụ yêu cầu của bạn. Để biết phạm vi vùng, xem [tài liệu hồ sơ inference AWS](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html).
+
+| Hồ sơ | Định tuyến | Sử dụng điển hình |
+|---|---|---|
+| **Global** | Bất kỳ vùng AWS thương mại nào | Thông lượng tối đa |
+| **US** | Chỉ vùng US | Lưu trú dữ liệu tại US |
+| **EU** | Chỉ vùng EU | Tuân thủ GDPR |
+| **APAC** | Chỉ vùng APAC | Lưu trú dữ liệu khu vực |
+
+---
+
+## Cách hoạt động
+
+- **Chọn mô hình** — CloudThinker chọn mô hình Claude phù hợp theo tác vụ; bạn không bao giờ phải chọn mô hình thủ công. Xem [danh sách các mô hình nền tảng được hỗ trợ](https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html).
+- **Kế thừa workspace** — chủ workspace cấu hình BYOK một lần; mọi thành viên kế thừa. Toàn bộ lưu lượng LLM của thành viên định tuyến qua tài khoản AWS của chủ sở hữu, và chủ sở hữu quản lý thông tin xác thực tập trung.
+
+---
+
+## Hành vi dự phòng
+
+CloudThinker có thể thử lại lệnh gọi BYOK thất bại trên thông tin xác thực Bedrock do nền tảng quản lý, nhưng điều này là **tùy chọn theo workspace** và **tắt theo mặc định cho gói Enterprise và BYOC**. Khi tắt dự phòng, lệnh gọi thất bại sẽ hiển thị lỗi — không có yêu cầu nào rời khỏi ranh giới thông tin xác thực của bạn.
+
+### Khi nào dự phòng kích hoạt (nếu bật)
+
+Lệnh gọi BYOK dự phòng sang đường dẫn nền tảng chỉ khi **cả ba** điều kiện đều đúng:
+
+1. Lỗi có thể thử lại — hết hạn thông tin xác thực, bị giới hạn tốc độ, lỗi 5xx tạm thời — không phải vi phạm nội dung hoặc chính sách.
+2. Thao tác được đánh dấu **đủ điều kiện dự phòng** (hầu hết thao tác đọc; không bao giờ là hành động ghi tự chủ trong môi trường sản xuất).
+3. Chính sách dự phòng của workspace là **Allow**.
+
+Dự phòng gửi lại yêu cầu đến tài khoản Bedrock do nền tảng quản lý **trong cùng vùng** với lệnh gọi ban đầu — không bao giờ sang địa phận khác. Mỗi lần dự phòng tạo ra một sự kiện kiểm tra (mã lỗi ban đầu, endpoint phục vụ, người dùng, workspace, mô hình, số token) trong **Admin Settings → Audit log**, có thể xuất sang SIEM của bạn qua [webhook](/vi/guide/webhooks/overview).
+
+### Đặt chính sách dự phòng
+
+<Steps>
+  <Step title="Mở chính sách dự phòng">
+    Vào **Admin Settings → BYOK → Fallback policy**.
+  </Step>
+  <Step title="Chọn chính sách">
+    | Chính sách | Hành vi khi BYOK thất bại | Sử dụng điển hình |
+    |---|---|---|
+    | **Allow** | Thử lại với thông tin xác thực nền tảng trong vùng | Tenant dev / sandbox |
+    | **Warn** | Thử lại trong vùng, nhưng yêu cầu người dùng xác nhận lại ở phiên tiếp theo | Khối lượng công việc hỗn hợp |
+    | **Strict** *(mặc định và khuyến nghị cho Enterprise / BYOC)* | Hiển thị lỗi; không bao giờ thử lại với thông tin xác thực khác | Môi trường được quy định |
+  </Step>
+  <Step title="Khóa ở cấp tổ chức (tùy chọn)">
+    Bật **Enforce across all workspaces** để admin workspace không thể thay đổi chính sách cục bộ. Chỉ chủ sở hữu tổ chức có quyền `byok:admin` mới có thể bật/tắt nút này.
+  </Step>
+</Steps>
+
+<Warning>
+**Đánh đổi của chế độ Strict:** nếu thông tin xác thực BYOK bị cấu hình sai hoặc bị thu hồi, các thao tác agent sẽ thất bại cho đến khi bạn sửa. Hãy lên kế hoạch xoay vòng thông tin xác thực và quản lý quota, đồng thời thiết lập [thông báo](/vi/guide/notifications) về tình trạng BYOK.
+</Warning>
+
+### Nội dung lệnh gọi inference gửi đi
+
+Bất kể chính sách nào, mỗi lệnh gọi BYOK đều gửi system prompt và định nghĩa công cụ của agent, lịch sử hội thoại liên quan, và ngữ cảnh được truy xuất (topology, memory, runbook). Nó không bao giờ gửi thông tin xác thực cloud thô, dữ liệu của workspace khác, hoặc — khi tokenization được cấu hình trong **Admin Settings → Data Protection** — PII của khách hàng.
+
+---
+
+## Khắc phục sự cố
+
+<AccordionGroup>
+  <Accordion title="Lỗi quyền truy cập mô hình bị từ chối">
+    - Xác minh bạn đã gửi biểu mẫu use case trong console Bedrock
+    - Kiểm tra cả Sonnet 4.5 và Opus 4.5 đều được bật trên trang **Model access**
+    - Chờ vài phút sau khi gửi để quyền truy cập được truyền tải
+  </Accordion>
+
+  <Accordion title="Lỗi quyền IAM">
+    - Xác minh policy bao gồm `bedrock:InvokeModel` và `bedrock:InvokeModelWithResponseStream`
+    - Kiểm tra ARN mô hình và hồ sơ inference khớp với mô hình và hồ sơ bạn sử dụng
+    - Kiểm tra quyền trực tiếp trong AWS Console
+  </Accordion>
+
+  <Accordion title="Lỗi xác thực thông tin xác thực">
+    - Xác minh access key ID và secret access key đúng và chưa bị xoay vòng hoặc thu hồi
+    - Đối với thông tin xác thực tạm thời, xác nhận session token chưa hết hạn
+    - Kiểm tra với `aws sts get-caller-identity`
+  </Accordion>
+
+  <Accordion title="Kiểm tra kết nối thất bại">
+    - Xác minh cả Sonnet 4.5 và Opus 4.5 có thể truy cập và được policy IAM của bạn bao phủ
+    - Đảm bảo Bedrock được bật trong tài khoản AWS của bạn
+    - Kiểm tra vùng đã chọn khớp với quyền truy cập mô hình của bạn
+  </Accordion>
+
+  <Accordion title="BYOK không hoạt động trong workspace">
+    - Xác minh chủ workspace đã cấu hình BYOK và được bật trong cài đặt
+    - Xác nhận gói của chủ sở hữu là Scale, Scale + hoặc Enterprise
+    - Kiểm tra thông tin xác thực của chủ sở hữu vẫn còn hiệu lực
+  </Accordion>
+
+  <Accordion title="Hết hạn session token">
+    - Thông tin xác thực dài hạn (AKIA) tự động làm mới
+    - Thông tin xác thực tạm thời (ASIA) không thể làm mới — cấu hình lại với thông tin xác thực mới
+    - Kiểm tra timestamp `session_token_expires_at` trong cấu hình
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Bảng giá & Gói dịch vụ" icon="credit-card" href="/vi/guide/billing/pricing">
+    Gói nào bao gồm BYOK và nội dung mỗi bậc
+  </Card>
+  <Card title="Sử dụng" icon="chart-line" href="/vi/guide/billing/usage">
+    Theo dõi tín dụng và sử dụng LLM trong workspace của bạn
+  </Card>
+  <Card title="Thông báo" icon="bell" href="/vi/guide/notifications">
+    Cảnh báo về tình trạng thông tin xác thực BYOK trước khi chặn công việc
+  </Card>
+  <Card title="Webhook" icon="webhook" href="/vi/guide/webhooks/overview">
+    Xuất sự kiện kiểm tra đến SIEM của bạn
+  </Card>
+</CardGroup>

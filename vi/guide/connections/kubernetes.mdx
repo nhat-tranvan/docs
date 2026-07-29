@@ -1,0 +1,321 @@
+---
+title: Kubernetes
+description: "Kết nối cụm Kubernetes với CloudThinker để phân tích workload, tối ưu tài nguyên và vận hành cluster"
+icon: "/images/icons/kubernetes.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối cụm Kubernetes của bạn để [Kai](/vi/guide/agents/kai) có thể phân tích workload, tối ưu tài nguyên và quản lý vận hành cluster.
+
+Kubernetes kết nối qua **tự động khám phá từ cloud provider** (dành cho EKS, GKE và AKS) hoặc **service-account token** kèm thông tin endpoint cluster cho các cụm tự quản lý.
+
+---
+
+## Điều kiện tiên quyết
+
+Cài đặt Metrics Server trước khi kết nối — thành phần này bắt buộc để lấy metrics tài nguyên pod và node:
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+```
+
+| Thành phần | Mục đích |
+|-----------|---------|
+| **Metrics Server** | Bắt buộc để lấy metrics tài nguyên pod và node |
+| **kube-state-metrics** | Metrics cluster nâng cao (tùy chọn) |
+| **Kết nối mạng** | CloudThinker phải tiếp cận được API server của cluster |
+
+### Nền tảng được hỗ trợ
+
+| Nền tảng | Hỗ trợ |
+|----------|---------|
+| **Amazon EKS** | Tất cả phiên bản |
+| **Google GKE** | Standard, Autopilot |
+| **Azure AKS** | Tất cả phiên bản |
+| **Tự quản lý** | Kubernetes 1.24+ |
+| **Rancher** | RKE, RKE2 |
+| **OpenShift** | 4.x |
+
+---
+
+## Thiết lập
+
+<Tabs>
+  <Tab title="Qua Cloud Provider (Khuyến nghị)">
+    ### Tự động khám phá từ kết nối cloud
+
+    Nếu bạn đã kết nối AWS, GCP hoặc Azure, các cụm Kubernetes được quản lý sẽ được tự động khám phá.
+
+    <Steps>
+      <Step title="Kết nối cloud provider">
+        Thiết lập kết nối [AWS](/vi/guide/connections/aws), [GCP](/vi/guide/connections/gcp) hoặc [Azure](/vi/guide/connections/azure) trước.
+      </Step>
+      <Step title="Cluster được tự động khám phá">
+        Các cụm EKS, GKE hoặc AKS xuất hiện tự động trong CloudThinker. Chọn cluster nào cần bật để phân tích. CloudThinker hiển thị trạng thái **Connected** cho mỗi cluster đã kích hoạt.
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Kubeconfig trực tiếp">
+    ### Thiết lập thủ công với service account
+
+    Dành cho các cụm tự quản lý hoặc khi cần quyền truy cập ngoài phạm vi kết nối cloud provider cung cấp:
+
+    <Steps>
+      <Step title="Tạo namespace (tùy chọn)">
+        Tạo một namespace riêng:
+        ```yaml
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: cloudthinker
+        ```
+      </Step>
+      <Step title="Tạo service account">
+        ```yaml
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: cloudthinker-readonly
+          namespace: cloudthinker
+        ```
+      </Step>
+      <Step title="Tạo ClusterRole">
+        ```yaml
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        metadata:
+          name: cloudthinker-readonly
+        rules:
+        - apiGroups: [""]
+          resources: ["*"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: ["apps", "extensions"]
+          resources: ["*"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: ["autoscaling"]
+          resources: ["*"]
+          verbs: ["get", "list", "watch"]
+        - apiGroups: ["metrics.k8s.io"]
+          resources: ["pods", "nodes"]
+          verbs: ["get", "list"]
+        ```
+      </Step>
+      <Step title="Tạo ClusterRoleBinding">
+        ```yaml
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: cloudthinker-readonly
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: cloudthinker-readonly
+        subjects:
+        - kind: ServiceAccount
+          name: cloudthinker-readonly
+          namespace: cloudthinker
+        ```
+      </Step>
+      <Step title="Tạo token dài hạn">
+        Từ Kubernetes 1.24, tạo một Secret cho token dài hạn:
+        ```yaml
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: cloudthinker-readonly-token
+          namespace: cloudthinker
+          annotations:
+            kubernetes.io/service-account.name: cloudthinker-readonly
+        type: kubernetes.io/service-account-token
+        ```
+
+        Áp dụng bằng lệnh:
+        ```bash
+        kubectl apply -f cloudthinker-token-secret.yaml
+        ```
+      </Step>
+      <Step title="Lấy token">
+        ```bash
+        kubectl get secret cloudthinker-readonly-token -n cloudthinker \
+          -o jsonpath='{.data.token}' | base64 --decode
+        ```
+      </Step>
+      <Step title="Lấy thông tin cluster">
+        Lấy endpoint của cluster:
+        ```bash
+        kubectl cluster-info
+        ```
+
+        Trích xuất CA certificate:
+        ```bash
+        kubectl get secret cloudthinker-readonly-token -n cloudthinker \
+          -o jsonpath='{.data.ca\.crt}' | base64 --decode
+        ```
+      </Step>
+      <Step title="Thêm kết nối trong CloudThinker">
+        Điều hướng đến **Connections → Kubernetes** và nhập:
+        - Cluster API endpoint
+        - Service account token
+        - CA certificate (cho các cluster dùng chứng chỉ tự ký)
+
+        Nhấn **Connect**. CloudThinker xác minh quyền truy cập và hiển thị trạng thái **Connected**.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+---
+
+## Chi tiết kết nối
+
+Định dạng kubeconfig mà CloudThinker sử dụng cho kết nối trực tiếp:
+
+```yaml
+apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    certificate-authority-data: <base64-encoded-ca-cert>
+    server: https://your-cluster-endpoint:6443
+  name: your-cluster
+contexts:
+- context:
+    cluster: your-cluster
+    user: cloudthinker-readonly
+  name: cloudthinker-context
+current-context: cloudthinker-context
+users:
+- name: cloudthinker-readonly
+  user:
+    token: <your-service-account-token>
+```
+
+---
+
+## Quyền bắt buộc
+
+### Tối thiểu (chỉ đọc)
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cloudthinker-readonly
+rules:
+- apiGroups: [""]
+  resources: ["pods", "nodes", "services", "namespaces", "events", "configmaps"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods", "nodes"]
+  verbs: ["get", "list"]
+```
+
+### Khuyến nghị (phân tích toàn diện)
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cloudthinker-full-analysis
+rules:
+- apiGroups: [""]
+  resources: ["pods", "nodes", "services", "namespaces", "events", "configmaps", "secrets", "persistentvolumeclaims", "resourcequotas", "limitranges", "replicationcontrollers"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["batch"]
+  resources: ["jobs", "cronjobs"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses", "networkpolicies"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["autoscaling"]
+  resources: ["horizontalpodautoscalers"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["metrics.k8s.io"]
+  resources: ["pods", "nodes"]
+  verbs: ["get", "list"]
+```
+
+<Tip>
+Bắt đầu với ClusterRole tối thiểu và mở rộng sang role phân tích toàn diện chỉ khi bạn cần tập khả năng rộng hơn. Không bao giờ cấp verbs ghi — get, list và watch là đủ cho mọi khả năng của Kai.
+</Tip>
+
+---
+
+## Khả năng của agent
+
+Sau khi kết nối, [Kai](/vi/guide/agents/kai) có thể kiểm tra và tối ưu cluster của bạn.
+
+| Khả năng | Mô tả |
+|------------|-------------|
+| **Phân tích tài nguyên** | Mức sử dụng CPU/memory của pod, requests so với limits |
+| **Sức khỏe node** | Trạng thái node, dung lượng, tài nguyên có thể phân bổ |
+| **Tối ưu workload** | Khuyến nghị right-sizing, điều chỉnh HPA |
+| **Khắc phục sự cố** | CrashLoopBackOff, OOMKilled, pod đang chờ |
+| **Kiểm tra bảo mật** | Xem xét RBAC, bảo mật pod, network policy |
+
+### Xác minh kết nối
+
+```text
+@kai check the cluster connection and list all namespaces and node count
+```
+
+### Ví dụ prompt
+
+```text
+@kai analyze pod resource utilization in the production namespace and #report the top CPU and memory consumers
+@kai investigate crash loops in the payment service and #recommend a fix
+@kai check node resource pressure across the cluster and #alert if any node is near capacity
+```
+
+---
+
+## Khắc phục sự cố
+
+<Accordion title="Không thể kết nối tới cluster">
+Xác minh endpoint API server có thể truy cập từ internet. Kiểm tra rằng firewall và security group cho phép IP của CloudThinker. Với cluster riêng tư, hãy thiết lập VPN hoặc bastion và xác nhận chứng chỉ API server hợp lệ.
+</Accordion>
+
+<Accordion title="Lỗi Unauthorized">
+Xác minh service account token chính xác. Kiểm tra ClusterRoleBinding đã được áp dụng và token chưa hết hạn. Xác nhận service account tồn tại trong namespace đúng.
+</Accordion>
+
+<Accordion title="Không có dữ liệu metrics">
+Xác minh Metrics Server đã cài đặt bằng cách chạy `kubectl top nodes`. Kiểm tra các pod Metrics Server đang chạy và API `metrics.k8s.io` khả dụng.
+</Accordion>
+
+<Accordion title="Thiếu namespace">
+Xác minh ClusterRole bao gồm quyền liệt kê namespace. Kiểm tra xem RBAC có hạn chế truy cập một số namespace nhất định không và xác nhận service account binding là cluster-wide.
+</Accordion>
+
+---
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Chỉ đọc** — không bao giờ cấp verbs ghi cho service account CloudThinker; get, list và watch là đủ cho mọi khả năng của agent.
+- **Cô lập namespace** — giữ service account trong một namespace riêng (ví dụ: `cloudthinker`) để đơn giản hóa kiểm toán và thu hồi quyền.
+
+---
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Kai Agent" icon="dharmachakra" href="/vi/guide/agents/kai">
+    Agent tối ưu Kubernetes
+  </Card>
+  <Card title="Kết nối AWS" icon="/images/icons/aws.svg" href="/vi/guide/connections/aws">
+    Kết nối AWS để tự động khám phá EKS
+  </Card>
+</CardGroup>

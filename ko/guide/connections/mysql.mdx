@@ -1,0 +1,198 @@
+---
+title: MySQL
+description: "MySQL 데이터베이스를 CloudThinker에 연결하여 쿼리 분석, 성능 모니터링, 데이터베이스 최적화를 수행합니다"
+icon: "/images/icons/mysql.svg"
+---
+
+import ConnectionSecurity from '/snippets/ko/connection-security.mdx';
+
+MySQL 데이터베이스를 연결하면 [Tony](/ko/guide/agents/tony) (Database Engineer)가 쿼리를 분석하고, 성능을 최적화하며, 데이터베이스 상태를 모니터링할 수 있습니다.
+
+## 지원 플랫폼
+
+| 플랫폼 | 지원 |
+|----------|---------|
+| **자체 호스팅 MySQL** | 5.7, 8.0, 8.1+ |
+| **MariaDB** | 10.x |
+| **AWS RDS MySQL** | 전체 버전 |
+| **AWS Aurora MySQL** | 전체 버전 |
+| **Google Cloud SQL** | 전체 MySQL 버전 |
+| **Azure Database for MySQL** | Flexible Server |
+
+## 사전 요구사항
+
+- 네트워크를 통해 CloudThinker에서 접근 가능한 MySQL 인스턴스.
+- 전용 사용자를 생성하고 권한을 부여할 관리자 또는 루트 접근.
+- Performance Schema 활성화 (MySQL 5.7+에서 기본값; 연결 전 확인).
+
+## 설정
+
+<Steps>
+  <Step title="루트로 연결">
+    루트 또는 관리자 사용자로 MySQL에 연결하세요:
+    ```bash
+    mysql -h your-host -u root -p
+    ```
+  </Step>
+  <Step title="읽기 전용 사용자 생성">
+    CloudThinker 사용자를 생성하세요:
+    ```sql
+    CREATE USER 'cloudthinker_readonly'@'%' IDENTIFIED BY 'your-secure-password';
+    ```
+  </Step>
+  <Step title="읽기 권한 부여">
+    SELECT 및 모니터링 권한을 부여하세요:
+    ```sql
+    GRANT SELECT ON *.* TO 'cloudthinker_readonly'@'%';
+    GRANT SHOW DATABASES ON *.* TO 'cloudthinker_readonly'@'%';
+    GRANT PROCESS ON *.* TO 'cloudthinker_readonly'@'%';
+    ```
+  </Step>
+  <Step title="Performance Schema 접근 권한 부여">
+    쿼리 분석에 필요합니다:
+    ```sql
+    GRANT SELECT ON performance_schema.* TO 'cloudthinker_readonly'@'%';
+    FLUSH PRIVILEGES;
+    ```
+  </Step>
+  <Step title="Performance Schema 활성화 확인">
+    ```sql
+    SHOW VARIABLES LIKE 'performance_schema';
+    -- 결과: ON 이어야 함
+    ```
+
+    비활성화되어 있으면 `my.cnf`에 추가하고 재시작하세요:
+    ```ini
+    [mysqld]
+    performance_schema = ON
+    ```
+  </Step>
+  <Step title="네트워크 접근 설정">
+    CloudThinker가 데이터베이스에 접근할 수 있는지 확인하세요:
+    - CloudThinker IP를 보안 그룹 또는 방화벽에 추가
+    - RDS의 경우: 공개 접근 활성화 또는 VPC 피어링 사용
+  </Step>
+  <Step title="CloudThinker에 연결 추가">
+    **Connections → MySQL**로 이동하여 다음을 입력하세요:
+    - **Host**: 데이터베이스 호스트명 또는 IP
+    - **Port**: 데이터베이스 포트 (기본값: `3306`)
+    - **Database**: 데이터베이스 이름
+    - **Username**: `cloudthinker_readonly`
+    - **Password**: 위에서 설정한 비밀번호
+    - **SSL**: 활성화 (권장)
+
+    **Connect**를 클릭하세요. 성공하면 CloudThinker가 **Connected** 상태를 표시합니다.
+  </Step>
+</Steps>
+
+## 연결 세부 정보
+
+| 필드 | 설명 | 기본값 |
+|-------|-------------|---------|
+| **Host** | 데이터베이스 호스트명 또는 IP | — |
+| **Port** | MySQL 포트 | `3306` |
+| **Database** | 데이터베이스 이름 | — |
+| **Username** | 전용 사용자, 예: `cloudthinker_readonly` | — |
+| **Password** | 사용자 비밀번호 | — |
+| **SSL** | SSL/TLS 암호화 활성화 | 활성화 |
+| **Connection timeout** | 연결 대기 시간 (초) | `10` |
+| **Read timeout** | 쿼리 결과 최대 대기 시간 (초) | `30` |
+
+연결 문자열 형식:
+
+```
+mysql://cloudthinker_readonly:your-secure-password@your-host:3306/database-name
+```
+
+## 필요 권한
+
+### 최소
+
+```sql
+GRANT SELECT ON your_database.* TO 'cloudthinker_readonly'@'%';
+GRANT PROCESS ON *.* TO 'cloudthinker_readonly'@'%';
+```
+
+### 권장 (전체 분석)
+
+```sql
+-- 위의 모든 권한에 추가:
+GRANT SELECT ON performance_schema.* TO 'cloudthinker_readonly'@'%';
+GRANT SELECT ON mysql.* TO 'cloudthinker_readonly'@'%';
+GRANT REPLICATION CLIENT ON *.* TO 'cloudthinker_readonly'@'%';
+```
+
+<Tip>
+최소 권한으로 시작하세요. 느린 쿼리 데이터 및 복제 모니터링을 활성화하려면 `performance_schema` 및 `REPLICATION CLIENT`를 추가하세요.
+</Tip>
+
+## 에이전트 기능
+
+연결이 완료되면 Tony가 할 수 있는 작업:
+
+| 기능 | 설명 |
+|------------|-------------|
+| **쿼리 분석** | 느린 쿼리 로그 및 Performance Schema에서 느린 쿼리 식별 |
+| **인덱스 권고** | 누락된 인덱스 찾기, 중복 인덱스 식별 |
+| **성능 메트릭** | 연결, 버퍼 풀, 쿼리 캐시 모니터링 |
+| **테이블 통계** | 테이블 크기, 단편화, 엔진 상태 분석 |
+| **복제 모니터링** | 복제본 상태, 지연, 오류 확인 |
+
+### 연결 확인
+
+```text
+@tony #report check MySQL connection health and show current active sessions
+```
+
+### 예시 프롬프트
+
+```text
+@tony #report analyze slow queries on the production MySQL instance
+@tony #recommend find missing indexes for high-frequency queries
+@tony #dashboard show buffer pool usage and connection statistics
+```
+
+## 문제 해결
+
+<Accordion title="연결 거부됨">
+- 호스트와 포트가 올바른지 확인하세요
+- 보안 그룹 또는 방화벽이 CloudThinker IP를 허용하는지 확인하세요
+- RDS의 경우: "공개적으로 접근 가능"이 활성화되어 있는지 또는 VPC 피어링을 사용하는지 확인하세요
+- MySQL이 올바른 인터페이스에서 수신 대기 중인지 확인하세요 (`my.cnf`의 `bind-address`)
+</Accordion>
+
+<Accordion title="접근 거부됨">
+- 사용자 이름과 비밀번호가 올바른지 확인하세요
+- 사용자의 호스트 지정자가 올바른지 확인하세요 (`'user'@'%'` 대 `'user'@'localhost'`)
+- `GRANT` 문 이후 `FLUSH PRIVILEGES`가 실행되었는지 확인하세요
+</Accordion>
+
+<Accordion title="Performance Schema 비활성화됨">
+- 확인: `SHOW VARIABLES LIKE 'performance_schema';`
+- `my.cnf`에서 활성화하고 MySQL을 재시작하세요
+- RDS의 경우: 파라미터 그룹을 수정하고 인스턴스를 재부팅하세요
+</Accordion>
+
+<Accordion title="느린 쿼리 데이터 없음">
+- 느린 쿼리 로그 활성화: `SET GLOBAL slow_query_log = 'ON';`
+- 임계값 설정: `SET GLOBAL long_query_time = 1;`
+- RDS의 경우: 파라미터 그룹을 수정하세요
+</Accordion>
+
+## 보안
+
+<ConnectionSecurity />
+
+- **SSL 필수** — 전송 중 데이터를 암호화하려면 항상 SSL을 활성화하세요.
+- **최소 권한** — CloudThinker 사용자에게 `SELECT`만 부여하고 쓰기 접근은 절대 부여하지 마세요.
+
+## 관련 항목
+
+<CardGroup cols={2}>
+  <Card title="Tony 에이전트" icon="database" href="/ko/guide/agents/tony">
+    데이터베이스 중심 최적화 에이전트
+  </Card>
+  <Card title="PostgreSQL 연결" icon="/images/icons/postgresql.svg" href="/ko/guide/connections/postgresql">
+    PostgreSQL 데이터베이스의 유사한 설정
+  </Card>
+</CardGroup>

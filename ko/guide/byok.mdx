@@ -1,0 +1,280 @@
+---
+title: 자체 키 사용 (BYOK)
+description: "무제한 사용량, 비용 제어, 데이터 레지던시를 위해 자체 AWS Bedrock 계정을 통해 LLM 추론을 실행하세요"
+icon: key
+---
+
+자체 키 사용(BYOK)은 Scale 이상 플랜의 워크스페이스가 플랫폼 크레딧 대신 자체 AWS Bedrock 자격 증명을 통해 LLM 추론을 실행할 수 있게 합니다. 사용량은 AWS 계정에 청구되며, 추론을 제공하는 리전을 선택할 수 있습니다.
+
+---
+
+## BYOK를 사용하는 이유
+
+- **무제한 사용량** — 플랫폼 크레딧 한도가 아닌 자체 Bedrock 할당량이 적용됩니다.
+- **비용 제어** — 이미 예산과 비용 배분 태그가 있는 AWS 청구서에 요금이 부과됩니다.
+- **데이터 레지던시** — 미국 전용, EU 전용, 또는 APAC 전용 [추론 프로필](#추론-프로필)을 통해 추론을 라우팅합니다.
+- **컴플라이언스** — 추론이 발생하는 위치와 감사 권한을 제어합니다.
+- **모델 관리 불필요** — CloudThinker가 태스크에 따라 Claude Sonnet 4.5 또는 Opus 4.5를 자동으로 선택합니다.
+
+---
+
+## 사전 요구 사항
+
+- **Scale, Scale + 또는 Enterprise 플랜** — [가격 및 플랜](/ko/guide/billing/pricing) 참조
+- Amazon Bedrock 액세스가 활성화된 **AWS 계정**
+- Bedrock 호출 권한이 있는 **IAM 자격 증명** (액세스 키 ID 및 시크릿 액세스 키)
+- AWS 계정에서 Claude Sonnet 4.5 및 Claude Opus 4.5 모두에 대한 **모델 액세스**
+
+CloudThinker는 AWS IAM 자격 증명(액세스 키 ID, 시크릿 액세스 키, 임시 자격 증명을 위한 선택적 세션 토큰)으로 AWS에 인증합니다. 직접 Bedrock API 키는 계획 중이지만 아직 지원되지 않습니다.
+
+<Info>
+장기 자격 증명(AKIA 접두사)은 자동 세션 토큰 갱신을 지원합니다. 임시 자격 증명(ASIA 접두사)은 갱신할 수 없으므로 만료 시 재구성해야 합니다.
+</Info>
+
+---
+
+## Claude 모델 액세스 요청
+
+Claude 모델은 호출하기 전에 Bedrock 콘솔에서 일회성 사용 사례 양식을 작성해야 합니다. 자세한 내용은 [AWS Bedrock 모델 액세스 문서](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html)를 참조하세요.
+
+<Steps>
+  <Step title="Bedrock 콘솔에서 모델 액세스 열기">
+    [AWS 콘솔](https://console.aws.amazon.com/)에 로그인하고, [Amazon Bedrock](https://console.aws.amazon.com/bedrock/)을 열고, 왼쪽 탐색에서 **모델 액세스**를 클릭합니다.
+  </Step>
+  <Step title="모델 액세스 수정">
+    **모델 액세스 수정**을 클릭하고 다음 두 가지를 모두 활성화합니다:
+    - **Claude Sonnet 4.5** (`anthropic.claude-sonnet-4-5-20250929-v1:0`)
+    - **Claude Opus 4.5** (`anthropic.claude-opus-4-5-20251101-v1:0`)
+  </Step>
+  <Step title="사용 사례 세부 정보 제출">
+    사용 사례 설명, 예상 사용 패턴, 해당하는 경우 컴플라이언스 요구 사항을 양식에 작성합니다.
+
+    **성공 상태:** 모델 액세스 페이지에 두 모델 모두 액세스 허용으로 표시됩니다 — 일반적으로 제출 후 즉시.
+  </Step>
+</Steps>
+
+<Info>
+**Sonnet 4.5와 Opus 4.5** 모두에 대한 액세스를 요청하세요. CloudThinker는 태스크 요구 사항에 따라 두 모델 간에 전환합니다.
+</Info>
+
+---
+
+## IAM 자격 증명 생성
+
+IAM 사용자는 두 모델 모두를 호출할 권한이 필요합니다. AWS CLI 또는 [AWS 콘솔](https://console.aws.amazon.com/iam/)을 통해 생성합니다.
+
+<Steps>
+  <Step title="IAM 사용자 생성">
+    ```bash
+    aws iam create-user --user-name bedrock-byok-user
+    ```
+  </Step>
+  <Step title="정책 파일 생성">
+    ```bash
+    cat > bedrock-policy.json << 'EOF'
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "bedrock:InvokeModel",
+            "bedrock:InvokeModelWithResponseStream"
+          ],
+          "Resource": [
+            "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-5-20251101-v1:0",
+            "arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-opus-4-5-20251101-v1:0",
+            "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-opus-4-5-20251101-v1:0",
+            "arn:aws:bedrock:*:*:inference-profile/eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "arn:aws:bedrock:*:*:inference-profile/eu.anthropic.claude-opus-4-5-20251101-v1:0",
+            "arn:aws:bedrock:*:*:inference-profile/apac.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "arn:aws:bedrock:*:*:inference-profile/apac.anthropic.claude-opus-4-5-20251101-v1:0"
+          ]
+        },
+        {
+          "Effect": "Allow",
+          "Action": ["sts:GetSessionToken"],
+          "Resource": "*"
+        }
+      ]
+    }
+    EOF
+    ```
+  </Step>
+  <Step title="정책 연결">
+    ```bash
+    aws iam put-user-policy \
+      --user-name bedrock-byok-user \
+      --policy-name BedrockInvokePolicy \
+      --policy-document file://bedrock-policy.json
+    ```
+  </Step>
+  <Step title="액세스 키 생성">
+    ```bash
+    aws iam create-access-key --user-name bedrock-byok-user
+    ```
+
+    출력에서 `AccessKeyId`와 `SecretAccessKey`를 저장합니다 — CloudThinker에 입력해야 합니다.
+  </Step>
+  <Step title="자격 증명 확인">
+    ```bash
+    aws configure --profile bedrock-byok-user
+    aws sts get-caller-identity --profile bedrock-byok-user
+    ```
+
+    **성공 상태:** `get-caller-identity`가 `bedrock-byok-user` ARN을 반환합니다.
+  </Step>
+</Steps>
+
+<Info>
+이 명령어들은 IAM 관리 권한(`iam:CreateUser`, `iam:PutUserPolicy`, `iam:CreateAccessKey`)이 있는 AWS 프로파일이 필요합니다.
+</Info>
+
+---
+
+## CloudThinker에서 Bedrock 연결
+
+<Steps>
+  <Step title="BYOK 설정 열기">
+    **설정 → BYOK 설정**으로 이동하여 **AWS Bedrock**을 제공자로 선택합니다.
+  </Step>
+  <Step title="자격 증명 입력">
+    **액세스 키 ID** (AKIA 또는 ASIA 접두사), **시크릿 액세스 키**, 임시 자격 증명의 경우에만 **세션 토큰**을 입력합니다.
+  </Step>
+  <Step title="추론 프로필 선택">
+    [데이터 레지던시 필요에 따라](#추론-프로필) **Global**, **US**, **EU**, 또는 **APAC**를 선택합니다.
+  </Step>
+  <Step title="테스트 및 저장">
+    **연결 테스트**를 클릭하여 자격 증명이 유효하고 두 모델 모두 접근 가능한지 확인한 다음 **저장**을 클릭합니다.
+
+    **성공 상태:** Sonnet 4.5와 Opus 4.5 모두에서 테스트가 통과됩니다.
+  </Step>
+</Steps>
+
+자격 증명은 저장 시 암호화되며 API 응답이나 로그에 노출되지 않습니다.
+
+---
+
+## 추론 프로필
+
+Bedrock 추론 프로필은 요청을 처리할 수 있는 AWS 리전을 제어합니다. 리전 커버리지는 [AWS 추론 프로필 문서](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html)를 참조하세요.
+
+| 프로필 | 라우팅 | 일반적인 용도 |
+|---|---|---|
+| **Global** | 모든 상용 AWS 리전 | 최대 처리량 |
+| **US** | 미국 리전만 | 미국 데이터 레지던시 |
+| **EU** | EU 리전만 | GDPR 컴플라이언스 |
+| **APAC** | APAC 리전만 | 지역 데이터 레지던시 |
+
+---
+
+## 작동 방식
+
+- **모델 선택** — CloudThinker가 태스크에 따라 적절한 Claude 모델을 선택합니다. 수동으로 모델을 선택할 필요가 없습니다. [지원되는 파운데이션 모델 목록](https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html)을 참조하세요.
+- **워크스페이스 상속** — 워크스페이스 오너가 BYOK를 한 번 구성하면 모든 멤버가 이를 상속합니다. 모든 멤버의 LLM 사용량은 오너의 AWS 계정을 통해 라우팅되며, 오너가 중앙에서 자격 증명을 관리합니다.
+
+---
+
+## 폴백 동작
+
+CloudThinker는 실패한 BYOK 호출을 플랫폼 관리 Bedrock 자격 증명으로 재시도할 수 있지만, 이는 **워크스페이스별로 옵트인**이며 **Enterprise 및 BYOC 플랜의 경우 기본적으로 비활성화**됩니다. 폴백이 꺼진 경우 실패한 호출은 오류를 표시하며 — 자격 증명 경계를 벗어나는 요청이 없습니다.
+
+### 폴백이 트리거되는 경우 (활성화된 경우)
+
+BYOK 호출은 다음 **세 가지** 모두가 참일 때만 플랫폼 경로로 폴백됩니다:
+
+1. 오류가 재시도 가능 — 자격 증명 만료, 스로틀링, 일시적인 5xx — 콘텐츠 또는 정책 위반이 아닌.
+2. 작업이 **폴백 가능**으로 표시됨 (대부분의 읽기 작업; 프로덕션의 자율적 쓰기 작업은 절대 해당 없음).
+3. 워크스페이스의 폴백 정책이 **허용**임.
+
+폴백은 원래 호출과 **동일한 리전**의 플랫폼 관리 Bedrock 계정으로 요청을 재전송합니다 — 다른 관할권이 아닙니다. 모든 폴백은 **관리자 설정 → 감사 로그**에서 감사 이벤트(원래 오류 코드, 서비스 엔드포인트, 사용자, 워크스페이스, 모델, 토큰 수)를 생성하며, [웹훅](/ko/guide/webhooks/overview)을 통해 SIEM으로 내보낼 수 있습니다.
+
+### 폴백 정책 설정
+
+<Steps>
+  <Step title="폴백 정책 열기">
+    **관리자 설정 → BYOK → 폴백 정책**으로 이동합니다.
+  </Step>
+  <Step title="정책 선택">
+    | 정책 | BYOK 실패 시 동작 | 일반적인 용도 |
+    |---|---|---|
+    | **허용** | 리전 내 플랫폼 자격 증명으로 재시도 | 개발/샌드박스 테넌트 |
+    | **경고** | 리전 내 재시도하지만 다음 세션에 사용자 재확인 필요 | 혼합 워크로드 |
+    | **엄격** *(Enterprise / BYOC의 기본값 및 권장)* | 오류 표시; 다른 자격 증명으로 재시도 안 함 | 규제 환경 |
+  </Step>
+  <Step title="조직 수준에서 잠금 (선택 사항)">
+    **모든 워크스페이스에 적용** 토글을 활성화하여 워크스페이스 관리자가 정책을 로컬에서 변경할 수 없도록 합니다. `byok:admin` 권한이 있는 조직 오너만 이 토글을 변경할 수 있습니다.
+  </Step>
+</Steps>
+
+<Warning>
+**엄격 모드의 트레이드오프:** BYOK 자격 증명이 잘못 구성되거나 취소된 경우, 수정할 때까지 에이전트 작업이 실패합니다. 자격 증명 교체 및 할당량 관리를 계획하고, BYOK 상태에 대한 [알림](/ko/guide/notifications)을 설정하세요.
+</Warning>
+
+### 추론 호출에서 전송되는 내용
+
+정책에 관계없이, 각 BYOK 호출은 에이전트의 시스템 프롬프트 및 도구 정의, 관련 대화 기록, 그리고 검색된 컨텍스트(토폴로지, 메모리, 런북)를 전송합니다. 원시 클라우드 자격 증명, 다른 워크스페이스의 데이터, 또는 **관리자 설정 → 데이터 보호**에서 토큰화가 구성된 경우 고객 PII는 전송하지 않습니다.
+
+---
+
+## 문제 해결
+
+<AccordionGroup>
+  <Accordion title="모델 액세스 거부 오류">
+    - Bedrock 콘솔에서 사용 사례 양식을 제출했는지 확인합니다
+    - **모델 액세스** 페이지에서 Sonnet 4.5와 Opus 4.5가 모두 활성화되어 있는지 확인합니다
+    - 액세스 전파를 위해 제출 후 몇 분 기다립니다
+  </Accordion>
+
+  <Accordion title="IAM 권한 오류">
+    - 정책에 `bedrock:InvokeModel` 및 `bedrock:InvokeModelWithResponseStream`이 포함되어 있는지 확인합니다
+    - 모델 및 추론 프로필 ARN이 사용하는 모델 및 프로필과 일치하는지 확인합니다
+    - AWS 콘솔에서 직접 권한을 테스트합니다
+  </Accordion>
+
+  <Accordion title="자격 증명 유효성 검사 실패">
+    - 액세스 키 ID와 시크릿 액세스 키가 올바르고 교체되거나 취소되지 않았는지 확인합니다
+    - 임시 자격 증명의 경우 세션 토큰이 만료되지 않았는지 확인합니다
+    - `aws sts get-caller-identity`로 테스트합니다
+  </Accordion>
+
+  <Accordion title="연결 테스트 실패">
+    - Sonnet 4.5와 Opus 4.5가 모두 접근 가능하고 IAM 정책에 포함되어 있는지 확인합니다
+    - AWS 계정에서 Bedrock이 활성화되어 있는지 확인합니다
+    - 리전 선택이 모델 액세스와 일치하는지 확인합니다
+  </Accordion>
+
+  <Accordion title="워크스페이스에서 BYOK가 작동하지 않음">
+    - 워크스페이스 오너가 BYOK를 구성하고 설정에서 활성화했는지 확인합니다
+    - 오너의 플랜이 Scale, Scale +, 또는 Enterprise인지 확인합니다
+    - 오너의 자격 증명이 여전히 유효한지 확인합니다
+  </Accordion>
+
+  <Accordion title="세션 토큰 만료">
+    - 장기 자격 증명(AKIA)은 자동으로 갱신됩니다
+    - 임시 자격 증명(ASIA)은 갱신할 수 없으므로 새 자격 증명으로 재구성합니다
+    - 구성에서 `session_token_expires_at` 타임스탬프를 확인합니다
+  </Accordion>
+</AccordionGroup>
+
+---
+
+## 관련 항목
+
+<CardGroup cols={2}>
+  <Card title="가격 및 플랜" icon="credit-card" href="/ko/guide/billing/pricing">
+    BYOK가 포함된 플랜과 각 티어가 제공하는 내용
+  </Card>
+  <Card title="사용량" icon="chart-line" href="/ko/guide/billing/usage">
+    워크스페이스 전체의 크레딧 및 LLM 사용량 추적
+  </Card>
+  <Card title="알림" icon="bell" href="/ko/guide/notifications">
+    작업이 차단되기 전에 BYOK 자격 증명 상태 알림
+  </Card>
+  <Card title="웹훅" icon="webhook" href="/ko/guide/webhooks/overview">
+    감사 이벤트를 SIEM으로 내보내기
+  </Card>
+</CardGroup>

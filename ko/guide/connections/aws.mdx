@@ -1,0 +1,286 @@
+---
+title: AWS
+description: "IAM 역할 또는 액세스 키를 통해 AWS를 CloudThinker에 연결하여 비용 분석, 보안 감사, 인프라 관리를 실현하세요"
+icon: "/images/icons/aws.svg"
+---
+
+import ConnectionSecurity from '/snippets/ko/connection-security.mdx';
+
+AWS 계정을 연결하여 CloudThinker 에이전트가 비용을 분석하고, 보안을 감사하고, 리소스를 최적화하고, 인프라를 대규모로 관리할 수 있도록 합니다.
+
+AWS는 **IAM 역할 (AssumeRole)** 또는 **IAM 사용자 액세스 키**로 인증합니다. 역할 기반 인증은 AWS STS를 통해 단기 자격 증명을 사용하고 장기 시크릿을 저장하지 않기 때문에 강력히 권장됩니다.
+
+---
+
+## 사전 요구 사항
+
+- IAM 관리자 권한이 있는 AWS 계정.
+- 대상 계정에서 IAM 역할 또는 IAM 사용자를 생성할 권한.
+- 설정을 위한 [AWS CloudShell](https://console.aws.amazon.com/) 또는 [IAM 콘솔](https://console.aws.amazon.com/iam/) 접근 권한.
+
+<Info>
+역할 기반 인증(AssumeRole)이 강력히 권장됩니다. 환경에서 AssumeRole이 불가능한 경우에만 액세스 키를 사용하세요.
+</Info>
+
+---
+
+## 설정
+
+<Tabs>
+  <Tab title="역할 기반 (권장)">
+    ### AssumeRole을 사용한 IAM 역할
+
+    이 방법은 CloudThinker가 리소스에 접근하기 위해 맡을(assume) IAM 역할을 생성합니다. 장점:
+    - 장기 자격 증명을 공유하거나 저장하지 않음
+    - 자동 순환되는 임시 자격 증명에 AWS STS 사용
+    - External ID가 confused deputy 공격 방지
+    - 손쉬운 감사 및 접근 취소
+
+    #### CloudShell을 통한 빠른 설정
+
+    <Steps>
+      <Step title="AWS CloudShell 열기">
+        [AWS 콘솔](https://console.aws.amazon.com/)에 로그인하고 상단 탐색에서 **CloudShell**을 여세요.
+      </Step>
+      <Step title="설정 스크립트 실행">
+        CloudThinker 연결 대화상자에서 **Copy Script**를 클릭하고 CloudShell에 붙여 넣으세요. 스크립트는:
+        - `CloudThinkerAccessRole`이 존재하지 않음을 확인
+        - 읽기 전용 권한으로 IAM 역할 생성
+        - External ID로 신뢰 정책 연결
+      </Step>
+      <Step title="역할 ARN 복사">
+        출력에서 역할 ARN을 복사하세요:
+        ```
+        arn:aws:iam::123456789012:role/CloudThinkerAccessRole
+        ```
+      </Step>
+      <Step title="연결 완료">
+        역할 ARN을 CloudThinker에 붙여 넣고 리전을 선택한 후 **Connect**를 클릭하세요. CloudThinker가 역할을 검증하고 **Connected** 상태를 표시합니다.
+      </Step>
+    </Steps>
+
+    #### 예상 출력
+
+    ```
+    Starting CloudThinker IAM Role setup...
+    ✅ Role does not exist, proceeding...
+    ✅ Role created successfully
+    ✅ Policy attached successfully
+    ==========================================
+    ✅ Setup Complete!
+    ==========================================
+    Copy this Role ARN:
+    arn:aws:iam::123456789012:role/CloudThinkerAccessRole
+    ```
+
+    #### 수동 역할 생성
+
+    수동 설정을 선호하는 경우:
+
+    **신뢰 정책:**
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Principal": {
+            "AWS": "arn:aws:iam::CLOUDTHINKER_ACCOUNT_ID:root"
+          },
+          "Action": "sts:AssumeRole",
+          "Condition": {
+            "StringEquals": {
+              "sts:ExternalId": "YOUR_EXTERNAL_ID"
+            }
+          }
+        }
+      ]
+    }
+    ```
+
+    **권한 정책:**
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "ec2:Describe*",
+            "rds:Describe*",
+            "s3:GetBucket*",
+            "s3:List*",
+            "cloudwatch:GetMetric*",
+            "cloudwatch:List*",
+            "ce:GetCost*",
+            "ce:GetReservation*",
+            "iam:GetRole",
+            "iam:ListRoles"
+          ],
+          "Resource": "*"
+        }
+      ]
+    }
+    ```
+
+  </Tab>
+
+  <Tab title="액세스 키 (대안)">
+    ### 액세스 키를 사용한 IAM 사용자
+
+    환경에서 AssumeRole이 불가능한 경우에만 이 방법을 사용하세요.
+
+    <Warning>
+    AWS는 장기 액세스 키보다 IAM 역할을 권장합니다. 이 방법을 사용하는 경우 키를 정기적으로 교체하세요.
+    </Warning>
+
+    <Steps>
+      <Step title="IAM 사용자 생성">
+        [IAM 콘솔](https://console.aws.amazon.com/iam/) → **Users → Create user**로 이동하여 `cloudthinker-readonly`로 이름을 지정하세요.
+      </Step>
+      <Step title="정책 연결">
+        **Attach policies directly**를 선택하고 다음을 추가하세요:
+        - `ReadOnlyAccess` (포괄적), 또는
+        - `AmazonEC2ReadOnlyAccess`, `AmazonS3ReadOnlyAccess`와 같은 특정 정책
+      </Step>
+      <Step title="액세스 키 생성">
+        사용자 선택 → **Security credentials → Create access key**. 사용 사례로 **Third-party service**를 선택하세요.
+      </Step>
+      <Step title="자격 증명 저장">
+        액세스 키 ID와 시크릿 액세스 키를 복사하여 안전하게 보관하세요. **Connections → AWS**에 입력하고 **Connect**를 클릭하세요. CloudThinker가 **Connected** 상태를 표시합니다.
+      </Step>
+    </Steps>
+
+  </Tab>
+</Tabs>
+
+### 멀티 계정 설정
+
+여러 AWS 계정이 있는 조직의 경우:
+
+<Steps>
+  <Step title="각 계정에 역할 생성">
+    CloudFormation StackSets를 사용하여 모든 대상 계정에 IAM 역할을 배포하세요.
+  </Step>
+  <Step title="AWS Organizations 사용">
+    조직 전체 가시성을 위해 관리 계정을 연결하세요.
+  </Step>
+  <Step title="각 계정 추가">
+    CloudThinker에서 계정 연결을 개별적으로 추가하세요.
+  </Step>
+</Steps>
+
+---
+
+## 연결 세부 정보
+
+| 필드 | 설명 | 예시 |
+|-------|-------------|---------|
+| **Role ARN** | CloudThinker가 맡을(assume) IAM 역할의 ARN (역할 기반 방법) | `arn:aws:iam::123456789012:role/CloudThinkerAccessRole` |
+| **External ID** | 신뢰 정책의 시크릿 ID, CloudThinker에서 제공 | — |
+| **Region** | 이 연결의 기본 AWS 리전 | `us-east-1` |
+| **Access Key ID** | IAM 사용자 키 ID (액세스 키 방법만 해당) | — |
+| **Secret Access Key** | IAM 사용자 시크릿 키 (액세스 키 방법만 해당) | — |
+
+---
+
+## 필요 권한
+
+### 최소 (읽기 전용 분석)
+
+```
+ec2:Describe*
+rds:Describe*
+s3:GetBucket*, s3:List*
+cloudwatch:GetMetric*, cloudwatch:List*
+ce:GetCost*, ce:GetReservation*
+iam:GetRole, iam:ListRoles
+```
+
+### 권장 (전체 분석)
+
+```
+# 모든 최소 권한에 추가:
+elasticloadbalancing:Describe*
+autoscaling:Describe*
+lambda:List*, lambda:GetFunction*
+ecs:Describe*, ecs:List*
+eks:Describe*, eks:List*
+securityhub:Get*, securityhub:List*
+guardduty:Get*, guardduty:List*
+config:Describe*, config:Get*
+cloudtrail:Describe*, cloudtrail:Get*
+```
+
+<Tip>
+최소 권한으로 시작하고 필요에 따라 확장하세요. 연결 전에 AWS 콘솔에서 Cost Explorer를 활성화하세요 — 새 계정에서 활성화되는 데 최대 24시간이 걸릴 수 있습니다.
+</Tip>
+
+---
+
+## 에이전트 기능
+
+연결되면 에이전트가 AWS 리소스를 분석하고 최적화할 수 있습니다.
+
+| 에이전트 | AWS 기능 |
+|-------|------------------------------------------------------------------------------------------|
+| **[Alex](/ko/guide/agents/alex)** | 비용 분석, EC2 적정 크기 조정, Reserved Instance 권장 사항, 리소스 최적화 |
+| **[Oliver](/ko/guide/agents/oliver)** | Security Hub 결과, IAM 감사, 컴플라이언스 검사, 취약성 평가 |
+| **[Tony](/ko/guide/agents/tony)** | RDS 성능 분석, Aurora 최적화, DynamoDB 튜닝 |
+| **[Kai](/ko/guide/agents/kai)** | EKS 클러스터 관리, Fargate 최적화, 컨테이너 분석 |
+
+### 연결 검증
+
+```text
+@alex run an AWS account check and list the connected account ID and active regions
+```
+
+### 예시 프롬프트
+
+```text
+@alex analyze EC2 costs over the last 30 days and #recommend right-sizing opportunities
+@oliver audit IAM roles and flag any with excessive permissions or missing MFA requirements
+@kai check EKS cluster health across all connected regions and #report any failing pods
+```
+
+---
+
+## 문제 해결
+
+<Accordion title="Access Denied 오류">
+IAM 역할에 필요한 권한이 있는지 확인하세요. 신뢰 정책에 CloudThinker의 계정 ID가 포함되어 있는지, External ID가 정확히 일치하는지, 역할 ARN이 올바른지 확인하세요.
+</Accordion>
+
+<Accordion title="비용 데이터 없음">
+AWS 콘솔에서 Cost Explorer를 활성화하세요 (활성화까지 최대 24시간 소요). `ce:GetCost*` 권한이 부여되었는지 확인하고 청구 기본 설정에서 프로그래밍 방식 접근이 허용되어 있는지 확인하세요.
+</Accordion>
+
+<Accordion title="메트릭 없음">
+CloudWatch 메트릭이 수집되고 있는지 확인하세요. 리전 선택에 모든 관련 리전이 포함되어 있는지 확인하고 서비스가 실행 중이고 데이터를 생성하고 있는지 확인하세요.
+</Accordion>
+
+<Accordion title="연결 타임아웃">
+AWS API에 대한 네트워크 연결을 확인하세요. VPC 엔드포인트가 접근을 차단하고 있지 않은지 확인하고 다른 리전에서 연결을 시도해보세요.
+</Accordion>
+
+---
+
+## 보안
+
+<ConnectionSecurity />
+
+- **IAM 역할 사용** — 장기 액세스 키보다 AssumeRole을 선호하세요. IAM 역할은 자동 순환되는 단기 STS 자격 증명을 사용하며 시크릿 저장이 필요 없습니다.
+- **CloudTrail 활성화** — CloudThinker 연결을 통해 이루어진 모든 API 호출을 감사하여 완전한 활동 로그를 유지하세요.
+
+---
+
+## 관련 문서
+
+<CardGroup cols={2}>
+  <Card title="Alex 에이전트" icon="cloud" href="/ko/guide/agents/alex">
+    AWS 중심 클라우드 최적화 에이전트
+  </Card>
+  <Card title="Bring Your Own Key (BYOK)" icon="key" href="/ko/guide/byok">
+    무제한 LLM 사용을 위해 자체 AWS Bedrock 자격 증명 사용
+  </Card>
+</CardGroup>

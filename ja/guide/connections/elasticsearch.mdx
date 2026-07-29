@@ -1,0 +1,193 @@
+---
+title: Elasticsearch
+description: "ログ分析・インデックス管理・検索パフォーマンス最適化のためにElasticsearchをCloudThinkerに接続します"
+icon: "/images/icons/elasticsearch.svg"
+---
+
+import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+
+ElasticsearchクラスターをCloudThinkerに接続すると、エージェントがログの検索、オブザーバビリティデータの分析、インシデントの調査を行えるようになります。
+
+Elasticsearchは、特定のインデックスおよびクラスター権限にスコープされた**APIキー**で認証します。
+
+---
+
+## 前提条件
+
+- CloudThinkerから到達可能な **Elasticsearch**（7.x、8.x）、**OpenSearch**（1.x、2.x）、**AWS OpenSearch Service**、または **Elastic Cloud** クラスター。
+- APIキーを作成するための Kibana（**Stack Management → Security → API Keys**）または Elasticsearch API への管理者アクセス。
+- クラスターエンドポイントURL。
+
+---
+
+## セットアップ
+
+<Steps>
+  <Step title="Kibanaを開く">
+    Kibanaインスタンスにアクセスし、管理者権限でサインインします。
+  </Step>
+  <Step title="APIキーへ移動">
+    **Stack Management → Security → API Keys** へ移動します。
+  </Step>
+  <Step title="APIキーを作成">
+    **Create API key** をクリックし、次の情報を入力します:
+    - **Name**: `cloudthinker-readonly`
+  </Step>
+  <Step title="権限を設定">
+    読み取り専用アクセス用のロールディスクリプターを追加します（完全なJSONは[必要な権限](#必要な権限)を参照）。最低限、クラスターに `monitor`、必要なインデックスパターンに `read` + `view_index_metadata` を付与してください。
+  </Step>
+  <Step title="生成してコピー">
+    **Create API key** をクリックし、エンコードされたキーをすぐにコピーします。Elasticsearchはキーを再表示しません。
+  </Step>
+  <Step title="クラスターエンドポイントを確認">
+    Elasticsearchエンドポイントをコピーします:
+    - セルフホスト: `https://elasticsearch.your-domain.com:9200`
+    - Elastic Cloud: デプロイ設定から確認
+    - AWS OpenSearch: AWSコンソールのドメインエンドポイント
+  </Step>
+  <Step title="CloudThinkerで接続を追加">
+    **Connections → Elasticsearch** に移動し、次の情報を入力します:
+    - **Cluster URL**: Elasticsearchエンドポイント
+    - **API Key**: コピーしたエンコード済みキー
+    - **Index patterns**: アクセスするパターン（例: `logs-*`）
+
+    **Connect** をクリックします。CloudThinkerが認証情報を検証し、**Connected** ステータスを表示します。
+  </Step>
+</Steps>
+
+<Warning>
+APIキーは作成直後にコピーしてください。Elasticsearchはキーを再表示しないため、紛失した場合は新しいキーを作成する必要があります。
+</Warning>
+
+---
+
+## 接続の詳細
+
+| フィールド | 説明 | 例 |
+|-------|-------------|---------|
+| **ES_URL** | ElasticsearchクラスターURL | `https://your-cluster.es.region.cloud.es.io:9243` |
+| **ES_API_KEY** | Base64エンコードされたAPIキー | `VnVhQk...` |
+
+設定する一般的なインデックスパターン:
+
+| パターン | ユースケース |
+|---------|----------|
+| `logs-*` | アプリケーションログ |
+| `filebeat-*` | Filebeatで収集したログ |
+| `metricbeat-*` | インフラストラクチャメトリクス |
+| `apm-*` | アプリケーションパフォーマンスデータ |
+| `kubernetes-*` | Kubernetesクラスターログ |
+
+---
+
+## 必要な権限
+
+### 最小権限
+
+```json
+{
+  "cluster": ["monitor"],
+  "indices": [
+    {
+      "names": ["logs-*", "metrics-*"],
+      "privileges": ["read"]
+    }
+  ]
+}
+```
+
+### 推奨
+
+```json
+{
+  "cluster": ["monitor", "read_ilm"],
+  "indices": [
+    {
+      "names": ["*"],
+      "privileges": ["read", "view_index_metadata"]
+    }
+  ]
+}
+```
+
+<Tip>
+CloudThinkerが必要とするインデックスパターンに対してのみ `read` 権限を付与してください。CloudThinkerのAPIキーに `write` やクラスター管理者権限を付与しないでください。
+</Tip>
+
+---
+
+## エージェント機能
+
+接続後、エージェントは次のことができます:
+
+| 機能 | 説明 |
+|------------|-------------|
+| **ログ検索** | アプリケーションおよびインフラストラクチャログを検索 |
+| **エラー分析** | エラーパターンと異常を検出 |
+| **インシデント調査** | サービス間でイベントを相関付け |
+| **メトリクスクエリ** | 保存されたメトリクスデータをクエリ |
+
+### 接続を確認
+
+```text
+@oliver search Elasticsearch for application errors in the last hour
+```
+
+### プロンプト例
+
+```text
+@oliver search logs for authentication failures in the last 24 hours
+@alex find error patterns in application logs for the api-gateway service
+@kai search for pod crash events in Kubernetes logs
+```
+
+---
+
+## トラブルシューティング
+
+<Accordion title="接続が拒否される">
+- クラスターURLが正しく、CloudThinkerから到達可能であることを確認してください。
+- ファイアウォールルールがCloudThinkerのエグレスIPを許可しているか確認してください。
+- AWS OpenSearchの場合、パブリックアクセスを有効にするか、VPCエンドポイントを設定してください。
+- Elasticsearchが実行中でリクエストを受け付けていることを確認してください。
+</Accordion>
+
+<Accordion title="認証に失敗した">
+- APIキーが正しく、期限切れになっていないか確認してください。
+- キーに必要なインデックスおよびクラスター権限があることを確認してください。
+- AWS OpenSearchの場合、IAMロールまたはアクセスポリシーが正しく設定されているか確認してください。
+</Accordion>
+
+<Accordion title="APIキーの期限切れ">
+- **Stack Management → Security → API Keys** に移動します。
+- 同じ権限で新しいキーを作成します。
+- CloudThinkerの接続設定でキーを更新します。
+</Accordion>
+
+<Accordion title="データが返されない">
+- インデックスパターンがクラスター内の既存インデックスに一致しているか確認してください。
+- APIキーがそれらのインデックスに対して `read` 権限を持っているか確認してください。
+- インデックスにリクエストした時間範囲のデータが含まれていることを確認してください。
+</Accordion>
+
+---
+
+## セキュリティ
+
+<ConnectionSecurity />
+
+- **APIキーのローテーション** — APIキーは90日ごとにローテーションし、キー作成時に有効期限を設定してください
+- **インデックスの制限** — CloudThinkerが実際に必要とするインデックスパターンにキーを制限し、`*` へのアクセスを許可しないでください
+
+---
+
+## 関連情報
+
+<CardGroup cols={2}>
+  <Card title="Oliver エージェント" icon="shield-check" href="/ja/guide/agents/oliver">
+    セキュリティログ分析
+  </Card>
+  <Card title="Grafana 接続" icon="/images/icons/grafana.svg" href="/ja/guide/connections/grafana">
+    Elasticsearchデータの可視化
+  </Card>
+</CardGroup>
