@@ -258,3 +258,5 @@ When updating multiple image references:
 4. Test with `mintlify dev` to verify rendering
 
 @./docs-writing-workflow.md
+@./.agents/skills/write-docs/SKILL.md
+@./.agents/skills/ship-docs/SKILL.md
