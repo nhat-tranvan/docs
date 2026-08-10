@@ -1,0 +1,227 @@
+---
+title: ClickHouse
+description: "Kết nối ClickHouse với CloudThinker để kiểm tra schema, điều tra truy vấn phân tích và tùy chọn cấp quyền ghi"
+icon: "/images/icons/clickhouse.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối cụm ClickHouse của bạn để [Tony](/vi/guide/agents/tony) (Database Engineer) có thể khám phá schema, kiểm tra sức khỏe bảng và trả lời câu hỏi bằng SQL phân tích. Một kết nối mới là chỉ đọc: CloudThinker gửi mọi truy vấn với thiết lập `readonly` của ClickHouse được bật. Bật **Write access** khi bạn muốn agent thay đổi dữ liệu, và bật riêng **Allow DROP and TRUNCATE** khi bạn muốn agent xóa đối tượng.
+
+## Nền tảng được hỗ trợ
+
+| Nền tảng | Hỗ trợ |
+|----------|---------|
+| **ClickHouse Cloud** | Tất cả service |
+| **ClickHouse tự host** | 23.x, 24.x, 25.x |
+| **ClickHouse trên Kubernetes** | Altinity Operator và tương đương |
+| **Aiven for ClickHouse** | Tất cả gói |
+| **DoubleCloud Managed ClickHouse** | Tất cả gói |
+
+## Điều kiện tiên quyết
+
+- Một server ClickHouse có thể tiếp cận từ CloudThinker qua HTTP interface của nó (`8443` với TLS, `8123` không TLS).
+- Quyền admin để tạo người dùng riêng.
+- Cổng TCP native (`9000`) không được sử dụng và không cần mở.
+
+## Thiết lập
+
+<Steps>
+  <Step title="Tạo người dùng riêng">
+    Kết nối với tư cách admin và tạo người dùng CloudThinker:
+    ```sql
+    CREATE USER cloudthinker IDENTIFIED BY 'your-secure-password';
+    ```
+  </Step>
+  <Step title="Cấp quyền đọc">
+    Cấp `SELECT` trên các cơ sở dữ liệu mà agent nên thấy, cùng với `SHOW`:
+    ```sql
+    GRANT SELECT ON your_database.* TO cloudthinker;
+    GRANT SHOW DATABASES, SHOW TABLES, SHOW COLUMNS ON *.* TO cloudthinker;
+    ```
+  </Step>
+  <Step title="Ghim người dùng ở chế độ chỉ đọc (khuyến nghị)">
+    Kết nối mặc định là chỉ đọc, nhưng một settings profile giúp ràng buộc này được giữ ở phía server, độc lập với mọi client:
+    ```sql
+    CREATE SETTINGS PROFILE cloudthinker_readonly SETTINGS readonly = 1 READONLY;
+    ALTER USER cloudthinker SETTINGS PROFILE cloudthinker_readonly;
+    ```
+    Bỏ qua bước này nếu bạn định bật **Write access**. Profile sử dụng `READONLY`, nên người dùng không thể gỡ bỏ nó, và công tắc của CloudThinker cũng không thể ghi đè nó.
+  </Step>
+  <Step title="Cho phép truy cập bảng hệ thống (tùy chọn)">
+    Kích thước bảng, số lượng part và metadata cột đến từ `system`:
+    ```sql
+    GRANT SELECT ON system.tables TO cloudthinker;
+    GRANT SELECT ON system.columns TO cloudthinker;
+    GRANT SELECT ON system.parts TO cloudthinker;
+    ```
+  </Step>
+  <Step title="Cấu hình truy cập mạng">
+    Mở HTTP interface cho CloudThinker:
+    - ClickHouse Cloud: thêm CloudThinker vào IP access list của service.
+    - Tự host: cho phép inbound `8443` (hoặc `8123`) từ CloudThinker trong firewall hoặc security group của bạn.
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Điều hướng đến **Connections → ClickHouse** và nhập:
+    - **Host**: chỉ hostname, không có scheme và không có port, ví dụ `abc123.ap-southeast-1.aws.clickhouse.cloud`
+    - **Port**: `8443` với TLS, `8123` không TLS
+    - **Username**: `cloudthinker`
+    - **Password**: mật khẩu bạn đặt ở trên
+    - **Use TLS**: `Yes` cho ClickHouse Cloud và mọi endpoint công khai
+    - **Verify the TLS certificate**: để ở `Yes`; chỉ tắt khi chứng chỉ là self-signed hoặc do CA nội bộ cấp
+    - **Default database**: tùy chọn; để trống để dùng mặc định của server
+    - **Write access**: để ở `Read-only` trừ khi agent cần thay đổi dữ liệu
+    - **Allow DROP and TRUNCATE**: chỉ xuất hiện khi write access đã bật; để ở `Blocked` trừ khi bạn muốn agent xóa đối tượng
+
+    Nhấn **Connect**. Trạng thái chuyển thành **Connected** khi CloudThinker tiếp cận được server.
+  </Step>
+</Steps>
+
+## Chi tiết kết nối
+
+| Trường | Mô tả | Mặc định |
+|-------|-------------|---------|
+| **Host** | Hostname hoặc IP, không có scheme và không có port | — |
+| **Port** | Cổng HTTP interface | `8443` |
+| **Username** | Người dùng riêng, ví dụ: `cloudthinker` | — |
+| **Password** | Mật khẩu người dùng | — |
+| **Use TLS** | Dùng HTTPS thay vì HTTP thuần | `Yes` |
+| **Verify the TLS certificate** | Chỉ tắt khi chứng chỉ là self-signed hoặc do CA nội bộ cấp; ẩn khi TLS tắt | `Yes` |
+| **Default database** | Cơ sở dữ liệu được dùng khi truy vấn không chỉ định rõ bảng | Mặc định của server |
+| **Write access** | Agent có được phép thay đổi dữ liệu hay không | `Read-only` |
+| **Allow DROP and TRUNCATE** | Agent có được phép xóa đối tượng hay không; bị ẩn khi đang ở chế độ chỉ đọc | `Blocked` |
+
+<Tip>
+`8443` và TLS là cặp dùng cho ClickHouse Cloud. Một server tự host với TLS tắt sẽ trả lời trên `8123`; hãy đặt **Use TLS** thành `No` và port thành `8123` cùng lúc, vì nếu không khớp thì kết nối sẽ thất bại ngay khi connect.
+</Tip>
+
+## Quyền bắt buộc
+
+### Tối thiểu
+
+```sql
+GRANT SELECT ON your_database.* TO cloudthinker;
+GRANT SHOW DATABASES, SHOW TABLES, SHOW COLUMNS ON *.* TO cloudthinker;
+```
+
+### Khuyến nghị (phân tích toàn diện)
+
+```sql
+-- All of the above, plus:
+GRANT SELECT ON system.tables TO cloudthinker;
+GRANT SELECT ON system.columns TO cloudthinker;
+GRANT SELECT ON system.parts TO cloudthinker;
+GRANT SELECT ON system.query_log TO cloudthinker;
+```
+
+`system.query_log` là thứ biến "dashboard này chậm" thành một danh sách xếp hạng các truy vấn gây ra điều đó.
+
+### Quyền ghi (chỉ khi bạn bật)
+
+```sql
+GRANT INSERT, ALTER, CREATE TABLE, CREATE VIEW ON your_database.* TO cloudthinker;
+-- Only if the agent should remove objects:
+GRANT DROP TABLE, TRUNCATE ON your_database.* TO cloudthinker;
+```
+
+Hãy cấp các quyền này trên đúng những cơ sở dữ liệu mà agent nên thay đổi, không bao giờ cấp trên `*.*`. Một grant mà người dùng không có chính là ranh giới mà công tắc **Write access** không thể vượt qua.
+
+## Khả năng của agent
+
+Sau khi kết nối, Tony có thể:
+
+| Khả năng | Mô tả |
+|------------|-------------|
+| **Khám phá schema** | Liệt kê cơ sở dữ liệu và bảng kèm engine, sorting key, số dòng và kiểu cột |
+| **Truy vấn phân tích** | Chạy SQL, bao gồm aggregate, join và window function |
+| **Sức khỏe bảng** | Kiểm tra số lượng part, kích thước nén và chưa nén, và index granularity |
+| **Điều tra truy vấn** | Xếp hạng các truy vấn chậm hoặc tốn kém từ `system.query_log` |
+
+### Xác minh kết nối
+
+```text
+@tony #report list the ClickHouse databases and the tables in each one
+```
+
+### Ví dụ prompt
+
+```text
+@tony #report which ClickHouse tables grew the most in the last week
+@tony #report show per-service p95 latency from the events table
+@tony #recommend suggest a better sorting key for our largest MergeTree table
+```
+
+## Quyền ghi
+
+Kết nối được tạo ra ở chế độ chỉ đọc, và hai công tắc mở nó ra từng bước một.
+
+| Write access | Allow DROP and TRUNCATE | Agent có thể làm gì |
+|--------------|-------------------------|------------------------|
+| `Read-only` (mặc định) | bị ẩn | Chỉ `SELECT`. Mọi thứ khác bị ClickHouse từ chối với lỗi `164 READONLY`. |
+| `Full access` | `Blocked` (mặc định) | `INSERT`, `ALTER`, `CREATE` và materialized view. Một lệnh `DROP TABLE` hoặc `TRUNCATE` bị từ chối, nên bảng vẫn còn. |
+| `Full access` | `Allowed` | Tất cả những gì ở trên, cộng thêm việc drop và truncate bảng và cơ sở dữ liệu. |
+
+Ba điều cần cân nhắc trước khi bật quyền ghi:
+
+- **`Blocked` bảo vệ bảng, không bảo vệ dữ liệu trong bảng.** Nó từ chối các câu lệnh `DROP TABLE` và `TRUNCATE`. Nó không từ chối `ALTER TABLE ... DELETE`, `DROP PARTITION` hay `DROP COLUMN`, mỗi lệnh trong số đó đều xóa dữ liệu trong khi vẫn giữ nguyên bảng. Hãy xem `Full access` là "agent có thể phá hủy dữ liệu", bất kể công tắc thứ hai ở trạng thái nào.
+- **ClickHouse không có transaction.** Một lệnh `ALTER TABLE ... DELETE` là một mutation bất đồng bộ và một lệnh `DROP` có hiệu lực ngay lập tức. Không lệnh nào có thể rollback, nên khôi phục đồng nghĩa với việc phục hồi từ bản backup.
+- **Grant mới là biện pháp kiểm soát mạnh hơn.** Các công tắc này chỉ quyết định CloudThinker có gửi `readonly=1` hay không; chúng không bao giờ cấp một đặc quyền mà người dùng ClickHouse chưa có. Hãy cấp cho người dùng CloudThinker quyền ghi trên đúng những cơ sở dữ liệu bạn muốn cho phép tiếp cận, và công tắc không thể vượt quá phạm vi đó.
+
+Để bật quyền ghi cho một kết nối đã có, mở **Connections → ClickHouse → Edit**, thay đổi **Write access**, rồi kết nối lại.
+
+<Warning>
+Một agent có quyền ghi sẽ hành động mà không hỏi xác nhận cho từng truy vấn. Hãy trỏ nó vào một cụm analytics hoặc staging trước khi trỏ vào cụm mà các dashboard của bạn đang đọc.
+</Warning>
+
+## Khắc phục sự cố
+
+<Accordion title="Kết nối đóng ngay lập tức">
+- Kiểm tra **Host** không mang tiền tố `https://` và không có hậu tố `:port`. Cả hai thuộc về các trường riêng của chúng.
+- Xác nhận **Port** và **Use TLS** khớp nhau: `8443` với TLS, `8123` không TLS.
+</Accordion>
+
+<Accordion title="Xác thực thất bại">
+- Xác nhận người dùng tồn tại: `SHOW USERS;`
+- ClickHouse Cloud vô hiệu hóa xác thực bằng mật khẩu với một số người dùng được cấp qua SSO. Hãy tạo một người dùng cơ sở dữ liệu riêng thay vì dùng lại tài khoản đăng nhập console.
+</Accordion>
+
+<Accordion title="Timeout hoặc connection refused">
+- ClickHouse Cloud: thêm CloudThinker vào IP access list của service.
+- Tự host: xác nhận `<listen_host>` bao gồm interface bạn đã mở, và firewall cho phép `8443` hoặc `8123`.
+- Cổng native `9000` không phải là HTTP interface. Trỏ kết nối vào nó sẽ thất bại.
+</Accordion>
+
+<Accordion title="Cannot execute query in readonly mode">
+Kết nối đang ở chế độ chỉ đọc, đây là mặc định. Nếu agent cần có khả năng ghi, hãy đặt **Write access** thành `Full access` rồi kết nối lại.
+
+Nếu sau đó vẫn thất bại, ràng buộc nằm ở phía server: kiểm tra xem người dùng có mang settings profile `readonly` hay không (`SHOW CREATE USER cloudthinker;`) và người dùng đó có các grant ghi mà truy vấn cần hay không.
+</Accordion>
+
+<Accordion title="DROP bị từ chối dù đã bật write access">
+`DROP` và `TRUNCATE` nằm sau công tắc riêng của chúng. Hãy đặt **Allow DROP and TRUNCATE** thành `Allowed`. Nó chỉ xuất hiện khi **Write access** ở `Full access`.
+</Accordion>
+
+<Accordion title="Danh sách bảng rỗng">
+- Người dùng cần `SHOW TABLES` và `SELECT` trên cơ sở dữ liệu, không chỉ trên từng bảng riêng lẻ.
+- Cấp `SELECT ON system.tables` để các truy vấn metadata trả về dữ liệu.
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **TLS trên endpoint công khai** — giữ **Use TLS** bật cho ClickHouse Cloud và mọi endpoint nằm ngoài mạng riêng.
+- **Người dùng riêng** — không bao giờ dùng lại tài khoản admin; một người dùng riêng giúp audit trail dễ đọc.
+- **Grant quan trọng hơn công tắc** — các đặc quyền trên người dùng ClickHouse mới là ranh giới bền vững. Công tắc **Write access** quyết định CloudThinker có yêu cầu ghi hay không; grant quyết định ClickHouse có cho phép ghi hay không.
+- **Chỉ đọc ở phía server** — với một kết nối không bao giờ được ghi, hãy thêm settings profile ở bước 3. `READONLY` khiến nó không thể bị gỡ bỏ từ phía client.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Tony Agent" icon="database" href="/vi/guide/agents/tony">
+    Agent tối ưu cơ sở dữ liệu
+  </Card>
+  <Card title="Kết nối PostgreSQL" icon="/images/icons/postgresql.svg" href="/vi/guide/connections/postgresql">
+    Thiết lập tương tự cho cơ sở dữ liệu PostgreSQL
+  </Card>
+</CardGroup>
