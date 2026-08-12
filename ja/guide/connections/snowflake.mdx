@@ -1,0 +1,208 @@
+---
+title: Snowflake
+description: "Snowflake を CloudThinker に接続してウェアハウスのクレジット分析、低速クエリの調査、ストレージ確認、および任意のウェアハウス制御を実現"
+icon: "/images/icons/snowflake.svg"
+---
+
+import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+
+Snowflake アカウントを接続して、[Tony](/ja/guide/agents/tony)（データベースエンジニア）がウェアハウスのクレジット消費を読み取り、低速クエリと失敗クエリを順位付けし、テーブルのストレージ負荷を測定できるようにします。CloudThinker はプログラマティックアクセストークンを使い SQL REST API 経由で Snowflake に接続し、新しい接続は書き込みツールをオンにするまで読み取り専用です。
+
+## 前提条件
+
+- ロール、サービスユーザー、トークンを作成するための `ACCOUNTADMIN`（または同等の権限）。
+- そのユーザーに割り当てるネットワークポリシー。ネットワークポリシーが存在するまで、Snowflake はトークン認証を拒否します。
+- ロールが使用できるウェアハウス。メタデータクエリはコンピュートを必要としないため、ウェアハウスがなくても接続テストは成功し、実際の分析だけが失敗することがあります。
+
+## セットアップ
+
+<Steps>
+  <Step title="読み取り専用ロールを作成する">
+    `ACCOUNTADMIN` で実行します。`USAGE_VIEWER` はメータリングとストレージ、`OBJECT_VIEWER` はオブジェクトインベントリを対象とし、`GOVERNANCE_VIEWER` が `QUERY_HISTORY` を読み取り可能にします:
+    ```sql
+    USE ROLE ACCOUNTADMIN;
+
+    CREATE ROLE IF NOT EXISTS CT_READONLY;
+    GRANT DATABASE ROLE SNOWFLAKE.USAGE_VIEWER      TO ROLE CT_READONLY;
+    GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER     TO ROLE CT_READONLY;
+    GRANT DATABASE ROLE SNOWFLAKE.GOVERNANCE_VIEWER TO ROLE CT_READONLY;
+    GRANT MONITOR USAGE ON ACCOUNT                  TO ROLE CT_READONLY;
+    GRANT USAGE ON WAREHOUSE COMPUTE_WH             TO ROLE CT_READONLY;
+    ```
+  </Step>
+  <Step title="サービスユーザーを作成する">
+    `SERVICE` タイプのユーザーはパスワード、MFA、SSO を持たないため、トークンだけで認証します:
+    ```sql
+    CREATE USER IF NOT EXISTS SVC_CLOUDTHINKER
+      TYPE = SERVICE
+      DEFAULT_ROLE = CT_READONLY
+      DEFAULT_WAREHOUSE = COMPUTE_WH
+      COMMENT = 'CloudThinker connection';
+    GRANT ROLE CT_READONLY TO USER SVC_CLOUDTHINKER;
+    ```
+  </Step>
+  <Step title="ネットワークポリシーを割り当てる">
+    テストアカウント以外では、`ALLOWED_IP_LIST` を自社の送信 IP レンジに絞り込んでください:
+    ```sql
+    CREATE NETWORK POLICY IF NOT EXISTS CT_POLICY ALLOWED_IP_LIST = ('0.0.0.0/0');
+    ALTER USER SVC_CLOUDTHINKER SET NETWORK_POLICY = CT_POLICY;
+    ```
+    この手順の省略が最も多いセットアップ失敗であり、返るエラー（`390403`）はポリシーについて何も述べません。
+  </Step>
+  <Step title="プログラマティックアクセストークンを発行する">
+    ```sql
+    ALTER USER SVC_CLOUDTHINKER ADD PROGRAMMATIC ACCESS TOKEN CT_DEV
+      ROLE_RESTRICTION = 'CT_READONLY'
+      DAYS_TO_EXPIRY = 90;
+    ```
+    Snowflake がトークンを表示するのは作成時の一度だけです。`DAYS_TO_EXPIRY` は厳格な有効期限で、その日から接続は `390318` で失敗し始めるため、新しいトークンを発行します。
+  </Step>
+  <Step title="CloudThinker で接続を追加する">
+    **Connections → Snowflake** を開き、次を入力します:
+    - **Account identifier**: `MYORG-MYACCOUNT`。**Snowsight → Account details** で確認できます。完全な URL ではありません。
+    - **Programmatic access token**: 前の手順で発行したトークン。アカウントのパスワードではありません。
+    - **Role**: 任意。空欄にするとユーザーのデフォルトロールを使用します。
+    - **Warehouse**: 任意。空欄にするとユーザーのデフォルトウェアハウスを使用します。
+
+    **Connect** をクリックします。CloudThinker がアカウント、リージョン、ロール、ウェアハウスを解決すると、ステータスが **Connected** になります。
+  </Step>
+</Steps>
+
+## 接続の詳細
+
+| 項目 | 説明 | デフォルト |
+|-------|-------------|---------|
+| **Account identifier** | `ORG-ACCOUNT`。**Snowsight → Account details** から取得 | — |
+| **Programmatic access token** | `ALTER USER ... ADD PROGRAMMATIC ACCESS TOKEN` で作成したトークン | — |
+| **Role** | 接続が引き受けるロール。トークンの `ROLE_RESTRICTION` の範囲内である必要があります | ユーザーのデフォルトロール |
+| **Warehouse** | この接続が消費するクレジットが課金されるウェアハウス | ユーザーのデフォルトウェアハウス |
+
+<Tip>
+REST ホストはアカウント識別子を小文字にし、区切り文字をハイフンとして扱うため、アンダースコアで書かれた識別子でも解決されます。
+</Tip>
+
+## 必要な権限
+
+### 読み取り専用（デフォルト）
+
+```sql
+GRANT DATABASE ROLE SNOWFLAKE.USAGE_VIEWER      TO ROLE CT_READONLY;
+GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER     TO ROLE CT_READONLY;
+GRANT DATABASE ROLE SNOWFLAKE.GOVERNANCE_VIEWER TO ROLE CT_READONLY;
+GRANT MONITOR USAGE ON ACCOUNT                  TO ROLE CT_READONLY;
+GRANT USAGE ON WAREHOUSE COMPUTE_WH             TO ROLE CT_READONLY;
+```
+
+`GOVERNANCE_VIEWER` は見落としやすい権限です。これがないと、コストとストレージの回答は動作し続ける一方で、低速クエリとエラーの回答はすべて `QUERY_HISTORY` で失敗します。
+
+### 書き込みアクセス（有効にする場合のみ）
+
+```sql
+-- 一時停止と再開: エージェントが制御してよいウェアハウスを個別に指定します。
+GRANT USAGE, OPERATE, MONITOR ON WAREHOUSE CT_AGENT_WH TO ROLE CT_READWRITE;
+
+-- findings テーブルの配置先。
+GRANT USAGE ON DATABASE MONITORING                    TO ROLE CT_READWRITE;
+GRANT USAGE, CREATE TABLE ON SCHEMA MONITORING.ALERTS TO ROLE CT_READWRITE;
+```
+
+`OPERATE` はエージェントが操作してよいウェアハウスにのみ付与し、共有の本番ウェアハウスには決して付与しないでください。リソースモニターを設定した専用のエージェント用ウェアハウスなら、そのコンピュートにプロンプトでは引き上げられない上限を設けられます。
+
+## エージェントの機能
+
+接続後、Tony は次のことができます:
+
+| 機能 | 説明 |
+|------------|-------------|
+| **アカウント探索** | アイデンティティ、ウェアハウス、データベース、およびロールが読み取れる `ACCOUNT_USAGE` ビュー |
+| **クレジット分析** | ウェアハウス別・日別の計測クレジットと、測定期間の明示 |
+| **クエリ健全性** | 読み取り可能な最も遅いクエリ、繰り返し発生するエラー分類、リモートスピル |
+| **ストレージ確認** | 最大のテーブル、タイムトラベルとフェイルセーフの負荷、データベース別の増加 |
+| **インベントリ** | スキーマ、ロール、およびこの接続自身のグラント |
+
+### 接続を確認する
+
+```text
+@tony #report 私の Snowflake ウェアハウスと、この接続が読み取れる ACCOUNT_USAGE ビューを一覧表示して
+```
+
+### プロンプト例
+
+```text
+@tony #report 過去30日間でクレジットを最も消費した Snowflake ウェアハウスはどれ
+@tony #report 最も遅い Snowflake クエリと繰り返し発生しているエラーを見せて
+@tony #recommend タイムトラベルとフェイルセーフがストレージ負荷を増やしている箇所はどこ
+```
+
+Snowflake が公開するのはクレジットであり通貨ではありません。クレジット単価はこの接続からは読み取れないため、エージェントはクレジットをクレジットとして報告します。
+
+## 書き込みアクセス
+
+接続は読み取り専用で出荷され、アクセス権は資格情報に従うため、書き込みは接続ごとの判断になります。1 つのワークスペースが読み取り専用トークンと書き込み可能トークンを同時に保持できます。
+
+| ツール権限 | 資格情報 | エージェントができること |
+|-----------------|------------|------------------------|
+| `snowflake_cli_write_only` オフ（デフォルト） | 任意 | 読み取りのみ。書き込みスクリプトはリクエストを組み立てる前に拒否します。 |
+| `snowflake_cli_write_only` オン | 読み取り専用ロール | 依然として何もできません。Snowflake がステートメントを拒否し、エージェントはその拒否を報告します。 |
+| `snowflake_cli_write_only` オン | 書き込み可能ロール | 指定したウェアハウスの一時停止・再開と、計測した所見の `CT_FINDINGS` テーブルへの保存。 |
+
+有効化は **Connections → Snowflake → Tool permissions** から行います。事前に検討すべき点が 2 つあります:
+
+- **ここでの書き込みは正確に 2 つの操作であり、任意の SQL ではありません。** リソースモニターの引き上げ、`DATA_RETENTION_TIME_IN_DAYS` の引き下げ、ウェアハウスのサイズ変更は、Snowsight で実行するステートメントとしてユーザーに報告されます。
+- **グラントの方が強い制御です。** ツール権限は CloudThinker が書き込みを要求するかどうかを決めます。Snowflake が書き込みを許可するかどうかは、トークンの `ROLE_RESTRICTION` とロールのグラントが決めます。
+
+<Warning>
+Snowflake に条件付きの一時停止はありません。ビジー状態の確認と `ALTER` は別々のステートメントであるため、その間にクエリが開始してコンピュートを失う可能性があります。エージェントは状態変更とこの制約を報告し、一時停止が安全だったとは決して述べません。
+</Warning>
+
+書き込みは毎回、ツール呼び出しでのユーザー承認を必要とします。
+
+## トラブルシューティング
+
+<Accordion title="認証が即座に失敗する（390403）">
+ユーザーにネットワークポリシーがありません。割り当てられるまで Snowflake はトークン認証を拒否します: `ALTER USER SVC_CLOUDTHINKER SET NETWORK_POLICY = CT_POLICY;`
+</Accordion>
+
+<Accordion title="昨日は動いていたのに失敗する（390318）">
+トークンが期限切れまたは取り消されています。`DAYS_TO_EXPIRY` は厳格な有効期限です。新しいトークンを発行し、接続を更新してください。
+</Accordion>
+
+<Accordion title="Object does not exist or not authorized（002003）">
+ビュー名の誤記ではなく、データベースロールの不足です。エージェントに探索を実行させてください。ロールが読み取れる `ACCOUNT_USAGE` ビューを一覧し、読み取れないビューには正確な `GRANT` 行を出力します。
+</Accordion>
+
+<Accordion title="Connected なのにすべてのクエリが失敗する（090073）">
+リソースモニターがクォータを超過しているか、ウェアハウスが一時停止していて再開できません。これは権限ではなくアカウントのキャパシティの問題であり、`GRANT` では解決しません。アカウント管理者がリソースモニターを引き上げるかリセットします。
+
+資格情報は有効であり、テストプローブはコンピュートを必要としないため、接続は **Connected** のままです。
+</Accordion>
+
+<Accordion title="No active warehouse selected（000606）">
+サービスユーザーに `DEFAULT_WAREHOUSE` がなく、設定もされていません。接続の **Warehouse** を設定するか、ユーザーにデフォルトを付与してください。
+</Accordion>
+
+<Accordion title="Role not authorized（090105）">
+ロールがトークンの `ROLE_RESTRICTION` の範囲外です。トークンが引き受けられるロールを使うか、**Role** を空にしてユーザーのデフォルトを使用してください。
+</Accordion>
+
+<Accordion title="セクションが空で返る">
+エラーではありません。`ACCOUNT_USAGE` には数時間の遅延があり、履歴は 1 年分保持されるため、利用の少ないアカウントで狭い期間を指定すると行が返りません。
+</Accordion>
+
+## セキュリティ
+
+<ConnectionSecurity />
+
+- **専用のサービスユーザー** — `TYPE = SERVICE` のユーザーはパスワード、MFA、SSO を持たないため、トークンが唯一の経路となり、監査証跡が読み取りやすく保たれます。
+- **トークンを制限し期限を設ける** — `ROLE_RESTRICTION` が接続の到達範囲すべてを限定し、`DAYS_TO_EXPIRY` が忘れがちなローテーションを強制します。
+
+## 関連
+
+<CardGroup cols={2}>
+  <Card title="Tony エージェント" icon="database" href="/ja/guide/agents/tony">
+    データベースに特化した最適化エージェント
+  </Card>
+  <Card title="ClickHouse 接続" icon="/images/icons/clickhouse.svg" href="/ja/guide/connections/clickhouse">
+    ClickHouse クラスタ向けの同様のセットアップ
+  </Card>
+</CardGroup>
