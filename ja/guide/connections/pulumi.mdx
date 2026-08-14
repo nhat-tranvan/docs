@@ -1,0 +1,133 @@
+---
+title: Pulumi
+description: "Pulumi を CloudThinker に接続してスタック棚卸し、リソース検索、ポリシー確認、承認付きデプロイを実現"
+icon: "/images/icons/pulumi.svg"
+---
+
+import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+
+Pulumi アカウントを接続して、[Alex](/ja/guide/agents/alex)（クラウドエンジニア）がスタックを調査し、Pulumi が管理するリソースを検索し、ポリシー違反を確認し、Pulumi がホストする MCP サーバー経由で Registry のスキーマを参照できるようにします。Pulumi は **OAuth** を使うため、Pulumi のアクセストークンを CloudThinker に貼り付ける必要はありません。
+
+## 前提条件
+
+- CloudThinker に調査させたい組織に所属する **Pulumi Cloud アカウント**。
+- Pulumi の OAuth フローで CloudThinker を承認する権限。
+
+<Info>
+ツールが読み取るのは、Pulumi アカウントの既定の組織です。対象のスタックを保有する組織に所属するアカウントで認可してください。そうしないとエージェントは空の一覧を報告します。
+</Info>
+
+## セットアップ
+
+<Steps>
+  <Step title="CloudThinker を開く">
+    ワークスペースで **Connections → Pulumi** を開きます。
+  </Step>
+  <Step title="OAuth フローを開始する">
+    **Connect** をクリックして Pulumi の認可ページを開きます。
+  </Step>
+  <Step title="CloudThinker を認可する">
+    対象のスタックを参照できる Pulumi アカウントでサインインし、アクセスを承認します。
+  </Step>
+  <Step title="CloudThinker に戻る">
+    CloudThinker が OAuth トークンを保存し、接続が **Connected** 状態になります。
+  </Step>
+</Steps>
+
+## 接続詳細
+
+Pulumi は OAuth を使うため、入力する項目はありません。認可が完了すると CloudThinker がトークンを自動的に保存します。
+
+| 項目 | 説明 |
+|-------|-------------|
+| **OAuth トークン** | Pulumi が発行し自動保存されます。手入力は不要です |
+| **MCP エンドポイント** | Pulumi がホストする `mcp.ai.pulumi.com`。固定で変更できません |
+
+## 必要な権限
+
+CloudThinker は OAuth で付与された Pulumi の権限を引き継ぎます。
+
+- **読み取り操作**：スタック、管理対象リソース、ポリシー違反、組織メンバー、Neo のタスク履歴、Registry のスキーマ。
+- **デプロイと Pulumi Neo**：対応する Pulumi の権限に加えて、CloudThinker での明示的な[承認](/ja/guide/approval)が必要です。どちらもクラウドリソースを変更するためです。
+
+<Tip>
+組織を管理するアカウントではなく、組織を読み取れるアカウントで認可してください。読み取り権限だけで、確認を求める 2 つの機能を除くすべての機能をまかなえます。
+</Tip>
+
+## エージェントの機能
+
+接続すると、Alex は次のことができます。
+
+| 機能 | 説明 |
+|------------|-------------|
+| **スタック棚卸し** | 組織内のスタックをプロジェクトと最終更新とともに一覧表示 |
+| **リソース検索** | Pulumi 管理下のリソースを名前、種類、プロジェクト、スタックで検索 |
+| **ポリシー確認** | ポリシー違反を一覧表示し、適用レベルごとに分類 |
+| **Registry 参照** | Pulumi Registry からプロバイダーのリソースおよび関数スキーマを取得 |
+| **組織メンバー** | 組織のメンバーと管理者を一覧表示 |
+| **Neo のタスク** | Pulumi Neo のタスク履歴を参照。Neo の操作には承認が必要 |
+| **AWS へのデプロイ** | 呼び出しを承認した場合にのみ AWS へデプロイ |
+
+### 接続を確認する
+
+```text
+@alex #report list my Pulumi stacks and the organization they belong to
+```
+
+### プロンプト例
+
+```text
+@alex #report which Pulumi stacks have mandatory policy violations
+@alex #report find every S3 bucket Pulumi manages and name the stack that owns it
+@alex #recommend read the aws:s3/bucket schema and list the settings we leave unset
+```
+
+## 承認が必要なツール
+
+実際の状態を変更する Pulumi のツールは 4 つあり、CloudThinker は呼び出しのたびに確認します。**AWS へのデプロイ**と、Pulumi Neo を操作する 3 つのツール（ブリッジ、タスクの継続、会話のリセット）です。エージェントはスタックと影響を示したうえで、回答を待ちます。
+
+この接続のその他の操作はすべて読み取りです。スタックの読み取りで確認が入ることはないため、棚卸しやポリシーの質問は 1 ターンで完了します。
+
+<Warning>
+プロンプトに示されたスタックに心当たりがある場合にのみデプロイを承認してください。Pulumi のデプロイは実際のクラウドリソースを作成し、クラウドアカウントに課金されます。
+</Warning>
+
+## トラブルシューティング
+
+<Accordion title="OAuth フローが完了しない">
+ブラウザが別の Pulumi アカウントでサインインしている可能性があります。app.pulumi.com で目的のアカウントにサインインしてから、CloudThinker で **Connect** をやり直してください。
+</Accordion>
+
+<Accordion title="エージェントがスタックを見つけられない">
+Pulumi はアカウントの既定の組織について回答します。そのアカウントが対象スタックを保有する組織のメンバーであることを確認し、正しいアカウントで接続し直してください。
+</Accordion>
+
+<Accordion title="組織へのアクセス権がないと表示される">
+トークンが届くのは、Pulumi ユーザーが所属する組織だけです。Pulumi でそのユーザーを組織に追加するか、すでに所属しているアカウントで接続し直してください。
+</Accordion>
+
+<Accordion title="デプロイのたびに確認を求められる">
+これは承認ゲートで、呼び出しごとに動作します。会話の中で確認に回答してください。CloudThinker がゲート付きツールをどう扱うかは[承認](/ja/guide/approval)を参照してください。
+</Accordion>
+
+<Accordion title="Pulumi の新しいツールが見当たらない">
+CloudThinker は確認済みの Pulumi ツールのみを公開します。Pulumi が後から追加したツールは、CloudThinker が内容を確認し承認の要否を決めるまで表示されません。
+</Accordion>
+
+## セキュリティ
+
+<ConnectionSecurity />
+
+- **ゲートを維持する** — デプロイと Pulumi Neo は承認必須のままにしてください。ここでクラウドを変更できるツールはこの 2 種類だけです。
+- **接続はよく考えて張り直す** — 接続の到達範囲は認可したアカウントの到達範囲そのものです。アカウントを変えるときは接続を削除して認可し直してください。
+
+## 関連
+
+<CardGroup cols={2}>
+  <Card title="Alex Agent" icon="cloud" href="/ja/guide/agents/alex">
+    クラウドインフラとコストの分析
+  </Card>
+  <Card title="承認" icon="shield-check" href="/ja/guide/approval">
+    状態を変更するツールを CloudThinker がどうゲートするか
+  </Card>
+</CardGroup>
