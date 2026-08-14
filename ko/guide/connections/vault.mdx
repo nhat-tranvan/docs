@@ -1,0 +1,221 @@
+---
+title: HashiCorp Vault
+description: "Token 또는 AppRole 인증을 통해 HashiCorp Vault를 연결하여 KV 시크릿을 읽고, 동적 자격증명을 발급하며, 정책·토큰·상태를 감사합니다"
+icon: "/images/icons/vault.svg"
+---
+
+import ConnectionSecurity from '/snippets/ko/connection-security.mdx';
+
+HashiCorp Vault 클러스터를 연결하면 [Oliver](/ko/guide/agents/oliver) (Security Professional)가 CloudThinker의 보안 샌드박스에서 실행되는 `vault` CLI를 통해 KV 시크릿을 읽고, 동적 데이터베이스 및 클라우드 자격증명을 가져오며, 정책·토큰·감사 디바이스·클러스터 상태를 검사할 수 있습니다.
+
+## 지원 플랫폼
+
+| 플랫폼 | 지원 |
+|----------|---------|
+| **Vault 오픈소스** | 자체 호스팅, 최신 릴리스 |
+| **Vault Enterprise** | 네임스페이스 지원 |
+| **HCP Vault Dedicated** | 네임스페이스 설정 필요 (기본값 `admin`) |
+
+## 사전 요구사항
+
+1. **접근 가능한 Vault 주소** — 샌드박스는 네트워크를 통해 `VAULT_ADDR`에 연결합니다. 로컬 머신이 아닙니다. `localhost`, 개인 주소 대신 공개 DNS 이름 또는 HCP 엔드포인트를 사용하세요.
+2. **자격증명** — Vault 토큰, 또는 에이전트가 쿼리할 경로에 대한 읽기 접근을 허용하는 정책이 연결된 AppRole (`role_id` + `secret_id`).
+3. **(Enterprise / HCP만 해당)** 시크릿이 있는 **네임스페이스**.
+
+## 설정
+
+배포 환경에 맞는 인증 방법을 선택하세요. 프로덕션에서는 `secret_id`를 장기 토큰 교체 없이 갱신할 수 있는 AppRole을 권장합니다.
+
+<Tabs>
+  <Tab title="Token">
+
+    <Steps>
+      <Step title="읽기 정책 작성">
+        CloudThinker가 접근할 경로에만 읽기 권한을 부여하세요:
+
+        ```bash
+        vault policy write cloudthinker-read - <<EOF
+        path "kv/data/*" {
+          capabilities = ["read", "list"]
+        }
+        path "kv/metadata/*" {
+          capabilities = ["list"]
+        }
+        EOF
+        ```
+      </Step>
+      <Step title="토큰 생성">
+        해당 정책에 토큰을 바인딩하세요:
+
+        ```bash
+        vault token create \
+          -policy=cloudthinker-read \
+          -ttl=720h \
+          -display-name=cloudthinker
+        ```
+
+        출력에서 `token` 값을 복사하세요.
+      </Step>
+      <Step title="CloudThinker에 연결 추가">
+        **Connections → HashiCorp Vault**로 이동하여 다음을 입력하세요:
+
+        - **VAULT_ADDR**: 스킴과 포트를 포함한 Vault URL, 예: `https://vault.example.com:8200`
+        - **VAULT_NAMESPACE**: 오픈소스 Vault는 비워두고, HCP(`admin`) 또는 Enterprise 네임스페이스는 설정하세요
+        - **VAULT_AUTH_METHOD**: **Token**
+        - **VAULT_TOKEN**: 이전 단계의 토큰
+
+        **Connect**를 클릭하세요. CloudThinker가 `vault token lookup`으로 토큰을 검증하고 **Connected** 상태를 표시합니다.
+      </Step>
+    </Steps>
+
+  </Tab>
+
+  <Tab title="AppRole">
+
+    <Steps>
+      <Step title="AppRole 활성화 및 정책 작성">
+        AppRole 인증 방법을 활성화하고 (이미 활성화된 경우 건너뛰기) 경로에 읽기 권한을 부여하세요:
+
+        ```bash
+        vault auth enable approle
+
+        vault policy write cloudthinker-read - <<EOF
+        path "kv/data/*" {
+          capabilities = ["read", "list"]
+        }
+        path "kv/metadata/*" {
+          capabilities = ["list"]
+        }
+        EOF
+        ```
+      </Step>
+      <Step title="AppRole 생성">
+        AppRole을 정책에 바인딩하세요:
+
+        ```bash
+        vault write auth/approle/role/cloudthinker \
+          token_policies=cloudthinker-read \
+          token_ttl=1h \
+          token_max_ttl=4h \
+          secret_id_ttl=720h
+        ```
+      </Step>
+      <Step title="Role ID 및 Secret ID 가져오기">
+        ```bash
+        vault read auth/approle/role/cloudthinker/role-id
+        vault write -f auth/approle/role/cloudthinker/secret-id
+        ```
+
+        `role_id`와 생성된 `secret_id`를 복사하세요.
+      </Step>
+      <Step title="CloudThinker에 연결 추가">
+        **Connections → HashiCorp Vault**로 이동하여 다음을 입력하세요:
+
+        - **VAULT_ADDR**: 스킴과 포트를 포함한 Vault URL, 예: `https://vault.example.com:8200`
+        - **VAULT_NAMESPACE**: 오픈소스 Vault는 비워두고, HCP(`admin`) 또는 Enterprise 네임스페이스는 설정하세요
+        - **VAULT_AUTH_METHOD**: **AppRole**
+        - **VAULT_ROLE_ID**: `role_id`
+        - **VAULT_SECRET_ID**: `secret_id`
+
+        **Connect**를 클릭하세요. CloudThinker가 `auth/approle/login`을 수행하고 클라이언트 토큰이 반환되는지 확인한 후 **Connected** 상태를 표시합니다.
+      </Step>
+    </Steps>
+
+  </Tab>
+</Tabs>
+
+토큰과 secret ID는 상태 확인 중 CloudThinker가 표시하는 오류 메시지에서 마스킹됩니다.
+
+## 연결 세부 정보
+
+| 필드 | 필수 여부 | 비고 |
+|-------|----------|-------|
+| **VAULT_ADDR** | 예 | 스킴을 포함한 전체 URL, 예: `https://vault.example.com:8200` |
+| **VAULT_NAMESPACE** | 아니오 | HCP Vault Dedicated(`admin`) 및 Vault Enterprise 네임스페이스 배포만 해당 |
+| **VAULT_AUTH_METHOD** | 예 | `token` 또는 `approle` |
+| **VAULT_TOKEN** | Token 인증 | 인증 방법이 Token인 경우 표시 |
+| **VAULT_ROLE_ID** | AppRole | 인증 방법이 AppRole인 경우 표시 |
+| **VAULT_SECRET_ID** | AppRole | 인증 방법이 AppRole인 경우 표시 |
+
+## 필요 권한
+
+Oliver가 쿼리해야 하는 시크릿 경로에 대해 `read` 및 `list`를 허용하는 정책을 토큰 또는 AppRole에 연결하세요. Vault의 기본 거부 원칙으로 인해 Oliver는 자격증명에 연결된 정책을 절대 초과할 수 없습니다.
+
+<Tip>
+최소 읽기 경로로 시작하고, Oliver가 쓰기 워크플로우를 실행해야 하는 경우에만 `create`/`update` 기능을 추가하세요.
+</Tip>
+
+## 에이전트 기능
+
+Oliver의 작업은 토큰 또는 AppRole의 정책에 의해 제한됩니다. 읽기 작업은 자동으로 실행되며, Vault를 변경하거나 리스를 발급하는 작업은 CloudThinker에서 승인이 필요합니다.
+
+| 기능 | 설명 |
+|------------|-------------|
+| **시크릿 읽기** | KV v1/v2 시크릿 경로 및 값 읽기/목록 조회 |
+| **상태 점검** | 봉인 상태, 마운트된 시크릿 엔진, 인증 방법 확인 |
+| **정책 감사** | 정책, 감사 디바이스, 토큰 메타데이터 목록 조회 및 읽기 |
+| **동적 자격증명** | 단기 데이터베이스 및 클라우드 자격증명 생성 — 승인 필요 |
+| **시크릿 쓰기** | KV 시크릿 및 버전 생성, 업데이트, 삭제 — 승인 필요 |
+| **리스 관리** | 자격증명 리스 취소 또는 갱신 — 승인 필요 |
+
+### 연결 확인
+
+```text
+@oliver #report list all mounted auth methods and check Vault health
+```
+
+### 예시 프롬프트
+
+```text
+@oliver #report list all secrets under the kv mount and summarize what's there
+@oliver #report show Vault health, seal status, and version
+@oliver #recommend audit the current token — what policies and TTL does it have
+```
+
+## 문제 해결
+
+<Accordion title="샌드박스에서 VAULT_ADDR에 접근할 수 없음">
+`vault` CLI는 사용자 머신이 아닌 CloudThinker의 샌드박스 안에서 실행됩니다. `localhost`, `127.0.0.1`, `host.docker.internal`은 샌드박스 자체를 가리키므로 `dial tcp ... no such host` 또는 연결 거부 오류가 발생합니다. `VAULT_ADDR`을 공개 DNS 이름 또는 HCP Vault Dedicated 엔드포인트로 설정하세요. 방화벽이나 VPN 뒤에 있는 Vault는 공개 엔드포인트, 허용된 이그레스, 또는 네트워크 브리지를 통해 먼저 노출해야 합니다.
+</Accordion>
+
+<Accordion title="VAULT_ADDR 스킴 오류">
+`vault`는 스킴을 포함한 전체 URL이 필요합니다. `vault.example.com:8200` (스킴 없음)은 연결 오류를 유발합니다. `https://vault.example.com:8200`을 사용하거나 개발 모드 서버에는 `http://...`를 사용하세요.
+</Accordion>
+
+<Accordion title="403 권한 거부됨">
+토큰 또는 AppRole 정책이 요청한 경로에 대한 접근 권한을 부여하지 않습니다. `vault token lookup`으로 정책을 확인하고 에이전트가 쿼리하는 경로를 포함하는지 확인하세요. 예를 들어, `kv/data/production/*`를 읽으려면 정책에 해당 경로에 대한 `capabilities = ["read", "list"]`가 필요합니다.
+</Accordion>
+
+<Accordion title="HCP / Enterprise에서 네임스페이스 필요">
+HCP Vault Dedicated 및 Enterprise 다중 네임스페이스 배포에서는 `VAULT_NAMESPACE`가 필요합니다. HCP의 기본값은 `admin`입니다. HCP 또는 Enterprise에서 `no handler for route` 또는 `permission denied`가 표시되면 네임스페이스가 설정되어 있는지 확인하세요.
+</Accordion>
+
+<Accordion title="AppRole secret_id 만료됨">
+`secret_id`에는 TTL(`secret_id_ttl`)이 있습니다. 만료되면 `invalid secret_id`로 인증이 실패합니다. 새 secret_id를 생성하고 **VAULT_SECRET_ID**를 업데이트한 후 재연결하세요:
+
+```bash
+vault write -f auth/approle/role/cloudthinker/secret-id
+```
+</Accordion>
+
+<Accordion title="Vault가 봉인됨">
+`vault status`가 `Sealed: true`를 표시하고 어떤 작업도 성공하지 못합니다. 에이전트가 읽거나 쓸 수 있으려면 Vault 운영자가 클러스터를 봉인 해제해야 합니다 (`vault operator unseal`).
+</Accordion>
+
+## 보안
+
+<ConnectionSecurity />
+
+- **프로덕션에서 AppRole 권장** — 장기 토큰 교체 없이 `secret_id`를 갱신하세요.
+- **쓰기 작업 제한** — 자격증명 발급 및 변경이 항상 인간의 승인을 거치도록 쓰기 경로를 승인 필요로 유지하세요.
+
+## 관련 항목
+
+<CardGroup cols={2}>
+  <Card title="Oliver 에이전트" icon="shield-halved" href="/ko/guide/agents/oliver">
+    보안 및 컴플라이언스 에이전트
+  </Card>
+  <Card title="승인 제어" icon="circle-check" href="/ko/guide/approval">
+    쓰기 작업에 승인 게이트 설정
+  </Card>
+</CardGroup>

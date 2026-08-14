@@ -1,0 +1,221 @@
+---
+title: HashiCorp Vault
+description: "Kết nối HashiCorp Vault để đọc KV secrets, cấp phát dynamic credentials và kiểm toán policy, token và sức khỏe cluster qua xác thực Token hoặc AppRole"
+icon: "/images/icons/vault.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối cụm HashiCorp Vault của bạn để [Oliver](/vi/guide/agents/oliver) (Security Professional) có thể đọc KV secrets, lấy dynamic credentials cho database và cloud, đồng thời kiểm tra policy, token, audit device và sức khỏe cluster — tất cả thông qua CLI `vault` chạy trong sandbox bảo mật của CloudThinker.
+
+## Nền tảng được hỗ trợ
+
+| Nền tảng | Hỗ trợ |
+|----------|---------|
+| **Vault open-source** | Tự host, các phiên bản gần đây |
+| **Vault Enterprise** | Hỗ trợ namespace |
+| **HCP Vault Dedicated** | Đặt namespace (mặc định `admin`) |
+
+## Điều kiện tiên quyết
+
+1. **Địa chỉ Vault có thể tiếp cận** — sandbox kết nối tới `VAULT_ADDR` qua mạng, không phải máy tính của bạn. Sử dụng tên DNS công khai hoặc endpoint HCP, không dùng `localhost` hoặc địa chỉ riêng tư mà sandbox không thể định tuyến.
+2. **Thông tin xác thực** — Vault token, hoặc AppRole (`role_id` + `secret_id`), được gắn với policy cấp quyền đọc tới các path mà bạn muốn agent truy vấn.
+3. **(Chỉ Enterprise / HCP)** **Namespace** chứa secrets.
+
+## Thiết lập
+
+Chọn phương thức xác thực phù hợp với triển khai của bạn. AppRole được khuyến nghị cho môi trường production vì `secret_id` có thể xoay vòng mà không cần thay thế token dài hạn.
+
+<Tabs>
+  <Tab title="Token">
+
+    <Steps>
+      <Step title="Tạo read policy">
+        Cấp quyền đọc chỉ đến các path mà CloudThinker cần tiếp cận:
+
+        ```bash
+        vault policy write cloudthinker-read - <<EOF
+        path "kv/data/*" {
+          capabilities = ["read", "list"]
+        }
+        path "kv/metadata/*" {
+          capabilities = ["list"]
+        }
+        EOF
+        ```
+      </Step>
+      <Step title="Tạo token">
+        Gắn token với policy đó:
+
+        ```bash
+        vault token create \
+          -policy=cloudthinker-read \
+          -ttl=720h \
+          -display-name=cloudthinker
+        ```
+
+        Sao chép giá trị `token` từ output.
+      </Step>
+      <Step title="Thêm kết nối trong CloudThinker">
+        Điều hướng đến **Connections → HashiCorp Vault** và nhập:
+
+        - **VAULT_ADDR**: URL Vault của bạn bao gồm scheme và port, ví dụ: `https://vault.example.com:8200`
+        - **VAULT_NAMESPACE**: để trống cho Vault open-source; đặt cho HCP (`admin`) hoặc namespace Enterprise
+        - **VAULT_AUTH_METHOD**: **Token**
+        - **VAULT_TOKEN**: token từ bước trước
+
+        Nhấn **Connect**. CloudThinker xác minh token bằng `vault token lookup` và hiển thị trạng thái **Connected**.
+      </Step>
+    </Steps>
+
+  </Tab>
+
+  <Tab title="AppRole">
+
+    <Steps>
+      <Step title="Bật AppRole và tạo policy">
+        Bật phương thức xác thực AppRole (bỏ qua nếu đã bật) và cấp quyền đọc tới các path của bạn:
+
+        ```bash
+        vault auth enable approle
+
+        vault policy write cloudthinker-read - <<EOF
+        path "kv/data/*" {
+          capabilities = ["read", "list"]
+        }
+        path "kv/metadata/*" {
+          capabilities = ["list"]
+        }
+        EOF
+        ```
+      </Step>
+      <Step title="Tạo AppRole">
+        Gắn AppRole với policy:
+
+        ```bash
+        vault write auth/approle/role/cloudthinker \
+          token_policies=cloudthinker-read \
+          token_ttl=1h \
+          token_max_ttl=4h \
+          secret_id_ttl=720h
+        ```
+      </Step>
+      <Step title="Lấy role ID và secret ID">
+        ```bash
+        vault read auth/approle/role/cloudthinker/role-id
+        vault write -f auth/approle/role/cloudthinker/secret-id
+        ```
+
+        Sao chép `role_id` và `secret_id` được tạo ra.
+      </Step>
+      <Step title="Thêm kết nối trong CloudThinker">
+        Điều hướng đến **Connections → HashiCorp Vault** và nhập:
+
+        - **VAULT_ADDR**: URL Vault của bạn bao gồm scheme và port, ví dụ: `https://vault.example.com:8200`
+        - **VAULT_NAMESPACE**: để trống cho Vault open-source; đặt cho HCP (`admin`) hoặc namespace Enterprise
+        - **VAULT_AUTH_METHOD**: **AppRole**
+        - **VAULT_ROLE_ID**: `role_id`
+        - **VAULT_SECRET_ID**: `secret_id`
+
+        Nhấn **Connect**. CloudThinker thực hiện `auth/approle/login`, xác nhận client token được trả về và hiển thị trạng thái **Connected**.
+      </Step>
+    </Steps>
+
+  </Tab>
+</Tabs>
+
+Token và secret ID bị ẩn khỏi mọi thông báo lỗi mà CloudThinker hiển thị trong quá trình kiểm tra sức khỏe.
+
+## Chi tiết kết nối
+
+| Trường | Bắt buộc | Ghi chú |
+|-------|----------|-------|
+| **VAULT_ADDR** | Có | URL đầy đủ bao gồm scheme, ví dụ: `https://vault.example.com:8200` |
+| **VAULT_NAMESPACE** | Không | Chỉ dành cho HCP Vault Dedicated (`admin`) và triển khai namespace Vault Enterprise |
+| **VAULT_AUTH_METHOD** | Có | `token` hoặc `approle` |
+| **VAULT_TOKEN** | Xác thực Token | Hiển thị khi phương thức xác thực là Token |
+| **VAULT_ROLE_ID** | AppRole | Hiển thị khi phương thức xác thực là AppRole |
+| **VAULT_SECRET_ID** | AppRole | Hiển thị khi phương thức xác thực là AppRole |
+
+## Quyền bắt buộc
+
+Gắn policy vào token hoặc AppRole cấp quyền `read` và `list` trên các secret path mà Oliver cần truy vấn. Chính sách mặc định từ chối của Vault đảm bảo Oliver không bao giờ vượt quá policy gắn với thông tin xác thực của bạn.
+
+<Tip>
+Bắt đầu với các path đọc tối thiểu và chỉ thêm khả năng `create`/`update` nếu bạn muốn Oliver thực hiện các luồng ghi.
+</Tip>
+
+## Khả năng của agent
+
+Các hành động của Oliver bị giới hạn bởi policy trên token hoặc AppRole. Các thao tác đọc chạy tự động; bất kỳ hành động nào thay đổi Vault hoặc cấp phát lease đều cần phê duyệt trong CloudThinker.
+
+| Khả năng | Mô tả |
+|------------|-------------|
+| **Đọc secret** | Đọc và liệt kê các path và giá trị secret KV v1/v2 |
+| **Kiểm tra sức khỏe** | Kiểm tra trạng thái seal, các secret engine đã mount và phương thức xác thực |
+| **Kiểm toán policy** | Liệt kê và đọc policy, audit device và metadata token |
+| **Dynamic credentials** | Tạo credentials database và cloud ngắn hạn — cần phê duyệt |
+| **Ghi secret** | Tạo, cập nhật và xóa KV secrets và phiên bản — cần phê duyệt |
+| **Quản lý lease** | Thu hồi hoặc gia hạn credential lease — cần phê duyệt |
+
+### Xác minh kết nối
+
+```text
+@oliver #report list all mounted auth methods and check Vault health
+```
+
+### Ví dụ prompt
+
+```text
+@oliver #report list all secrets under the kv mount and summarize what's there
+@oliver #report show Vault health, seal status, and version
+@oliver #recommend audit the current token — what policies and TTL does it have
+```
+
+## Khắc phục sự cố
+
+<Accordion title="VAULT_ADDR không thể tiếp cận từ sandbox">
+CLI `vault` chạy bên trong sandbox của CloudThinker, không phải trên máy của bạn. `localhost`, `127.0.0.1` và `host.docker.internal` phân giải về chính sandbox và thất bại với lỗi `dial tcp ... no such host` hoặc connection refused. Trỏ `VAULT_ADDR` tới tên DNS công khai hoặc endpoint HCP Vault Dedicated. Vault đằng sau firewall hoặc VPN phải được expose qua endpoint công khai, egress được cho phép hoặc network bridge trước.
+</Accordion>
+
+<Accordion title="Scheme VAULT_ADDR sai">
+`vault` cần URL đầy đủ bao gồm scheme. `vault.example.com:8200` (không có scheme) gây lỗi kết nối. Sử dụng `https://vault.example.com:8200`, hoặc `http://...` cho máy chủ ở chế độ dev.
+</Accordion>
+
+<Accordion title="403 permission denied">
+Policy của token hoặc AppRole không cấp quyền truy cập tới path được yêu cầu. Kiểm tra policy bằng `vault token lookup` và đảm bảo policy bao gồm các path mà agent truy vấn. Ví dụ, để đọc `kv/data/production/*`, policy cần `capabilities = ["read", "list"]` trên path đó.
+</Accordion>
+
+<Accordion title="Namespace bắt buộc trên HCP / Enterprise">
+HCP Vault Dedicated và các triển khai multi-namespace Enterprise yêu cầu `VAULT_NAMESPACE`. Với HCP, mặc định là `admin`. Nếu bạn thấy `no handler for route` hoặc `permission denied` trên HCP hoặc Enterprise, hãy xác nhận namespace đã được đặt.
+</Accordion>
+
+<Accordion title="AppRole secret_id hết hạn">
+`secret_id` có TTL (`secret_id_ttl`). Khi hết hạn, xác thực thất bại với lỗi `invalid secret_id`. Tạo một cái mới, cập nhật **VAULT_SECRET_ID** và kết nối lại:
+
+```bash
+vault write -f auth/approle/role/cloudthinker/secret-id
+```
+</Accordion>
+
+<Accordion title="Vault đang bị sealed">
+`vault status` hiển thị `Sealed: true` và không có thao tác nào thành công. Quản trị viên Vault phải unseal cluster (`vault operator unseal`) trước khi agent có thể đọc hoặc ghi.
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Ưu tiên AppRole trong production** — xoay vòng `secret_id` mà không cần thay thế token dài hạn.
+- **Kiểm soát thao tác ghi** — giữ các path ghi yêu cầu phê duyệt để việc cấp phát credentials và các thay đổi luôn cần xác nhận từ người dùng.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Oliver Agent" icon="shield-halved" href="/vi/guide/agents/oliver">
+    Agent bảo mật và tuân thủ
+  </Card>
+  <Card title="Kiểm soát phê duyệt" icon="circle-check" href="/vi/guide/approval">
+    Yêu cầu phê duyệt cho các thao tác ghi
+  </Card>
+</CardGroup>

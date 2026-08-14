@@ -1,0 +1,209 @@
+---
+title: "SCIMプロビジョニングの設定"
+description: "SCIM 2.0を使ってIDプロバイダーからのユーザーとグループのプロビジョニングを自動化する"
+icon: users-gear
+---
+
+SCIMプロビジョニングは **Scale**、**Scale +**、**Enterprise** プランで利用できます。アクティブなSSO接続が必要です。
+
+このガイドでは、SCIMディレクトリ同期の有効化、グループとワークスペースのマッピング設定、トークン管理、同期アクティビティの監視について説明します。
+
+**始める前に:** まず[シングルサインオン（SSO）の設定](/ja/guide/security/sso)を完了してください。SCIMはアクティブなSSO接続の上に構築されます——先にドメイン確認とIDプロバイダーとのSSO設定が必要です。
+
+---
+
+## CloudThinkerでのSCIMの仕組み
+
+SCIM（System for Cross-domain Identity Management）は、IDプロバイダーがCloudThinkerを自社ディレクトリと自動的に同期できるようにする業界標準です。手動でユーザーを招待・削除する代わりに、IdPが自動的に処理します。
+
+SCIMを有効にすると:
+
+- IdPでCloudThinkerアプリケーションに**割り当てられたユーザー**が組織に自動的に追加される
+- IdPアプリケーションから**削除されたユーザー**がCloudThinkerで自動的に非アクティブ化される
+- IdPから**プッシュされたグループ**がCloudThinkerに表示され、特定のワークスペースとロールにマッピングできる
+- IdPでの**グループメンバーシップの変更**がCloudThinkerのワークスペースアクセスに自動的に反映される
+
+裏側では、IdPがユーザーやグループの作成・更新・削除が必要なときにベアラートークンを使ってCloudThinkerのSCIM 2.0 APIを呼び出します。
+
+---
+
+## ステップ1: CloudThinkerでSCIMを有効にする
+
+<Steps>
+  <Step title="Identity and access設定に移動する">
+    **Admin Settings → Identity and access** に移動します。SSO接続がアクティブな場合、**Provisioning & directory sync** カードがSSOカードの下に表示されます。
+  </Step>
+  <Step title="SCIMを選択する">
+    プロビジョニングモードセレクターで **SCIM** オプションをクリックします。CloudThinkerがベアラートークンとSCIMエンドポイントURLを生成します。
+  </Step>
+  <Step title="クレデンシャルをコピーする">
+    ダイアログにIDプロバイダーに貼り付ける2つの値が表示されます:
+    - **Bearer token** — IdPがCloudThinkerのSCIM APIに認証するために使用するシークレットトークン
+    - **SCIM base URL** — IdPがリクエストを送信するエンドポイント（形式: `https://<your-domain>/api/v1/scim/{org_id}/v2`）
+
+    今すぐ両方の値をコピーしてください——ベアラートークンは一度のみ表示されます。
+  </Step>
+</Steps>
+
+<Warning>
+ベアラートークンはダイアログを閉じた後に取得できません。すぐにコピーしてください。紛失した場合はトークンをローテーションする必要があります。
+</Warning>
+
+---
+
+## ステップ2: IDプロバイダーでSCIMを設定する
+
+IDプロバイダーの管理コンソールに切り替えて、CloudThinkerアプリケーションのSCIMプロビジョニングをセットアップします。プロバイダー（Okta、Azure AD / Microsoft Entra、OneLoginなど）によって手順は異なりますが、必要な値は同じです。
+
+### 一般的な設定
+
+IdPのCloudThinkerアプリケーションのSCIMまたはプロビジョニング設定で以下を入力します:
+
+| フィールド | 値 |
+|-------|-------|
+| **SCIM connector base URL** | ステップ1のSCIM base URL |
+| **Authentication mode** | HTTP Header / Bearer Token |
+| **Bearer token** | ステップ1のトークン |
+| **Unique identifier field** | `userName`（ユーザーのメールアドレスにマッピングされる） |
+
+### IdPが同期できること
+
+| 操作 | サポート | 内容 |
+|-----------|-----------|-------------|
+| Create Users | Yes | CloudThinker組織に新しいユーザーアカウントを追加する |
+| Update User Attributes | Yes | 名前、メール、アクティブステータスを同期する |
+| Deactivate Users | Yes | IdPでユーザーが非アクティブ化されたときにアクセスを無効にする |
+| Delete Users | Yes | 組織からユーザーを削除する |
+| Push Groups | Yes | IdPグループをCloudThinkerに同期してワークスペースマッピングに使用する |
+| Group Membership | Yes | IdPとCloudThinker間でグループメンバーを同期する |
+
+<Info>
+CloudThinkerはユーザー検索に `userName` でのフィルタリング、グループ検索に `displayName` でのフィルタリングをサポートします。バルク操作は現在サポートされていません。
+</Info>
+
+---
+
+## ステップ3: グループをワークスペースとロールにマッピングする
+
+IdPがSCIM経由でグループをプッシュし始めると、Identity and accessページの **Group mappings** セクションに自動的に表示されます。グループマッピングを使うと、IdPでのグループメンバーシップに基づいて、ユーザーがどのワークスペースに入り、どのロールを取得するかを制御できます。
+
+同期されたグループごとに以下を設定できます:
+
+| 設定 | 説明 |
+|---------|-------------|
+| **Auto-assigned workspaces** | このグループのメンバーが自動的に追加されるワークスペース |
+| **Auto-assigned organization role** | このグループのメンバーの組織ロール——Viewer、Developer、またはAdminから選択。SSO接続設定のデフォルトロールを使用するには "Use connection role" を選択する。 |
+
+<Steps>
+  <Step title="グループが表示されるのを待つ">
+    IdPでSCIMを設定した後、CloudThinkerアプリケーションにグループを割り当てます。IdPがグループをプッシュすると **Group mappings** テーブルに表示されます——IdPの同期間隔によっては数分かかる場合があります。
+  </Step>
+  <Step title="ワークスペースを選択する">
+    各グループについて、ワークスペースドロップダウンを使ってメンバーがアクセスできるワークスペースを選択します。
+  </Step>
+  <Step title="ロールを設定する（オプション）">
+    オプションで各グループに特定のロールを選択します。"Use connection role" のままにすると、メンバーはSSO接続設定のデフォルトロールを取得します。
+  </Step>
+  <Step title="保存する">
+    各グループ行の **Save** をクリックしてマッピングを適用します。
+  </Step>
+</Steps>
+
+<Info>
+グループがまだ同期されていない場合、Group mappingsセクションに次のメッセージが表示されます: "No groups synced yet. Groups will appear here automatically once your identity provider pushes them via SCIM."
+</Info>
+
+---
+
+## SCIMトークンの管理
+
+### トークンのローテーション
+
+トークンが侵害された場合やセキュリティポリシーで定期的なローテーションが必要な場合、ダウンタイムなしでローテーションできます:
+
+1. **Directory sync (SCIM)** セクションで **Rotate token** をクリックする
+2. ローテーションを確認します——古いトークンはさらに24時間有効で、IdPを更新する時間があります
+3. 新しいトークンをコピーしてIdPのSCIM設定で更新する
+
+古いトークンと新しいトークンの両方が24時間の重複ウィンドウ中に機能するため、切り替え中にIdPで同期エラーは発生しません。
+
+### トークンの失効
+
+SCIMから別のプロビジョニングモード（ManualまたはJIT）に切り替えると、SCIMトークンが自動的に失効し、すべてのディレクトリ同期が停止します。IdPはCloudThinkerでユーザーを作成・更新・削除できなくなります。
+
+---
+
+## 同期アクティビティの監視
+
+Directory syncセクションの **View sync logs** をクリックすると、すべてのSCIM操作の履歴を確認できます。これはIdPが正しく変更をプッシュしていることを確認したり、プロビジョニングの問題をトラブルシューティングするのに役立ちます。
+
+各ログエントリには以下が表示されます:
+
+| フィールド | 説明 |
+|-------|-------------|
+| **Timestamp** | 操作が発生した日時 |
+| **Action** | 何が起きたか（例: CREATE、UPDATE、DELETE） |
+| **Resource** | 影響を受けたユーザーまたはグループ |
+| **Status** | 成功（SUCCESS）、スキップ（SKIPPED）、失敗（FAILED）のいずれか |
+
+---
+
+## SCIMの無効化
+
+ディレクトリ同期が不要になった場合、SCIMを無効化できます:
+
+1. **Provisioning & directory sync** カードで **Manual** または **Just-in-time** を選択する
+2. アクションを確認します——これにより即座にSCIMトークンが失効し、すべてのディレクトリ同期が停止します
+3. 既存のユーザーは組織に残りますが、IdPはユーザーを自動的に追加・削除できなくなります
+
+<Warning>
+SCIMの無効化は即時に有効になります。IDプロバイダーは次の同期サイクルで認証エラーを受け取り始めます。不要なエラーアラートを避けるために、IdPのSCIMプロビジョニングを更新または無効化してください。
+</Warning>
+
+---
+
+## トラブルシューティング
+
+### CloudThinkerにグループが表示されない
+
+IdPのプロビジョニング設定でグループがCloudThinkerアプリケーションに割り当てられていることを確認してください。CloudThinkerはIdPからグループをプルしません——IdPがプッシュする必要があります。**View sync logs** でグループ同期の試みが行われたか確認してください。
+
+### ユーザーがプロビジョニングされない
+
+1. IdPでユーザーがCloudThinkerアプリケーションに割り当てられていることを確認する
+2. SCIMトークンがローテーションまたは失効していないことを確認する——不明な場合はトークンをローテーションしてIdPを更新する
+3. **View sync logs** を開いてFAILEDエントリを探す——何が問題だったかの詳細が含まれていることが多い
+4. ユーザーのメールアドレスが有効で、別のCloudThinker組織にすでに関連付けられていないことを確認する
+
+### ユーザーがデプロビジョニングされない
+
+1. IdPでユーザーがCloudThinkerアプリケーションから削除されていることを確認する（グループから削除するだけでは不十分——アプリケーションの割り当てを解除する必要がある）
+2. そのユーザーに対するDELETEまたはDEACTIVATEアクションの同期ログを確認する
+3. IdPによっては変更が即時に同期されない——例えばMicrosoft Entraは約40分ごとに同期します。次のサイクルを待ってから再確認してください。
+
+### SCIMトークンが機能しなくなった
+
+別の管理者によってトークンがローテーションまたは失効した可能性があります。CloudThinkerで新しいトークンを生成して、IdPのSCIM設定を新しい値で更新してください。
+
+### 「Cannot enable JIT provisioning while SCIM is active」
+
+JIT（Just-in-Time）プロビジョニングとSCIMは同時に使用できません。JITに切り替えるには、まず別のプロビジョニングモード（ManualまたはJIT）を選択してください——SCIMトークンが失効してディレクトリ同期が停止します。
+
+---
+
+## 関連
+
+<CardGroup cols={2}>
+  <Card title="SSOの設定" icon="key" href="/ja/guide/security/sso">
+    SAML またはOIDCシングルサインオンの設定（SCIMの前提条件）
+  </Card>
+  <Card title="セキュリティ概要" icon="shield-halved" href="/ja/guide/security/overview">
+    MFA、RBAC、APIキー、データセキュリティ
+  </Card>
+  <Card title="Organizations" icon="building-columns" href="/ja/guide/organization">
+    組織メンバーとロールの管理
+  </Card>
+  <Card title="Workspace Users" icon="users" href="/ja/guide/workspace-users">
+    ワークスペースレベルのアクセス制御
+  </Card>
+</CardGroup>

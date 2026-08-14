@@ -1,0 +1,71 @@
+---
+title: "Chapter 6 · Policy, Approvals, and Execution Safety as Code"
+description: "The trust ladder is a promise to your organization. Policy-as-code is how the promise is kept when nobody is watching."
+icon: clipboard-check
+---
+
+*The trust ladder is a promise to your organization. Policy-as-code is how the promise is kept when nobody is watching.*
+
+## 6.1 Action classification: the two-axis engine
+
+Everything the governance stack does downstream depends on classifying actions well. Two axes do the work: reversibility (can this be cleanly undone, and how fast?) and blast radius (how much of the estate, and which tiers of it, can this touch?). Classify action classes, not individual commands — “restart a stateless pod” is a class with known properties; and make the classification machine-derivable where possible: skills that declare their access class, reversibility, and scope (Chapter 3) classify themselves, which removes the failure mode of a human forgetting that a script is dangerous.
+
+|  | Reversible | Hard / slow to reverse |
+|---|---|---|
+| Narrow blast radius | Automate first: restarts, cache clears, replica scaling, cert rotation → L3–L4 candidates | Approval-gated even when small: data deletions, credential revocations → L2 |
+| Wide blast radius | Approval with soak: traffic shifts, config rollouts with staged verification → L2–L3 by evidence | Human-owned: schema migrations, failovers, security-group changes on crown jewels → L1–L2, senior approval |
+
+Policy then binds the matrix to reality per environment and per agent: which agent may take which action class at which autonomy level, where, when (change windows), under what pre-conditions, with what approval quorum. Express it as versioned, reviewable configuration — policy changes go through pull requests with owners, exactly like the infrastructure they govern. A policy diff is an autonomy decision; it deserves the same review as a production change, because it is one.
+
+```yaml
+# policy sketch (illustrative)
+action_class: rollback_recent_deploy
+  applies_to: [orchestrator]
+  preconditions: [deploy_age < 60m, slo_breach_active, rollback_plan_attached]
+  environments:
+    production: { level: L3, window: any, notify: "#ops-incidents" }
+    payments:   { level: L2, approvers: [sre-senior], quorum: 1 }
+  limits: { max_per_hour: 2, circuit_break_on: repeated_failure }
+```
+
+## 6.2 Approval engineering
+
+Approvals are a human-factors system, and they fail in a known direction: fatigue, then rubber-stamping — at which point the gate is theater and the audit trail records consent that never cognitively happened. The Field Guide gave the operating heuristic (above 95% acceptance, graduate the class; below 70%, fix the agent or the policy). Engineering makes the heuristic real:
+
+- **One screen, full context.** The approval artifact carries the finding, the evidence chain, the exact plan (as a diff or plan output, not prose), the blast-radius estimate, the rollback plan, and the verification that will follow. If an approver must go digging, the design has failed.
+
+- **Make rejection informative.** A structured reject reason (wrong diagnosis / right diagnosis wrong fix / bad timing / policy exception) is training signal for policy tuning and evaluation — capture it at the moment of rejection or lose it forever.
+
+- **Quorum and identity are policy.** Consequential classes can demand specific roles or two-person rules; approvals authenticate as the person, not the channel, and land in the audit trail as first-class events.
+
+- **Meter the gate.** Track approval latency, acceptance rate, and modification rate per class — these are the graduation evidence, and they surface fatigue before it becomes rubber-stamping.
+
+## 6.3 Execution safety mechanics
+
+Between “approved” and “done” sits the machinery that makes agentic change safer than the average human change — which is the standard to hold it to:
+
+1. **Pre-flight checks.** Recompute preconditions at execution time, not decision time: the world moves between plan and apply. Scope assertions (“affects ≤ N resources, none tagged crown-jewel”) fail closed.
+
+2. **Staged application with verification between stages.** Wide changes roll out in slices with the Chapter 1 verification loop between slices; the rollback plan is staged before slice one.
+
+3. **Circuit breakers and rate limits.** An agent repeating a failing action, or the fleet exceeding a change-rate ceiling, halts automatically and escalates. Retry-with-backoff is for network calls, not for production mutations.
+
+4. **Rollback as artifact.** Every consequential action ships with an executable rollback attached at plan time, tested where feasible. “We can probably reverse it” is not a rollback plan.
+
+5. **The kill switch.** One action — halting all autonomous execution fleet-wide while leaving investigation running — with an owner, a drill schedule, and an audit event. The day you need it is not the day to design it.
+
+## 6.4 The audit trail schema
+
+Design the audit record so three audiences can replay any action: the engineer at 09:00, the auditor at quarter-end, the regulator in the worst week of the year. Minimum viable schema per consequential action: trigger and its provenance → context snapshot references (what the agent knew) → reasoning summary with evidence pointers → policy evaluation (which rules matched, which level applied) → approval events (who, when, what they saw) → execution log (tool calls, parameters with secrets tokenized, results) → verification outcomes → and any rollback. Immutable, exportable, retained on your terms — the Field Guide’s data-control question number seven, wearing its engineering clothes. Done well, this is the quiet superpower of agentic operations: change evidence better than most human processes ever produced, generated as a side effect of doing the work.
+
+<Info>
+**IN PRACTICE — THE TRUST STACK IN FOUR NOUNS**
+
+CloudThinker ships this chapter’s machinery as four production objects: Policy — which action classes run at which autonomy level, L1 read-only through L4 unattended-within-policy; Approval — the human gate on consequential and irreversible actions; Operation Runbooks — reviewed execution paths for known work; and Trusted Commands — a command-level allowlist beneath everything else. Manual/Automode is the visible switch on top. These are not architecture-diagram aspirations; they are the objects a customer’s security review inspects and an auditor replays. Ask any vendor for their four equivalents — as running software, with the audit records they emit.
+</Info>
+
+<Tip>
+**KEY TAKEAWAY**
+
+Autonomy is governable when it is compiled: a two-axis classification feeding versioned policy-as-code, approvals engineered against fatigue and metered for graduation evidence, execution wrapped in pre-flight checks, staged rollout, circuit breakers, and pre-staged rollback — all emitting an audit schema three audiences can replay. If the trust ladder is the promise, this chapter is the mechanism.
+</Tip>

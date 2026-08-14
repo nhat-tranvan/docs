@@ -1,0 +1,208 @@
+---
+title: PostgreSQL
+description: "PostgreSQL 데이터베이스를 CloudThinker에 연결하여 쿼리 분석, 인덱스 최적화, 성능 모니터링을 수행합니다"
+icon: "/images/icons/postgresql.svg"
+---
+
+import ConnectionSecurity from '/snippets/ko/connection-security.mdx';
+
+PostgreSQL 데이터베이스를 연결하면 [Tony](/ko/guide/agents/tony) (Database Engineer)가 쿼리를 분석하고, 성능을 최적화하며, 데이터베이스 상태를 모니터링할 수 있습니다.
+
+## 지원 플랫폼
+
+| 플랫폼 | 지원 |
+|----------|---------|
+| **자체 호스팅 PostgreSQL** | 12.x, 13.x, 14.x, 15.x, 16.x |
+| **AWS RDS PostgreSQL** | 전체 버전 |
+| **AWS Aurora PostgreSQL** | 전체 버전 |
+| **Google Cloud SQL** | 전체 PostgreSQL 버전 |
+| **Azure Database for PostgreSQL** | Flexible Server, Single Server |
+
+## 사전 요구사항
+
+- 네트워크를 통해 CloudThinker에서 접근 가능한 PostgreSQL 인스턴스.
+- 전용 사용자를 생성하고 권한을 부여할 관리자 접근.
+- 쿼리 수준 분석(느린 쿼리 데이터에 필요)을 원한다면 `pg_stat_statements` 익스텐션 설치.
+
+## 설정
+
+<Steps>
+  <Step title="관리자로 연결">
+    관리자 계정을 사용하여 PostgreSQL 인스턴스에 연결하세요:
+    ```bash
+    psql -h your-host -U postgres -d your-database
+    ```
+  </Step>
+  <Step title="읽기 전용 사용자 생성">
+    CloudThinker 전용 사용자를 생성하세요:
+    ```sql
+    CREATE USER cloudthinker_readonly WITH PASSWORD 'your-secure-password';
+    ```
+  </Step>
+  <Step title="연결 및 스키마 접근 권한 부여">
+    연결 및 스키마 사용 권한을 허용하세요:
+    ```sql
+    GRANT CONNECT ON DATABASE your_database TO cloudthinker_readonly;
+    GRANT USAGE ON SCHEMA public TO cloudthinker_readonly;
+    GRANT USAGE ON SCHEMA information_schema TO cloudthinker_readonly;
+    ```
+  </Step>
+  <Step title="SELECT 권한 부여">
+    현재 및 향후 테이블/뷰에 대한 SELECT 권한을 부여하세요:
+    ```sql
+    GRANT SELECT ON ALL TABLES IN SCHEMA public TO cloudthinker_readonly;
+    GRANT SELECT ON ALL TABLES IN SCHEMA information_schema TO cloudthinker_readonly;
+
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT SELECT ON TABLES TO cloudthinker_readonly;
+    ```
+  </Step>
+  <Step title="pg_stat_statements 활성화">
+    쿼리 분석에 이 익스텐션이 필요합니다:
+    ```sql
+    -- 익스텐션 활성화 (슈퍼유저 필요)
+    CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+
+    -- 사용자에게 접근 권한 부여
+    GRANT SELECT ON pg_stat_statements TO cloudthinker_readonly;
+    ```
+
+    RDS/Aurora의 경우 파라미터 그룹에 추가하세요:
+    ```
+    shared_preload_libraries = 'pg_stat_statements'
+    ```
+  </Step>
+  <Step title="네트워크 접근 설정">
+    CloudThinker가 데이터베이스에 접근할 수 있는지 확인하세요:
+    - CloudThinker IP를 보안 그룹 또는 방화벽에 추가
+    - RDS의 경우: 공개 접근 활성화 또는 VPC 피어링 사용
+  </Step>
+  <Step title="CloudThinker에 연결 추가">
+    **Connections → PostgreSQL**로 이동하여 다음을 입력하세요:
+    - **Host**: 데이터베이스 호스트명 또는 IP
+    - **Port**: 데이터베이스 포트 (기본값: `5432`)
+    - **Database**: 데이터베이스 이름
+    - **Username**: `cloudthinker_readonly`
+    - **Password**: 위에서 설정한 비밀번호
+    - **SSL mode**: `require` (권장)
+
+    **Connect**를 클릭하세요. 성공하면 CloudThinker가 **Connected** 상태를 표시합니다.
+  </Step>
+</Steps>
+
+## 연결 세부 정보
+
+| 필드 | 설명 | 기본값 |
+|-------|-------------|---------|
+| **Host** | 데이터베이스 호스트명 또는 IP | — |
+| **Port** | PostgreSQL 포트 | `5432` |
+| **Database** | 데이터베이스 이름 | — |
+| **Username** | 전용 사용자, 예: `cloudthinker_readonly` | — |
+| **Password** | 사용자 비밀번호 | — |
+| **SSL mode** | `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full` | `require` |
+| **Connection timeout** | 연결 대기 시간 (초) | `10` |
+| **Statement timeout** | 최대 쿼리 실행 시간 (ms) | `30000` |
+
+연결 문자열 형식:
+
+```
+postgresql://cloudthinker_readonly:your-secure-password@your-host:5432/your-database
+```
+
+## 필요 권한
+
+### 최소
+
+```sql
+GRANT CONNECT ON DATABASE dbname TO cloudthinker_readonly;
+GRANT USAGE ON SCHEMA public TO cloudthinker_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO cloudthinker_readonly;
+```
+
+### 권장 (전체 분석)
+
+```sql
+-- 위의 모든 권한에 추가:
+GRANT SELECT ON pg_stat_statements TO cloudthinker_readonly;
+GRANT SELECT ON pg_stat_activity TO cloudthinker_readonly;
+GRANT SELECT ON pg_stat_user_tables TO cloudthinker_readonly;
+GRANT SELECT ON pg_stat_user_indexes TO cloudthinker_readonly;
+GRANT SELECT ON pg_statio_user_tables TO cloudthinker_readonly;
+GRANT pg_read_all_stats TO cloudthinker_readonly;  -- PostgreSQL 14+
+```
+
+<Tip>
+최소 권한으로 시작하고, 쿼리 수준 분석 및 캐시 히트 보고를 활성화하려면 권장 통계 권한을 추가하세요.
+</Tip>
+
+## 에이전트 기능
+
+연결이 완료되면 Tony가 할 수 있는 작업:
+
+| 기능 | 설명 |
+|------------|-------------|
+| **쿼리 분석** | 느린 쿼리 식별, 실행 계획 분석 |
+| **인덱스 권고** | 누락된 인덱스 찾기, 미사용 인덱스 식별 |
+| **성능 메트릭** | 연결, I/O, 캐시 히트율 모니터링 |
+| **테이블 통계** | 테이블 부풀림, 데드 튜플, 배큠 상태 분석 |
+| **복제 모니터링** | 복제본의 지연 및 스트리밍 상태 확인 |
+
+### 연결 확인
+
+```text
+@tony #report check PostgreSQL connection health and list active database sessions
+```
+
+### 예시 프롬프트
+
+```text
+@tony #report analyze slow queries on the production PostgreSQL instance
+@tony #recommend find missing indexes on the orders table
+@tony #dashboard show database performance metrics including cache hit rates
+```
+
+## 문제 해결
+
+<Accordion title="연결 거부됨">
+- 호스트와 포트가 올바른지 확인하세요
+- 보안 그룹 또는 방화벽이 CloudThinker IP를 허용하는지 확인하세요
+- RDS의 경우: "공개적으로 접근 가능"이 활성화되어 있는지 또는 VPC 피어링을 사용하는지 확인하세요
+- PostgreSQL이 올바른 인터페이스에서 수신 대기 중인지 확인하세요
+</Accordion>
+
+<Accordion title="인증 실패">
+- 사용자 이름과 비밀번호가 올바른지 확인하세요
+- `pg_hba.conf`가 연결 방법을 허용하는지 확인하세요
+- 사용자에게 데이터베이스에 대한 `CONNECT` 권한이 있는지 확인하세요
+</Accordion>
+
+<Accordion title="pg_stat_statements 누락">
+- 익스텐션 설치 확인: `SELECT * FROM pg_extension WHERE extname = 'pg_stat_statements';`
+- `shared_preload_libraries`에 `pg_stat_statements`가 포함되어 있는지 확인하세요
+- `shared_preload_libraries` 변경 후 PostgreSQL을 재시작하세요
+- RDS의 경우: 파라미터 그룹을 수정하고 인스턴스를 재부팅하세요
+</Accordion>
+
+<Accordion title="권한 거부됨">
+- 사용자에게 필요한 테이블에 대한 `SELECT` 권한이 있는지 확인하세요
+- PostgreSQL 14+에서는 `pg_read_all_stats` 역할을 부여하세요
+- psql에서 `\dn+`으로 스키마 권한을 확인하세요
+</Accordion>
+
+## 보안
+
+<ConnectionSecurity />
+
+- **SSL 필수** — 전송 중 데이터를 암호화하려면 항상 SSL 모드 `require` 이상을 사용하세요.
+- **최소 권한** — CloudThinker 사용자에게 `SELECT`만 부여하고 쓰기 접근은 절대 부여하지 마세요.
+
+## 관련 항목
+
+<CardGroup cols={2}>
+  <Card title="Tony 에이전트" icon="database" href="/ko/guide/agents/tony">
+    데이터베이스 중심 최적화 에이전트
+  </Card>
+  <Card title="MySQL 연결" icon="/images/icons/mysql.svg" href="/ko/guide/connections/mysql">
+    MySQL 데이터베이스의 유사한 설정
+  </Card>
+</CardGroup>

@@ -1,0 +1,286 @@
+---
+title: AWS
+description: "IAMロールまたはアクセスキーによるコスト分析、セキュリティ監査、インフラ管理のためにAWSをCloudThinkerに接続します"
+icon: "/images/icons/aws.svg"
+---
+
+import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+
+AWSアカウントを接続して、CloudThinkerエージェントがコスト分析、セキュリティ監査、リソース最適化、大規模なインフラ管理を実行できるようにします。
+
+AWSの認証は**IAMロール（AssumeRole）**または**IAMユーザーアクセスキー**で行います。ロールベースの認証は、AWS STSを通じた短期認証情報を使用し、長期シークレットの保存を避けられるため、強く推奨されています。
+
+---
+
+## 前提条件
+
+- IAM管理者アクセス権を持つAWSアカウント。
+- ターゲットアカウントでIAMロールまたはIAMユーザーを作成する権限。
+- セットアップ用の[AWS CloudShell](https://console.aws.amazon.com/)または[IAMコンソール](https://console.aws.amazon.com/iam/)へのアクセス。
+
+<Info>
+ロールベースの認証（AssumeRole）を強く推奨します。環境でAssumeRoleが使用できない場合にのみアクセスキーを使用してください。
+</Info>
+
+---
+
+## セットアップ
+
+<Tabs>
+  <Tab title="ロールベース（推奨）">
+    ### AssumeRoleを使用したIAMロール
+
+    この方法は、CloudThinkerがリソースにアクセスするためのIAMロールを作成します。メリット：
+    - 長期認証情報の共有や保存が不要
+    - 自動ローテーションされる一時的な認証情報にAWS STSを使用
+    - External IDがconfused deputy攻撃を防御
+    - アクセスの監査と失効が容易
+
+    #### CloudShellによるクイックセットアップ
+
+    <Steps>
+      <Step title="AWS CloudShellを開く">
+        [AWSコンソール](https://console.aws.amazon.com/)にログインし、上部ナビから**CloudShell**を開きます。
+      </Step>
+      <Step title="セットアップスクリプトを実行">
+        CloudThinkerの接続ダイアログで**Copy Script**をクリックし、CloudShellに貼り付けます。スクリプトは以下を実行します：
+        - `CloudThinkerAccessRole` が存在しないことを確認
+        - 読み取り専用権限でIAMロールを作成
+        - External IDを含むトラストポリシーを添付
+      </Step>
+      <Step title="ロールARNをコピー">
+        出力からロールARNをコピーします：
+        ```
+        arn:aws:iam::123456789012:role/CloudThinkerAccessRole
+        ```
+      </Step>
+      <Step title="接続を完了">
+        ロールARNをCloudThinkerに貼り付け、リージョンを選択して**Connect**をクリックします。CloudThinkerがロールを確認し、**Connected**ステータスに変わります。
+      </Step>
+    </Steps>
+
+    #### 期待される出力
+
+    ```
+    Starting CloudThinker IAM Role setup...
+    ✅ Role does not exist, proceeding...
+    ✅ Role created successfully
+    ✅ Policy attached successfully
+    ==========================================
+    ✅ Setup Complete!
+    ==========================================
+    Copy this Role ARN:
+    arn:aws:iam::123456789012:role/CloudThinkerAccessRole
+    ```
+
+    #### 手動ロール作成
+
+    手動でセットアップする場合：
+
+    **トラストポリシー：**
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Principal": {
+            "AWS": "arn:aws:iam::CLOUDTHINKER_ACCOUNT_ID:root"
+          },
+          "Action": "sts:AssumeRole",
+          "Condition": {
+            "StringEquals": {
+              "sts:ExternalId": "YOUR_EXTERNAL_ID"
+            }
+          }
+        }
+      ]
+    }
+    ```
+
+    **権限ポリシー：**
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "ec2:Describe*",
+            "rds:Describe*",
+            "s3:GetBucket*",
+            "s3:List*",
+            "cloudwatch:GetMetric*",
+            "cloudwatch:List*",
+            "ce:GetCost*",
+            "ce:GetReservation*",
+            "iam:GetRole",
+            "iam:ListRoles"
+          ],
+          "Resource": "*"
+        }
+      ]
+    }
+    ```
+
+  </Tab>
+
+  <Tab title="アクセスキー（代替）">
+    ### アクセスキーを使用したIAMユーザー
+
+    AssumeRoleが環境で使用できない場合にのみこの方法を使用してください。
+
+    <Warning>
+    AWSは長期アクセスキーよりIAMロールを推奨しています。この方法を使用する場合は定期的にキーをローテーションしてください。
+    </Warning>
+
+    <Steps>
+      <Step title="IAMユーザーを作成">
+        [IAMコンソール](https://console.aws.amazon.com/iam/) → **Users → Create user** に移動し、名前を `cloudthinker-readonly` に設定します。
+      </Step>
+      <Step title="ポリシーをアタッチ">
+        **Attach policies directly** を選択して追加します：
+        - `ReadOnlyAccess`（包括的）、または
+        - `AmazonEC2ReadOnlyAccess`、`AmazonS3ReadOnlyAccess` などの特定ポリシー
+      </Step>
+      <Step title="アクセスキーを作成">
+        ユーザーを選択 → **Security credentials → Create access key**。ユースケースとして**Third-party service**を選択します。
+      </Step>
+      <Step title="認証情報を保存">
+        Access Key IDとSecret Access Keyをコピーして安全に保管します。**Connections → AWS** に入力し、**Connect**をクリックします。CloudThinkerは**Connected**ステータスに変わります。
+      </Step>
+    </Steps>
+
+  </Tab>
+</Tabs>
+
+### マルチアカウントのセットアップ
+
+複数のAWSアカウントを持つ組織向け：
+
+<Steps>
+  <Step title="各アカウントにロールを作成">
+    CloudFormation StackSetsを使用して、すべてのターゲットアカウントにIAMロールをデプロイします。
+  </Step>
+  <Step title="AWS Organizationsを使用">
+    組織全体の可視性のため管理アカウントを接続します。
+  </Step>
+  <Step title="各アカウントを追加">
+    CloudThinkerで各アカウントの接続を個別に追加します。
+  </Step>
+</Steps>
+
+---
+
+## 接続詳細
+
+| フィールド | 説明 | 例 |
+|-------|-------------|---------|
+| **ロールARN** | CloudThinkerが引き受けるIAMロールのARN（ロールベースの方法） | `arn:aws:iam::123456789012:role/CloudThinkerAccessRole` |
+| **External ID** | トラストポリシー内のシークレットID（CloudThinkerから提供） | — |
+| **リージョン** | この接続の主要AWSリージョン | `us-east-1` |
+| **アクセスキーID** | IAMユーザーキーID（アクセスキー方法のみ） | — |
+| **シークレットアクセスキー** | IAMユーザーシークレットキー（アクセスキー方法のみ） | — |
+
+---
+
+## 必要な権限
+
+### 最小（読み取り専用分析）
+
+```
+ec2:Describe*
+rds:Describe*
+s3:GetBucket*, s3:List*
+cloudwatch:GetMetric*, cloudwatch:List*
+ce:GetCost*, ce:GetReservation*
+iam:GetRole, iam:ListRoles
+```
+
+### 推奨（完全分析）
+
+```
+# All minimum permissions, plus:
+elasticloadbalancing:Describe*
+autoscaling:Describe*
+lambda:List*, lambda:GetFunction*
+ecs:Describe*, ecs:List*
+eks:Describe*, eks:List*
+securityhub:Get*, securityhub:List*
+guardduty:Get*, guardduty:List*
+config:Describe*, config:Get*
+cloudtrail:Describe*, cloudtrail:Get*
+```
+
+<Tip>
+最小権限から始め、必要に応じて拡張します。接続前にAWSコンソールでCost Explorerを有効にしてください。新しいアカウントでは有効化に最大24時間かかる場合があります。
+</Tip>
+
+---
+
+## エージェントの機能
+
+接続後、エージェントはAWSリソースの分析と最適化を実行できます。
+
+| エージェント | AWSの機能 |
+|-------|------------------------------------------------------------------------------------------|
+| **[Alex](/ja/guide/agents/alex)** | コスト分析、EC2の適正サイズ調整、リザーブドインスタンスの推奨、リソース最適化 |
+| **[Oliver](/ja/guide/agents/oliver)** | Security Hubのファインディング、IAM監査、コンプライアンスチェック、脆弱性評価 |
+| **[Tony](/ja/guide/agents/tony)** | RDSパフォーマンス分析、Aurora最適化、DynamoDBチューニング |
+| **[Kai](/ja/guide/agents/kai)** | EKSクラスター管理、Fargate最適化、コンテナ分析 |
+
+### 接続を確認する
+
+```text
+@alex run an AWS account check and list the connected account ID and active regions
+```
+
+### プロンプト例
+
+```text
+@alex analyze EC2 costs over the last 30 days and #recommend right-sizing opportunities
+@oliver audit IAM roles and flag any with excessive permissions or missing MFA requirements
+@kai check EKS cluster health across all connected regions and #report any failing pods
+```
+
+---
+
+## トラブルシューティング
+
+<Accordion title="アクセス拒否エラー">
+IAMロールに必要な権限があることを確認します。トラストポリシーにCloudThinkerのアカウントIDが含まれていること、External IDが完全に一致していること、ロールARNが正しいことを確認してください。
+</Accordion>
+
+<Accordion title="コストデータがない">
+AWSコンソールでCost Explorerを有効にします（有効化に最大24時間かかります）。`ce:GetCost*`権限が付与されていることと、請求設定でプログラムによるアクセスが許可されていることを確認してください。
+</Accordion>
+
+<Accordion title="メトリクスがない">
+CloudWatchメトリクスが収集されていることを確認します。リージョン選択にすべての関連リージョンが含まれていること、サービスが実行中でデータを生成していることを確認してください。
+</Accordion>
+
+<Accordion title="接続タイムアウト">
+AWS APIへのネットワーク接続を確認します。VPCエンドポイントがアクセスをブロックしていないことを確認し、別のリージョンから接続を試みてください。
+</Accordion>
+
+---
+
+## セキュリティ
+
+<ConnectionSecurity />
+
+- **IAMロールを使用** — 長期アクセスキーよりAssumeRoleを優先してください。IAMロールは自動ローテーションされる短期STS認証情報を使用し、シークレットの保存が不要です。
+- **CloudTrailを有効にする** — CloudThinker接続経由のすべてのAPI呼び出しを監査し、完全なアクティビティログを維持します。
+
+---
+
+## 関連
+
+<CardGroup cols={2}>
+  <Card title="Alexエージェント" icon="cloud" href="/ja/guide/agents/alex">
+    AWS重点のクラウド最適化エージェント
+  </Card>
+  <Card title="Bring Your Own Key (BYOK)" icon="key" href="/ja/guide/byok">
+    AWS Bedrock認証情報を使用して無制限のLLM使用が可能
+  </Card>
+</CardGroup>

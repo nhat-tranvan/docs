@@ -1,0 +1,96 @@
+---
+title: 'Vận hành Nhiều Tài khoản AWS'
+description: 'Vận hành nhiều tài khoản AWS từ một workspace sử dụng phím tắt IAM AssumeRole để chuyển đổi ngữ cảnh tài khoản theo yêu cầu'
+icon: layer-group
+---
+
+Một nhóm platform quản lý các tài khoản AWS production, development, và staging có thể truy vấn chi phí, kiểm toán bảo mật, và điều tra sự cố trên cả ba — từ một workspace CloudThinker duy nhất.
+
+## Tình huống
+
+Tổ chức của bạn duy trì các tài khoản AWS riêng biệt cho production, development, và staging. Một nhóm platform tập trung cần khả năng hiển thị cross-account mà không cần cấp quyền production cho tất cả mọi người hay liên tục mất ngữ cảnh khi chuyển đổi workspace. Giải pháp: kết nối CloudThinker với tài khoản AWS chính, tạo IAM role trong mỗi tài khoản đích, và định nghĩa các phím tắt hướng dẫn [Alex](/vi/guide/agents/alex) hoạt động trên tài khoản nào — tất cả từ một workspace.
+
+## Hướng dẫn từng bước
+
+<Steps>
+  <Step title="Kết nối tài khoản AWS chính">
+    Trong **Connections**, thêm tài khoản AWS chính của bạn bằng [xác thực Role-Based](/vi/guide/connections/aws). Đây là tài khoản hub — tất cả yêu cầu cross-account đều xuất phát từ IAM identity của tài khoản này.
+
+    **Trạng thái thành công:** kết nối hiển thị trạng thái **Connected** trong bảng Connections.
+  </Step>
+
+  <Step title="Tạo IAM role cross-account">
+    Trong mỗi tài khoản AWS đích, tạo một IAM role với trust policy sau. Thay thế `PRIMARY_ACCOUNT_ID` bằng ID tài khoản AWS của hub account.
+
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Principal": {
+            "AWS": "arn:aws:iam::PRIMARY_ACCOUNT_ID:root"
+          },
+          "Action": "sts:AssumeRole"
+        }
+      ]
+    }
+    ```
+
+    Gắn `ReadOnlyAccess` (hoặc chính sách chỉ đọc có phạm vi giới hạn) vào role để giữ quyền hạn ở mức tối thiểu.
+
+    **Trạng thái thành công:** bạn có thể xác minh từng role có thể được assume bằng cách chạy `aws sts assume-role` từ tài khoản chính.
+  </Step>
+
+  <Step title="Định nghĩa phím tắt chuyển tài khoản">
+    Mở bảng **Shortcuts** (góc trên bên phải của bất kỳ workspace nào) và tạo một phím tắt cho mỗi tài khoản đích. Đặt **Init Step** để hướng dẫn agent assume role đích trước khi prompt của bạn chạy.
+
+    <Frame>
+      <img src="/images/use-cases/01-shortcut-assume-role.png" alt="Bảng Shortcuts của CloudThinker hiển thị phím tắt chuyển đổi tài khoản" />
+    </Frame>
+    <p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Bảng Shortcuts với init step AssumeRole</p>
+
+    | Tên phím tắt | Init step |
+    |---|---|
+    | `/switch-to-prod` | `Please assume arn:aws:iam::111111111111:role/CloudThinkerAccessRole and use the STS token for this session.` |
+    | `/switch-to-dev` | `Please assume arn:aws:iam::222222222222:role/CloudThinkerAccessRole and use the STS token for this session.` |
+    | `/switch-to-staging` | `Please assume arn:aws:iam::333333333333:role/CloudThinkerAccessRole and use the STS token for this session.` |
+
+    **Trạng thái thành công:** mỗi tên phím tắt xuất hiện trong danh sách gợi ý tự động của Shortcuts khi bạn gõ `/`.
+  </Step>
+
+  <Step title="Chạy các thao tác cross-account">
+    Thêm tên phím tắt vào đầu bất kỳ prompt nào. Alex sẽ assume role đích trước khi hành động, do đó mọi kết quả đều được giới hạn trong tài khoản đó.
+
+    ```text
+    /switch-to-prod @alex #dashboard Build an AWS daily cost report
+    ```
+
+    Alex assume role production, truy vấn Cost Explorer và CloudWatch trong tài khoản đó, và trả về dashboard chi phí có phạm vi là production.
+
+    ```text
+    /switch-to-dev @alex #report Summarize unused EC2 instances in the dev account
+    ```
+
+    **Trạng thái thành công:** phản hồi của Alex tham chiếu tài nguyên từ tài khoản đích, không phải hub.
+  </Step>
+</Steps>
+
+## Điều gì tạo nên hiệu quả
+
+- **[Xác thực Role-Based](/vi/guide/connections/aws)** — IAM identity của hub account thực hiện lời gọi `sts:AssumeRole`, do đó không có thông tin xác thực dài hạn nào được chia sẻ hay lưu trữ cho mỗi tài khoản đích.
+- **IAM đặc quyền tối thiểu** — gắn `ReadOnlyAccess` vào mỗi role cross-account giới hạn những gì agent có thể làm, ngay cả khi phím tắt bị sử dụng sai. Dùng ARN principal cụ thể thay vì `:root` khi chính sách bảo mật của bạn cho phép.
+- **Shortcuts** — một init step được chèn vào trước prompt của bạn thiết lập ngữ cảnh tài khoản mà không cần gõ lại ARN role mỗi lần. Shortcuts cũng cho phép bạn giới hạn kiến thức hoặc hướng dẫn theo từng tài khoản.
+- **[Alex (Kỹ sư Cloud)](/vi/guide/agents/alex)** — xử lý phân tích chi phí, kiểm toán tài nguyên, và truy vấn hạ tầng trên các tài khoản AWS sau khi ngữ cảnh role được thiết lập.
+- **[Workspaces](/vi/guide/workspaces)** — khi nhóm cần cách ly hoàn toàn (cơ sở kiến thức, nhật ký kiểm toán, hoặc kiểm soát truy cập riêng biệt theo từng tài khoản), hãy tạo một workspace cho mỗi tài khoản thay vì dùng phím tắt.
+
+## Tự mình thử
+
+<CardGroup cols={2}>
+  <Card title="Kết nối tài khoản AWS" icon="/images/icons/aws.svg" href="/vi/guide/connections/aws">
+    Thiết lập xác thực Role-Based để Alex có thể assume role trên nhiều tài khoản.
+  </Card>
+  <Card title="Workspaces" icon="layer-group" href="/vi/guide/workspaces">
+    Tạo workspace chuyên dụng khi bạn cần cách ly hoàn toàn giữa các tài khoản.
+  </Card>
+</CardGroup>

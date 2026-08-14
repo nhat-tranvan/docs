@@ -1,0 +1,208 @@
+---
+title: PostgreSQL
+description: "Kết nối cơ sở dữ liệu PostgreSQL với CloudThinker để phân tích truy vấn, tối ưu index và giám sát hiệu suất"
+icon: "/images/icons/postgresql.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối cơ sở dữ liệu PostgreSQL của bạn để [Tony](/vi/guide/agents/tony) (Database Engineer) có thể phân tích truy vấn, tối ưu hiệu suất và giám sát sức khỏe cơ sở dữ liệu.
+
+## Nền tảng được hỗ trợ
+
+| Nền tảng | Hỗ trợ |
+|----------|---------|
+| **PostgreSQL tự host** | 12.x, 13.x, 14.x, 15.x, 16.x |
+| **AWS RDS PostgreSQL** | Tất cả phiên bản |
+| **AWS Aurora PostgreSQL** | Tất cả phiên bản |
+| **Google Cloud SQL** | Tất cả phiên bản PostgreSQL |
+| **Azure Database for PostgreSQL** | Flexible Server, Single Server |
+
+## Điều kiện tiên quyết
+
+- Một instance PostgreSQL có thể tiếp cận từ CloudThinker qua mạng.
+- Quyền admin để tạo người dùng riêng và cấp đặc quyền.
+- Extension `pg_stat_statements` đã cài đặt nếu bạn muốn phân tích ở cấp độ truy vấn (bắt buộc để lấy dữ liệu slow query).
+
+## Thiết lập
+
+<Steps>
+  <Step title="Kết nối với tư cách admin">
+    Kết nối tới instance PostgreSQL bằng tài khoản admin:
+    ```bash
+    psql -h your-host -U postgres -d your-database
+    ```
+  </Step>
+  <Step title="Tạo người dùng chỉ đọc">
+    Tạo người dùng riêng cho CloudThinker:
+    ```sql
+    CREATE USER cloudthinker_readonly WITH PASSWORD 'your-secure-password';
+    ```
+  </Step>
+  <Step title="Cấp quyền kết nối và truy cập schema">
+    Cho phép kết nối và sử dụng schema:
+    ```sql
+    GRANT CONNECT ON DATABASE your_database TO cloudthinker_readonly;
+    GRANT USAGE ON SCHEMA public TO cloudthinker_readonly;
+    GRANT USAGE ON SCHEMA information_schema TO cloudthinker_readonly;
+    ```
+  </Step>
+  <Step title="Cấp quyền SELECT">
+    Cấp SELECT trên tất cả bảng và view, bao gồm các bảng sau này:
+    ```sql
+    GRANT SELECT ON ALL TABLES IN SCHEMA public TO cloudthinker_readonly;
+    GRANT SELECT ON ALL TABLES IN SCHEMA information_schema TO cloudthinker_readonly;
+
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT SELECT ON TABLES TO cloudthinker_readonly;
+    ```
+  </Step>
+  <Step title="Bật pg_stat_statements">
+    Extension này bắt buộc để phân tích truy vấn:
+    ```sql
+    -- Enable extension (requires superuser)
+    CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+
+    -- Grant access to the user
+    GRANT SELECT ON pg_stat_statements TO cloudthinker_readonly;
+    ```
+
+    Với RDS/Aurora, thêm vào parameter group:
+    ```
+    shared_preload_libraries = 'pg_stat_statements'
+    ```
+  </Step>
+  <Step title="Cấu hình truy cập mạng">
+    Đảm bảo CloudThinker có thể tiếp cận cơ sở dữ liệu:
+    - Thêm IP CloudThinker vào security group hoặc firewall
+    - Với RDS: bật public access hoặc dùng VPC peering
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Điều hướng đến **Connections → PostgreSQL** và nhập:
+    - **Host**: hostname hoặc IP cơ sở dữ liệu
+    - **Port**: cổng cơ sở dữ liệu (mặc định: `5432`)
+    - **Database**: tên cơ sở dữ liệu
+    - **Username**: `cloudthinker_readonly`
+    - **Password**: mật khẩu bạn đặt ở trên
+    - **SSL mode**: `require` (khuyến nghị)
+
+    Nhấn **Connect**. CloudThinker hiển thị trạng thái **Connected** khi thành công.
+  </Step>
+</Steps>
+
+## Chi tiết kết nối
+
+| Trường | Mô tả | Mặc định |
+|-------|-------------|---------|
+| **Host** | Hostname hoặc IP cơ sở dữ liệu | — |
+| **Port** | Cổng PostgreSQL | `5432` |
+| **Database** | Tên cơ sở dữ liệu | — |
+| **Username** | Người dùng riêng, ví dụ: `cloudthinker_readonly` | — |
+| **Password** | Mật khẩu người dùng | — |
+| **SSL mode** | `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full` | `require` |
+| **Connection timeout** | Giây chờ kết nối | `10` |
+| **Statement timeout** | Thời gian thực thi truy vấn tối đa tính bằng ms | `30000` |
+
+Định dạng connection string:
+
+```
+postgresql://cloudthinker_readonly:your-secure-password@your-host:5432/your-database
+```
+
+## Quyền bắt buộc
+
+### Tối thiểu
+
+```sql
+GRANT CONNECT ON DATABASE dbname TO cloudthinker_readonly;
+GRANT USAGE ON SCHEMA public TO cloudthinker_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO cloudthinker_readonly;
+```
+
+### Khuyến nghị (phân tích toàn diện)
+
+```sql
+-- All of the above, plus:
+GRANT SELECT ON pg_stat_statements TO cloudthinker_readonly;
+GRANT SELECT ON pg_stat_activity TO cloudthinker_readonly;
+GRANT SELECT ON pg_stat_user_tables TO cloudthinker_readonly;
+GRANT SELECT ON pg_stat_user_indexes TO cloudthinker_readonly;
+GRANT SELECT ON pg_statio_user_tables TO cloudthinker_readonly;
+GRANT pg_read_all_stats TO cloudthinker_readonly;  -- PostgreSQL 14+
+```
+
+<Tip>
+Bắt đầu với các grant tối thiểu và thêm các grant stats khuyến nghị để mở khóa phân tích cấp truy vấn và báo cáo cache hit.
+</Tip>
+
+## Khả năng của agent
+
+Sau khi kết nối, Tony có thể:
+
+| Khả năng | Mô tả |
+|------------|-------------|
+| **Phân tích truy vấn** | Xác định slow query, phân tích execution plan |
+| **Khuyến nghị index** | Tìm index còn thiếu, xác định index không dùng |
+| **Metrics hiệu suất** | Giám sát kết nối, I/O, tỷ lệ cache hit |
+| **Thống kê bảng** | Phân tích table bloat, dead tuple, trạng thái vacuum |
+| **Giám sát replication** | Kiểm tra lag và trạng thái streaming trên replica |
+
+### Xác minh kết nối
+
+```text
+@tony #report check PostgreSQL connection health and list active database sessions
+```
+
+### Ví dụ prompt
+
+```text
+@tony #report analyze slow queries on the production PostgreSQL instance
+@tony #recommend find missing indexes on the orders table
+@tony #dashboard show database performance metrics including cache hit rates
+```
+
+## Khắc phục sự cố
+
+<Accordion title="Connection refused">
+- Xác minh host và port chính xác
+- Kiểm tra security group hoặc firewall cho phép IP CloudThinker
+- Với RDS: đảm bảo "Publicly accessible" được bật hoặc dùng VPC peering
+- Xác nhận PostgreSQL đang lắng nghe trên interface đúng
+</Accordion>
+
+<Accordion title="Xác thực thất bại">
+- Xác minh username và password chính xác
+- Kiểm tra `pg_hba.conf` cho phép phương thức kết nối
+- Đảm bảo người dùng có đặc quyền `CONNECT` trên cơ sở dữ liệu
+</Accordion>
+
+<Accordion title="Thiếu pg_stat_statements">
+- Xác minh extension đã cài đặt: `SELECT * FROM pg_extension WHERE extname = 'pg_stat_statements';`
+- Kiểm tra `shared_preload_libraries` bao gồm `pg_stat_statements`
+- Khởi động lại PostgreSQL sau khi thay đổi `shared_preload_libraries`
+- Với RDS: sửa parameter group và reboot instance
+</Accordion>
+
+<Accordion title="Permission denied">
+- Xác minh người dùng có `SELECT` trên các bảng bắt buộc
+- Cấp role `pg_read_all_stats` cho PostgreSQL 14+
+- Kiểm tra quyền schema bằng `\dn+` trong psql
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Bắt buộc SSL** — luôn sử dụng SSL mode `require` hoặc cao hơn để mã hóa dữ liệu truyền tải.
+- **Grant tối thiểu** — chỉ cấp `SELECT` cho người dùng CloudThinker; không bao giờ cấp quyền ghi.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Tony Agent" icon="database" href="/vi/guide/agents/tony">
+    Agent tối ưu cơ sở dữ liệu
+  </Card>
+  <Card title="Kết nối MySQL" icon="/images/icons/mysql.svg" href="/vi/guide/connections/mysql">
+    Thiết lập tương tự cho cơ sở dữ liệu MySQL
+  </Card>
+</CardGroup>

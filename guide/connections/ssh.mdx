@@ -1,0 +1,150 @@
+---
+title: SSH
+description: "Connect your own servers to CloudThinker over SSH so agents can run shell commands using key-based authentication and trusted host keys"
+icon: "/images/icons/ssh.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+
+Connect your servers over SSH to let [Alex](/guide/agents/alex) (Cloud Engineer) run shell commands on your hosts: checking disk usage, tailing logs, inspecting services, and diagnosing issues directly on the box.
+
+## Prerequisites
+
+| Requirement | Detail |
+|-------------|--------|
+| **Reachable host** | The server must accept inbound SSH from CloudThinker on its SSH port |
+| **Login user** | An existing user account with shell access |
+| **Authorized key** | The public half of your key present in that user's `~/.ssh/authorized_keys` |
+| **Key-based auth enabled** | `sshd` must allow public-key authentication for the user |
+
+## Setup
+
+<Steps>
+  <Step title="Prepare a key pair">
+    Use an existing key pair or generate a dedicated one for CloudThinker:
+
+    ```bash
+    ssh-keygen -t ed25519 -C "cloudthinker" -f ./cloudthinker_key
+    ```
+
+    This produces `cloudthinker_key` (private) and `cloudthinker_key.pub` (public). Both OpenSSH (`-----BEGIN OPENSSH PRIVATE KEY-----`) and PEM (`-----BEGIN RSA/EC PRIVATE KEY-----`) formats are accepted, including `ed25519`, `rsa`, and `ecdsa` keys.
+  </Step>
+  <Step title="Authorize the public key">
+    Add the public key to the login user's authorized keys on the server:
+
+    ```bash
+    ssh-copy-id -i ./cloudthinker_key.pub user@server.example.com
+    # or append cloudthinker_key.pub manually to ~/.ssh/authorized_keys
+    ```
+  </Step>
+  <Step title="Add the connection in CloudThinker">
+    Navigate to **Connections → SSH** and enter:
+    - **Host**: hostname or IP, e.g. `server.example.com` or `10.0.0.5`
+    - **User**: the login user, e.g. `ubuntu`
+    - **Port**: SSH port (optional, defaults to `22`)
+    - **Private key**: the full private key, including the `BEGIN`/`END` lines
+    - **Passphrase**: optional, only needed if the private key has one
+
+    CloudThinker tests the connection and shows a **Connected** status once it succeeds.
+  </Step>
+</Steps>
+
+### Host-key verification
+
+The first time you connect, CloudThinker records your server's host key. On every later connection it checks that the key still matches, so you are warned if the server's identity changes unexpectedly.
+
+If the key changes, the connection stops and CloudThinker shows you both the previously trusted fingerprint and the new one. This normally happens after a server rebuild or SSH key rotation. Once you have confirmed the change is expected, choose **Trust new host key** to continue.
+
+<Warning>
+If you did not expect the server's identity to change, do not trust the new key yet. An unexpected change can indicate the connection is being intercepted. Verify the new fingerprint against your server first.
+</Warning>
+
+## Connection details
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| **Host** | Hostname or IP address of the target server | `server.example.com` |
+| **User** | Login user with shell access | `ubuntu` |
+| **Port** | SSH port | `22` |
+| **Private key** | Full private key including `BEGIN`/`END` headers | `-----BEGIN OPENSSH PRIVATE KEY-----...` |
+| **Passphrase** | Passphrase if the key is encrypted | — |
+
+## Required permissions
+
+Alex runs commands with the permissions of the login user. No root access is required unless your agents need to run privileged commands.
+
+<Tip>
+Scope the login user to only the commands and paths your agents need. Use `command=` and `from=` options in `authorized_keys` to restrict what the key can do and from where.
+</Tip>
+
+## Agent capabilities
+
+Once connected, Alex runs shell commands on your server over SSH.
+
+| Capability | Description |
+|------------|-------------|
+| **System inspection** | Disk, memory, CPU, processes, and service status |
+| **Log analysis** | Read and search application and system logs |
+| **Diagnostics** | Investigate failures, connectivity, and configuration on the host |
+| **Operational checks** | Run read-only commands to report on the server's state |
+
+### Verify the connection
+
+```text
+@alex #report show system uptime, disk usage, and top memory processes on the server
+```
+
+### Example prompts
+
+```text
+@alex #report check disk usage on all filesystems and flag anything above 80%
+@alex #report tail /var/log/app/error.log and summarize the last 100 error lines
+@alex #report show which processes are using the most CPU and memory right now
+```
+
+<Warning>
+Commands run with the permissions of the login user. Scope that user to what your agents actually need.
+</Warning>
+
+## Troubleshooting
+
+<Accordion title="Authentication failed">
+- Confirm the public key is in the login user's `~/.ssh/authorized_keys`
+- Verify the **User** matches an account that key is authorized for
+- Ensure the private key was pasted in full, including the `BEGIN`/`END` lines
+- If the key is passphrase-protected, provide the **Passphrase**
+</Accordion>
+
+<Accordion title="Could not reach the host">
+- Verify the **Host** and **Port** are correct
+- Confirm the server accepts SSH from CloudThinker (firewall, security group, or allowlist)
+- Check that the SSH daemon is running and listening on that port
+</Accordion>
+
+<Accordion title="Host key has changed">
+- Expected after a server rebuild or SSH key rotation: review the new fingerprint and choose **Trust new host key**
+- If the change is unexpected, investigate before re-trusting
+</Accordion>
+
+<Accordion title="Remote command failed">
+- The connection is healthy but the command returned a non-zero exit code
+- Check the command, the user's permissions, and paths on the remote host
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- **Dedicated key** — generate a key pair used only for CloudThinker so it can be revoked independently.
+- **Rotate and verify** — replace the key periodically and always confirm a host key change before re-trusting.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Alex Agent" icon="cloud" href="/guide/agents/alex">
+    Cloud engineering and infrastructure operations
+  </Card>
+  <Card title="Kubernetes Connection" icon="/images/icons/kubernetes.svg" href="/guide/connections/kubernetes">
+    Connect clusters for workload analysis and operations
+  </Card>
+</CardGroup>

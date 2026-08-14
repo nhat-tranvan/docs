@@ -1,0 +1,150 @@
+---
+title: SSH
+description: "Kết nối máy chủ của bạn với CloudThinker qua SSH để agent có thể chạy lệnh shell bằng xác thực key và host key đáng tin cậy"
+icon: "/images/icons/ssh.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối máy chủ của bạn qua SSH để [Alex](/vi/guide/agents/alex) (Cloud Engineer) có thể chạy lệnh shell trên host: kiểm tra dung lượng đĩa, theo dõi log, kiểm tra service và chẩn đoán sự cố trực tiếp trên máy chủ.
+
+## Điều kiện tiên quyết
+
+| Yêu cầu | Chi tiết |
+|-------------|--------|
+| **Host có thể tiếp cận** | Máy chủ phải chấp nhận kết nối SSH đến từ CloudThinker trên cổng SSH |
+| **Người dùng đăng nhập** | Một tài khoản người dùng có quyền truy cập shell |
+| **Authorized key** | Phần khóa công khai của bạn phải có trong file `~/.ssh/authorized_keys` của người dùng đó |
+| **Xác thực key được bật** | `sshd` phải cho phép xác thực khóa công khai cho người dùng |
+
+## Thiết lập
+
+<Steps>
+  <Step title="Chuẩn bị cặp khóa">
+    Sử dụng cặp khóa hiện có hoặc tạo một cặp riêng cho CloudThinker:
+
+    ```bash
+    ssh-keygen -t ed25519 -C "cloudthinker" -f ./cloudthinker_key
+    ```
+
+    Lệnh này tạo ra `cloudthinker_key` (khóa riêng tư) và `cloudthinker_key.pub` (khóa công khai). Cả hai định dạng OpenSSH (`-----BEGIN OPENSSH PRIVATE KEY-----`) và PEM (`-----BEGIN RSA/EC PRIVATE KEY-----`) đều được chấp nhận, bao gồm các khóa `ed25519`, `rsa` và `ecdsa`.
+  </Step>
+  <Step title="Ủy quyền khóa công khai">
+    Thêm khóa công khai vào authorized keys của người dùng đăng nhập trên máy chủ:
+
+    ```bash
+    ssh-copy-id -i ./cloudthinker_key.pub user@server.example.com
+    # or append cloudthinker_key.pub manually to ~/.ssh/authorized_keys
+    ```
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Điều hướng đến **Connections → SSH** và nhập:
+    - **Host**: hostname hoặc IP, ví dụ: `server.example.com` hoặc `10.0.0.5`
+    - **User**: người dùng đăng nhập, ví dụ: `ubuntu`
+    - **Port**: cổng SSH (tùy chọn, mặc định là `22`)
+    - **Private key**: toàn bộ khóa riêng tư, bao gồm các dòng `BEGIN`/`END`
+    - **Passphrase**: tùy chọn, chỉ cần nếu khóa riêng tư có passphrase
+
+    CloudThinker kiểm tra kết nối và hiển thị trạng thái **Connected** khi thành công.
+  </Step>
+</Steps>
+
+### Xác minh host key
+
+Lần đầu kết nối, CloudThinker ghi lại host key của máy chủ. Ở mỗi lần kết nối sau, hệ thống kiểm tra xem key có còn khớp không, để cảnh báo nếu danh tính máy chủ thay đổi bất ngờ.
+
+Nếu key thay đổi, kết nối dừng lại và CloudThinker hiển thị cả fingerprint đã tin cậy trước đó lẫn fingerprint mới. Điều này thường xảy ra sau khi rebuild máy chủ hoặc xoay vòng SSH key. Sau khi xác nhận thay đổi là dự kiến, chọn **Trust new host key** để tiếp tục.
+
+<Warning>
+Nếu bạn không dự kiến danh tính máy chủ thay đổi, đừng tin cậy key mới ngay. Thay đổi bất ngờ có thể là dấu hiệu kết nối đang bị chặn. Hãy xác minh fingerprint mới với máy chủ trước.
+</Warning>
+
+## Chi tiết kết nối
+
+| Trường | Mô tả | Ví dụ |
+|-------|-------------|---------|
+| **Host** | Hostname hoặc địa chỉ IP của máy chủ đích | `server.example.com` |
+| **User** | Người dùng đăng nhập có quyền truy cập shell | `ubuntu` |
+| **Port** | Cổng SSH | `22` |
+| **Private key** | Toàn bộ khóa riêng tư bao gồm header `BEGIN`/`END` | `-----BEGIN OPENSSH PRIVATE KEY-----...` |
+| **Passphrase** | Passphrase nếu khóa được mã hóa | — |
+
+## Quyền bắt buộc
+
+Alex chạy lệnh với quyền của người dùng đăng nhập. Không cần quyền root trừ khi agent cần chạy lệnh có đặc quyền.
+
+<Tip>
+Giới hạn người dùng đăng nhập chỉ với các lệnh và đường dẫn mà agent thực sự cần. Sử dụng tùy chọn `command=` và `from=` trong `authorized_keys` để hạn chế những gì key có thể làm và từ đâu.
+</Tip>
+
+## Khả năng của agent
+
+Sau khi kết nối, Alex chạy lệnh shell trên máy chủ của bạn qua SSH.
+
+| Khả năng | Mô tả |
+|------------|-------------|
+| **Kiểm tra hệ thống** | Đĩa, bộ nhớ, CPU, tiến trình và trạng thái service |
+| **Phân tích log** | Đọc và tìm kiếm log ứng dụng và hệ thống |
+| **Chẩn đoán** | Điều tra lỗi, kết nối mạng và cấu hình trên host |
+| **Kiểm tra vận hành** | Chạy lệnh chỉ đọc để báo cáo trạng thái máy chủ |
+
+### Xác minh kết nối
+
+```text
+@alex #report show system uptime, disk usage, and top memory processes on the server
+```
+
+### Ví dụ prompt
+
+```text
+@alex #report check disk usage on all filesystems and flag anything above 80%
+@alex #report tail /var/log/app/error.log and summarize the last 100 error lines
+@alex #report show which processes are using the most CPU and memory right now
+```
+
+<Warning>
+Các lệnh chạy với quyền của người dùng đăng nhập. Hãy giới hạn người dùng đó chỉ với những gì agent thực sự cần.
+</Warning>
+
+## Khắc phục sự cố
+
+<Accordion title="Xác thực thất bại">
+- Xác nhận khóa công khai có trong file `~/.ssh/authorized_keys` của người dùng đăng nhập
+- Xác minh **User** khớp với tài khoản được ủy quyền cho key đó
+- Đảm bảo khóa riêng tư được dán đầy đủ, bao gồm các dòng `BEGIN`/`END`
+- Nếu key có passphrase, hãy cung cấp **Passphrase**
+</Accordion>
+
+<Accordion title="Không thể tiếp cận host">
+- Xác minh **Host** và **Port** chính xác
+- Xác nhận máy chủ chấp nhận SSH từ CloudThinker (firewall, security group hoặc allowlist)
+- Kiểm tra SSH daemon đang chạy và lắng nghe trên cổng đó
+</Accordion>
+
+<Accordion title="Host key đã thay đổi">
+- Thường xảy ra sau khi rebuild máy chủ hoặc xoay vòng SSH key: xem xét fingerprint mới và chọn **Trust new host key**
+- Nếu thay đổi là bất ngờ, hãy điều tra trước khi tin cậy lại
+</Accordion>
+
+<Accordion title="Lệnh từ xa thất bại">
+- Kết nối hoạt động bình thường nhưng lệnh trả về exit code khác 0
+- Kiểm tra lệnh, quyền của người dùng và đường dẫn trên host từ xa
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Khóa riêng biệt** — tạo cặp khóa chỉ dùng cho CloudThinker để có thể thu hồi độc lập.
+- **Xoay vòng và xác minh** — thay thế khóa định kỳ và luôn xác nhận thay đổi host key trước khi tin cậy lại.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Alex Agent" icon="cloud" href="/vi/guide/agents/alex">
+    Vận hành cloud engineering và hạ tầng
+  </Card>
+  <Card title="Kết nối Kubernetes" icon="/images/icons/kubernetes.svg" href="/vi/guide/connections/kubernetes">
+    Kết nối cluster để phân tích và vận hành workload
+  </Card>
+</CardGroup>

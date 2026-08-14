@@ -1,0 +1,152 @@
+---
+title: Jenkins
+description: "Kết nối Jenkins CI/CD server với CloudThinker để giám sát build pipeline, phân tích job và theo dõi deployment"
+icon: "/images/icons/jenkins.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối Jenkins server tự lưu trữ của bạn để cho phép các agent CloudThinker giám sát build, phân tích kết quả test, xem xét log pipeline và quản lý các thao tác job. Jenkins xác thực bằng **tên đăng nhập và API token** qua Jenkins MCP Server Plugin.
+
+---
+
+## Điều kiện tiên quyết
+
+- Một instance **Jenkins tự lưu trữ** chạy phiên bản 2.x trở lên (Jenkins được lưu trữ trên đám mây không được hỗ trợ).
+- **[Jenkins MCP Server Plugin](https://github.com/jenkinsci/mcp-server-plugin)** được cài đặt trên server của bạn; cổng MCP mặc định là `9090`.
+- Quyền admin trên Jenkins để cấu hình root URL và tạo thông tin xác thực.
+
+<Info>
+Các dịch vụ Jenkins được lưu trữ trên đám mây không được hỗ trợ. Kết nối này yêu cầu Jenkins MCP Server Plugin.
+</Info>
+
+---
+
+## Thiết lập
+
+<Steps>
+  <Step title="Cấu hình root URL">
+    Jenkins MCP Server Plugin yêu cầu Jenkins phải có root URL được cấu hình để trả về các đường dẫn job đúng. Chạy lệnh sau trong Jenkins Script Console:
+
+    ```bash
+    COOKIE_JAR=/tmp/jenkins_cookies
+    CRUMB=$(curl -s -c $COOKIE_JAR -u "admin:<password>" \
+      'http://<host-ip>:9090/crumbIssuer/api/json' | python3 -c "import json,sys; print(json.load(sys.stdin)['crumb'])")
+
+    curl -s -X POST "http://<host-ip>:9090/scriptText" \
+      -b $COOKIE_JAR -u "admin:<password>" -H "Jenkins-Crumb: $CRUMB" \
+      --data-urlencode "script=
+    import jenkins.model.JenkinsLocationConfiguration
+    def loc = JenkinsLocationConfiguration.get()
+    loc.setUrl('http://<host-ip>:9090/')
+    loc.save()
+    println('Root URL set to: ' + loc.getUrl())
+    "
+    ```
+  </Step>
+  <Step title="Xác minh MCP endpoint">
+    Xác nhận plugin đang chạy trước khi kết nối:
+
+    ```bash
+    curl -s http://<host-ip>:9090/mcp-health/
+    ```
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Điều hướng đến **Connections → Jenkins** và nhập:
+    - **URL**: `http://<host-ip>:9090`
+    - **Username**: `admin`
+    - **API Token**: mật khẩu admin hoặc API token Jenkins của bạn
+
+    Nhấn **Connect**. CloudThinker xác minh thông tin xác thực và hiển thị trạng thái **Connected**.
+  </Step>
+</Steps>
+
+---
+
+## Chi tiết kết nối
+
+| Trường | Mô tả | Ví dụ |
+|--------|-------|-------|
+| **URL** | URL cơ sở của instance Jenkins | `http://192.168.1.100:9090` |
+| **Username** | Tên đăng nhập Jenkins | `admin` |
+| **API Token** | Mật khẩu admin hoặc API token Jenkins | — |
+
+---
+
+## Quyền yêu cầu
+
+Cấp cho người dùng Jenkins các quyền sau:
+
+- **Overall**: Read
+- **Job**: Read, Discover
+- **View**: Read
+
+<Tip>
+Tạo một người dùng Jenkins riêng cho CloudThinker chỉ với các quyền này. Giữ các thao tác ghi (kích hoạt build, replay pipeline) được kiểm soát bởi phê duyệt.
+</Tip>
+
+---
+
+## Khả năng của agent
+
+Sau khi kết nối, các agent có thể giám sát và điều tra các pipeline Jenkins của bạn.
+
+| Khả năng | Mô tả |
+|----------|-------|
+| **Giám sát build** | Liệt kê job và kiểm tra trạng thái build |
+| **Phân tích log** | Lấy và tìm kiếm build log |
+| **Kết quả test** | Xem kết quả test |
+| **Tích hợp SCM** | Xem các thay đổi và commit Git |
+| **Điều khiển job** | Kích hoạt build và replay pipeline — **yêu cầu phê duyệt** |
+
+### Xác minh kết nối
+
+```text
+@alex list all Jenkins jobs and show the last build status for each
+```
+
+### Ví dụ lệnh
+
+```text
+@alex search Jenkins build logs for errors in the last 10 builds and #recommend fixes
+@alex show test results for the main project's recent builds and #report failures
+@alex check the Jenkins build queue and identify any stuck jobs
+```
+
+---
+
+## Khắc phục sự cố
+
+<Accordion title="Kết nối hết thời gian chờ">
+Xác minh Jenkins đang chạy và cổng 9090 có thể truy cập từ CloudThinker. Dùng địa chỉ IP của host (không phải `localhost`) trong trường URL.
+</Accordion>
+
+<Accordion title="Danh sách job trống">
+Root URL chưa được cấu hình hoặc lệnh Script Console thất bại. Chạy lại lệnh Script Console trong phần Thiết lập và kết nối lại.
+</Accordion>
+
+<Accordion title="Xác thực thất bại">
+Tên đăng nhập hoặc API token không đúng, hoặc người dùng thiếu quyền yêu cầu. Xác minh thông tin xác thực và người dùng Jenkins có quyền Overall Read, Job Read và View Read.
+</Accordion>
+
+---
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Người dùng riêng biệt** — tạo người dùng Jenkins riêng cho CloudThinker được giới hạn phạm vi theo chỉ các job và view nó cần.
+- **Cách ly mạng** — giới hạn cổng Jenkins 9090 theo dải IP của CloudThinker hoặc dùng VPN; tránh để lộ giao diện Jenkins ra internet công cộng.
+
+---
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Kết nối MCP" icon="/images/icons/mcp.svg" href="/vi/guide/connections/mcp">
+    Kết nối các công cụ tùy chỉnh qua Model Context Protocol
+  </Card>
+  <Card title="Kết nối Kubernetes" icon="/images/icons/kubernetes.svg" href="/vi/guide/connections/kubernetes">
+    Kết nối các cluster Kubernetes
+  </Card>
+</CardGroup>

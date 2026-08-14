@@ -1,0 +1,202 @@
+---
+title: MongoDB
+description: "MongoDB 데이터베이스를 CloudThinker에 연결하여 문서 쿼리 분석, 성능 튜닝, 운영 인사이트를 제공합니다"
+icon: "/images/icons/mongodb.svg"
+---
+
+import ConnectionSecurity from '/snippets/ko/connection-security.mdx';
+
+MongoDB 데이터베이스를 연결하면 [Tony](/ko/guide/agents/tony) (Database Engineer)가 쿼리를 분석하고, 성능을 최적화하며, 데이터베이스 상태를 모니터링할 수 있습니다.
+
+## 지원 플랫폼
+
+| 플랫폼 | 지원 |
+|----------|---------|
+| **자체 호스팅 MongoDB** | 4.x, 5.x, 6.x, 7.x |
+| **MongoDB Atlas** | 전체 버전 |
+
+## 사전 요구사항
+
+- 네트워크를 통해 CloudThinker에서 접근 가능한 MongoDB 인스턴스 또는 Atlas 클러스터.
+- 전용 데이터베이스 사용자를 생성하고 역할을 할당할 관리자 접근.
+- 자격증명이 포함된 MongoDB 연결 문자열.
+
+## 설정
+
+MongoDB 플랫폼을 선택하여 구체적인 연결 방법을 확인하세요.
+
+<Tabs>
+  <Tab title="자체 호스팅 MongoDB">
+    <Steps>
+      <Step title="관리자로 연결">
+        관리자 권한으로 Mongo 셸(`mongosh`)을 사용하여 MongoDB 인스턴스에 연결하세요.
+
+        *`<admin-user>`, `<admin-password>`, `<your-host>`를 실제 자격증명으로 교체하세요. `/admin` 데이터베이스가 필요합니다.*
+
+        ```bash
+        mongosh "mongodb://<admin-user>:<admin-password>@<your-host>:27017/admin"
+        ```
+      </Step>
+      <Step title="admin 데이터베이스로 전환">
+        사용자가 생성되는 `admin` 데이터베이스에 있는지 확인하세요:
+        ```javascript
+        use admin
+        ```
+      </Step>
+      <Step title="읽기 전용 사용자 생성">
+        표준 MongoDB 내장 역할을 사용하여 CloudThinker 전용 사용자를 생성하세요:
+        ```javascript
+        db.createUser({
+          user: "<cloudthinker_user>",
+          pwd: "<secure-password>",
+          roles: [
+            { role: "readAnyDatabase", db: "admin" },
+            { role: "clusterMonitor", db: "admin" }
+          ]
+        })
+        ```
+        성능 메트릭 분석을 위해 `clusterMonitor` 역할이 권장됩니다.
+      </Step>
+      <Step title="네트워크 접근 설정">
+        CloudThinker가 데이터베이스에 접근할 수 있는지 확인하세요:
+        - CloudThinker IP를 방화벽 또는 보안 그룹에 추가
+        - `mongod.conf`에서 MongoDB가 접근 가능한 IP 주소에 바인딩되어 있는지 확인
+      </Step>
+      <Step title="CloudThinker에 연결 추가">
+        **Connections → MongoDB**로 이동하여 연결 문자열을 붙여넣으세요:
+
+        ```
+        mongodb://<cloudthinker_user>:<secure-password>@<your-host>:27017/admin?tls=true&appName=CloudThinker
+        ```
+
+        배포 환경에서 TLS 암호화를 강제하는 경우 `tls=true`를 포함하세요. **Connect**를 클릭하세요. 성공하면 CloudThinker가 **Connected** 상태를 표시합니다.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="MongoDB Atlas">
+    <Steps>
+      <Step title="Database Access로 이동">
+        [cloud.mongodb.com/v2](https://cloud.mongodb.com/v2)에서 MongoDB Atlas 대시보드에 로그인하세요.
+
+        왼쪽 사이드바에서 **Security** 섹션으로 스크롤하여 **Database Access**를 선택하세요.
+      </Step>
+      <Step title="새 데이터베이스 사용자 추가">
+        **Add New Database User**를 클릭하고 다음을 설정하세요:
+        - **Authentication Method**: Password
+        - **Username**: `<cloudthinker_user>`
+        - **Password**: 안전한 비밀번호 생성
+        - **Database User Privileges**: **Built-in Role** → **Read Any Database** 선택
+
+        **Add User**를 클릭하세요.
+      </Step>
+      <Step title="네트워크 접근 설정">
+        **Security** 섹션의 **Network Access**로 이동하세요:
+        - **IP Access List** → **+ Add IP Address** 클릭
+        - CloudThinker 연결 설정 화면에 표시된 CloudThinker 고정 IP 주소 입력
+        - 향후 감사를 위해 `CloudThinker Agent Access`와 같은 설명 추가
+        - **Confirm** 클릭
+      </Step>
+      <Step title="연결 문자열 가져오기">
+        **Deployment** 아래의 **Databases** 탭으로 이동하여 클러스터에서 **Connect**를 클릭하고 **Drivers**를 선택하세요.
+
+        Atlas가 다음 형식의 문자열을 제공합니다:
+        ```
+        mongodb+srv://<username>:<password>@<cluster-name>.<cluster-hash>.mongodb.net/?appName=<ClusterName>
+        ```
+
+        CloudThinker에 맞게 수정하세요:
+        ```
+        mongodb+srv://<cloudthinker_user>:<secure-password>@<cluster-name>.<cluster-hash>.mongodb.net/admin?appName=CloudThinker&tls=true&retryWrites=false
+        ```
+
+        - `/admin`은 인증 데이터베이스를 명시적으로 지정
+        - `appName=CloudThinker`는 데이터베이스 로그에서 식별을 쉽게 함
+        - `tls=true`는 전송 중 암호화를 강제
+        - `retryWrites=false`는 이 읽기 전용 사용자에 적합
+      </Step>
+      <Step title="CloudThinker에 연결 추가">
+        **Connections → MongoDB**로 이동하여 수정된 연결 문자열을 붙여넣으세요. **Connect**를 클릭하세요. 성공하면 CloudThinker가 **Connected** 상태를 표시합니다.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+## 연결 세부 정보
+
+| 필드 | 설명 | 예시 |
+|-------|-------------|---------|
+| **Connection string** | 자격증명을 포함한 전체 MongoDB URI | `mongodb+srv://user:pass@host/admin?tls=true` |
+| **TLS/SSL** | 연결에 TLS 강제 — URI에서 `tls=true` 사용 | `true` |
+| **Read preference** | 읽기 작업을 라우팅할 노드 | `primary` |
+| **Connection timeout** | 연결 대기 시간 (초) | `10` |
+
+## 필요 권한
+
+| 역할 | 용도 |
+|------|---------|
+| `readAnyDatabase` | 모든 컬렉션의 쿼리 및 인덱스 사용량 분석 |
+| `clusterMonitor` | 성능 메트릭을 위한 `serverStatus`, `replSetGetStatus` 및 기타 진단 명령 접근 |
+
+<Tip>
+전체 쿼리 분석 및 클러스터 상태 모니터링을 활성화하려면 두 역할을 모두 할당하세요. CloudThinker 사용자에게 절대 쓰기 또는 관리자 역할을 부여하지 마세요.
+</Tip>
+
+## 에이전트 기능
+
+연결이 완료되면 Tony가 할 수 있는 작업:
+
+| 기능 | 설명 |
+|------------|-------------|
+| **쿼리 분석** | 느린 쿼리 식별, `explain()`으로 실행 계획 분석 |
+| **인덱스 권고** | 누락된 인덱스 찾기, 미사용 인덱스 식별 |
+| **성능 메트릭** | 연결, 메모리 사용량, 복제 지연 모니터링 |
+
+### 연결 확인
+
+```text
+@tony #report list all MongoDB databases and summarize their collection counts
+```
+
+### 예시 프롬프트
+
+```text
+@tony #report analyze slow queries on the production MongoDB instance
+@tony #recommend find missing indexes on the users collection
+@tony #report check replication lag on the secondary nodes
+```
+
+## 문제 해결
+
+<Accordion title="인증 실패">
+- 사용자 이름과 비밀번호가 올바른지 확인하세요
+- 사용자가 `admin` 데이터베이스에 생성되어 있는지 확인하거나 연결 문자열에 `?authSource=admin`을 추가하세요
+- Atlas의 경우: Database Access에서 올바른 권한으로 사용자가 생성되었는지 확인하세요
+</Accordion>
+
+<Accordion title="연결 거부됨 또는 타임아웃">
+- CloudThinker IP가 Atlas 네트워크 접근 목록 또는 방화벽에 추가되어 있는지 확인하세요
+- 로컬 MongoDB의 경우: `mongod.conf`의 `bindIp`가 `127.0.0.1`만으로 설정되어 있지 않은지 확인하세요
+</Accordion>
+
+<Accordion title="성능 메트릭 사용 불가">
+- Tony가 `serverStatus` 및 `replSetGetStatus`를 실행하려면 `clusterMonitor` 역할이 필요합니다
+- `admin` 데이터베이스의 CloudThinker 사용자에게 `clusterMonitor` 역할을 추가하고 재연결하세요
+</Accordion>
+
+## 보안
+
+<ConnectionSecurity />
+
+- **TLS 필수** — 전송 중 데이터를 암호화하려면 항상 연결 문자열에 `tls=true`를 사용하세요.
+- **최소 역할** — `readAnyDatabase`와 `clusterMonitor`만 부여하고 쓰기 또는 관리자 역할은 절대 부여하지 마세요.
+
+## 관련 항목
+
+<CardGroup cols={2}>
+  <Card title="Tony 에이전트" icon="database" href="/ko/guide/agents/tony">
+    데이터베이스 중심 최적화 에이전트
+  </Card>
+  <Card title="PostgreSQL 연결" icon="/images/icons/postgresql.svg" href="/ko/guide/connections/postgresql">
+    PostgreSQL 데이터베이스 설정 방법
+  </Card>
+</CardGroup>

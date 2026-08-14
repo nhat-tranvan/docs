@@ -1,0 +1,64 @@
+---
+title: "Chapter 1 · The Anatomy of an Operations Agent"
+description: "Everything that matters — quality, cost, safety — is decided by what you put inside the agent loop."
+icon: arrows-rotate
+---
+
+*Strip the marketing away and an operations agent is a loop. Everything that matters — quality, cost, safety — is decided by what you put inside that loop.*
+
+## 1.1 The loop, precisely
+
+An operations agent is software that repeatedly executes one cycle: assemble context → reason → select an action → execute a tool → observe the result → decide whether to continue, conclude, or escalate. Each pass is a step. An incident investigation is a trajectory of steps; a remediation is a trajectory whose final steps change the world and then verify the change. The Field Guide named the outer pipeline — Detect → Analyze → Resolve → Validate — and this chapter is about what happens inside each stage of it.
+
+```text
+loop (one step):
+  context   = system_prompt + task + memory + retrieved_context + tool_results_so_far
+  decision  = model.reason(context)          # hypothesis, plan, or tool selection
+  if decision is tool_call:
+      result = execute(tool, args)           # via policy + sandbox (Ch. 5-6)
+      append result to trajectory            # feeds the next step
+  elif decision is conclusion:
+      emit finding | plan | verification     # with evidence attached
+  guard: step budget, token budget, time budget, loop detector
+```
+
+Three properties of this loop drive every architectural decision that follows. First, it is stateful across steps but stateless across incidents unless you build memory deliberately — Chapter 2. Second, its cost is multiplicative: tokens per step × steps per task × tasks per day, which is why economics get their own treatment in Chapter 4. Third, every input to the loop that came from the environment — logs, tickets, alert annotations — is untrusted data sitting next to trusted instructions, which is why security gets Chapter 5.
+
+## 1.2 What a step really costs
+
+Engineers evaluating agents should think in unit economics from day one. A realistic investigation of a non-trivial incident runs tens of steps and hundreds of thousands of tokens once telemetry excerpts are included; independent benchmark harnesses cap agents at around a hundred turns per task for exactly this reason, and publish token and cost curves alongside accuracy. The implications are concrete:
+
+1. **Context dominates cost.** Tool results — log excerpts, metric series, config dumps — are almost always the largest token line, not the model’s own reasoning. Controlling what re-enters the loop (summarize, truncate, reference-by-pointer) is the first optimization, not the last.
+
+2. **Steps are your latency.** Each step is a full model round-trip. A 40-step investigation on a slow frontier model is not a real-time responder. Parallel tool calls and specialist delegation (Chapter 4) are latency tools as much as quality tools.
+
+3. **Budgets are guardrails.** Production agents run with explicit step, token, time, and spend ceilings per task, and a loop detector that recognizes when the same tool is being called with the same arguments to no new effect. An agent without budgets is a cost incident waiting for a quiet weekend.
+
+## 1.3 The determinism boundary
+
+The single most useful design question inside the loop is: which parts must be deterministic, and which parts benefit from judgment? Mature systems draw the line deliberately:
+
+| Layer | Deterministic (code) | Generative (model) |
+|---|---|---|
+| Sensing & triggering | Alert routing, dedup windows, severity mapping, policy filters | Deciding an anomaly is worth deep investigation |
+| Investigation | Tool execution, data collection, redaction, timeouts | Hypothesis formation, evidence weighing, next-probe selection |
+| Remediation | The runbook steps themselves; pre-flight checks; rollback mechanics | Choosing which remediation fits this incident; drafting a new plan when no runbook exists |
+| Verification | Health checks, SLO probes, diff of before/after state | Judging whether the overall outcome matches intent; deciding to escalate |
+
+The pattern is deterministic rails, generative core. Reasoning chooses; code executes. Every consequential side effect should pass through versioned, testable, idempotent code paths — never through freeform shell strings the model composed under pressure. Chapter 3 turns this into tool and runbook design; Chapter 6 turns it into policy.
+
+<Info>
+**IN PRACTICE — STEP KINDS AS A CONTRACT**
+
+CloudThinker’s runbook engine makes the determinism boundary explicit in its type system: every runbook is composed of five step kinds — Note (context for the reader), Check (read-only probe with an expected result), Act (a side-effecting, idempotent operation), Confirm (verification against intent), and Ask (an explicit human decision point). An agent may select and parameterize runbooks and may draft new ones for review, but Act steps execute as code under policy — the model never free-hands a mutation. The same contract is a useful lens on any platform you evaluate: ask where reasoning ends and execution begins.
+</Info>
+
+## 1.4 Verification is the species difference
+
+Automation executes and hopes. Agents execute and check. The validate stage — re-probing the symptom, diffing state against intent, watching the SLO for a soak period, and rolling back on failure — is what makes graduated autonomy defensible at all, and it is the first thing to inspect in any platform demo. Two engineering notes: verification must run against independent signals (the alert clearing is not proof; alerts can be cleared by the very restart that masked the fault — a failure mode documented in public benchmarks, Chapter 7), and verification must have a timeout with an opinion — an explicit soak window after which the system either declares success with evidence or escalates with a rollback already staged.
+
+<Tip>
+**KEY TAKEAWAY**
+
+An operations agent is a budgeted, observable loop with a deliberate determinism boundary and independent verification. Judge any platform by the loop’s internals — context handling, cost controls, execution rails, verification signals — not by the eloquence of its findings.
+</Tip>
