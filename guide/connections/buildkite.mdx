@@ -1,0 +1,166 @@
+---
+title: Buildkite
+description: "Connect Buildkite to CloudThinker for pipeline health monitoring, failed-build triage from logs and annotations, and approval-gated build controls"
+icon: "/images/icons/buildkite.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+
+Connect your Buildkite organization to enable CloudThinker agents to track pipeline health, triage failed builds from logs and annotations, check agent and cluster capacity, and run approval-gated controls like retrying a job or unblocking a deploy gate.
+
+Buildkite authenticates with an **API access token** through Buildkite's hosted MCP server. The token's scopes decide which operations succeed, so the scopes you grant are the hard limit on what an agent can reach.
+
+---
+
+## Prerequisites
+
+- A **Buildkite account** with access to the organization you want to monitor.
+- An **API access token** with the read scopes listed under [Required permissions](#required-permissions).
+- For the approval-gated controls, the same token needs the **`write_builds`** scope.
+
+<Info>
+Monitoring and triage work with read scopes only. Retry, unblock, rebuild, and cancel additionally need `write_builds` on the token.
+</Info>
+
+---
+
+## Setup
+
+<Steps>
+  <Step title="Create an API access token">
+    In Buildkite, go to **Personal Settings → API Access Tokens → New API Access Token** ([buildkite.com/user/api-access-tokens/new](https://buildkite.com/user/api-access-tokens/new)):
+    - **Description**: `cloudthinker`
+    - **Organization access**: select the organization CloudThinker should reach
+    - **REST API scopes**: `read_organizations`, `read_pipelines`, `read_builds`, `read_build_logs`, `read_artifacts`, `read_agents`, `read_clusters`, `read_user` — add `write_builds` only if you want the build controls
+    - **Expiry**: choose a lifetime and plan to rotate
+
+    Copy the token immediately — Buildkite shows it only once.
+  </Step>
+  <Step title="Add the connection in CloudThinker">
+    Navigate to **Connections → Buildkite** and enter:
+    - **Token**: the API access token you just created
+
+    Click **Connect**. CloudThinker verifies the credentials and shows a **Connected** status.
+  </Step>
+</Steps>
+
+<Warning>
+Copy the API access token immediately after creation. You'll need to create a new token if it's lost.
+</Warning>
+
+---
+
+## Connection details
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| **BUILDKITE_API_TOKEN** | API access token used to authenticate the connection | — |
+
+<Note>
+CloudThinker resolves your organization from the token, so there is no org slug to configure. The connection uses Buildkite's hosted MCP server at `https://mcp.buildkite.com/direct`, which passes your token straight through to the Buildkite REST API.
+</Note>
+
+---
+
+## Required permissions
+
+Grant only the scopes for the work you want the agents to do.
+
+| Scope | Enables |
+|-------|---------|
+| `read_organizations` | Resolving the organization the token can reach |
+| `read_pipelines` | Pipeline inventory and pipeline details |
+| `read_builds` | Builds, jobs, annotations, and failure summaries |
+| `read_build_logs` | Reading, searching, and tailing job logs |
+| `read_artifacts` | Build and job artifacts |
+| `read_agents` | Agent connection state and capacity |
+| `read_clusters` | Clusters and cluster queues |
+| `read_user` | The `current_user` account lookup |
+| `write_builds` | Retry a job, unblock a job, rebuild, and cancel — each still [approval](/guide/approval)-gated in CloudThinker |
+
+<Tip>
+Follow least privilege: leave `write_builds` off for a monitoring-only connection. Agents keep every read capability, and the four control operations simply fail at Buildkite instead of relying on the approval gate alone.
+</Tip>
+
+---
+
+## Agent capabilities
+
+Once connected, agents have read access to your Buildkite pipelines, builds, logs, artifacts, and agents.
+
+| Capability | Description |
+|------------|-------------|
+| **Organization discovery** | Resolve the organization and list its pipelines, recent builds, agents, and clusters |
+| **Pipeline health** | Pass rate, failure streaks, and builds stuck longer than a threshold |
+| **Failed-build triage** | Cross-reference the failure summary with job logs, annotations, and failed tests |
+| **Logs & artifacts** | Read, search, and tail a job's log; list build and job artifacts |
+| **Capacity** | Agent connection state, clusters, and cluster queues |
+| **Build controls** | Retry a job, unblock a job, rebuild a build, and cancel a build — **requires approval** |
+
+A build parked on a manual gate reports `passed` in the Buildkite API. CloudThinker marks that build as awaiting a gate, names the block step, and keeps it out of the pass rate, so a held deploy is never reported as a green pipeline.
+
+### Verify the connection
+
+```text
+@alex list my Buildkite pipelines and show the latest build status for each
+```
+
+### Example prompts
+
+```text
+@alex which Buildkite pipelines are failing right now and #report their failure streaks
+@alex build 42 of the web pipeline failed — pull the logs and annotations, find the cause, and #recommend a fix
+@alex show Buildkite agent capacity and any builds stuck for more than an hour #dashboard
+```
+
+For organizations with many pipelines, scope requests to a single pipeline so the agent returns focused results.
+
+---
+
+## Troubleshooting
+
+<Accordion title="Connection shows Connected but every request returns 401">
+The token is invalid, expired, or revoked. The MCP handshake succeeds even with a bad token and only fails when a tool runs, so a green connection status does not prove the token works. Create a fresh API access token and reconnect.
+</Accordion>
+
+<Accordion title="403 on reads that used to work">
+The token is missing a scope. Reads need `read_organizations`, `read_pipelines`, `read_builds`, `read_build_logs`, `read_artifacts`, `read_agents`, and `read_clusters`. Edit the token's scopes in Buildkite — you do not need to create a new one.
+</Accordion>
+
+<Accordion title="Retry, unblock, rebuild, or cancel fails with a permission error">
+The token lacks `write_builds`. Add that scope to the token in Buildkite, or keep the connection read-only and run the action in Buildkite yourself.
+</Accordion>
+
+<Accordion title="A pipeline reads as healthy while a deploy is waiting">
+That is the manual gate, and it is handled. The newest build is excluded from the pass rate whenever it is gated. If the agent reports the gate state as **unknown**, the gate check itself failed — usually a rate limit — and the build is excluded then too. Unknown never means ungated.
+</Accordion>
+
+<Accordion title="404 on a pipeline that exists">
+A pipeline name was used where Buildkite expects the slug. Ask the agent to list your pipelines and use the slug from that output.
+</Accordion>
+
+<Accordion title="429 rate limited">
+Too many pipelines or builds in one request. Scope the question to a single pipeline, or ask for fewer recent builds.
+</Accordion>
+
+---
+
+## Security
+
+<ConnectionSecurity />
+
+- **Approval for build controls** — keep retry, unblock, rebuild, and cancel approval-gated. Unblocking releases a gate a person added on purpose, usually a deploy gate.
+- **Scope the token, not just the approval** — token scopes are enforced by Buildkite. A token without `write_builds` cannot change CI state at all.
+
+---
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="CircleCI Connection" icon="/images/icons/circleci.svg" href="/guide/connections/circleci">
+    Pipeline status, build log triage, and approval-gated controls
+  </Card>
+  <Card title="Approval" icon="shield-check" href="/guide/approval">
+    How approval-gated actions work
+  </Card>
+</CardGroup>
