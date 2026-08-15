@@ -1,0 +1,208 @@
+---
+title: Snowflake
+description: "Snowflake를 CloudThinker에 연결하여 웨어하우스 크레딧 분석, 느린 쿼리 조사, 스토리지 검토, 선택적 웨어하우스 제어를 수행합니다"
+icon: "/images/icons/snowflake.svg"
+---
+
+import ConnectionSecurity from '/snippets/ko/connection-security.mdx';
+
+Snowflake 계정을 연결하면 [Tony](/ko/guide/agents/tony) (Database Engineer)가 웨어하우스 크레딧 소모를 읽고, 느린 쿼리와 실패한 쿼리의 순위를 매기며, 테이블 스토리지 부담을 측정할 수 있습니다. CloudThinker는 프로그래매틱 액세스 토큰으로 SQL REST API를 통해 Snowflake에 접근하며, 새로 만든 연결은 쓰기 도구를 켜기 전까지 읽기 전용입니다.
+
+## 사전 준비
+
+- 역할, 서비스 사용자, 토큰을 만들 `ACCOUNTADMIN` (또는 동등한) 권한.
+- 해당 사용자에게 연결할 네트워크 정책. 네트워크 정책이 없으면 Snowflake는 토큰 인증을 거부합니다.
+- 역할이 사용할 수 있는 웨어하우스. 메타데이터 쿼리는 컴퓨트가 필요 없으므로, 웨어하우스가 없어도 연결 테스트는 통과하고 실제 분석만 실패할 수 있습니다.
+
+## 설정
+
+<Steps>
+  <Step title="읽기 전용 역할 만들기">
+    `ACCOUNTADMIN`으로 실행하세요. `USAGE_VIEWER`는 미터링과 스토리지를, `OBJECT_VIEWER`는 객체 인벤토리를 담당하며, `GOVERNANCE_VIEWER`가 `QUERY_HISTORY`를 읽을 수 있게 합니다:
+    ```sql
+    USE ROLE ACCOUNTADMIN;
+
+    CREATE ROLE IF NOT EXISTS CT_READONLY;
+    GRANT DATABASE ROLE SNOWFLAKE.USAGE_VIEWER      TO ROLE CT_READONLY;
+    GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER     TO ROLE CT_READONLY;
+    GRANT DATABASE ROLE SNOWFLAKE.GOVERNANCE_VIEWER TO ROLE CT_READONLY;
+    GRANT MONITOR USAGE ON ACCOUNT                  TO ROLE CT_READONLY;
+    GRANT USAGE ON WAREHOUSE COMPUTE_WH             TO ROLE CT_READONLY;
+    ```
+  </Step>
+  <Step title="서비스 사용자 만들기">
+    `SERVICE` 유형 사용자는 비밀번호, MFA, SSO가 없으므로 토큰으로만 인증합니다:
+    ```sql
+    CREATE USER IF NOT EXISTS SVC_CLOUDTHINKER
+      TYPE = SERVICE
+      DEFAULT_ROLE = CT_READONLY
+      DEFAULT_WAREHOUSE = COMPUTE_WH
+      COMMENT = 'CloudThinker connection';
+    GRANT ROLE CT_READONLY TO USER SVC_CLOUDTHINKER;
+    ```
+  </Step>
+  <Step title="네트워크 정책 연결하기">
+    테스트 계정이 아니라면 `ALLOWED_IP_LIST`를 사용 중인 이그레스 IP 대역으로 좁히세요:
+    ```sql
+    CREATE NETWORK POLICY IF NOT EXISTS CT_POLICY ALLOWED_IP_LIST = ('0.0.0.0/0');
+    ALTER USER SVC_CLOUDTHINKER SET NETWORK_POLICY = CT_POLICY;
+    ```
+    이 단계를 건너뛰는 것이 가장 흔한 설정 실패이며, 반환되는 오류(`390403`)는 정책을 언급하지 않습니다.
+  </Step>
+  <Step title="프로그래매틱 액세스 토큰 발급하기">
+    ```sql
+    ALTER USER SVC_CLOUDTHINKER ADD PROGRAMMATIC ACCESS TOKEN CT_DEV
+      ROLE_RESTRICTION = 'CT_READONLY'
+      DAYS_TO_EXPIRY = 90;
+    ```
+    Snowflake는 생성 시 토큰을 한 번만 보여줍니다. `DAYS_TO_EXPIRY`는 엄격한 만료 기한이며, 그날부터 연결이 `390318`로 실패하기 시작하므로 새 토큰을 발급해야 합니다.
+  </Step>
+  <Step title="CloudThinker에서 연결 추가하기">
+    **Connections → Snowflake**로 이동해 다음을 입력하세요:
+    - **Account identifier**: `MYORG-MYACCOUNT`. **Snowsight → Account details**에서 확인합니다. 전체 URL이 아닙니다.
+    - **Programmatic access token**: 이전 단계에서 발급한 토큰. 계정 비밀번호가 아닙니다.
+    - **Role**: 선택 사항. 비워 두면 사용자의 기본 역할을 사용합니다.
+    - **Warehouse**: 선택 사항. 비워 두면 사용자의 기본 웨어하우스를 사용합니다.
+
+    **Connect**를 클릭합니다. CloudThinker가 계정, 리전, 역할, 웨어하우스를 확인하면 상태가 **Connected**로 바뀝니다.
+  </Step>
+</Steps>
+
+## 연결 세부 정보
+
+| 항목 | 설명 | 기본값 |
+|-------|-------------|---------|
+| **Account identifier** | `ORG-ACCOUNT`. **Snowsight → Account details**에서 확인 | — |
+| **Programmatic access token** | `ALTER USER ... ADD PROGRAMMATIC ACCESS TOKEN`으로 만든 토큰 | — |
+| **Role** | 연결이 사용하는 역할. 토큰의 `ROLE_RESTRICTION` 범위 안에 있어야 합니다 | 사용자의 기본 역할 |
+| **Warehouse** | 이 연결이 소모하는 크레딧이 청구되는 웨어하우스 | 사용자의 기본 웨어하우스 |
+
+<Tip>
+REST 호스트는 계정 식별자를 소문자로 바꾸고 구분자를 하이픈으로 처리하므로, 밑줄로 작성한 식별자도 정상적으로 해석됩니다.
+</Tip>
+
+## 필요한 권한
+
+### 읽기 전용 (기본값)
+
+```sql
+GRANT DATABASE ROLE SNOWFLAKE.USAGE_VIEWER      TO ROLE CT_READONLY;
+GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER     TO ROLE CT_READONLY;
+GRANT DATABASE ROLE SNOWFLAKE.GOVERNANCE_VIEWER TO ROLE CT_READONLY;
+GRANT MONITOR USAGE ON ACCOUNT                  TO ROLE CT_READONLY;
+GRANT USAGE ON WAREHOUSE COMPUTE_WH             TO ROLE CT_READONLY;
+```
+
+`GOVERNANCE_VIEWER`는 놓치기 쉽습니다. 이것이 없으면 비용과 스토리지 답변은 계속 작동하지만, 느린 쿼리와 오류 답변은 모두 `QUERY_HISTORY`에서 실패합니다.
+
+### 쓰기 접근 (활성화하는 경우에만)
+
+```sql
+-- 일시 중단과 재개: 에이전트가 제어해도 되는 웨어하우스를 각각 지정합니다.
+GRANT USAGE, OPERATE, MONITOR ON WAREHOUSE CT_AGENT_WH TO ROLE CT_READWRITE;
+
+-- findings 테이블이 저장될 위치.
+GRANT USAGE ON DATABASE MONITORING                    TO ROLE CT_READWRITE;
+GRANT USAGE, CREATE TABLE ON SCHEMA MONITORING.ALERTS TO ROLE CT_READWRITE;
+```
+
+`OPERATE`는 에이전트가 조작해도 되는 웨어하우스에만 부여하고, 공유 프로덕션 웨어하우스에는 절대 부여하지 마세요. 리소스 모니터를 붙인 전용 에이전트 웨어하우스를 두면 어떤 프롬프트로도 올릴 수 없는 컴퓨트 상한이 생깁니다.
+
+## 에이전트 기능
+
+연결하면 Tony는 다음을 할 수 있습니다:
+
+| 기능 | 설명 |
+|------------|-------------|
+| **계정 탐색** | 자격 정보, 웨어하우스, 데이터베이스, 그리고 역할이 읽을 수 있는 `ACCOUNT_USAGE` 뷰 |
+| **크레딧 분석** | 웨어하우스별·일별 측정 크레딧과 측정 기간 명시 |
+| **쿼리 상태** | 읽을 수 있는 가장 느린 쿼리, 반복되는 오류 유형, 원격 스필 |
+| **스토리지 검토** | 가장 큰 테이블, 타임 트래블 및 페일세이프 부담, 데이터베이스별 증가량 |
+| **인벤토리** | 스키마, 역할, 그리고 이 연결 자신의 권한 |
+
+### 연결 확인
+
+```text
+@tony #report 내 Snowflake 웨어하우스와 이 연결이 읽을 수 있는 ACCOUNT_USAGE 뷰를 나열해줘
+```
+
+### 프롬프트 예시
+
+```text
+@tony #report 지난 30일 동안 크레딧을 가장 많이 소모한 Snowflake 웨어하우스는 어디야
+@tony #report 가장 느린 Snowflake 쿼리와 반복되는 오류를 보여줘
+@tony #recommend 타임 트래블과 페일세이프가 스토리지 부담을 늘리는 곳은 어디야
+```
+
+Snowflake는 통화가 아니라 크레딧을 노출하며, 크레딧당 단가는 이 연결로 읽을 수 없습니다. 에이전트는 크레딧을 크레딧으로 보고합니다.
+
+## 쓰기 접근
+
+연결은 읽기 전용으로 제공되며, 접근 권한은 자격 증명을 따르므로 쓰기는 연결마다 결정합니다. 하나의 워크스페이스가 읽기 전용 토큰과 쓰기 가능 토큰을 동시에 가질 수 있습니다.
+
+| 도구 권한 | 자격 증명 | 에이전트가 할 수 있는 일 |
+|-----------------|------------|------------------------|
+| `snowflake_cli_write_only` 끔 (기본값) | 무관 | 읽기만 가능. 쓰기 스크립트는 요청을 만들기 전에 거부합니다. |
+| `snowflake_cli_write_only` 켬 | 읽기 전용 역할 | 여전히 아무것도 못 합니다. Snowflake가 구문을 거부하고 에이전트는 그 거부를 보고합니다. |
+| `snowflake_cli_write_only` 켬 | 쓰기 가능 역할 | 지정한 웨어하우스의 일시 중단·재개, 그리고 측정한 발견 사항을 `CT_FINDINGS` 테이블에 저장. |
+
+**Connections → Snowflake → Tool permissions**에서 켭니다. 먼저 따져볼 두 가지:
+
+- **여기서 쓰기란 정확히 두 가지 작업이며, 임의의 SQL이 아닙니다.** 리소스 모니터 상향, `DATA_RETENTION_TIME_IN_DAYS` 하향, 웨어하우스 크기 변경은 여전히 Snowsight에서 직접 실행할 구문으로 보고됩니다.
+- **권한 부여가 더 강한 통제입니다.** 도구 권한은 CloudThinker가 쓰기를 요청할지를 결정하고, 토큰의 `ROLE_RESTRICTION`과 역할의 권한이 Snowflake가 쓰기를 허용할지를 결정합니다.
+
+<Warning>
+Snowflake에는 조건부 일시 중단이 없습니다. 사용 중 확인과 `ALTER`는 별개의 구문이므로 그 사이에 쿼리가 시작되어 컴퓨트를 잃을 수 있습니다. 에이전트는 상태 변경과 이 한계를 보고할 뿐, 일시 중단이 안전했다고는 결코 말하지 않습니다.
+</Warning>
+
+모든 쓰기는 도구 호출 시 사용자의 승인을 받아야 합니다.
+
+## 문제 해결
+
+<Accordion title="인증이 즉시 실패함 (390403)">
+사용자에게 네트워크 정책이 없습니다. 정책이 연결될 때까지 Snowflake는 토큰 인증을 거부합니다: `ALTER USER SVC_CLOUDTHINKER SET NETWORK_POLICY = CT_POLICY;`
+</Accordion>
+
+<Accordion title="어제는 되던 것이 실패함 (390318)">
+토큰이 만료되었거나 취소되었습니다. `DAYS_TO_EXPIRY`는 엄격한 만료 기한입니다. 새 토큰을 발급하고 연결을 업데이트하세요.
+</Accordion>
+
+<Accordion title="Object does not exist or not authorized (002003)">
+뷰 이름 오타가 아니라 데이터베이스 역할이 누락된 것입니다. 에이전트에게 탐색을 실행시키세요. 역할이 읽을 수 있는 모든 `ACCOUNT_USAGE` 뷰를 나열하고, 읽지 못하는 뷰에는 정확한 `GRANT` 구문을 출력합니다.
+</Accordion>
+
+<Accordion title="Connected인데 모든 쿼리가 실패함 (090073)">
+리소스 모니터가 할당량을 초과했거나, 웨어하우스가 중단된 채 재개하지 못하고 있습니다. 권한이 아니라 계정 용량 문제이므로 어떤 `GRANT`로도 해결되지 않습니다. 계정 관리자가 리소스 모니터를 올리거나 재설정해야 합니다.
+
+자격 증명이 유효하고 테스트 프로브는 컴퓨트가 필요 없기 때문에 연결 상태는 **Connected**로 유지됩니다.
+</Accordion>
+
+<Accordion title="No active warehouse selected (000606)">
+서비스 사용자에게 `DEFAULT_WAREHOUSE`가 없고 설정된 웨어하우스도 없습니다. 연결의 **Warehouse**를 설정하거나 사용자에게 기본값을 지정하세요.
+</Accordion>
+
+<Accordion title="Role not authorized (090105)">
+역할이 토큰의 `ROLE_RESTRICTION` 범위 밖에 있습니다. 토큰이 사용할 수 있는 역할을 쓰거나, **Role**을 비워 사용자의 기본값을 사용하세요.
+</Accordion>
+
+<Accordion title="섹션이 비어서 반환됨">
+오류가 아닙니다. `ACCOUNT_USAGE`는 최대 몇 시간까지 지연되고 1년치 이력을 보관하므로, 활동이 적은 계정에서 좁은 기간을 조회하면 행이 없습니다.
+</Accordion>
+
+## 보안
+
+<ConnectionSecurity />
+
+- **전용 서비스 사용자** — `TYPE = SERVICE` 사용자는 비밀번호, MFA, SSO가 없어 토큰이 유일한 진입 경로가 되고 감사 기록이 읽기 쉬워집니다.
+- **토큰을 제한하고 만료시키기** — `ROLE_RESTRICTION`은 연결이 도달할 수 있는 범위를 제한하고, `DAYS_TO_EXPIRY`는 잊기 쉬운 교체 주기를 강제합니다.
+
+## 관련 항목
+
+<CardGroup cols={2}>
+  <Card title="Tony 에이전트" icon="database" href="/ko/guide/agents/tony">
+    데이터베이스 중심 최적화 에이전트
+  </Card>
+  <Card title="ClickHouse 연결" icon="/images/icons/clickhouse.svg" href="/ko/guide/connections/clickhouse">
+    ClickHouse 클러스터를 위한 유사한 설정
+  </Card>
+</CardGroup>

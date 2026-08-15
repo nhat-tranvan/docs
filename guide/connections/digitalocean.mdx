@@ -1,0 +1,172 @@
+---
+title: DigitalOcean
+description: "Connect DigitalOcean to CloudThinker for Droplet and app inventory, database and Kubernetes drilldowns, exposure review, and billing context"
+icon: "/images/icons/digitalocean.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+
+Connect your DigitalOcean account to enable CloudThinker agents to inventory Droplets, apps, databases, Kubernetes clusters, and volumes, review firewalls and load balancers for exposure, check uptime and alert policies, and answer questions about your balance and invoices.
+
+DigitalOcean authenticates with a **personal access token**. The connection is read-only apart from creating and deleting an empty VPC, and the agent confirms each of those with you before it runs.
+
+---
+
+## Prerequisites
+
+- A **DigitalOcean account** with access to the resources you want to investigate.
+- A **personal access token** with read access to those resources, including `account:read`.
+- Permission to create tokens for the team that owns them.
+
+<Info>
+Issue a read-only token unless you want the agent to manage VPCs. The token's scope is the durable boundary — CloudThinker cannot exceed what the token allows.
+</Info>
+
+---
+
+## Setup
+
+<Steps>
+  <Step title="Create a personal access token">
+    Go to [**Applications & API → Tokens**](https://cloud.digitalocean.com/account/api/tokens) in the DigitalOcean Control Panel and click **Generate New Token** under **Personal access tokens**:
+    - **Token name**: `cloudthinker`
+    - **Expiration**: choose a lifetime and plan to rotate
+    - **Scopes**: pick **Read Only** for the full read surface, or **Custom Scopes** to narrow it
+
+    Copy the token immediately — DigitalOcean shows the secret only once.
+  </Step>
+  <Step title="Add the connection in CloudThinker">
+    Navigate to **Connections → DigitalOcean** and enter:
+    - **API token**: the token you just created
+
+    Click **Connect**. CloudThinker reads your account to verify the token, then shows a **Connected** status with your account state and resource limits.
+  </Step>
+</Steps>
+
+<Warning>
+Copy the personal access token immediately after creation. You'll need to create a new token if it's lost.
+</Warning>
+
+---
+
+## Connection details
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| **DIGITALOCEAN_API_TOKEN** | Personal access token with read access to the resources CloudThinker should inspect | — |
+
+---
+
+## Required permissions
+
+**Read Only** is the simplest choice: it grants `api:read`, which covers every read the connection makes and keeps covering new endpoints as DigitalOcean adds them. To narrow further, use **Custom Scopes** and pick from:
+
+| Scope | Covers |
+|-------|--------|
+| `account:read` | Account status and limits — **required**, CloudThinker reads the account to verify the token at connect time |
+| `billing:read` | Balance, billing history, and invoices |
+| `droplet:read` | Droplet inventory and drilldown |
+| `app:read` | App Platform inventory and deployment status |
+| `database:read` | Managed database clusters |
+| `kubernetes:read` | Clusters and node pools |
+| `vpc:read` `firewall:read` `load_balancer:read` | Networking inventory and exposure review |
+| `monitoring:read` `uptime:read` | Alert policies and uptime checks |
+| `block_storage:read` | Block volumes |
+
+Add `vpc:create` and `vpc:delete` only if you want the agent to manage VPCs. Without them the token cannot write at all, whatever else is configured.
+
+<Tip>
+Scopes cannot be edited after a token is created — narrowing or widening access means generating a new token and reconnecting. Set an expiration and rotate on the same schedule as your other credentials.
+</Tip>
+
+---
+
+## Agent capabilities
+
+Once connected, agents have read access to your DigitalOcean account and infrastructure.
+
+| Capability | Description |
+|------------|-------------|
+| **Account & billing** | Account status and limits, current balance, billing history, and invoice summaries |
+| **Compute** | Droplet inventory and single-Droplet drilldown |
+| **Apps** | App Platform inventory, per-app detail, and active deployment status |
+| **Databases** | Managed database cluster inventory and drilldown — engine, version, region, size, nodes, status |
+| **Kubernetes** | Cluster inventory, cluster detail, and node pools |
+| **Networking** | VPCs, firewalls, load balancers, and region availability |
+| **Monitoring** | Alert policies, uptime checks, and uptime check state |
+| **Storage** | Block volume inventory |
+| **VPC lifecycle** | Create and delete an **empty** VPC — **requires approval** |
+
+<Info>
+Creating and deleting a VPC each need their own confirmation: approving a create is not approval for a delete, and a rejection is final. Some read operations also ask for approval — DigitalOcean marks several database, Kubernetes, firewall, load balancer, and VPC reads as potentially destructive, and CloudThinker honors that label rather than overriding it.
+</Info>
+
+Agents report what a bounded page returned plus whether more exists, never a total — a "10 Droplets" answer means ten were read, not that you own ten. Ask for a wider window when you need the full picture. Kubernetes credentials and database connection strings are never retrievable through this connection.
+
+### Verify the connection
+
+```text
+@alex check the DigitalOcean connection and summarize my account status and resources
+```
+
+### Example prompts
+
+```text
+@alex inventory my DigitalOcean Droplets, apps, and databases and #report as a table
+@alex review my DigitalOcean firewalls and load balancers for exposed services and #recommend fixes
+@alex show my DigitalOcean balance and recent invoices and #report where spend is going
+```
+
+---
+
+## Troubleshooting
+
+<Accordion title="DigitalOcean API token is invalid or expired">
+DigitalOcean rejected the token with a 401. Generate a fresh token in the DigitalOcean control panel and reconnect.
+</Accordion>
+
+<Accordion title="DigitalOcean API token needs account:read permission">
+The token is valid but lacks the account scope CloudThinker verifies at connect time. Reissue it with `account:read` included, then reconnect.
+</Accordion>
+
+<Accordion title="Agent cannot see expected resources">
+The token's scopes don't cover those resource types, or they belong to another team. Reissue the token from the owning team with read access to the resource types you want, and reconnect.
+</Accordion>
+
+<Accordion title="Agent reports 404 for a resource">
+The ID is stale or belongs to another team. Ask the agent to list the resources again and work from the IDs it returns.
+</Accordion>
+
+<Accordion title="DigitalOcean API rate limit reached">
+DigitalOcean answered 429. Wait and retry, and scope requests to one resource type or a smaller window so the agent makes fewer calls per run.
+</Accordion>
+
+<Accordion title="Account verification timed out or is unavailable">
+DigitalOcean did not answer in time, or its API is temporarily down. Retry the connection; if it persists, check DigitalOcean's status page before reissuing the token.
+</Accordion>
+
+<Accordion title="A VPC change was requested but never ran">
+VPC creates and deletes need explicit approval in the same turn. Approve the action when prompted — a rejected call is final and the agent will not retry it.
+</Accordion>
+
+---
+
+## Security
+
+<ConnectionSecurity />
+
+- **Read-only by default** — issue a token without write scope unless you want VPC management; the token, not a setting, is what makes writes impossible.
+- **Set token expiration** — choose an expiration when creating the token and plan to rotate it; DigitalOcean tokens do not auto-rotate.
+
+---
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Kubernetes Connection" icon="/images/icons/kubernetes.svg" href="/guide/connections/kubernetes">
+    Connect a cluster directly for workload-level operations
+  </Card>
+  <Card title="Approval" icon="shield-check" href="/guide/approval">
+    How approval-gated actions work
+  </Card>
+</CardGroup>
