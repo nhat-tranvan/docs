@@ -1,0 +1,166 @@
+---
+title: Buildkite
+description: "Buildkite를 CloudThinker에 연결하여 파이프라인 상태 모니터링, 로그와 어노테이션 기반 실패 빌드 분류, 승인 게이트 빌드 제어를 수행하세요"
+icon: "/images/icons/buildkite.svg"
+---
+
+import ConnectionSecurity from '/snippets/ko/connection-security.mdx';
+
+Buildkite 조직을 연결하면 CloudThinker 에이전트가 파이프라인 상태를 추적하고, 로그와 어노테이션으로 실패한 빌드를 분류하고, 에이전트와 클러스터 용량을 확인하고, 잡 재시도나 배포 게이트 해제 같은 승인 게이트 작업을 실행할 수 있습니다.
+
+Buildkite는 Buildkite가 호스팅하는 MCP 서버를 통해 **API 액세스 토큰**으로 인증합니다. 토큰의 스코프가 성공하는 작업을 결정하므로, 부여한 스코프가 곧 에이전트가 접근할 수 있는 범위의 상한입니다.
+
+---
+
+## 사전 요구 사항
+
+- 모니터링하려는 조직에 접근할 수 있는 **Buildkite 계정**.
+- 아래 "필수 권한"에 나열된 읽기 스코프를 가진 **API 액세스 토큰**.
+- 승인 게이트 작업에는 동일한 토큰에 **`write_builds`** 스코프가 필요합니다.
+
+<Info>
+모니터링과 분류는 읽기 스코프만으로 동작합니다. retry, unblock, rebuild, cancel에는 토큰에 `write_builds`가 추가로 필요합니다.
+</Info>
+
+---
+
+## 설정
+
+<Steps>
+  <Step title="API 액세스 토큰 생성">
+    Buildkite에서 **Personal Settings → API Access Tokens → New API Access Token**([buildkite.com/user/api-access-tokens/new](https://buildkite.com/user/api-access-tokens/new))으로 이동합니다:
+    - **Description**: `cloudthinker`
+    - **Organization access**: CloudThinker가 접근할 조직 선택
+    - **REST API scopes**: `read_organizations`, `read_pipelines`, `read_builds`, `read_build_logs`, `read_artifacts`, `read_agents`, `read_clusters`, `read_user` — 빌드 제어를 사용할 경우에만 `write_builds` 추가
+    - **Expiry**: 유효 기간을 선택하고 교체 계획 수립
+
+    토큰은 즉시 복사하세요 — Buildkite는 한 번만 표시합니다.
+  </Step>
+  <Step title="CloudThinker에서 연결 추가">
+    **Connections → Buildkite**로 이동하여 입력합니다:
+    - **Token**: 방금 생성한 API 액세스 토큰
+
+    **Connect**를 클릭합니다. CloudThinker가 자격 증명을 확인하고 **Connected** 상태를 표시합니다.
+  </Step>
+</Steps>
+
+<Warning>
+API 액세스 토큰은 생성 직후 복사하세요. 분실하면 새 토큰을 만들어야 합니다.
+</Warning>
+
+---
+
+## 연결 세부 정보
+
+| 필드 | 설명 | 예시 |
+|-------|-------------|---------|
+| **BUILDKITE_API_TOKEN** | 연결 인증에 사용되는 API 액세스 토큰 | — |
+
+<Note>
+CloudThinker는 토큰에서 조직을 자동으로 확인하므로 org slug를 설정할 필요가 없습니다. 연결은 Buildkite가 호스팅하는 MCP 서버 `https://mcp.buildkite.com/direct`를 사용하며, 토큰을 Buildkite REST API로 그대로 전달합니다.
+</Note>
+
+---
+
+## 필수 권한
+
+에이전트에게 맡기려는 작업에 해당하는 스코프만 부여하세요.
+
+| 스코프 | 용도 |
+|-------|---------|
+| `read_organizations` | 토큰이 접근할 수 있는 조직 확인 |
+| `read_pipelines` | 파이프라인 목록과 세부 정보 |
+| `read_builds` | 빌드, 잡, 어노테이션, 실패 요약 |
+| `read_build_logs` | 잡 로그 읽기, 검색, 실시간 확인 |
+| `read_artifacts` | 빌드와 잡 아티팩트 |
+| `read_agents` | 에이전트 연결 상태와 용량 |
+| `read_clusters` | 클러스터와 클러스터 큐 |
+| `read_user` | `current_user` 계정 조회 |
+| `write_builds` | 잡 재시도, 잡 언블록, 리빌드, 취소 — 모두 CloudThinker에서 [승인](/ko/guide/approval) 게이트 대상 |
+
+<Tip>
+최소 권한을 따르세요: 모니터링 전용 연결에서는 `write_builds`를 제외합니다. 에이전트는 모든 읽기 기능을 그대로 사용하고, 네 가지 제어 작업은 승인 게이트에 의존하기 전에 Buildkite에서 먼저 실패합니다.
+</Tip>
+
+---
+
+## 에이전트 기능
+
+연결하면 에이전트는 Buildkite 파이프라인, 빌드, 로그, 아티팩트, 에이전트에 대한 읽기 권한을 갖습니다.
+
+| 기능 | 설명 |
+|------------|-------------|
+| **조직 탐색** | 조직을 확인하고 파이프라인, 최근 빌드, 에이전트, 클러스터 나열 |
+| **파이프라인 상태** | 성공률, 연속 실패 횟수, 기준 시간을 넘겨 멈춘 빌드 |
+| **실패 빌드 분류** | 실패 요약을 잡 로그, 어노테이션, 실패 테스트와 대조 |
+| **로그 및 아티팩트** | 잡 로그 읽기, 검색, 실시간 확인. 빌드와 잡 아티팩트 목록 |
+| **용량** | 에이전트 연결 상태, 클러스터, 클러스터 큐 |
+| **빌드 제어** | 잡 재시도, 잡 언블록, 빌드 리빌드, 빌드 취소 — **승인 필요** |
+
+수동 게이트에서 대기 중인 빌드는 Buildkite API에서 `passed`로 보고됩니다. CloudThinker는 해당 빌드를 게이트 대기로 표시하고 블록 단계의 이름을 알려주며 성공률 계산에서 제외합니다. 따라서 보류된 배포가 정상 파이프라인으로 보고되는 일은 없습니다.
+
+### 연결 확인
+
+```text
+@alex list my Buildkite pipelines and show the latest build status for each
+```
+
+### 예시 프롬프트
+
+```text
+@alex which Buildkite pipelines are failing right now and #report their failure streaks
+@alex build 42 of the web pipeline failed — pull the logs and annotations, find the cause, and #recommend a fix
+@alex show Buildkite agent capacity and any builds stuck for more than an hour #dashboard
+```
+
+파이프라인이 많은 조직에서는 단일 파이프라인으로 범위를 좁혀 요청하면 집중된 결과를 얻을 수 있습니다.
+
+---
+
+## 문제 해결
+
+<Accordion title="연결은 Connected인데 모든 요청이 401을 반환">
+토큰이 유효하지 않거나 만료 또는 취소되었습니다. MCP 핸드셰이크는 잘못된 토큰으로도 성공하고 도구를 실행할 때 비로소 실패하므로, 연결 상태가 정상이라고 해서 토큰이 동작한다는 증거는 아닙니다. 새 API 액세스 토큰을 만들고 다시 연결하세요.
+</Accordion>
+
+<Accordion title="이전에 동작하던 읽기가 403을 반환">
+토큰에 스코프가 부족합니다. 읽기에는 `read_organizations`, `read_pipelines`, `read_builds`, `read_build_logs`, `read_artifacts`, `read_agents`, `read_clusters`가 필요합니다. Buildkite에서 토큰의 스코프를 수정하세요 — 새 토큰을 만들 필요는 없습니다.
+</Accordion>
+
+<Accordion title="retry, unblock, rebuild, cancel이 권한 오류로 실패">
+토큰에 `write_builds`가 없습니다. Buildkite에서 해당 스코프를 추가하거나, 연결을 읽기 전용으로 두고 Buildkite에서 직접 작업하세요.
+</Accordion>
+
+<Accordion title="배포가 대기 중인데 파이프라인이 정상으로 보임">
+수동 게이트이며 이미 처리되어 있습니다. 최신 빌드는 게이트에 걸려 있는 동안 성공률에서 제외됩니다. 에이전트가 게이트 상태를 **unknown**으로 보고하면 게이트 확인 자체가 실패한 것으로, 대개 레이트 리밋 때문이며 이 경우에도 빌드는 제외됩니다. unknown은 게이트가 없다는 뜻이 아닙니다.
+</Accordion>
+
+<Accordion title="존재하는 파이프라인에서 404 발생">
+Buildkite가 slug를 요구하는 자리에 파이프라인 이름을 사용했습니다. 에이전트에게 파이프라인 목록을 요청하고 그 출력의 slug를 사용하세요.
+</Accordion>
+
+<Accordion title="429 레이트 리밋">
+한 요청에 파이프라인이나 빌드가 너무 많습니다. 단일 파이프라인으로 범위를 좁히거나 최근 빌드 수를 줄여 요청하세요.
+</Accordion>
+
+---
+
+## 보안
+
+<ConnectionSecurity />
+
+- **빌드 제어에는 승인 유지** — retry, unblock, rebuild, cancel은 승인 게이트를 유지하세요. 언블록은 누군가 의도적으로 둔 게이트, 보통 배포 게이트를 해제합니다.
+- **승인뿐 아니라 토큰 스코프로 제한** — 토큰 스코프는 Buildkite가 강제합니다. `write_builds`가 없는 토큰은 CI 상태를 전혀 변경할 수 없습니다.
+
+---
+
+## 관련 항목
+
+<CardGroup cols={2}>
+  <Card title="CircleCI 연결" icon="/images/icons/circleci.svg" href="/ko/guide/connections/circleci">
+    파이프라인 상태, 빌드 로그 분류, 승인 게이트 제어
+  </Card>
+  <Card title="승인" icon="shield-check" href="/ko/guide/approval">
+    승인 게이트 작업의 동작 방식
+  </Card>
+</CardGroup>
