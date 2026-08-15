@@ -1,0 +1,208 @@
+---
+title: Snowflake
+description: "Kết nối Snowflake với CloudThinker để phân tích credit của warehouse, điều tra truy vấn chậm, xem xét lưu trữ và tùy chọn điều khiển warehouse"
+icon: "/images/icons/snowflake.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối tài khoản Snowflake của bạn để [Tony](/vi/guide/agents/tony) (Database Engineer) đọc mức tiêu thụ credit của warehouse, xếp hạng các truy vấn chậm và lỗi, và đo chi phí lưu trữ của bảng. CloudThinker kết nối tới Snowflake qua SQL REST API bằng programmatic access token, và một kết nối mới chỉ đọc cho đến khi bạn bật công cụ ghi.
+
+## Yêu cầu trước
+
+- Quyền `ACCOUNTADMIN` (hoặc tương đương) để tạo role, service user và token.
+- Một network policy để gắn vào user đó. Snowflake từ chối xác thực bằng token cho đến khi có network policy.
+- Một warehouse mà role có thể dùng. Truy vấn metadata không cần compute, nên kiểm tra kết nối có thể thành công trong khi phân tích thật vẫn thất bại nếu thiếu warehouse.
+
+## Thiết lập
+
+<Steps>
+  <Step title="Tạo role chỉ đọc">
+    Chạy với quyền `ACCOUNTADMIN`. `USAGE_VIEWER` bao phủ metering và storage, `OBJECT_VIEWER` bao phủ danh mục đối tượng, và `GOVERNANCE_VIEWER` là thứ làm cho `QUERY_HISTORY` đọc được:
+    ```sql
+    USE ROLE ACCOUNTADMIN;
+
+    CREATE ROLE IF NOT EXISTS CT_READONLY;
+    GRANT DATABASE ROLE SNOWFLAKE.USAGE_VIEWER      TO ROLE CT_READONLY;
+    GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER     TO ROLE CT_READONLY;
+    GRANT DATABASE ROLE SNOWFLAKE.GOVERNANCE_VIEWER TO ROLE CT_READONLY;
+    GRANT MONITOR USAGE ON ACCOUNT                  TO ROLE CT_READONLY;
+    GRANT USAGE ON WAREHOUSE COMPUTE_WH             TO ROLE CT_READONLY;
+    ```
+  </Step>
+  <Step title="Tạo service user">
+    User kiểu `SERVICE` không có mật khẩu, không MFA và không SSO, nên nó chỉ xác thực bằng token:
+    ```sql
+    CREATE USER IF NOT EXISTS SVC_CLOUDTHINKER
+      TYPE = SERVICE
+      DEFAULT_ROLE = CT_READONLY
+      DEFAULT_WAREHOUSE = COMPUTE_WH
+      COMMENT = 'CloudThinker connection';
+    GRANT ROLE CT_READONLY TO USER SVC_CLOUDTHINKER;
+    ```
+  </Step>
+  <Step title="Gắn network policy">
+    Thu hẹp `ALLOWED_IP_LIST` về dải IP egress của bạn cho mọi trường hợp ngoài tài khoản thử nghiệm:
+    ```sql
+    CREATE NETWORK POLICY IF NOT EXISTS CT_POLICY ALLOWED_IP_LIST = ('0.0.0.0/0');
+    ALTER USER SVC_CLOUDTHINKER SET NETWORK_POLICY = CT_POLICY;
+    ```
+    Bỏ qua bước này là lỗi thiết lập phổ biến nhất, và lỗi trả về (`390403`) không nhắc đến network policy.
+  </Step>
+  <Step title="Tạo programmatic access token">
+    ```sql
+    ALTER USER SVC_CLOUDTHINKER ADD PROGRAMMATIC ACCESS TOKEN CT_DEV
+      ROLE_RESTRICTION = 'CT_READONLY'
+      DAYS_TO_EXPIRY = 90;
+    ```
+    Snowflake chỉ hiển thị token một lần, khi tạo. `DAYS_TO_EXPIRY` là hạn cứng: đúng ngày đó kết nối bắt đầu lỗi `390318` và bạn phải tạo token mới.
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Vào **Connections → Snowflake** và nhập:
+    - **Account identifier**: `MYORG-MYACCOUNT`, tìm trong **Snowsight → Account details**. Không phải URL đầy đủ.
+    - **Programmatic access token**: token từ bước trước. Không phải mật khẩu tài khoản.
+    - **Role**: tùy chọn; để trống để dùng role mặc định của user.
+    - **Warehouse**: tùy chọn; để trống để dùng warehouse mặc định của user.
+
+    Nhấn **Connect**. Trạng thái hiển thị **Connected** khi CloudThinker phân giải được account, region, role và warehouse.
+  </Step>
+</Steps>
+
+## Chi tiết kết nối
+
+| Trường | Mô tả | Mặc định |
+|-------|-------------|---------|
+| **Account identifier** | `ORG-ACCOUNT`, lấy từ **Snowsight → Account details** | — |
+| **Programmatic access token** | Token tạo bằng `ALTER USER ... ADD PROGRAMMATIC ACCESS TOKEN` | — |
+| **Role** | Role mà kết nối sử dụng; phải nằm trong `ROLE_RESTRICTION` của token | Role mặc định của user |
+| **Warehouse** | Warehouse bị tính credit mà kết nối này tiêu thụ | Warehouse mặc định của user |
+
+<Tip>
+Host REST chuyển account identifier về chữ thường và hiển thị dấu phân cách thành dấu gạch nối, nên identifier viết bằng dấu gạch dưới vẫn phân giải được.
+</Tip>
+
+## Quyền cần thiết
+
+### Chỉ đọc (mặc định)
+
+```sql
+GRANT DATABASE ROLE SNOWFLAKE.USAGE_VIEWER      TO ROLE CT_READONLY;
+GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER     TO ROLE CT_READONLY;
+GRANT DATABASE ROLE SNOWFLAKE.GOVERNANCE_VIEWER TO ROLE CT_READONLY;
+GRANT MONITOR USAGE ON ACCOUNT                  TO ROLE CT_READONLY;
+GRANT USAGE ON WAREHOUSE COMPUTE_WH             TO ROLE CT_READONLY;
+```
+
+`GOVERNANCE_VIEWER` rất dễ bỏ sót. Thiếu nó, câu trả lời về chi phí và lưu trữ vẫn chạy trong khi mọi câu trả lời về truy vấn chậm và lỗi đều thất bại trên `QUERY_HISTORY`.
+
+### Quyền ghi (chỉ khi bạn bật)
+
+```sql
+-- Suspend và resume: nêu tên từng warehouse mà agent được phép điều khiển.
+GRANT USAGE, OPERATE, MONITOR ON WAREHOUSE CT_AGENT_WH TO ROLE CT_READWRITE;
+
+-- Nơi đặt bảng findings.
+GRANT USAGE ON DATABASE MONITORING                    TO ROLE CT_READWRITE;
+GRANT USAGE, CREATE TABLE ON SCHEMA MONITORING.ALERTS TO ROLE CT_READWRITE;
+```
+
+Cấp `OPERATE` trên đúng những warehouse mà agent được phép tác động, không bao giờ trên warehouse production dùng chung. Một warehouse riêng cho agent kèm resource monitor tạo trần cứng cho compute của nó mà không prompt nào nâng lên được.
+
+## Khả năng của agent
+
+Sau khi kết nối, Tony có thể:
+
+| Khả năng | Mô tả |
+|------------|-------------|
+| **Khám phá tài khoản** | Danh tính, warehouse, database, và những view `ACCOUNT_USAGE` mà role đọc được |
+| **Phân tích credit** | Credit đo được theo từng warehouse và từng ngày, kèm khoảng thời gian đã đo |
+| **Sức khỏe truy vấn** | Các truy vấn chậm nhất đọc được, nhóm lỗi lặp lại, và remote spill |
+| **Xem xét lưu trữ** | Bảng lớn nhất, chi phí time travel và failsafe, và tăng trưởng theo từng database |
+| **Danh mục** | Schema, role, và các grant của chính kết nối này |
+
+### Kiểm tra kết nối
+
+```text
+@tony #report liệt kê các Snowflake warehouse của tôi và những view ACCOUNT_USAGE mà kết nối này đọc được
+```
+
+### Ví dụ prompt
+
+```text
+@tony #report warehouse Snowflake nào tiêu thụ nhiều credit nhất trong 30 ngày qua
+@tony #report cho tôi xem các truy vấn Snowflake chậm nhất và các lỗi lặp lại
+@tony #recommend time travel và failsafe đang làm tăng chi phí lưu trữ ở đâu
+```
+
+Snowflake hiển thị credit chứ không phải tiền tệ, và đơn giá mỗi credit không đọc được qua kết nối này. Agent báo cáo credit đúng như credit.
+
+## Quyền ghi
+
+Kết nối mặc định chỉ đọc, và quyền ghi là quyết định riêng của từng kết nối vì quyền truy cập đi theo credential. Một workspace có thể giữ đồng thời một token chỉ đọc và một token có quyền ghi.
+
+| Quyền công cụ | Credential | Agent làm được gì |
+|-----------------|------------|------------------------|
+| `snowflake_cli_write_only` tắt (mặc định) | bất kỳ | Chỉ đọc. Các script ghi từ chối trước khi dựng request. |
+| `snowflake_cli_write_only` bật | role chỉ đọc | Vẫn không làm được gì. Snowflake từ chối câu lệnh và agent báo cáo việc bị từ chối. |
+| `snowflake_cli_write_only` bật | role có quyền ghi | Suspend hoặc resume một warehouse chỉ định, và lưu các phát hiện đã đo vào bảng `CT_FINDINGS`. |
+
+Bật tại **Connections → Snowflake → Tool permissions**. Hai điều cần cân nhắc trước:
+
+- **Ghi ở đây nghĩa là đúng hai hành động, không phải SQL tùy ý.** Nâng resource monitor, hạ `DATA_RETENTION_TIME_IN_DAYS`, hay đổi kích thước warehouse vẫn được báo lại cho bạn dưới dạng câu lệnh để tự chạy trong Snowsight.
+- **Grant mới là lớp kiểm soát mạnh hơn.** Quyền công cụ quyết định CloudThinker có yêu cầu ghi hay không; `ROLE_RESTRICTION` của token và các grant của role quyết định Snowflake có cho phép ghi hay không.
+
+<Warning>
+Snowflake không có suspend theo điều kiện. Bước kiểm tra bận và câu lệnh `ALTER` là hai câu lệnh riêng, nên một truy vấn có thể bắt đầu ở giữa và mất compute. Agent báo cáo thay đổi trạng thái cùng giới hạn này, không bao giờ nói rằng suspend là an toàn.
+</Warning>
+
+Mọi thao tác ghi vẫn cần bạn phê duyệt trên lời gọi công cụ.
+
+## Xử lý sự cố
+
+<Accordion title="Xác thực thất bại ngay lập tức (390403)">
+User chưa có network policy. Snowflake từ chối xác thực bằng token cho đến khi có một cái được gắn: `ALTER USER SVC_CLOUDTHINKER SET NETWORK_POLICY = CT_POLICY;`
+</Accordion>
+
+<Accordion title="Hôm qua còn chạy, hôm nay lỗi (390318)">
+Token đã hết hạn hoặc bị thu hồi. `DAYS_TO_EXPIRY` là hạn cứng. Tạo token mới và cập nhật kết nối.
+</Accordion>
+
+<Accordion title="Object does not exist or not authorized (002003)">
+Thiếu database role, không phải gõ sai tên view. Yêu cầu agent chạy bước khám phá: nó liệt kê mọi view `ACCOUNT_USAGE` mà role đọc được và in ra đúng dòng `GRANT` cho những view không đọc được.
+</Accordion>
+
+<Accordion title="Đã Connected nhưng mọi truy vấn đều lỗi (090073)">
+Một resource monitor đã vượt hạn mức, hoặc warehouse đang suspended và không resume được. Đây là vấn đề capacity của tài khoản, không phải quyền, nên không `GRANT` nào sửa được. Account admin cần nâng hoặc reset resource monitor.
+
+Kết nối vẫn ở trạng thái **Connected** vì credential hợp lệ và bước kiểm tra không cần compute.
+</Accordion>
+
+<Accordion title="No active warehouse selected (000606)">
+Service user không có `DEFAULT_WAREHOUSE` và cũng không cấu hình warehouse nào. Đặt **Warehouse** trên kết nối, hoặc gán mặc định cho user.
+</Accordion>
+
+<Accordion title="Role not authorized (090105)">
+Role nằm ngoài `ROLE_RESTRICTION` của token. Dùng một role mà token được phép sử dụng, hoặc xóa **Role** để lấy mặc định của user.
+</Accordion>
+
+<Accordion title="Một mục trả về rỗng">
+Không phải lỗi. `ACCOUNT_USAGE` trễ tới vài giờ và giữ một năm lịch sử, nên một khoảng thời gian hẹp trên tài khoản ít hoạt động sẽ không có dòng nào.
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Service user riêng** — user `TYPE = SERVICE` không có mật khẩu, không MFA và không SSO, nên token là lối vào duy nhất và dấu vết kiểm toán vẫn dễ đọc.
+- **Giới hạn và đặt hạn cho token** — `ROLE_RESTRICTION` giới hạn mọi thứ kết nối chạm tới được, và `DAYS_TO_EXPIRY` buộc bạn xoay vòng token thay vì quên mất.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Tony Agent" icon="database" href="/vi/guide/agents/tony">
+    Agent tối ưu hóa tập trung vào cơ sở dữ liệu
+  </Card>
+  <Card title="Kết nối ClickHouse" icon="/images/icons/clickhouse.svg" href="/vi/guide/connections/clickhouse">
+    Thiết lập tương tự cho cluster ClickHouse
+  </Card>
+</CardGroup>

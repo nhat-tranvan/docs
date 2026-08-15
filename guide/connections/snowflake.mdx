@@ -1,0 +1,208 @@
+---
+title: Snowflake
+description: "Connect Snowflake to CloudThinker for warehouse credit analysis, slow-query triage, storage review, and optional warehouse control"
+icon: "/images/icons/snowflake.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+
+Connect your Snowflake account to let [Tony](/guide/agents/tony) (Database Engineer) read warehouse credit burn, rank slow and failing queries, and measure table storage overhead. CloudThinker reaches Snowflake over the SQL REST API with a programmatic access token, and a new connection reads only until you turn the write tool on.
+
+## Prerequisites
+
+- `ACCOUNTADMIN` (or equivalent) to create the role, the service user, and the token.
+- A network policy you can attach to that user. Snowflake refuses token authentication until one exists.
+- A warehouse the role can use. Metadata queries need no compute, so the connection test can pass while real analysis still fails without one.
+
+## Setup
+
+<Steps>
+  <Step title="Create a read-only role">
+    Run as `ACCOUNTADMIN`. `USAGE_VIEWER` covers metering and storage, `OBJECT_VIEWER` covers object inventory, and `GOVERNANCE_VIEWER` is what makes `QUERY_HISTORY` readable:
+    ```sql
+    USE ROLE ACCOUNTADMIN;
+
+    CREATE ROLE IF NOT EXISTS CT_READONLY;
+    GRANT DATABASE ROLE SNOWFLAKE.USAGE_VIEWER      TO ROLE CT_READONLY;
+    GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER     TO ROLE CT_READONLY;
+    GRANT DATABASE ROLE SNOWFLAKE.GOVERNANCE_VIEWER TO ROLE CT_READONLY;
+    GRANT MONITOR USAGE ON ACCOUNT                  TO ROLE CT_READONLY;
+    GRANT USAGE ON WAREHOUSE COMPUTE_WH             TO ROLE CT_READONLY;
+    ```
+  </Step>
+  <Step title="Create a service user">
+    A `SERVICE` user has no password, no MFA, and no SSO, so it authenticates only with the token:
+    ```sql
+    CREATE USER IF NOT EXISTS SVC_CLOUDTHINKER
+      TYPE = SERVICE
+      DEFAULT_ROLE = CT_READONLY
+      DEFAULT_WAREHOUSE = COMPUTE_WH
+      COMMENT = 'CloudThinker connection';
+    GRANT ROLE CT_READONLY TO USER SVC_CLOUDTHINKER;
+    ```
+  </Step>
+  <Step title="Attach a network policy">
+    Narrow `ALLOWED_IP_LIST` to your egress ranges for anything beyond a test account:
+    ```sql
+    CREATE NETWORK POLICY IF NOT EXISTS CT_POLICY ALLOWED_IP_LIST = ('0.0.0.0/0');
+    ALTER USER SVC_CLOUDTHINKER SET NETWORK_POLICY = CT_POLICY;
+    ```
+    Skipping this step is the most common setup failure, and the resulting error (`390403`) does not name the policy.
+  </Step>
+  <Step title="Mint a programmatic access token">
+    ```sql
+    ALTER USER SVC_CLOUDTHINKER ADD PROGRAMMATIC ACCESS TOKEN CT_DEV
+      ROLE_RESTRICTION = 'CT_READONLY'
+      DAYS_TO_EXPIRY = 90;
+    ```
+    Snowflake shows the token once, on creation. `DAYS_TO_EXPIRY` is a hard expiry: on that day the connection starts failing with `390318` and you mint a new token.
+  </Step>
+  <Step title="Add the connection in CloudThinker">
+    Go to **Connections → Snowflake** and enter:
+    - **Account identifier**: `MYORG-MYACCOUNT`, found under **Snowsight → Account details**. Not the full URL.
+    - **Programmatic access token**: the token from the previous step. Not an account password.
+    - **Role**: optional; leave blank to use the user's default role.
+    - **Warehouse**: optional; leave blank to use the user's default warehouse.
+
+    Click **Connect**. The status shows **Connected** once CloudThinker resolves the account, region, role, and warehouse.
+  </Step>
+</Steps>
+
+## Connection details
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| **Account identifier** | `ORG-ACCOUNT`, from **Snowsight → Account details** | — |
+| **Programmatic access token** | Token created with `ALTER USER ... ADD PROGRAMMATIC ACCESS TOKEN` | — |
+| **Role** | Role the connection assumes; must sit inside the token's `ROLE_RESTRICTION` | User's default role |
+| **Warehouse** | Warehouse billed for the credits this connection burns | User's default warehouse |
+
+<Tip>
+The REST host lowercases the account identifier and renders the separator as a hyphen, so an identifier written with an underscore still resolves.
+</Tip>
+
+## Required permissions
+
+### Read-only (default)
+
+```sql
+GRANT DATABASE ROLE SNOWFLAKE.USAGE_VIEWER      TO ROLE CT_READONLY;
+GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER     TO ROLE CT_READONLY;
+GRANT DATABASE ROLE SNOWFLAKE.GOVERNANCE_VIEWER TO ROLE CT_READONLY;
+GRANT MONITOR USAGE ON ACCOUNT                  TO ROLE CT_READONLY;
+GRANT USAGE ON WAREHOUSE COMPUTE_WH             TO ROLE CT_READONLY;
+```
+
+`GOVERNANCE_VIEWER` is easy to miss. Without it, spend and storage answers keep working while every slow-query and error answer fails on `QUERY_HISTORY`.
+
+### Write access (only if you enable it)
+
+```sql
+-- Suspend and resume: name each warehouse the agent may control.
+GRANT USAGE, OPERATE, MONITOR ON WAREHOUSE CT_AGENT_WH TO ROLE CT_READWRITE;
+
+-- Where the findings table lives.
+GRANT USAGE ON DATABASE MONITORING                    TO ROLE CT_READWRITE;
+GRANT USAGE, CREATE TABLE ON SCHEMA MONITORING.ALERTS TO ROLE CT_READWRITE;
+```
+
+Grant `OPERATE` on the warehouses the agent may act on, never on a shared production warehouse. A dedicated agent warehouse with a resource monitor gives its compute a ceiling no prompt can raise.
+
+## Agent capabilities
+
+Once connected, Tony can:
+
+| Capability | Description |
+|------------|-------------|
+| **Account discovery** | Identity, warehouses, databases, and which `ACCOUNT_USAGE` views the role can read |
+| **Credit analysis** | Metered credits per warehouse and per day, with the measured window stated |
+| **Query health** | Slowest readable queries, recurring error classes, and remote spill |
+| **Storage review** | Largest tables, time-travel and failsafe overhead, and per-database growth |
+| **Inventory** | Schemas, roles, and this connection's own grants |
+
+### Verify the connection
+
+```text
+@tony #report list my Snowflake warehouses and which ACCOUNT_USAGE views this connection can read
+```
+
+### Example prompts
+
+```text
+@tony #report which Snowflake warehouses burned the most credits in the last 30 days
+@tony #report show the slowest Snowflake queries and any recurring errors
+@tony #recommend where are time travel and failsafe adding storage overhead
+```
+
+Snowflake exposes credits, not currency, and the price per credit is not readable through this connection. Agents report credits as credits.
+
+## Write access
+
+The connection ships read-only, and write is a per-connection decision because access follows the credential. One workspace can hold a read-only token and a write-capable token at the same time.
+
+| Tool permission | Credential | What the agent can do |
+|-----------------|------------|------------------------|
+| `snowflake_cli_write_only` off (default) | any | Reads only. The write scripts refuse before they build a request. |
+| `snowflake_cli_write_only` on | read-only role | Still nothing. Snowflake denies the statement and the agent reports the denial. |
+| `snowflake_cli_write_only` on | write-capable role | Suspend or resume a named warehouse, and keep measured findings in a `CT_FINDINGS` table. |
+
+Turn it on under **Connections → Snowflake → Tool permissions**. Two things to weigh first:
+
+- **Write means exactly two actions, not arbitrary SQL.** Raising a resource monitor, lowering `DATA_RETENTION_TIME_IN_DAYS`, or resizing a warehouse is still reported to you as a statement to run in Snowsight.
+- **The grant is the stronger control.** The tool permission decides whether CloudThinker asks for a write; the token's `ROLE_RESTRICTION` and the role's grants decide whether Snowflake allows one.
+
+<Warning>
+A suspend cannot be conditional in Snowflake. The busy check and the `ALTER` are two statements, so a query can start between them and lose its compute. Agents report the state change and this limit, never that the suspend was safe.
+</Warning>
+
+Every write still needs your approval on the tool call.
+
+## Troubleshooting
+
+<Accordion title="Authentication fails immediately (390403)">
+The user has no network policy. Snowflake refuses token authentication until one is attached: `ALTER USER SVC_CLOUDTHINKER SET NETWORK_POLICY = CT_POLICY;`
+</Accordion>
+
+<Accordion title="It worked yesterday and now fails (390318)">
+The token expired or was revoked. `DAYS_TO_EXPIRY` is a hard expiry. Mint a new token and update the connection.
+</Accordion>
+
+<Accordion title="Object does not exist or not authorized (002003)">
+A missing database role, not a typo in the view name. Ask the agent to run discovery: it lists every `ACCOUNT_USAGE` view the role can read and prints the exact `GRANT` line for the ones it cannot.
+</Accordion>
+
+<Accordion title="Connected, but every query fails (090073)">
+A resource monitor is over quota, or the warehouse is suspended and cannot resume. This is account capacity, not permission, so no `GRANT` fixes it. An account admin raises or resets the resource monitor.
+
+The connection stays **Connected** because the credential is valid and the test probe needs no compute.
+</Accordion>
+
+<Accordion title="No active warehouse selected (000606)">
+The service user has no `DEFAULT_WAREHOUSE` and none was configured. Set **Warehouse** on the connection, or give the user a default.
+</Accordion>
+
+<Accordion title="Role not authorized (090105)">
+The role sits outside the token's `ROLE_RESTRICTION`. Use a role the token may assume, or clear **Role** to take the user's default.
+</Accordion>
+
+<Accordion title="A section comes back empty">
+Not an error. `ACCOUNT_USAGE` lags by up to a few hours and keeps one year of history, so a narrow window over a quiet account returns no rows.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- **Dedicated service user** — a `TYPE = SERVICE` user has no password, no MFA, and no SSO, so the token is the only way in and the audit trail stays readable.
+- **Restrict and expire the token** — `ROLE_RESTRICTION` bounds everything the connection can reach, and `DAYS_TO_EXPIRY` forces a rotation you would otherwise forget.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Tony Agent" icon="database" href="/guide/agents/tony">
+    Database-focused optimization agent
+  </Card>
+  <Card title="ClickHouse Connection" icon="/images/icons/clickhouse.svg" href="/guide/connections/clickhouse">
+    Similar setup for ClickHouse clusters
+  </Card>
+</CardGroup>
