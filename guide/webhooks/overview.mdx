@@ -1,365 +1,166 @@
 ---
 title: Webhooks
-description: "Send CloudThinker events to external systems with configurable webhooks"
+description: "Give external systems a URL that starts an agent conversation or opens a DRE incident"
 icon: webhook
 ---
 
-Webhooks allow CloudThinker to push events to your external systems in real-time, enabling automation, integration, and custom workflows.
+Webhooks let external systems push events into CloudThinker. Each webhook gives you a unique URL; POST to it and CloudThinker starts an agent conversation or opens a [DRE](/guide/incident/overview) incident.
 
-## How webhooks work
+<Note>
+Webhooks are inbound only. CloudThinker does not POST events out to your endpoints. To send results outward, use [notifications](/guide/notifications), [Slack](/guide/slack-integration), or [Microsoft Teams](/guide/teams-integration).
+</Note>
+
+## How it works
+
+1. You create a webhook and choose what it does: start a **Conversation** or open a **DRE** incident.
+2. CloudThinker issues a unique URL containing the webhook token, plus a signing secret shown once.
+3. Your system POSTs a JSON body to that URL.
+4. CloudThinker authenticates the request, checks the rate limit, records the event, and returns **202 Accepted** in under 100 ms.
+5. A worker dispatches the payload and writes the final status.
+
+## Create a webhook
 
 <Steps>
-  <Step title="Configure">
-    Create a webhook endpoint with your target URL and select events to subscribe to
+  <Step title="Open Webhooks">
+    Navigate to **Webhooks** in the sidebar, or open **Chat Settings** (the gear icon beside the **+** button in the chat prompt box) and select **Webhooks** under **Integrations**.
   </Step>
-  <Step title="Trigger">
-    When subscribed events occur, CloudThinker prepares a webhook payload
+  <Step title="Click Create Webhook">
+    The wizard has four steps: **Basic Info**, **Type**, **Configure**, and **Advanced**.
   </Step>
-  <Step title="Deliver">
-    CloudThinker sends an HTTP POST request to your endpoint with the event data
+  <Step title="Fill in the fields">
+    - **Name** — a descriptive identifier
+    - **Description** — optional
+    - **Type** — **Conversation** or **DRE**
+    - **Rate limit** — requests per hour, default 100. Set 0 or below for unlimited
+    - **Prompt structure** — optional template that must contain `{{message}}`
+    - **Auth** — bearer token, HMAC, API key, or none
   </Step>
-  <Step title="Process">
-    Your system receives and processes the webhook, returning a success response
+  <Step title="Copy the URL and secret">
+    Save the webhook, then copy its URL and signing secret.
+
+    **Success state:** the webhook appears in the list as **active**.
   </Step>
 </Steps>
 
----
+<Warning>
+The signing secret is shown only once, when you create the webhook. Store it before you close the dialog.
+</Warning>
 
-## Creating webhooks
+## Action types
 
-### From the console
+| Type | What a request does |
+|------|---------------------|
+| **Conversation** | Starts an agent conversation from the payload. `message` is required |
+| **DRE** | Opens an incident, and optionally runs automatic RCA. `message` is optional |
 
-1. Navigate to **Settings > Webhooks**
-2. Click **Create Webhook**
-3. Configure the webhook:
-   - **Name**: Descriptive identifier
-   - **URL**: Your endpoint URL (must be HTTPS)
-   - **Events**: Select events to subscribe to
-   - **Secret**: Optional signing secret for verification
-4. Save and test
+For a DRE webhook, automatic RCA is **on by default** with a minimum severity of **Medium**. See [webhook integrations](/guide/incident/webhook-integrations/overview).
 
-### Webhook configuration
-
-| Field | Description | Required |
-|-------|-------------|----------|
-| **Name** | Friendly name for identification | Yes |
-| **URL** | HTTPS endpoint to receive events | Yes |
-| **Events** | Event types to subscribe to | Yes |
-| **Secret** | Shared secret for payload signing | Recommended |
-| **Headers** | Custom headers to include | No |
-| **Active** | Enable/disable the webhook | Yes |
-
----
-
-## Event types
-
-Subscribe to events across CloudThinker:
-
-### Recommendation events
-
-| Event | Trigger |
-|-------|---------|
-| `recommendation.created` | New recommendation generated |
-| `recommendation.updated` | Recommendation status changed |
-| `recommendation.implemented` | Recommendation marked complete |
-| `recommendation.comment` | Comment added to recommendation |
-
-### Incident events
-
-| Event | Trigger |
-|-------|---------|
-| `incident.created` | New incident created |
-| `incident.updated` | Incident details changed |
-| `incident.resolved` | Incident marked resolved |
-| `incident.comment` | Comment added to incident |
-
-### Security events
-
-| Event | Trigger |
-|-------|---------|
-| `finding.created` | New security finding detected |
-| `finding.resolved` | Security finding resolved |
-| `compliance.changed` | Compliance status changed |
-
-### Task events
-
-| Event | Trigger |
-|-------|---------|
-| `task.started` | Scheduled task began execution |
-| `task.completed` | Task finished successfully |
-| `task.failed` | Task encountered an error |
-
-### Agent events
-
-| Event | Trigger |
-|-------|---------|
-| `conversation.completed` | Agent conversation finished |
-| `approval.requested` | Agent requests approval for action |
-| `approval.granted` | User approved agent action |
-
-### Resource events
-
-| Event | Trigger |
-|-------|---------|
-| `resource.discovered` | New cloud resource found |
-| `resource.changed` | Resource configuration changed |
-| `resource.deleted` | Resource no longer exists |
-
----
-
-## Webhook payload
-
-Each webhook includes a standardized payload:
+## Request body
 
 ```json
 {
-  "id": "evt_abc123",
-  "type": "recommendation.created",
-  "timestamp": "2024-01-15T10:30:00Z",
-  "workspace_id": "ws_xyz789",
-  "data": {
-    "id": "rec_def456",
-    "title": "Right-size EC2 instance i-0abc123",
-    "potential_savings": 150.00,
-    "effort": "low",
-    "risk": "low",
-    "status": "pending"
+  "message": "Hello from webhook!",
+  "metadata": {
+    "source": "external-system",
+    "priority": "normal"
   }
 }
 ```
 
-### Payload fields
+| Field | Required | Description |
+|-------|----------|-------------|
+| `message` | For Conversation webhooks | The prompt the agent receives |
+| `metadata` | No | Custom fields carried into the incident payload |
 
-| Field | Description |
-|-------|-------------|
-| `id` | Unique event identifier |
-| `type` | Event type (e.g., `recommendation.created`) |
-| `timestamp` | ISO 8601 timestamp |
-| `workspace_id` | Workspace where event occurred |
-| `data` | Event-specific payload |
+<Warning>
+Unknown top-level fields are silently dropped. Put every custom field inside `metadata`.
+</Warning>
 
----
+The response returns `success`, `request_id`, and — depending on the action type — `conversation_id`, `incident_id`, `rca_run_id`, and `signal_id`.
 
-## Security
+## Authentication
 
-### Signature verification
+Choose one auth mode per webhook. CloudThinker verifies each incoming request before it accepts the payload.
 
-When you configure a webhook secret, CloudThinker signs each payload:
+| Mode | How the sender authenticates |
+|------|------------------------------|
+| **Bearer** | `Authorization: Bearer <token>` |
+| **HMAC** | A signature header, `X-Webhook-Signature` by default, computed with the webhook's signing secret |
+| **API key** | A key header, `X-Api-Key` by default |
+| **None** | No authentication. Rely on the unguessable token in the URL |
 
-```
-X-CloudThinker-Signature: sha256=<signature>
-```
+The header name is configurable for HMAC and API key. Sign the raw request body with HMAC-SHA256 and send `sha256=<hex digest>`:
 
-Verify the signature in your endpoint:
+```bash
+SIGNATURE="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex | awk '{print $2}')"
 
-```python
-import hmac
-import hashlib
-
-def verify_signature(payload, signature, secret):
-    expected = hmac.new(
-        secret.encode(),
-        payload.encode(),
-        hashlib.sha256
-    ).hexdigest()
-    return hmac.compare_digest(f"sha256={expected}", signature)
+curl -X POST "$WEBHOOK_URL" \
+  -H "Content-Type: application/json" \
+  -H "X-Webhook-Signature: $SIGNATURE" \
+  -d "$BODY"
 ```
 
-### IP allowlisting
+## Limits
 
-CloudThinker webhooks originate from known IP ranges. Contact support for the current IP list to configure firewall rules.
+| Limit | Value |
+|-------|-------|
+| Request body | 1 MB |
+| Rate limit | 100 requests per hour by default; 0 or below means unlimited |
+| Raw body retention | 90 days |
 
-### HTTPS only
+A request over the rate limit is recorded with status `rate_limited`.
 
-Webhook URLs must use HTTPS. Self-signed certificates are not supported in production.
+## Review triggers
 
----
+Navigate to **Webhooks > Triggers** to see every webhook trigger in the workspace.
 
-## Retry logic
+| Column | What it shows |
+|--------|---------------|
+| **Type** | Chat, Incident, System, or Auth Failed |
+| **Request ID** | The identifier returned to the sender |
+| **Status** | The HTTP status code |
+| **Duration** | Processing time in milliseconds |
+| **Error** | The failure reason, when one exists |
+| **Created** | When the request arrived |
+| **Actions** | A **View Incident** link for incident triggers |
 
-CloudThinker retries failed webhook deliveries:
+Each event carries one of four lifecycle statuses: `accepted`, `processed`, `failed`, or `rate_limited`.
 
-### Retry schedule
+<Note>
+Triggers never expose stored request headers, bodies, or client details. That data is retained internally for 90 days and redacted from the interface.
+</Note>
 
-| Attempt | Delay |
-|---------|-------|
-| 1 | Immediate |
-| 2 | 1 minute |
-| 3 | 5 minutes |
-| 4 | 30 minutes |
-| 5 | 2 hours |
-| 6 | 8 hours |
+## Pause a webhook
 
-### Success criteria
+Set the webhook to **paused** to stop it accepting requests. A webhook is `active`, `paused`, or `disabled`. While paused, the endpoint rejects incoming requests rather than queueing them.
 
-A delivery is successful when your endpoint returns:
-- HTTP 2xx status code
-- Response within 30 seconds
-
-### Failure handling
-
-After all retries fail:
-- Event is marked as failed
-- Notification sent (if configured)
-- Event available in webhook logs
-
----
-
-## Webhook management
-
-### Testing webhooks
-
-Test webhook delivery before going live:
-
-1. Select a webhook in settings
-2. Click **Send Test Event**
-3. Choose an event type
-4. Review delivery status and payload
-
-### Viewing logs
-
-Monitor webhook activity:
-
-1. Navigate to **Settings > Webhooks > Logs**
-2. View delivery attempts
-3. See request/response details
-4. Filter by status, event type, date
-
-### Pausing webhooks
-
-Temporarily disable a webhook:
-
-1. Select the webhook
-2. Toggle **Active** to off
-3. Events during pause are not queued
-
----
-
-## Webhook templates
-
-Use templates for common integrations:
-
-### Slack
-
-Post events to Slack channels:
-
-```json
-{
-  "url": "https://hooks.slack.com/services/...",
-  "events": ["recommendation.created", "incident.created"],
-  "transform": {
-    "text": "New {{type}}: {{data.title}}"
-  }
-}
-```
-
-### Jira
-
-Create Jira tickets from CloudThinker events:
-
-```json
-{
-  "url": "https://your-org.atlassian.net/...",
-  "events": ["recommendation.created"],
-  "headers": {
-    "Authorization": "Basic <base64_credentials>"
-  }
-}
-```
-
-### PagerDuty
-
-Trigger PagerDuty incidents:
-
-```json
-{
-  "url": "https://events.pagerduty.com/v2/enqueue",
-  "events": ["incident.created"],
-  "headers": {
-    "Content-Type": "application/json"
-  }
-}
-```
-
----
-
-## Best practices
+## Troubleshooting
 
 <AccordionGroup>
-  <Accordion title="Always Verify Signatures">
-    Use webhook secrets and verify signatures to ensure requests originate from CloudThinker.
+  <Accordion title="401 or 403 on every request">
+    The auth mode does not match what you send. Check the header name and confirm you are signing with the webhook's own secret. A failed attempt appears in Triggers as **Auth Failed**.
   </Accordion>
-
-  <Accordion title="Respond Quickly">
-    Return a 2xx response immediately, then process the event asynchronously. Long processing delays cause timeouts.
+  <Accordion title="Signature mismatch">
+    Sign the exact raw body bytes, before any reformatting, and send the digest as `sha256=<hex>`. Re-serializing JSON changes the bytes and breaks the signature.
   </Accordion>
-
-  <Accordion title="Handle Duplicates">
-    Webhook deliveries may occasionally duplicate. Use the event `id` to deduplicate on your end.
+  <Accordion title="Custom fields never reach the agent">
+    Unknown top-level keys are dropped. Move them inside `metadata`.
   </Accordion>
-
-  <Accordion title="Monitor Failures">
-    Set up alerts for webhook failures. Investigate and fix issues promptly to avoid missing events.
+  <Accordion title="429 responses">
+    The webhook is over its hourly rate limit. Raise the limit, or set it to 0 for unlimited.
   </Accordion>
-
-  <Accordion title="Use Specific Subscriptions">
-    Only subscribe to events you need. Reduces noise and processing overhead.
+  <Accordion title="413 or a rejected large payload">
+    The body is over the 1 MB cap. Send a reference instead of the full document.
   </Accordion>
 </AccordionGroup>
-
----
-
-## Integration examples
-
-### GitHub Actions
-
-Trigger workflows from CloudThinker events:
-
-```yaml
-# .github/workflows/cloudthinker.yml
-on:
-  repository_dispatch:
-    types: [recommendation-created]
-
-jobs:
-  process:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Process recommendation
-        run: |
-          echo "New recommendation: ${{ github.event.client_payload.title }}"
-```
-
-### AWS Lambda
-
-Process webhooks with serverless functions:
-
-```python
-def lambda_handler(event, context):
-    body = json.loads(event['body'])
-
-    if body['type'] == 'recommendation.created':
-        # Process new recommendation
-        process_recommendation(body['data'])
-
-    return {'statusCode': 200}
-```
-
----
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Incident webhooks" icon="siren-on" href="/guide/incident/webhook-integrations">
-    Inbound webhooks from PagerDuty, Datadog, Prometheus, and more to auto-trigger RCA
-  </Card>
-  <Card title="Tasks & Scheduling" icon="calendar-check" href="/guide/automation/tasks">
-    Schedule recurring operations and create event-driven workflows
+  <Card title="DRE Webhook Integrations" icon="bell-on" href="/guide/incident/webhook-integrations/overview">
+    Route alerts from monitoring platforms into incidents
   </Card>
   <Card title="Notifications" icon="bell" href="/guide/notifications">
-    Configure alert routing for recommendations, incidents, and security findings
-  </Card>
-  <Card title="Autonomous Agents" icon="robot" href="/guide/automation/autonomous-agents">
-    Let agents act automatically on webhook events without manual review
+    Deliver CloudThinker results to email, Slack, and Teams
   </Card>
 </CardGroup>
