@@ -1,0 +1,192 @@
+---
+title: Apache Cassandra
+description: "Kết nối Apache Cassandra với CloudThinker để liệt kê keyspace, kiểm tra schema, xem sức khỏe ring, đọc row và thay đổi có phê duyệt"
+icon: "/images/icons/cassandra.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối ring Cassandra của bạn để [Tony](/vi/guide/agents/tony) (Database Engineer) liệt kê keyspace và bảng, kiểm tra thiết lập replication và TTL, xem trạng thái node mà driver nhìn thấy, và đọc row theo primary key. CloudThinker xác thực bằng một login role qua CQL native transport, và mọi thay đổi đều dừng lại chờ bạn phê duyệt trên tool call.
+
+## Điều kiện tiên quyết
+
+- Một cụm Cassandra mà CloudThinker truy cập được qua cổng CQL native transport, mặc định là `9042`.
+- Quyền tạo login role, hoặc một role do người khác tạo sẵn cho bạn.
+- Hai hoặc ba địa chỉ node trong cùng một datacenter. Driver tự khám phá phần còn lại của ring từ đó.
+
+<Info>
+Kết nối này chỉ nói CQL. `nodetool` chạy qua JMX trên một cổng khác, nên trạng thái repair, hàng đợi compaction và dung lượng đĩa nằm ngoài phạm vi agent đọc được ở đây.
+</Info>
+
+## Thiết lập
+
+<Steps>
+  <Step title="Tạo login role">
+    Kết nối bằng một superuser sẵn có và tạo role riêng:
+    ```sql
+    CREATE ROLE ct_agent WITH LOGIN = true AND PASSWORD = 'your-secure-password';
+    ```
+    Đừng dùng lại superuser `cassandra` mặc định.
+  </Step>
+  <Step title="Cấp quyền đọc">
+    Đọc `system` và `system_schema` không cần grant nào, nên việc liệt kê keyspace, kiểm tra schema và xem sức khỏe ring hoạt động ngay khi role đăng nhập được. Chỉ thêm quyền đọc row trên đúng những keyspace mà agent cần chạm tới:
+    ```sql
+    GRANT SELECT ON KEYSPACE your_keyspace TO ct_agent;
+    ```
+  </Step>
+  <Step title="Cấp quyền thay đổi (tùy chọn)">
+    Bỏ qua bước này nếu bạn muốn một kết nối chỉ đọc. Cấp theo từng keyspace khi bạn muốn agent đề xuất thay đổi:
+    ```sql
+    GRANT MODIFY ON KEYSPACE your_keyspace TO ct_agent;  -- insert, update, delete một row
+    GRANT ALTER  ON KEYSPACE your_keyspace TO ct_agent;  -- TTL bảng, gc_grace, secondary index
+    ```
+  </Step>
+  <Step title="Mở truy cập mạng">
+    Cho phép kết nối vào cổng `9042` từ CloudThinker tới các contact point bạn định nhập. Amazon Keyspaces dùng `9142` và bắt buộc TLS.
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Vào **Connections → Cassandra** và nhập:
+    - **Contact points**: các hostname hoặc IP cách nhau bằng dấu phẩy, không kèm cổng, ví dụ `10.0.1.10,10.0.1.11`
+    - **Native transport port**: `9042` cho hầu hết cụm, `9142` cho Amazon Keyspaces
+    - **Role name**: `ct_agent`
+    - **Password**: mật khẩu bạn đặt ở trên
+    - **Local datacenter**: tùy chọn; đặt giá trị này để giữ các lệnh đọc trong một datacenter trên ring nhiều DC
+    - **Use TLS**: giữ ở `Yes` trừ khi cụm của bạn đã tắt `client_encryption_options`
+    - **Verify the TLS certificate**: giữ ở `Yes`; chỉ tắt khi dùng chứng chỉ tự ký hoặc do CA nội bộ cấp
+
+    Nhấn **Connect**. Kết nối hiển thị trạng thái **Connected** khi CloudThinker chạm được tới ring.
+  </Step>
+</Steps>
+
+## Chi tiết kết nối
+
+| Trường | Mô tả | Mặc định |
+|--------|-------|----------|
+| **Contact points** | Một hoặc nhiều địa chỉ node, cách nhau bằng dấu phẩy, chỉ hostname hoặc IP | — |
+| **Native transport port** | Cổng CQL, không phải cổng JMX | `9042` |
+| **Role name** | Một login role riêng, ví dụ `ct_agent` | — |
+| **Password** | Mật khẩu đặt trên role đó | — |
+| **Local datacenter** | Ghim các lệnh đọc vào một datacenter; để trống thì dùng datacenter nào trả lời | Để trống |
+| **Use TLS** | Mã hóa phiên làm việc, gồm cả mật khẩu của role | `Yes` |
+| **Verify the TLS certificate** | Chứng minh server nào đã trả lời; bị ẩn khi TLS tắt | `Yes` |
+
+<Warning>
+Một file `cassandra.yaml` mặc định tắt mã hóa client-to-node. Đặt **Use TLS** thành `No` là đi theo mặc định đó và đẩy tên role cùng mật khẩu lên đường truyền ở dạng rõ, bất cứ thứ gì nằm giữa CloudThinker và contact point của bạn đều đọc được.
+</Warning>
+
+## Quyền cần thiết
+
+### Tối thiểu
+
+Không cần grant nào. Một role đăng nhập được đã đọc `system` và `system_schema`, đủ cho việc liệt kê keyspace, replication factor, TTL, compaction, index, hình dạng primary key và trạng thái node mà driver nhìn thấy.
+
+### Đọc row
+
+```sql
+GRANT SELECT ON KEYSPACE your_keyspace TO ct_agent;
+```
+
+### Thay đổi
+
+```sql
+GRANT MODIFY ON KEYSPACE your_keyspace TO ct_agent;
+GRANT ALTER  ON KEYSPACE your_keyspace TO ct_agent;
+```
+
+<Tip>
+Cấp quyền trên đúng những keyspace agent cần chạm tới, đừng bao giờ dùng `ON ALL KEYSPACES`. Grant mới là ranh giới bền vững: phê duyệt quyết định CloudThinker có hỏi để thay đổi hay không, grant quyết định Cassandra có cho phép thay đổi hay không.
+</Tip>
+
+## Năng lực của agent
+
+Sau khi kết nối, Tony có thể:
+
+| Năng lực | Mô tả |
+|----------|-------|
+| **Liệt kê keyspace và bảng** | Liệt kê keyspace và bảng kèm chiến lược replication và hình dạng key |
+| **Kiểm tra schema** | Báo cáo replication factor, `default_time_to_live`, `gc_grace_seconds`, thiết lập compaction và secondary index |
+| **Sức khỏe ring** | Báo cáo datacenter, rack, phiên bản và mức đồng thuận schema theo góc nhìn của driver |
+| **Đọc row** | Đọc một partition theo key của nó, hoặc quét qua nhiều partition khi bạn yêu cầu rõ ràng |
+| **Thay đổi có phê duyệt** | Đổi một row, TTL hoặc `gc_grace_seconds` của một bảng, hoặc một secondary index |
+
+### Kiểm tra kết nối
+
+```text
+@tony #report list the Cassandra keyspaces and the tables in each one
+```
+
+### Ví dụ prompt
+
+```text
+@tony #report audit replication factor and TTL for the events keyspace
+@tony #report show the row in ct_demo.sessions where session_id = 'abc-123'
+@tony #recommend which tables in the events keyspace have no automatic expiry configured
+```
+
+## Thay đổi có phê duyệt
+
+Thay đổi không phải là CQL tùy ý. Kết nối mang một tập thao tác cố định, và mọi thứ nằm ngoài tập đó bị từ chối thay vì được đưa ra phê duyệt.
+
+| Thao tác | Phạm vi |
+|----------|---------|
+| `insert`, `update`, `delete` | Đúng một row. Đích đến phải nêu đủ mọi cột primary key, nên không thể diễn đạt một lệnh xóa cả partition hay cả dải. |
+| Thiết lập bảng | Chỉ `default_time_to_live` và `gc_grace_seconds`. |
+| Secondary index | Tạo hoặc xóa một index. |
+
+Bốn điều cần biết trước khi bạn phê duyệt:
+
+- **Mọi thay đổi đều báo cáo thứ nó đã đo.** Agent hiển thị giá trị nó đọc được trước khi thay đổi, kết quả, và đúng lệnh để đảo ngược. Chạy lệnh đảo ngược đó là một thay đổi thứ hai và cần phê duyệt riêng.
+- **`TRUNCATE`, `DROP TABLE`, `DROP KEYSPACE`, `ALTER KEYSPACE`, `GRANT` và `ALTER ROLE` không có mặt.** Chúng là từ chối, không phải phê duyệt đang chờ được cấp. Hỏi agent thì nó nêu tên thao tác và nói operator sẽ chạy gì thay thế.
+- **Không thể đặt điều kiện cho thay đổi thiết lập bảng.** Cassandra không có `ALTER TABLE` có điều kiện, nên agent đọc giá trị hiện tại, thay đổi nó, rồi đọc lại và báo cáo giá trị của chính nó có còn không. Một writer chen vào khoảng trống đó sẽ ghi đè mà không bị phát hiện, và kết quả in ra nói rõ điều này.
+- **Không có gì được rollback.** Cassandra không có transaction. Một lệnh xóa ghi ra tombstone, nên row đọc lại là không tồn tại ngay lập tức còn dung lượng chỉ trả về sau `gc_grace_seconds` và compaction. Một TTL mới áp dụng cho các row ghi sau khi thay đổi, không bao giờ cho các row đã lưu.
+
+<Warning>
+Một kết nối Cassandra thứ hai trong cùng workspace khiến cả hai thành chỉ đọc. Một thay đổi nêu tên loại kết nối chứ không nêu một instance cụ thể, nên phê duyệt dành cho staging có thể chạm tới production. Giữ một kết nối Cassandra cho mỗi workspace khi bạn còn cần thay đổi.
+</Warning>
+
+## Xử lý sự cố
+
+<Accordion title="Kết nối hỏng ngay lập tức">
+- Kiểm tra **Contact points** không kèm cổng và không kèm scheme. Cổng có trường riêng của nó.
+- Xác nhận **Native transport port** là cổng CQL. `7199` là JMX và `7000` là internode; cả hai đều không trả lời ở đây.
+</Accordion>
+
+<Accordion title="Xác thực thất bại">
+- Xác nhận role tồn tại và đăng nhập được: `LIST ROLES;`
+- Một role tạo ra mà không có `WITH LOGIN = true` thì không xác thực được ở đâu cả. Hãy tạo lại hoặc chạy `ALTER ROLE ct_agent WITH LOGIN = true;`
+</Accordion>
+
+<Accordion title="Đã kết nối, nhưng một keyspace trông rỗng">
+Chưa chắc đã là lỗi. Metadata của keyspace và bảng đến từ `system_schema` và không cần grant, nên danh sách bảng rỗng nghĩa là keyspace đó không chứa bảng nào. Một lệnh đọc **row** rỗng nghĩa là role thiếu `SELECT` trên keyspace đó, hoặc partition thực sự không chứa gì.
+</Accordion>
+
+<Accordion title="Bắt tay TLS thất bại">
+- Amazon Keyspaces bắt buộc TLS trên cổng `9142`. Hãy đặt cả hai cùng lúc.
+- Với chứng chỉ tự ký hoặc do CA nội bộ cấp, giữ **Use TLS** ở `Yes` và đặt **Verify the TLS certificate** thành `No`. Phiên làm việc vẫn được mã hóa; nó chỉ không còn chứng minh được server nào đã trả lời.
+</Accordion>
+
+<Accordion title="Một thay đổi bị timeout">
+Cassandra trả về timeout cả trước lẫn sau khi một lệnh ghi được commit, nên kết quả thực sự không xác định và không có gì được thử lại tự động. Hãy yêu cầu agent đọc lại row hoặc thiết lập đó, rồi quyết định dựa trên những gì lần đọc ấy báo cáo. Đừng bao giờ chạy lại thay đổi để xem nó đã áp dụng chưa.
+</Accordion>
+
+<Accordion title="Index đã được tạo nhưng truy vấn vẫn lỗi">
+Một secondary index mới chỉ trả lời truy vấn sau khi quá trình build hoàn tất trên mọi node. Hãy cho nó thời gian, rồi hỏi lại.
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **TLS mang theo mật khẩu** — kết nối này gửi tên role và mật khẩu qua cùng socket với truy vấn. Giữ **Use TLS** bật cho mọi thứ nằm ngoài mạng riêng.
+- **Role đặc quyền tối thiểu** — một login role không có grant nào đã trả lời được các câu hỏi về liệt kê, schema và sức khỏe. Chỉ thêm `SELECT`, `MODIFY` và `ALTER` theo từng keyspace khi bạn thực sự cần, và đừng bao giờ dùng superuser `cassandra` mặc định.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Tony Agent" icon="database" href="/vi/guide/agents/tony">
+    Agent tối ưu cơ sở dữ liệu
+  </Card>
+  <Card title="Phê duyệt" icon="shield-check" href="/vi/guide/approval">
+    Cách CloudThinker hỏi trước khi thay đổi
+  </Card>
+</CardGroup>

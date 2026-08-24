@@ -1,0 +1,192 @@
+---
+title: Apache Cassandra
+description: "Apache Cassandra를 CloudThinker에 연결하여 키스페이스 목록, 스키마 점검, 링 상태, 행 조회, 승인 기반 변경을 수행합니다"
+icon: "/images/icons/cassandra.svg"
+---
+
+import ConnectionSecurity from '/snippets/ko/connection-security.mdx';
+
+Cassandra 링을 연결하면 [Tony](/ko/guide/agents/tony) (Database Engineer)가 키스페이스와 테이블을 목록화하고, 복제와 TTL 설정을 점검하며, 드라이버가 보는 노드 상태를 확인하고, 기본 키로 행을 조회할 수 있습니다. CloudThinker는 로그인 역할로 CQL 네이티브 트랜스포트를 통해 인증하며, 모든 변경은 도구 호출 시점에서 멈추고 사용자의 승인을 기다립니다.
+
+## 사전 준비
+
+- CloudThinker에서 CQL 네이티브 트랜스포트 포트(기본값 `9042`)로 접근할 수 있는 Cassandra 클러스터.
+- 로그인 역할을 만들 권한, 또는 다른 사람이 만들어 준 역할.
+- 같은 데이터센터에 속한 노드 주소 두세 개. 드라이버가 여기서 나머지 링을 찾아냅니다.
+
+<Info>
+이 연결은 CQL만 사용합니다. `nodetool`은 다른 포트의 JMX 위에서 동작하므로, 리페어 상태, 컴팩션 적체, 디스크 사용량은 여기서 에이전트가 읽을 수 있는 범위 밖에 있습니다.
+</Info>
+
+## 설정
+
+<Steps>
+  <Step title="로그인 역할 만들기">
+    기존 슈퍼유저로 접속해 전용 역할을 만듭니다.
+    ```sql
+    CREATE ROLE ct_agent WITH LOGIN = true AND PASSWORD = 'your-secure-password';
+    ```
+    기본 `cassandra` 슈퍼유저를 재사용하지 마세요.
+  </Step>
+  <Step title="읽기 권한 부여">
+    `system`과 `system_schema` 읽기에는 권한 부여가 필요 없습니다. 따라서 역할이 로그인만 되면 키스페이스 목록, 스키마 점검, 링 상태가 바로 동작합니다. 행 조회는 에이전트가 접근해야 하는 키스페이스에만 추가하세요.
+    ```sql
+    GRANT SELECT ON KEYSPACE your_keyspace TO ct_agent;
+    ```
+  </Step>
+  <Step title="변경 권한 부여 (선택)">
+    읽기 전용 연결이라면 이 단계를 건너뛰세요. 에이전트가 변경을 제안하게 하려면 키스페이스 단위로 부여합니다.
+    ```sql
+    GRANT MODIFY ON KEYSPACE your_keyspace TO ct_agent;  -- 단일 행 insert, update, delete
+    GRANT ALTER  ON KEYSPACE your_keyspace TO ct_agent;  -- 테이블 TTL, gc_grace, 보조 인덱스
+    ```
+  </Step>
+  <Step title="네트워크 접근 열기">
+    입력할 접속 지점에 대해 CloudThinker에서 들어오는 `9042` 트래픽을 허용하세요. Amazon Keyspaces는 `9142`를 사용하며 TLS가 필수입니다.
+  </Step>
+  <Step title="CloudThinker에서 연결 추가">
+    **Connections → Cassandra**로 이동해 다음을 입력합니다.
+    - **Contact points**: 쉼표로 구분한 호스트명 또는 IP, 포트는 제외. 예: `10.0.1.10,10.0.1.11`
+    - **Native transport port**: 대부분의 클러스터는 `9042`, Amazon Keyspaces는 `9142`
+    - **Role name**: `ct_agent`
+    - **Password**: 위에서 설정한 비밀번호
+    - **Local datacenter**: 선택 사항. 멀티 DC 링에서 읽기를 한 데이터센터 안에 두고 싶을 때 설정합니다
+    - **Use TLS**: 클러스터에서 `client_encryption_options`를 비활성화하지 않았다면 `Yes`로 두세요
+    - **Verify the TLS certificate**: `Yes`로 두세요. 자체 서명 인증서나 내부 CA 인증서일 때만 끄세요
+
+    **Connect**를 클릭합니다. CloudThinker가 링에 도달하면 연결이 **Connected** 상태로 표시됩니다.
+  </Step>
+</Steps>
+
+## 연결 정보
+
+| 항목 | 설명 | 기본값 |
+|------|------|--------|
+| **Contact points** | 하나 이상의 노드 주소. 쉼표로 구분하며 호스트명 또는 IP만 입력 | — |
+| **Native transport port** | JMX 포트가 아니라 CQL 포트 | `9042` |
+| **Role name** | 전용 로그인 역할. 예: `ct_agent` | — |
+| **Password** | 해당 역할에 설정한 비밀번호 | — |
+| **Local datacenter** | 읽기를 한 데이터센터에 고정합니다. 비워 두면 응답한 데이터센터를 사용합니다 | 비어 있음 |
+| **Use TLS** | 역할 비밀번호를 포함해 세션을 암호화합니다 | `Yes` |
+| **Verify the TLS certificate** | 어느 서버가 응답했는지 증명합니다. TLS가 꺼지면 숨겨집니다 | `Yes` |
+
+<Warning>
+기본 `cassandra.yaml`은 클라이언트와 노드 사이의 암호화가 꺼진 상태로 배포됩니다. **Use TLS**를 `No`로 두는 것은 그 기본값을 따르는 것이며, 역할 이름과 비밀번호가 평문으로 전송되어 CloudThinker와 접속 지점 사이의 무엇이든 읽을 수 있게 됩니다.
+</Warning>
+
+## 필요한 권한
+
+### 최소
+
+권한 부여가 전혀 필요 없습니다. 로그인할 수 있는 역할은 `system`과 `system_schema`를 읽으며, 이것만으로 키스페이스 목록, 복제 계수, TTL, 컴팩션, 인덱스, 기본 키 구성, 드라이버가 보는 노드 상태가 모두 확보됩니다.
+
+### 행 조회
+
+```sql
+GRANT SELECT ON KEYSPACE your_keyspace TO ct_agent;
+```
+
+### 변경
+
+```sql
+GRANT MODIFY ON KEYSPACE your_keyspace TO ct_agent;
+GRANT ALTER  ON KEYSPACE your_keyspace TO ct_agent;
+```
+
+<Tip>
+에이전트가 접근해야 하는 키스페이스에만 부여하고 `ON ALL KEYSPACES`는 절대 쓰지 마세요. 지속되는 경계는 권한 부여입니다. 승인은 CloudThinker가 변경을 요청할지를 결정하고, 권한 부여는 Cassandra가 변경을 허용할지를 결정합니다.
+</Tip>
+
+## 에이전트 기능
+
+연결이 완료되면 Tony는 다음을 할 수 있습니다.
+
+| 기능 | 설명 |
+|------|------|
+| **키스페이스와 테이블 목록** | 키스페이스와 테이블을 복제 전략, 키 구성과 함께 나열합니다 |
+| **스키마 점검** | 복제 계수, `default_time_to_live`, `gc_grace_seconds`, 컴팩션 설정, 보조 인덱스를 보고합니다 |
+| **링 상태** | 데이터센터, 랙, 릴리스, 스키마 합의 상태를 드라이버가 보는 그대로 보고합니다 |
+| **행 조회** | 키로 한 파티션을 읽거나, 명시적으로 요청하면 여러 파티션을 훑습니다 |
+| **승인 기반 변경** | 한 행, 테이블의 TTL 또는 `gc_grace_seconds`, 보조 인덱스를 변경합니다 |
+
+### 연결 확인
+
+```text
+@tony #report list the Cassandra keyspaces and the tables in each one
+```
+
+### 프롬프트 예시
+
+```text
+@tony #report audit replication factor and TTL for the events keyspace
+@tony #report show the row in ct_demo.sessions where session_id = 'abc-123'
+@tony #recommend which tables in the events keyspace have no automatic expiry configured
+```
+
+## 승인 기반 변경
+
+변경은 임의의 CQL이 아닙니다. 연결은 고정된 작업 집합만 갖고 있으며, 그 밖의 모든 것은 승인 대상이 아니라 거부됩니다.
+
+| 작업 | 범위 |
+|------|------|
+| `insert`, `update`, `delete` | 정확히 한 행. 대상은 모든 기본 키 컬럼을 지정해야 하므로 파티션 전체 삭제나 범위 삭제는 표현할 수 없습니다. |
+| 테이블 설정 | `default_time_to_live`와 `gc_grace_seconds`만 해당합니다. |
+| 보조 인덱스 | 인덱스 하나를 생성하거나 삭제합니다. |
+
+승인하기 전에 알아 둘 네 가지입니다.
+
+- **모든 변경은 측정한 값을 보고합니다.** 에이전트는 변경 전에 읽은 값, 결과, 그리고 그것을 되돌리는 정확한 명령을 함께 보여 줍니다. 그 되돌리기 명령을 실행하는 것은 두 번째 변경이며 별도의 승인이 필요합니다.
+- **`TRUNCATE`, `DROP TABLE`, `DROP KEYSPACE`, `ALTER KEYSPACE`, `GRANT`, `ALTER ROLE`은 없습니다.** 이들은 승인 대기 항목이 아니라 거부입니다. 에이전트에게 물으면 작업 이름과 운영자가 대신 실행할 명령을 알려 줍니다.
+- **테이블 설정 변경은 조건부로 만들 수 없습니다.** Cassandra에는 조건부 `ALTER TABLE`이 없으므로, 에이전트는 현재 값을 읽고, 변경한 뒤, 다시 읽어 자신의 값이 살아남았는지 보고합니다. 그 사이에 끼어든 쓰기는 감지되지 않은 채 덮어쓰지만, 출력에 그 사실이 표시됩니다.
+- **되돌아가는 것은 없습니다.** Cassandra에는 트랜잭션이 없습니다. 삭제는 툼스톤을 쓰므로 행은 즉시 없는 것으로 읽히고, 공간은 `gc_grace_seconds`와 컴팩션 이후에야 회수됩니다. 새 TTL은 변경 이후에 쓰인 행에 적용되며, 이미 저장된 행에는 적용되지 않습니다.
+
+<Warning>
+같은 워크스페이스에 두 번째 Cassandra 연결이 있으면 둘 다 읽기 전용이 됩니다. 변경은 개별 인스턴스가 아니라 연결 유형을 지정하므로, 스테이징을 염두에 두고 준 승인이 프로덕션에 닿을 수 있기 때문입니다. 변경이 필요한 동안에는 워크스페이스당 Cassandra 연결을 하나로 유지하세요.
+</Warning>
+
+## 문제 해결
+
+<Accordion title="연결이 즉시 실패함">
+- **Contact points**에 포트나 스킴이 들어가지 않았는지 확인하세요. 포트에는 별도 항목이 있습니다.
+- **Native transport port**가 CQL 포트인지 확인하세요. `7199`는 JMX, `7000`은 노드 간 통신이며 둘 다 여기서 응답하지 않습니다.
+</Accordion>
+
+<Accordion title="인증 실패">
+- 역할이 존재하고 로그인할 수 있는지 확인하세요: `LIST ROLES;`
+- `WITH LOGIN = true` 없이 만든 역할은 어디에서도 인증되지 않습니다. 다시 만들거나 `ALTER ROLE ct_agent WITH LOGIN = true;`를 실행하세요.
+</Accordion>
+
+<Accordion title="연결은 됐는데 키스페이스가 비어 보임">
+반드시 오류는 아닙니다. 키스페이스와 테이블 메타데이터는 `system_schema`에서 오고 권한 부여가 필요 없으므로, 테이블 목록이 비었다면 그 키스페이스에 테이블이 없다는 뜻입니다. **행** 조회가 비었다면 역할에 해당 키스페이스의 `SELECT`가 없거나, 파티션에 실제로 아무것도 없는 것입니다.
+</Accordion>
+
+<Accordion title="TLS 핸드셰이크 실패">
+- Amazon Keyspaces는 포트 `9142`에서 TLS를 요구합니다. 둘을 함께 설정하세요.
+- 자체 서명 인증서나 내부 CA 인증서라면 **Use TLS**를 `Yes`로 두고 **Verify the TLS certificate**를 `No`로 설정하세요. 세션은 계속 암호화되지만, 어느 서버가 응답했는지는 더 이상 증명하지 않습니다.
+</Accordion>
+
+<Accordion title="변경이 타임아웃됨">
+Cassandra는 쓰기가 커밋되기 전에도, 커밋된 후에도 타임아웃을 반환하므로 결과는 실제로 알 수 없으며 자동 재시도도 없습니다. 에이전트에게 해당 행이나 설정을 다시 읽게 한 뒤, 그 조회 결과를 보고 판단하세요. 적용되었는지 확인하려고 변경을 다시 실행하지 마세요.
+</Accordion>
+
+<Accordion title="인덱스를 만들었는데 쿼리가 계속 실패함">
+새 보조 인덱스는 모든 노드에서 빌드가 끝난 뒤에야 쿼리에 응답합니다. 빌드에 시간을 준 다음 다시 물어보세요.
+</Accordion>
+
+## 보안
+
+<ConnectionSecurity />
+
+- **TLS가 비밀번호를 운반합니다** — 이 연결은 역할 이름과 비밀번호를 쿼리와 같은 소켓으로 보냅니다. 사설망 밖으로 나가는 경우에는 **Use TLS**를 켜 두세요.
+- **최소 권한 역할** — 권한 부여가 없는 로그인 역할만으로도 목록, 스키마, 상태 질문에 답할 수 있습니다. `SELECT`, `MODIFY`, `ALTER`는 필요할 때 키스페이스 단위로만 추가하고, 기본 `cassandra` 슈퍼유저에는 절대 부여하지 마세요.
+
+## 관련 문서
+
+<CardGroup cols={2}>
+  <Card title="Tony Agent" icon="database" href="/ko/guide/agents/tony">
+    데이터베이스 최적화 에이전트
+  </Card>
+  <Card title="승인" icon="shield-check" href="/ko/guide/approval">
+    CloudThinker가 변경 전에 확인하는 방식
+  </Card>
+</CardGroup>
