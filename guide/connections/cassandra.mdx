@@ -1,0 +1,192 @@
+---
+title: Apache Cassandra
+description: "Connect Apache Cassandra to CloudThinker for keyspace inventory, schema audits, ring health, row reads, and approval-gated changes"
+icon: "/images/icons/cassandra.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+
+Connect your Cassandra ring to let [Tony](/guide/agents/tony) (Database Engineer) inventory keyspaces and tables, audit replication and TTL settings, check driver-visible node health, and read rows by primary key. CloudThinker authenticates with a login role over the CQL native transport, and every change stops for your approval on the tool call.
+
+## Prerequisites
+
+- A Cassandra cluster reachable from CloudThinker on its CQL native transport port, `9042` by default.
+- Permission to create a login role, or a role someone created for you.
+- Two or three node addresses from the same datacenter. The driver discovers the rest of the ring from them.
+
+<Info>
+This connection speaks CQL only. `nodetool` runs over JMX on a different port, so repair status, compaction backlog, and disk usage stay outside what an agent can read here.
+</Info>
+
+## Setup
+
+<Steps>
+  <Step title="Create a login role">
+    Connect as an existing superuser and create a dedicated role:
+    ```sql
+    CREATE ROLE ct_agent WITH LOGIN = true AND PASSWORD = 'your-secure-password';
+    ```
+    Do not reuse the default `cassandra` superuser.
+  </Step>
+  <Step title="Grant read access">
+    Reading `system` and `system_schema` needs no grant, so keyspace inventory, schema audits, and ring health work as soon as the role can log in. Add row reads on only the keyspaces the agent should reach:
+    ```sql
+    GRANT SELECT ON KEYSPACE your_keyspace TO ct_agent;
+    ```
+  </Step>
+  <Step title="Grant change access (optional)">
+    Skip this step for a read-only connection. Grant it per keyspace when you want the agent to propose changes:
+    ```sql
+    GRANT MODIFY ON KEYSPACE your_keyspace TO ct_agent;  -- single-row insert, update, delete
+    GRANT ALTER  ON KEYSPACE your_keyspace TO ct_agent;  -- table TTL, gc_grace, secondary indexes
+    ```
+  </Step>
+  <Step title="Open network access">
+    Allow inbound `9042` from CloudThinker to the contact points you plan to enter. Amazon Keyspaces uses `9142` with TLS required.
+  </Step>
+  <Step title="Add the connection in CloudThinker">
+    Go to **Connections → Cassandra** and enter:
+    - **Contact points**: comma-separated hostnames or IPs, no port, for example `10.0.1.10,10.0.1.11`
+    - **Native transport port**: `9042` for most clusters, `9142` for Amazon Keyspaces
+    - **Role name**: `ct_agent`
+    - **Password**: the password you set above
+    - **Local datacenter**: optional; set it to keep reads inside one datacenter on a multi-DC ring
+    - **Use TLS**: leave on `Yes` unless your cluster has `client_encryption_options` disabled
+    - **Verify the TLS certificate**: leave on `Yes`; turn it off only for a self-signed or internal-CA certificate
+
+    Click **Connect**. The connection shows a **Connected** status once CloudThinker reaches the ring.
+  </Step>
+</Steps>
+
+## Connection details
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| **Contact points** | One or more node addresses, comma-separated, hostname or IP only | — |
+| **Native transport port** | The CQL port, not the JMX port | `9042` |
+| **Role name** | A dedicated login role, for example `ct_agent` | — |
+| **Password** | The password set on that role | — |
+| **Local datacenter** | Pins reads to one datacenter; blank uses the datacenter that answers | Blank |
+| **Use TLS** | Encrypts the session, including the role password | `Yes` |
+| **Verify the TLS certificate** | Proves which server answered; hidden when TLS is off | `Yes` |
+
+<Warning>
+A stock `cassandra.yaml` ships with client-to-node encryption disabled. Setting **Use TLS** to `No` matches that default and puts the role name and password on the wire in the clear, readable by anything between CloudThinker and your contact point.
+</Warning>
+
+## Required permissions
+
+### Minimum
+
+No grant at all. A role that can log in reads `system` and `system_schema`, which covers keyspace inventory, replication factor, TTL, compaction, indexes, primary-key shape, and driver-visible node state.
+
+### Row reads
+
+```sql
+GRANT SELECT ON KEYSPACE your_keyspace TO ct_agent;
+```
+
+### Changes
+
+```sql
+GRANT MODIFY ON KEYSPACE your_keyspace TO ct_agent;
+GRANT ALTER  ON KEYSPACE your_keyspace TO ct_agent;
+```
+
+<Tip>
+Grant on the specific keyspaces the agent should reach, never `ON ALL KEYSPACES`. The grant is the durable boundary: approval decides whether CloudThinker asks for a change, the grant decides whether Cassandra allows one.
+</Tip>
+
+## Agent capabilities
+
+Once connected, Tony can:
+
+| Capability | Description |
+|------------|-------------|
+| **Keyspace and table inventory** | List keyspaces and tables with their replication strategy and key shape |
+| **Schema audit** | Report replication factor, `default_time_to_live`, `gc_grace_seconds`, compaction settings, and secondary indexes |
+| **Ring health** | Report datacenters, racks, releases, and schema agreement as the driver sees them |
+| **Row reads** | Read one partition by its key, or scan across partitions when you ask for it by name |
+| **Approved changes** | Change one row, a table's TTL or `gc_grace_seconds`, or a secondary index |
+
+### Verify the connection
+
+```text
+@tony #report list the Cassandra keyspaces and the tables in each one
+```
+
+### Example prompts
+
+```text
+@tony #report audit replication factor and TTL for the events keyspace
+@tony #report show the row in ct_demo.sessions where session_id = 'abc-123'
+@tony #recommend which tables in the events keyspace have no automatic expiry configured
+```
+
+## Approved changes
+
+Changes are not arbitrary CQL. The connection carries a fixed set of operations, and everything outside it is refused rather than approved.
+
+| Operation | Scope |
+|-----------|-------|
+| `insert`, `update`, `delete` | Exactly one row. The target must name every primary key column, so a partition-wide or range delete cannot be expressed. |
+| Table settings | `default_time_to_live` and `gc_grace_seconds` only. |
+| Secondary indexes | Create or drop one index. |
+
+Four things to know before you approve one:
+
+- **Every change reports what it measured.** The agent shows the value it read before the change, the outcome, and the exact command that reverses it. Running that reversal is a second change and needs its own approval.
+- **`TRUNCATE`, `DROP TABLE`, `DROP KEYSPACE`, `ALTER KEYSPACE`, `GRANT`, and `ALTER ROLE` are absent.** They are refusals, not approvals waiting to be granted. Ask the agent and it names the operation and what an operator would run instead.
+- **A table setting change cannot be made conditional.** Cassandra has no conditional `ALTER TABLE`, so the agent reads the current value, changes it, then re-reads it and reports whether its own value survived. A writer inside that gap is overwritten without detection, and the output says so.
+- **Nothing rolls back.** Cassandra has no transaction. A delete writes a tombstone, so the row reads as absent at once and the space returns only after `gc_grace_seconds` and compaction. A new TTL applies to rows written after the change, never to rows already stored.
+
+<Warning>
+A second Cassandra connection in the same workspace turns both read-only. A change names the connection type rather than one instance, so an approval meant for staging could reach production. Keep one Cassandra connection per workspace while you need changes.
+</Warning>
+
+## Troubleshooting
+
+<Accordion title="Connection fails immediately">
+- Check that **Contact points** carry no port and no scheme. The port belongs in its own field.
+- Confirm **Native transport port** is the CQL port. `7199` is JMX and `7000` is internode; neither answers here.
+</Accordion>
+
+<Accordion title="Authentication failed">
+- Confirm the role exists and can log in: `LIST ROLES;`
+- A role created without `WITH LOGIN = true` authenticates nowhere. Recreate it or `ALTER ROLE ct_agent WITH LOGIN = true;`
+</Accordion>
+
+<Accordion title="Connected, but a keyspace looks empty">
+Not necessarily an error. Keyspace and table metadata come from `system_schema` and need no grant, so an empty table list means the keyspace holds no tables. An empty **row** read means the role lacks `SELECT` on that keyspace, or the partition genuinely holds nothing.
+</Accordion>
+
+<Accordion title="TLS handshake fails">
+- Amazon Keyspaces requires TLS on port `9142`. Set both together.
+- For a self-signed or internal-CA certificate, keep **Use TLS** on `Yes` and set **Verify the TLS certificate** to `No`. The session stays encrypted; it no longer proves which server answered.
+</Accordion>
+
+<Accordion title="A change timed out">
+Cassandra returns a timeout both before and after a write commits, so the outcome is genuinely unknown and nothing is retried automatically. Ask the agent to re-read the row or setting, then decide from what that read reports. Never re-run the change to find out whether it applied.
+</Accordion>
+
+<Accordion title="An index was created but queries still fail">
+A new secondary index answers queries only after its build finishes on every node. Give the build time, then ask again.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- **TLS carries the password** — this connection sends the role name and password over the same socket as the query. Keep **Use TLS** on for anything outside a private network.
+- **Least-privilege role** — a login role with no grant already answers inventory, schema, and health questions. Add `SELECT`, `MODIFY`, and `ALTER` per keyspace only when you need them, and never on the default `cassandra` superuser.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Tony Agent" icon="database" href="/guide/agents/tony">
+    Database-focused optimization agent
+  </Card>
+  <Card title="Approval" icon="shield-check" href="/guide/approval">
+    How CloudThinker asks before a change
+  </Card>
+</CardGroup>
