@@ -18,7 +18,7 @@ description: Ship CloudThinker documentation changes with consistent git hygiene
 - Include verification notes only for checks that were actually run.
 
 ## Branch Naming
-- Docs branch pattern: `docs/<description>`. No author prefix. Confirm against `git branch -r`, which is the record of what this repo actually uses.
+- Docs branch pattern: `docs/<description>`, the majority form. `<author>/docs/<description>` is also established here and is fine. Read `git branch -r` before deciding; it is the record of what this repo actually uses, and it holds both.
 - Use lowercase kebab-case.
 - If the user explicitly requests a different branch name, use that instead.
 
