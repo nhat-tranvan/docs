@@ -18,15 +18,19 @@ description: Ship CloudThinker documentation changes with consistent git hygiene
 - Include verification notes only for checks that were actually run.
 
 ## Branch Naming
-- Default docs branch pattern: `docs/<description>`
-- When the author prefixes their branches, `<author>/docs/<description>` is equally valid. Match what the author's own merged PRs use rather than switching them to the bare form.
+- Docs branch pattern: `docs/<description>`. No author prefix. Confirm against `git branch -r`, which is the record of what this repo actually uses.
 - Use lowercase kebab-case.
 - If the user explicitly requests a different branch name, use that instead.
 
 Examples:
 - `docs/add-argocd-connection-guide`
 - `docs/update-kubernetes-health-monitoring`
-- `hao/docs/add-rancher-connection-guide`
+- `docs/fix-broken-links`
+
+## Where to Push
+- Push the branch to `origin`, the shared docs repo, and open the PR from that branch.
+- Do not push to a personal fork. Run `gh api repos/<owner>/<repo> --jq .permissions` before assuming a fork is needed; contributors here have push access.
+- Read the remote list and the existing branch names before inventing a convention. Both are one command away, and both are authoritative.
 
 ## Commit Authorship
 - Read the last few commits before committing, and match their author identity and trailer convention.
