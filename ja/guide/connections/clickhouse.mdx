@@ -8,19 +8,9 @@ import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
 ClickHouse クラスタを接続して、[Tony](/ja/guide/agents/tony)（データベースエンジニア）がスキーマを調査し、テーブルの健全性を確認し、分析 SQL で質問に回答できるようにします。新しい接続は読み取り専用です。CloudThinker はすべてのクエリを ClickHouse の `readonly` 設定を有効にした状態で送信します。エージェントにデータを変更させたい場合は **Write access** をオンにし、オブジェクトを削除させたい場合はさらに **Allow DROP and TRUNCATE** をオンにします。
 
-## 対応プラットフォーム
-
-| プラットフォーム | サポート |
-|----------|---------|
-| **ClickHouse Cloud** | 全サービス |
-| **セルフホスト ClickHouse** | 23.x・24.x・25.x |
-| **Kubernetes 上の ClickHouse** | Altinity Operator および同等のもの |
-| **Aiven for ClickHouse** | 全プラン |
-| **DoubleCloud Managed ClickHouse** | 全プラン |
-
 ## 前提条件
 
-- CloudThinker から HTTP インターフェース経由で到達可能な ClickHouse サーバー（TLS ありは `8443`、なしは `8123`）。
+- CloudThinker から **HTTP インターフェース**経由で到達可能な ClickHouse サーバー（TLS ありは `8443`、なしは `8123`）。ClickHouse Cloud、セルフホストのクラスタ、Kubernetes 上で Operator が運用するクラスタ、他社のマネージド ClickHouse のいずれでも動作します。CloudThinker が必要とするのはそのポートだけです。
 - 専用ユーザーを作成するための管理者アクセス。
 - ネイティブ TCP ポート（`9000`）は使用しないため、公開する必要はありません。
 
@@ -58,7 +48,7 @@ ClickHouse クラスタを接続して、[Tony](/ja/guide/agents/tony)（デー�
   </Step>
   <Step title="ネットワークアクセスを設定する">
     CloudThinker に HTTP インターフェースを開放します：
-    - ClickHouse Cloud の場合：サービスの IP アクセスリストに CloudThinker を追加
+    - ClickHouse Cloud の場合：サービスの **Settings → Security** にある **IP アクセスリスト**に CloudThinker を追加
     - セルフホストの場合：ファイアウォールまたはセキュリティグループで CloudThinker からの `8443`（または `8123`）の受信を許可
   </Step>
   <Step title="CloudThinker に接続を追加する">
@@ -73,7 +63,7 @@ ClickHouse クラスタを接続して、[Tony](/ja/guide/agents/tony)（デー�
     - **Write access**：エージェントがデータを変更する必要がない限り `Read-only` のままにします
     - **Allow DROP and TRUNCATE**：書き込みアクセスをオンにしたときのみ表示されます。エージェントにオブジェクトを削除させたい場合を除き `Blocked` のままにします
 
-    **Connect** をクリックします。CloudThinker がサーバーに到達すると、ステータスが **Connected** に変わります。
+    **Connect** をクリックします。CloudThinker はそのユーザーとして `SELECT version()` を 1 回だけ実行して認証情報を確認し、**Connected** のメッセージには到達した ClickHouse のバージョン、使用したユーザー名、そして設定した場合はデフォルトデータベースが示されます。それ以外の場合は具体的な理由が返ります。[トラブルシューティング](#トラブルシューティング)を参照してください。
   </Step>
 </Steps>
 
@@ -175,20 +165,37 @@ GRANT DROP TABLE, TRUNCATE ON your_database.* TO cloudthinker;
 
 ## トラブルシューティング
 
-<Accordion title="接続がすぐに閉じられる">
-- **Host** に `https://` プレフィックスや `:port` サフィックスが含まれていないか確認してください。どちらも専用のフィールドに入力します。
-- **Port** と **Use TLS** が一致しているか確認してください：TLS ありは `8443`、なしは `8123`。
-</Accordion>
-
-<Accordion title="認証に失敗した">
+<Accordion title="ClickHouse rejected the username or password">
+ClickHouse は応答した上で認証情報を拒否しました。
 - ユーザーが存在するか確認してください：`SHOW USERS;`
+- パスワードは貼り付けずに入力し直してください。改行を含む値は、CloudThinker がサーバーに接続する前の段階で拒否されます。
 - ClickHouse Cloud は一部の SSO でプロビジョニングされたユーザーのパスワード認証を無効にします。コンソールのログインを再利用せず、専用のデータベースユーザーを作成してください。
 </Accordion>
 
-<Accordion title="タイムアウトまたは接続拒否">
+<Accordion title="ClickHouse has no database named …">
+**Default database** に入力した名前は、ClickHouse が見つけられませんでした。データベース名は大文字と小文字を区別します。綴りを確認するか、このフィールドを空にしてサーバーの既定値を使用してください。
+</Accordion>
+
+<Accordion title="ClickHouse rejected the request path. Check the port.">
+何かが応答しましたが、それは ClickHouse の HTTP インターフェースではありませんでした。
+- **Port** と **Use TLS** が一致しているか確認してください：TLS ありは `8443`、なしは `8123`。
+- ネイティブ TCP ポート `9000` は HTTP インターフェースではありません。接続をそこに向けると失敗します。
+</Accordion>
+
+<Accordion title="ClickHouse is unreachable">
+その host と port では何も応答しませんでした。
+- **Host** に `https://` プレフィックスや `:port` サフィックスが含まれていないか確認してください。どちらも専用のフィールドに入力します。
 - ClickHouse Cloud の場合：サービスの IP アクセスリストに CloudThinker を追加してください。
 - セルフホストの場合：`<listen_host>` に公開したインターフェースが含まれているか、およびファイアウォールが `8443` または `8123` を許可しているか確認してください。
-- ネイティブポート `9000` は HTTP インターフェースではありません。接続をそこに向けると失敗します。
+- TLS の不一致も同じように見えます。平文 HTTP のポートに対して **Use TLS** をオンにした場合や、HTTPS 専用のポートに対してオフにした場合です。
+</Accordion>
+
+<Accordion title="ClickHouse did not answer in time">
+アドレスには到達できましたが、チェックがタイムアウトするまで応答がありませんでした。ClickHouse Cloud では通常、自動アイドリングが原因です。使われていないサービスは一時停止し、再起動するまで接続はタイムアウトします。サービスを起動してから接続し直してください。
+</Accordion>
+
+<Accordion title="ClickHouse is temporarily unavailable">
+サーバーが 5xx ステータスを返しました。稼働はしていますが、クエリを処理できない状態です。クラスタ自体の健全性を確認してから接続し直してください。
 </Accordion>
 
 <Accordion title="readonly モードではクエリを実行できない">
