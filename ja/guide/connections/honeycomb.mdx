@@ -1,0 +1,137 @@
+---
+title: Honeycomb
+description: "OAuth で Honeycomb を CloudThinker に接続し、トレースクエリ、BubbleUp による根本原因分析、承認を要するボードとトリガーの変更を実行します"
+icon: "/images/icons/honeycomb.svg"
+---
+
+import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+
+Honeycomb のチームを接続すると、[Alex](/ja/guide/agents/alex)（Cloud Engineer）がトレースをクエリし、失敗しているエンドポイントを順位付けし、BubbleUp で何が変わったかを特定し、トレースウォーターフォールをたどって失敗したスパンに到達できます。
+
+Honeycomb は Honeycomb がホストする MCP サーバー経由で **OAuth** 認証を行うため、API キーを作成したり認証情報を CloudThinker に貼り付けたりする必要はありません。
+
+## 前提条件
+
+- CloudThinker に読み取らせたいチームへアクセスできる **Honeycomb アカウント**。
+- Honeycomb の OAuth フローで CloudThinker を認可する権限。
+- **テレメトリーを受信しているデータセットを持つ environment** が少なくとも 1 つ。すべてのクエリツールはデータセットを必要とします。データセットのない environment は、正常でゼロなのではなく、テレメトリーが送られていないことを意味します。
+
+<Info>
+CloudThinker は Honeycomb の US エンドポイント `https://mcp.honeycomb.io/mcp` に接続します。EU エンドポイントは選択できないため、EU のみのチームはまだ接続できません。
+</Info>
+
+## セットアップ
+
+<Steps>
+  <Step title="接続を開く">
+    CloudThinker ワークスペースで **Connections → Honeycomb** に移動します。
+  </Step>
+  <Step title="OAuth フローを開始する">
+    **Connect** をクリックします。CloudThinker が Honeycomb の認可ページを開きます。
+  </Step>
+  <Step title="CloudThinker を認可する">
+    使用したいチームにアクセスできる Honeycomb アカウントでサインインし、アクセスを承認します。
+  </Step>
+  <Step title="CloudThinker に戻る">
+    Honeycomb が元の画面に戻し、CloudThinker がトークンを保存します。接続に **Connected** ステータスが表示されます。
+  </Step>
+</Steps>
+
+## 接続の詳細
+
+Honeycomb は OAuth を使用するため、入力する項目はありません。CloudThinker はフロー完了後にアクセストークンとリフレッシュトークンを保存し、再度尋ねることなく更新します。
+
+| 項目 | 説明 |
+|-------|-------------|
+| **OAuth トークン** | Honeycomb が発行し自動的に保存されます。手動入力は不要です |
+| **エンドポイント** | `https://mcp.honeycomb.io/mcp`（Honeycomb がホストする MCP サーバー） |
+
+## 必要な権限
+
+CloudThinker は認可したアカウントがアクセスできる範囲をそのまま引き継ぎます。認可では 2 つのスコープが付与されます。
+
+| スコープ | 対象 |
+|-------|----------------|
+| `mcp:read` | environment、データセット、カラム、クエリ、トレース、トリガー、ボード、レシピエント |
+| `mcp:write` | ボード、トリガー、SLO、マーカー、レシピエントの作成と更新 |
+
+<Tip>
+エージェントに見せたいチームに限定したアカウントで認可してください。CloudThinker はそのアカウントが既に持つ権限より狭く絞ることはできません。
+</Tip>
+
+## エージェントの機能
+
+接続すると、Alex は次のことができます。
+
+| 機能 | 説明 |
+|------------|-------------|
+| **環境の把握** | チーム名を示し、environment とデータセットを一覧し、トリガー・ボード・レシピエントの有無を報告します |
+| **サービスの健全性** | 失敗スパン数とエラー率でエンドポイントを順位付けし、p95 レイテンシーを併記します |
+| **根本原因分析** | BubbleUp を実行し、失敗スパンと正常スパンを分けるディメンションを特定します |
+| **トレース調査** | スパンを一覧し、スパン詳細を開き、トレースウォーターフォールをたどって失敗箇所に到達します |
+| **アラートの確認** | トリガー、SLO、ボード、通知先レシピエントを読み取ります |
+| **承認を要する変更** | 入力内容をあなたが承認した後に、ボード、トリガー、SLO、マーカー、レシピエントを作成または更新します |
+
+### 接続を確認する
+
+```text
+@alex #report summarize my Honeycomb setup: team, environments, datasets, and whether triggers exist
+```
+
+### プロンプト例
+
+```text
+@alex which endpoint is in the worst shape right now
+@alex why is POST /checkout failing and #report the dimension that changed
+@alex show me the trace waterfall for the slowest checkout request
+```
+
+## 書き込みは取り消せません
+
+Honeycomb の MCP サーバーには削除ツールがありません。エージェントが作成したボード、トリガー、SLO、マーカー、レシピエントは CloudThinker からは削除できず、Honeycomb 側で削除します。
+
+そのため、すべての書き込みは二重にゲートされます。エージェントが影響と正確な入力内容を提示し、そのターンであなたが[承認](/ja/guide/approval)した後にのみ変更が実行されます。
+
+<Warning>
+そのオブジェクトを残し続けてよい場合にのみ作成を承認してください。CloudThinker から取り消す手段はありません。
+</Warning>
+
+## トラブルシューティング
+
+<Accordion title="OAuth フローが完了しない">
+ブラウザが別の Honeycomb アカウントでサインインしている可能性があります。目的のアカウントでサインインし直し、Honeycomb 接続をやり直してください。
+</Accordion>
+
+<Accordion title="すべての呼び出しが認証エラーになる">
+保存されたトークンが無効です。多くの場合、Honeycomb 側で認可が取り消されています。接続を削除して再接続してください。
+</Accordion>
+
+<Accordion title="エージェントがデータセットは無いと報告する">
+クエリにはクエリ可能な environment 内のデータセットが必要です。その environment が Honeycomb でテレメトリーを受信しているか確認してください。データセットのない environment では、クエリ、BubbleUp、トレースの質問に答えられません。
+</Accordion>
+
+<Accordion title="エージェントが特定の environment を飛ばす">
+`$activity-log$` は Honeycomb 自身の監査用 environment です。environment 一覧には表示されますが、スコープ付きの呼び出しはすべて拒否されるため、CloudThinker は意図的にスキップします。
+</Accordion>
+
+<Accordion title="作成が拒否された">
+ボード、トリガー、SLO、マーカー、レシピエントの作成には同じターン内でのあなたの承認が必要です。承認プロンプトが開いている間に応答してください。新しいターンでは再度尋ねられます。
+</Accordion>
+
+## セキュリティ
+
+<ConnectionSecurity />
+
+- **結果リンクをチャットに出さない** — Honeycomb はクエリ結果とトレース結果のダウンロード URL に署名します。CloudThinker は人間向けのパーマリンクのみを共有するため、コピーされたメッセージが結果へのアクセス権を持つトークンを運ぶことはありません。
+- **チームを切り替えるときは再接続する** — 別の Honeycomb アカウントを認可する前に、既存の接続を削除してください。
+
+## 関連
+
+<CardGroup cols={2}>
+  <Card title="Alex エージェント" icon="cloud" href="/ja/guide/agents/alex">
+    クラウドとオブザーバビリティの調査エージェント
+  </Card>
+  <Card title="承認" icon="shield-check" href="/ja/guide/approval">
+    CloudThinker が書き込みを確認の後ろでゲートする仕組み
+  </Card>
+</CardGroup>

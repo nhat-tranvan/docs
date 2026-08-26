@@ -1,0 +1,166 @@
+---
+title: Buildkite
+description: "Kết nối Buildkite với CloudThinker để giám sát sức khỏe pipeline, phân loại build thất bại từ log và annotation, và điều khiển build có phê duyệt"
+icon: "/images/icons/buildkite.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối tổ chức Buildkite của bạn để cho phép các agent CloudThinker theo dõi sức khỏe pipeline, phân loại build thất bại từ log và annotation, kiểm tra năng lực agent và cluster, cũng như chạy các thao tác điều khiển được kiểm soát bởi phê duyệt như chạy lại một job hoặc mở một cổng deploy.
+
+Buildkite xác thực bằng **API access token** thông qua máy chủ MCP do Buildkite lưu trữ. Các scope của token quyết định thao tác nào thành công, nên những scope bạn cấp chính là giới hạn cứng cho những gì agent có thể truy cập.
+
+---
+
+## Điều kiện tiên quyết
+
+- Một **tài khoản Buildkite** có quyền truy cập tổ chức bạn muốn giám sát.
+- Một **API access token** với các scope đọc được liệt kê trong phần Quyền hạn cần thiết bên dưới.
+- Với các thao tác điều khiển được kiểm soát bởi phê duyệt, token cần thêm scope **`write_builds`**.
+
+<Info>
+Giám sát và phân loại lỗi hoạt động chỉ với các scope đọc. Retry, unblock, rebuild và cancel bổ sung yêu cầu scope `write_builds` trên token.
+</Info>
+
+---
+
+## Thiết lập
+
+<Steps>
+  <Step title="Tạo API access token">
+    Trong Buildkite, vào **Personal Settings → API Access Tokens → New API Access Token** ([buildkite.com/user/api-access-tokens/new](https://buildkite.com/user/api-access-tokens/new)):
+    - **Description**: `cloudthinker`
+    - **Organization access**: chọn tổ chức mà CloudThinker cần truy cập
+    - **REST API scopes**: `read_organizations`, `read_pipelines`, `read_builds`, `read_build_logs`, `read_artifacts`, `read_agents`, `read_clusters`, `read_user` — chỉ thêm `write_builds` nếu bạn muốn dùng các thao tác điều khiển build
+    - **Expiry**: chọn thời hạn và lên kế hoạch xoay vòng
+
+    Sao chép token ngay lập tức — Buildkite chỉ hiển thị một lần.
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Điều hướng đến **Connections → Buildkite** và nhập:
+    - **Token**: API access token bạn vừa tạo
+
+    Nhấn **Connect**. CloudThinker xác minh thông tin xác thực và hiển thị trạng thái **Connected**.
+  </Step>
+</Steps>
+
+<Warning>
+Sao chép API access token ngay sau khi tạo. Bạn cần tạo token mới nếu mất.
+</Warning>
+
+---
+
+## Chi tiết kết nối
+
+| Trường | Mô tả | Ví dụ |
+|--------|-------|-------|
+| **BUILDKITE_API_TOKEN** | API access token dùng để xác thực kết nối | — |
+
+<Note>
+CloudThinker tự động xác định tổ chức của bạn từ token, nên không cần cấu hình org slug. Kết nối sử dụng máy chủ MCP do Buildkite lưu trữ tại `https://mcp.buildkite.com/direct`, nơi chuyển tiếp trực tiếp token của bạn đến REST API của Buildkite.
+</Note>
+
+---
+
+## Quyền hạn cần thiết
+
+Chỉ cấp những scope tương ứng với công việc bạn muốn agent thực hiện.
+
+| Scope | Cho phép |
+|-------|----------|
+| `read_organizations` | Xác định tổ chức mà token có thể truy cập |
+| `read_pipelines` | Danh sách và chi tiết pipeline |
+| `read_builds` | Build, job, annotation và tóm tắt lỗi |
+| `read_build_logs` | Đọc, tìm kiếm và theo dõi log của job |
+| `read_artifacts` | Artifact của build và job |
+| `read_agents` | Trạng thái kết nối và năng lực của agent |
+| `read_clusters` | Cluster và cluster queue |
+| `read_user` | Tra cứu tài khoản qua `current_user` |
+| `write_builds` | Retry job, unblock job, rebuild và cancel — mỗi thao tác vẫn được [phê duyệt](/vi/guide/approval) kiểm soát trong CloudThinker |
+
+<Tip>
+Tuân theo nguyên tắc ít quyền nhất: bỏ `write_builds` cho kết nối chỉ dùng để giám sát. Agent vẫn giữ toàn bộ khả năng đọc, còn bốn thao tác điều khiển sẽ thất bại ngay tại Buildkite thay vì chỉ dựa vào lớp phê duyệt.
+</Tip>
+
+---
+
+## Khả năng của Agent
+
+Sau khi kết nối, các agent có quyền đọc đối với pipeline, build, log, artifact và agent Buildkite của bạn.
+
+| Khả năng | Mô tả |
+|----------|-------|
+| **Khám phá tổ chức** | Xác định tổ chức và liệt kê pipeline, build gần đây, agent và cluster |
+| **Sức khỏe pipeline** | Tỷ lệ pass, chuỗi thất bại liên tiếp và build bị treo quá ngưỡng thời gian |
+| **Phân loại build thất bại** | Đối chiếu tóm tắt lỗi với log job, annotation và test thất bại |
+| **Log & artifact** | Đọc, tìm kiếm và theo dõi log của một job; liệt kê artifact của build và job |
+| **Năng lực** | Trạng thái kết nối của agent, cluster và cluster queue |
+| **Điều khiển build** | Retry job, unblock job, rebuild build và cancel build — **yêu cầu phê duyệt** |
+
+Một build đang chờ ở cổng thủ công vẫn báo `passed` trong API của Buildkite. CloudThinker đánh dấu build đó là đang chờ cổng, nêu tên bước block và loại nó khỏi tỷ lệ pass, nhờ vậy một deploy đang bị giữ không bao giờ bị báo cáo là pipeline xanh.
+
+### Xác minh kết nối
+
+```text
+@alex list my Buildkite pipelines and show the latest build status for each
+```
+
+### Ví dụ prompt
+
+```text
+@alex which Buildkite pipelines are failing right now and #report their failure streaks
+@alex build 42 of the web pipeline failed — pull the logs and annotations, find the cause, and #recommend a fix
+@alex show Buildkite agent capacity and any builds stuck for more than an hour #dashboard
+```
+
+Với các tổ chức có nhiều pipeline, hãy giới hạn yêu cầu theo một pipeline duy nhất để agent trả về kết quả tập trung.
+
+---
+
+## Khắc phục sự cố
+
+<Accordion title="Kết nối hiển thị Connected nhưng mọi yêu cầu đều trả về 401">
+Token không hợp lệ, đã hết hạn hoặc bị thu hồi. Quá trình bắt tay MCP vẫn thành công với token sai và chỉ thất bại khi một tool chạy, nên trạng thái kết nối màu xanh không chứng minh token hoạt động. Tạo API access token mới và kết nối lại.
+</Accordion>
+
+<Accordion title="403 với các thao tác đọc trước đây vẫn chạy">
+Token thiếu một scope. Các thao tác đọc cần `read_organizations`, `read_pipelines`, `read_builds`, `read_build_logs`, `read_artifacts`, `read_agents` và `read_clusters`. Chỉnh sửa scope của token trong Buildkite — bạn không cần tạo token mới.
+</Accordion>
+
+<Accordion title="Retry, unblock, rebuild hoặc cancel thất bại do lỗi quyền hạn">
+Token thiếu `write_builds`. Thêm scope đó cho token trong Buildkite, hoặc giữ kết nối ở chế độ chỉ đọc và tự thực hiện thao tác trong Buildkite.
+</Accordion>
+
+<Accordion title="Pipeline hiển thị khỏe mạnh trong khi một deploy đang chờ">
+Đó là cổng thủ công, và trường hợp này đã được xử lý. Build mới nhất bị loại khỏi tỷ lệ pass bất cứ khi nào nó đang bị chặn bởi cổng. Nếu agent báo trạng thái cổng là **unknown**, nghĩa là phép kiểm tra cổng đã thất bại — thường do rate limit — và build cũng bị loại trong trường hợp đó. Unknown không bao giờ có nghĩa là không có cổng.
+</Accordion>
+
+<Accordion title="404 với một pipeline đang tồn tại">
+Tên pipeline đã được dùng ở nơi Buildkite yêu cầu slug. Yêu cầu agent liệt kê pipeline của bạn và dùng slug từ kết quả đó.
+</Accordion>
+
+<Accordion title="429 rate limited">
+Quá nhiều pipeline hoặc build trong một yêu cầu. Giới hạn câu hỏi theo một pipeline duy nhất, hoặc yêu cầu ít build gần đây hơn.
+</Accordion>
+
+---
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Phê duyệt cho các thao tác điều khiển build** — giữ retry, unblock, rebuild và cancel được kiểm soát bởi phê duyệt. Unblock sẽ mở một cổng mà ai đó đã cố tình đặt, thường là cổng deploy.
+- **Giới hạn scope của token, không chỉ dựa vào phê duyệt** — scope của token được Buildkite thực thi. Một token không có `write_builds` hoàn toàn không thể thay đổi trạng thái CI.
+
+---
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Kết nối CircleCI" icon="/images/icons/circleci.svg" href="/vi/guide/connections/circleci">
+    Trạng thái pipeline, phân loại build log và điều khiển có phê duyệt
+  </Card>
+  <Card title="Phê duyệt" icon="shield-check" href="/vi/guide/approval">
+    Cách thức hoạt động của các hành động được kiểm soát bởi phê duyệt
+  </Card>
+</CardGroup>

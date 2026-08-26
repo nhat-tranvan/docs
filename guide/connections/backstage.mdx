@@ -1,0 +1,225 @@
+---
+title: Backstage
+description: "Connect Backstage to CloudThinker for software catalog inventory, service ownership and dependency context, catalog metadata gaps, and approval-gated location registration"
+icon: "/images/icons/backstage.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+
+Connect your Backstage instance to let [Alex](/guide/agents/alex) (Cloud Engineer) read the Software Catalog: which services exist, who owns them, what they depend on, where their code and documentation live, and which entries are missing the metadata your teams rely on.
+
+Backstage authenticates with a **static external access token** that you add to your Backstage configuration. Reading the catalog is the whole connection. The one change an agent can make is to a catalog location you name, and it asks you before every one.
+
+---
+
+## Prerequisites
+
+- A **Backstage instance** reachable from CloudThinker over **HTTPS**.
+- Access to the **Backstage configuration file** where you can add a static external access token.
+- Optional, for updating a registered location: **Backstage 1.50 or later**. That release is the first to carry the catalog's location-update endpoint. Reading, registering, and removing locations work on earlier releases.
+
+<Info>
+Create a token dedicated to CloudThinker rather than reusing one you handed to another system. Each entry carries its own restrictions, so a dedicated token keeps the scope visible and lets you revoke it without disturbing anything else.
+</Info>
+
+---
+
+## Setup
+
+<Steps>
+  <Step title="Generate a token">
+    The token can be any string without whitespace, but it should be long enough that it cannot be guessed. Backstage suggests generating one on the command line:
+
+    ```shell
+    node -p 'require("crypto").randomBytes(24).toString("base64")'
+    ```
+
+    Store the result in a secret manager or an environment variable. Do not paste it into the configuration file directly.
+  </Step>
+  <Step title="Add it as a static external access token">
+    Add an entry of type `static` under `backend.auth.externalAccess` in your Backstage app configuration. The `subject` identifies the caller in Backstage's own logs, so name it after CloudThinker:
+
+    ```yaml
+    backend:
+      auth:
+        externalAccess:
+          - type: static
+            options:
+              token: ${CLOUDTHINKER_TOKEN}
+              subject: cloudthinker
+            accessRestrictions:
+              - plugin: catalog
+    ```
+
+    The `accessRestrictions` block is what keeps the token narrow. `plugin: catalog` means a request to any other Backstage plugin is rejected. Leave it out and, in Backstage's words, "the access method has unlimited access to all functionality of all plugins".
+
+    See [Backstage's service-to-service authentication guide](https://backstage.io/docs/auth/service-to-service-auth) for the full option set.
+  </Step>
+  <Step title="Restart Backstage">
+    Backstage reads external access tokens from configuration at startup. Restart it so the new entry takes effect.
+  </Step>
+  <Step title="Add the connection in CloudThinker">
+    Navigate to **Connections → Backstage** and enter:
+    - **Backstage URL**: the Backstage backend root, such as `https://backstage.example.com`
+    - **Service token**: the token you generated
+
+    Click **Connect**. CloudThinker reads a single catalog entity to verify the token, and the status turns **Connected**.
+  </Step>
+</Steps>
+
+<Warning>
+Enter the **Backstage root only**, such as `https://backstage.example.com`. Do not append `/api/catalog`, any other path, a query string, a fragment, or a username and password. CloudThinker adds the catalog path itself and rejects a URL that carries anything else.
+</Warning>
+
+---
+
+## Connection details
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| **Backstage URL** | The Backstage backend root, with no path, query, fragment, or credentials | `https://backstage.example.com` |
+| **Service token** | The static external access token you added to your Backstage configuration | — |
+
+<Note>
+The Backstage URL must use `https`. The token is sent with every request, so plain `http` is rejected.
+</Note>
+
+---
+
+## Required permissions
+
+Restrict the token to the catalog plugin and nothing else:
+
+| Restriction | Effect |
+|-------------|--------|
+| **`plugin: catalog`** | The token reaches the Software Catalog and is rejected everywhere else. This is the restriction to set. |
+| **No restrictions** | The token reaches every plugin in your Backstage instance. Avoid this. |
+
+That single line covers everything an agent reads. Registering, updating, or removing a catalog location additionally needs the token to be allowed to create, update, and delete locations — see [Write access](#write-access).
+
+<Warning>
+Backstage also offers `permission` and `permissionAttribute` restrictions for narrowing a token further, for example to read-only actions. Both apply only where permission checks are enabled in the first place. The permissions framework is off until you turn it on in your Backstage configuration, so on a default instance neither setting restricts anything. Do not rely on `permissionAttribute` as your read-only guarantee. The `plugin` restriction is always enforced.
+</Warning>
+
+<Tip>
+If you only want agents to read, give the token no location write access at all. There is then no Backstage change an agent can make, whatever it is asked to do.
+</Tip>
+
+---
+
+## Agent capabilities
+
+Once connected, agents can read what your catalog knows about your services.
+
+| Capability | Description |
+|------------|-------------|
+| **Catalog inventory** | List the entities in the catalog with their kind, namespace, owner, type, and lifecycle |
+| **Catalog shape** | Summarize the catalog by kind, type, and owner so you can see how it is distributed |
+| **Service context** | For one named entity: its owner, lifecycle, system, domain, source repository, documentation, the APIs it provides or consumes, and its relations |
+| **Metadata gaps** | Count the returned entities that have no owner, no lifecycle, no source-repository link, or no documentation link |
+| **Location lookup** | Read one registered catalog location by its ID |
+
+### Verify the connection
+
+```text
+@alex summarize what is in our Backstage catalog: how many entities, which kinds, and who owns them
+```
+
+### Example prompts
+
+```text
+@alex #report which components in Backstage have no owner set
+@alex #report show the owner, system, and dependencies of the payments-api component in Backstage
+@alex #recommend which Backstage entries are missing a documentation link and which to fix first
+```
+
+<Note>
+Answers are bounded so a broad question cannot pull the whole catalog: a lookup returns up to **15** entities across **3** pages by default, and never more than **50** entities across **5** pages. Agents say "returned 15" rather than "15 exist", because a full page is not proof that you have seen everything. Name the component, system, or domain you care about to get an exact answer.
+</Note>
+
+<Warning>
+A metadata gap is a gap in the catalog, not in the service. An entity with no owner recorded means nobody filled that field in, not that the real service is unowned. Agents report it that way, and so should any report you build on it.
+</Warning>
+
+---
+
+## Write access
+
+Agents cannot create, edit, or delete catalog entities. Entities come from the locations your catalog ingests, so the only change this connection can make is to a **location**: register a new one, point an existing one somewhere else, or remove one.
+
+Every one of those asks you first. The agent states the action, the location ID or target URL, and the **URL prefix it treats as yours**, then waits. Your rejection ends it — the agent does not look for another route.
+
+Two rules bound what an approval can do:
+
+- The target must be an **`https`** URL **under the prefix you approved**. A target outside it is refused before any request is made.
+- Updating or removing a location first reads that location and checks its **current** target is under the same prefix. A location pointing somewhere else is refused, so an approval for one prefix cannot reach a location that belongs to another team.
+
+<Warning>
+Removing a location removes the entities it produced from your catalog. Read the target in the prompt before you approve, and approve only a location you recognize as yours.
+</Warning>
+
+<Tip>
+Skip this entirely by giving the token no location write access. See [Required permissions](#required-permissions).
+</Tip>
+
+---
+
+## Troubleshooting
+
+<Accordion title="Failed to connect to Backstage">
+CloudThinker reports one message for every connection failure, so check the likely causes in order:
+
+- The **URL** points somewhere other than the Backstage backend root, or something in front of it redirects the request elsewhere. CloudThinker never follows a redirect, because that would hand your token to a server you did not name.
+- The **token** is not in `backend.auth.externalAccess`, was mistyped, or Backstage has not been restarted since you added it.
+- The token's **`accessRestrictions`** do not include `plugin: catalog`, so Backstage rejects the request.
+- Backstage is **unreachable** from CloudThinker, or its certificate is not trusted.
+</Accordion>
+
+<Accordion title="Invalid Backstage connection configuration">
+The service token is empty, or it carries a line break. Re-copy it as a single line with no surrounding quotes.
+</Accordion>
+
+<Accordion title="Invalid Backstage URL">
+The address is not a plain host root. Remove any path such as `/api/catalog`, any query string, any fragment, and any embedded username and password, then reconnect with the root only.
+</Accordion>
+
+<Accordion title="Backstage URL must use HTTPS">
+The address is plain `http`, which would send the token in clear text. Serve Backstage over HTTPS and reconnect.
+</Accordion>
+
+<Accordion title="The agent reports fewer entities than Backstage shows">
+The answer came from a bounded page of results, or the token cannot see the rest. Narrow the question to the component, system, or domain you care about rather than asking for everything.
+</Accordion>
+
+<Accordion title="An agent says it cannot edit a catalog entity">
+That is correct, and no permission changes it. Entities are produced by the locations your catalog ingests, so edit them at their source. An agent can register, repoint, or remove a location for you, with your approval.
+</Accordion>
+
+<Accordion title="Updating a location fails">
+The location-update endpoint arrived in Backstage 1.50. On an earlier release, remove the location and register the new target instead.
+</Accordion>
+
+---
+
+## Security
+
+<ConnectionSecurity />
+
+- **Restrict the token to the catalog** — one `plugin: catalog` line is the difference between a catalog reader and a token that reaches every plugin you run.
+- **Do not lean on permission restrictions you have not enabled** — `permission` and `permissionAttribute` do nothing until the permissions framework is switched on in Backstage.
+- **Read-only is a choice you make in Backstage** — withhold location write access and there is no Backstage change an agent can make.
+- **Approve by target, not by habit** — a location approval names a URL prefix; read it, because removing a location removes the entities it produced.
+- **Rotate by replacing the entry** — a static token does not expire on its own. Replace it in your Backstage configuration and update the connection on your own schedule.
+
+---
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Alex Agent" icon="cloud" href="/guide/agents/alex">
+    Cloud infrastructure and cost analysis
+  </Card>
+  <Card title="Approval" icon="shield-check" href="/guide/approval">
+    How CloudThinker gates tools that change state
+  </Card>
+</CardGroup>
