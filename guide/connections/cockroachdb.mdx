@@ -1,0 +1,176 @@
+---
+title: CockroachDB
+description: "Connect CockroachDB for bounded SQL analysis and approval-gated row changes with separate read and write credentials"
+icon: "/images/icons/cockroachdb.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+
+Connect CockroachDB to let [Tony](/guide/agents/tony) inspect schemas, query bounded data, and review SQL activity. Separate read and write connection strings keep row changes approval-gated.
+
+## Prerequisites
+
+- A CockroachDB SQL endpoint reachable from CloudThinker.
+- Administrator access to create two dedicated SQL users.
+- Two password-based connection strings using `sslmode=require`, `verify-ca`, or `verify-full`. Use `verify-full` when possible.
+
+## Setup
+
+<Steps>
+  <Step title="Create separate SQL users">
+    Connect to the target database as an administrator, then create one user for reads and one for approved writes:
+
+    ```sql
+    CREATE USER cloudthinker_read WITH PASSWORD '<read-password>';
+    CREATE USER cloudthinker_write WITH PASSWORD '<write-password>';
+    ```
+
+    Store both passwords securely.
+  </Step>
+
+  <Step title="Grant the minimum table privileges">
+    Run these grants in each schema CloudThinker should reach. This example uses `public`:
+
+    ```sql
+    GRANT USAGE ON SCHEMA public TO cloudthinker_read;
+    GRANT SELECT ON ALL TABLES IN SCHEMA public TO cloudthinker_read;
+
+    GRANT USAGE ON SCHEMA public TO cloudthinker_write;
+    GRANT INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO cloudthinker_write;
+    ```
+
+    Reapply the grants for new tables, or configure default privileges for the role that creates them.
+  </Step>
+
+  <Step title="Allow current activity reads (optional)">
+    Grant the read user `VIEWACTIVITY` only when Tony should inspect statements from other sessions:
+
+    ```sql
+    GRANT SYSTEM VIEWACTIVITY TO cloudthinker_read;
+    ```
+
+    Without it, schema and data reads still work.
+  </Step>
+
+  <Step title="Build two encrypted connection strings">
+    In the [CockroachDB Cloud console](https://cockroachlabs.cloud/), copy the general connection string. Use the same cluster and database with both users:
+
+    ```text
+    postgresql://cloudthinker_read:PASSWORD@HOST:26257/appdb?sslmode=verify-full
+    postgresql://cloudthinker_write:PASSWORD@HOST:26257/appdb?sslmode=verify-full
+    ```
+
+    URL-encode special characters in each password. Remove local certificate paths that CloudThinker cannot access.
+  </Step>
+
+  <Step title="Add CockroachDB in CloudThinker">
+    Go to **Connections → CockroachDB** and enter:
+
+    - **Connection string**: the `cloudthinker_read` URL
+    - **Write connection string**: the distinct `cloudthinker_write` URL
+
+    Click **Connect**. CloudThinker shows **Connected** after verification.
+  </Step>
+</Steps>
+
+## Connection details
+
+| Field | Description | Required |
+|-------|-------------|----------|
+| **Connection string** | Encrypted PostgreSQL URL for a user limited to `SELECT` and optional `VIEWACTIVITY` | Yes |
+| **Write connection string** | Different encrypted PostgreSQL URL for a user limited to `INSERT`, `UPDATE`, and `DELETE` | Yes |
+
+The connection rejects `sslmode=disable`, `allow`, and `prefer`. It also rejects identical read and write URLs.
+
+## Required permissions
+
+| Purpose | Minimum CockroachDB privileges |
+|---------|--------------------------------|
+| Database and table discovery | `USAGE` on the schema and `SELECT` on the intended tables |
+| Bounded row reads and query plans | `SELECT` on the intended tables |
+| Current statements from other sessions | `VIEWACTIVITY` system privilege on the read user |
+| Approved row inserts | `INSERT` on the intended tables for the write user |
+| Approved row updates | `UPDATE` on the intended tables for the write user |
+| Approved row deletes | `DELETE` on the intended tables for the write user |
+
+<Tip>
+Neither user needs `admin`, DDL privileges, or unsafe internals. Grant table privileges only where the workspace should operate.
+</Tip>
+
+## Agent capabilities
+
+Once connected, Tony can:
+
+| Capability | Description |
+|------------|-------------|
+| **Schema discovery** | List databases and tables, then read columns, indexes, and constraints |
+| **Bounded data reads** | Run one read-only `SELECT` with an explicit server-side limit |
+| **Query planning** | Run estimated `EXPLAIN` without executing the statement |
+| **SQL metadata** | Run bounded `SHOW` statements for indexes and other supported metadata |
+| **Cluster inspection** | Report the server build and current statements available to the read user |
+| **Row changes** | Insert, update, or delete rows through the write credential after approval |
+
+Queries stop after 30 seconds and return at most 1,000 rows. `EXPLAIN ANALYZE` is unavailable because it executes the statement.
+
+### Verify the connection
+
+```text
+@tony #report list my CockroachDB databases and the tables in the application database
+```
+
+### Example prompts
+
+```text
+@tony #report show the schema and indexes for public.orders
+@tony #report explain the plan for the bounded order lookup without executing it
+@tony #recommend identify running statements that need a closer query-plan review
+```
+
+## Write access
+
+CloudThinker exposes only row inserts, updates, and deletes. Each call pauses for approval and uses the write connection string only for that call.
+
+- An `UPDATE` or `DELETE` without a `WHERE` clause is refused.
+- The retained tools cannot create, alter, drop, or truncate databases, tables, or indexes.
+- Mutation receipts report the action, table, and affected-row count.
+- Approval for one mutation does not approve another mutation.
+
+## Troubleshooting
+
+<Accordion title="The connection rejects the SSL mode">
+Use `sslmode=require`, `verify-ca`, or `verify-full`. The connection refuses `disable`, `allow`, and `prefer` because they permit an unencrypted or downgraded database socket.
+</Accordion>
+
+<Accordion title="Authentication or connection verification fails">
+Confirm the username, URL-encoded password, host, port, and database. Copy the CockroachDB Cloud connection string again after a password reset.
+</Accordion>
+
+<Accordion title="A table is missing or a query is denied">
+Grant schema `USAGE` and the required table privilege. New tables need grants or configured default privileges.
+</Accordion>
+
+<Accordion title="A write is refused">
+Confirm that the write URL differs from the read URL, the write user holds the exact table privilege, and you approved this specific call. Add a `WHERE` clause to every update or delete.
+</Accordion>
+
+<Accordion title="Node inventory or the SQL user list is unavailable">
+This is an expected CockroachDB v26 boundary. The connection reports the gap instead of inferring a node count, cluster ID, or user list.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- **Separate credential lanes** — keep `SELECT` on the read user and row-mutation privileges on the write user. Never grant both sets to one connection string.
+- **Verified TLS** — prefer `sslmode=verify-full` and a hostname that matches the server certificate.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="PostgreSQL Connection" icon="/images/icons/postgresql.svg" href="/guide/connections/postgresql">
+    Connect another PostgreSQL-compatible database with a dedicated user
+  </Card>
+  <Card title="Approval" icon="shield-check" href="/guide/approval">
+    Control how agent write tools request approval
+  </Card>
+</CardGroup>
