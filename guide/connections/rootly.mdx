@@ -1,0 +1,146 @@
+---
+title: Rootly
+description: "Connect Rootly to CloudThinker to triage live incidents, review alerts, and track the action items an incident leaves behind"
+icon: "/images/icons/rootly.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+
+Connect your Rootly account to let CloudThinker agents triage open and recent incidents, review alerts and whether each became an incident, and track the follow-up work a response leaves behind.
+
+Rootly authenticates with an **API key**, and agents read incident state on every question and can file one thing back: an incident action item, behind an approval prompt.
+
+## Prerequisites
+
+- A **Rootly account** with access to the organization you want to investigate.
+- An **API key** with **Global** scope, keeping the role Rootly assigns it, so agents can read every team's incidents.
+- Permission to open **Organization Settings** in Rootly, which is where keys are minted.
+
+<Info>
+A Team-scoped or Personal key still connects. It returns fewer rows on the endpoints it can reach and `403` on the ones it cannot, which reads like a quiet account rather than a narrow credential.
+</Info>
+
+## Setup
+
+<Steps>
+  <Step title="Open Rootly">
+    Sign in to Rootly and open the organization dropdown in the top-left corner.
+  </Step>
+  <Step title="Generate an API key">
+    Go to **Organization Settings → API Keys** and click **Generate New API Key**:
+    - **Name**: `cloudthinker`
+    - **Scope**: pick **Global** so the key reads across every team
+
+    Copy the key immediately and store it in your secret manager.
+  </Step>
+  <Step title="Add the connection in CloudThinker">
+    Navigate to **Connections → Rootly** and enter:
+    - **API Key**: the key you just generated
+
+    Click **Connect**. CloudThinker verifies the credential and shows a **Connected** status.
+  </Step>
+</Steps>
+
+<Warning>
+Copy the API key before you leave the page. If you lose it, generate a new key and reconnect — CloudThinker cannot recover the old one.
+</Warning>
+
+## Connection details
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| **ROOTLY_API_TOKEN** | Rootly API key, Global scope | — |
+
+<Note>
+CloudThinker calls the Rootly REST API at `https://api.rootly.com/v1` directly. There is no endpoint or region to configure.
+</Note>
+
+## Required permissions
+
+Mint the key with **Global** scope. A Global key can reach every entity in your Rootly instance. Rootly assigns it the On-Call and Incident Response role at generation, and that role's permissions decide what the key actually reads, so leave the role in place.
+
+<Tip>
+Follow least privilege where it costs you nothing else. Rootly scopes a key at creation and offers no per-endpoint permission list, so scope is the only control — pick Global for full visibility, or a Team key when one team's incidents are all you want agents to see.
+</Tip>
+
+## Agent capabilities
+
+Once connected, agents read your Rootly incident state. Filing, updating, or removing an action item asks you to approve it first.
+
+| Capability | Description |
+|------------|-------------|
+| **Discovery** | Read the acting identity and the account's own severity, team, service, environment, and incident-type names |
+| **Incident triage** | List open and recent incidents with status, severity, kind, impacted services, responding teams, and lifecycle timestamps |
+| **Alert review** | List alerts with status, source, urgency, owning service, and whether each became an incident |
+| **Follow-up tracking** | List the action items an incident left behind, who owns each one, and what is still owed |
+| **Action item writes** | Create, update, or delete one incident action item per run, after you approve it |
+
+
+### Verify the connection
+
+```text
+@alex run Rootly discovery and summarize the acting identity, the severity names this account uses, and how many teams and services it can read
+```
+
+### Example prompts
+
+```text
+@alex list the Rootly incidents still open right now with severity and impacted services
+@alex show Rootly alerts from the last 24 hours and #report which ones never became an incident
+@alex what action items are still owed on incident 4821, and who owns each one?
+```
+
+Agents cap every read and say so. A run that returns 20 rows against a total of 340 reports `truncated`, so ask for a narrower window rather than reading a row count as the account total.
+
+## Write access
+
+Agents cannot declare, update, resolve, or delete a Rootly incident. Declaring one through the API runs your account's real workflows: it opens a Slack channel, notifies subscribers, and pages the on-call rotation. Deleting the incident afterwards removes the record without retracting any of that, so incident writes stay in Rootly's own UI.
+
+The one change agents can make is to an **incident action item** — file a new one, update an existing one, or remove one. An action item attaches to an incident that already exists and changes no incident state.
+
+Every action item write asks you first. The agent names the action, the incident, and the exact fields, then waits. Your rejection ends it.
+
+Two rules bound what an approval can do:
+
+- **One write per run.** An approval covers that call, not the next one.
+- **The read-back is the proof.** After the write the agent reads the item back and reports whether the change is present. Rootly answers an update that sets nothing with `200`, so the status code alone proves nothing.
+
+## Troubleshooting
+
+<Accordion title="401 Unauthorized">
+The key is missing, revoked, or mistyped. Generate a new key in **Organization Settings → API Keys** and reconnect.
+</Accordion>
+
+<Accordion title="403 Forbidden on some reads">
+The key is Team-scoped or Personal, or the role assigned to your Global key was narrowed. A narrow key answers `200` with fewer rows on the endpoints it can reach and `403` on the rest. Generate a Global key, leave its assigned role in place, and reconnect.
+</Accordion>
+
+<Accordion title="A filter returns nothing">
+Rootly answers an unknown filter value with an empty list, not an error. A severity or team name that does not exist in your account looks exactly like a quiet week. Ask the agent to run discovery and quote the account's own names, then filter again.
+</Accordion>
+
+<Accordion title="429 Too Many Requests">
+Rootly allows 3,000 reads per API key per minute. Wait and retry. Reconnecting does not reset the limit.
+</Accordion>
+
+<Accordion title="An action item write was not applied">
+The write asks for approval, so a declined prompt changes nothing. If you approved it and the run reports the request timed out, ask the agent to list the incident's action items before retrying — a retry can file the same item twice.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- **Global scope is broad** — a Global key reads every team's incidents. Use a Team key when agents should only see one team.
+- **The write boundary is structural** — only the action item route can write, and it asks for approval every run.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="PagerDuty Connection" icon="/images/icons/pagerduty.svg" href="/guide/connections/pagerduty">
+    On-call schedules, alerting, and escalation
+  </Card>
+  <Card title="Jira Service Management Connection" icon="/images/icons/jsm.svg" href="/guide/connections/jsm">
+    Alert triage and incident sync during response
+  </Card>
+</CardGroup>
