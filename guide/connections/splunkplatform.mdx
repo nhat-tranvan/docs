@@ -1,0 +1,165 @@
+---
+title: Splunk Platform
+description: "Connect Splunk Cloud Platform or Splunk Enterprise to CloudThinker for read-only SPL searches, index and event-volume review, and saved search inspection"
+icon: "/images/icons/splunkplatform.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+
+Connect your Splunk deployment to let [Alex](/guide/agents/alex) (Cloud Engineer) run bounded SPL searches over a time range, list your indexes and how many events each holds, read the roles the connection is working under, and inspect saved searches, their schedules, and their alert actions.
+
+The connection is **read-only** and reaches Splunk on its management port with an authentication token.
+
+## Supported platforms
+
+| Platform | What it needs |
+|----------|---------------|
+| **Splunk Cloud Platform** | The management port opened to CloudThinker. It is closed to everyone by default |
+| **Splunk Enterprise** | The management port reachable from CloudThinker, and TLS enabled, which token authentication requires |
+
+<Warning>
+Free trial Splunk Cloud Platform accounts cannot use the REST API, so this connection cannot reach them. No setting in your deployment changes it.
+</Warning>
+
+## Prerequisites
+
+- A **Splunk Cloud Platform** deployment or a **Splunk Enterprise** instance.
+- **Token authentication turned on**. Splunk ships it off, and the Tokens page says so plainly when it is off.
+- An **administrator**, or any user holding a role that can issue tokens to others.
+- A **Splunk user for CloudThinker** whose roles reach only the indexes you want read.
+
+## Setup
+
+<Steps>
+  <Step title="Splunk Cloud Platform: open the management port to CloudThinker">
+    Splunk closes the search head API allow list to every address by default, so nothing reaches port 8089 until you add CloudThinker to it.
+
+    Go to **Settings → Server settings → IP allow list**, open the **Search head API access** tab, click **Add IP subnet**, and add CloudThinker's egress IP addresses in CIDR notation. Click **Save**. Changes can take 15 minutes or more to propagate.
+
+    This page needs Splunk Cloud Platform 8.2.2201 or higher and a role with the `edit_ip_allow_list` capability, which `sc_admin` has by default. On an older deployment, open a case in the Splunk Support Portal with the same addresses instead.
+  </Step>
+  <Step title="Turn on token authentication">
+    Go to **Settings → Tokens**. If it reads `Token authentication is currently disabled`, click **Enable Token Authentication**. It applies immediately, with no restart.
+
+    On Splunk Enterprise this also needs TLS enabled on the instance and the app key value store running, which is the default on a search head.
+  </Step>
+  <Step title="Create the token">
+    Still on **Settings → Tokens**, click **New Token**. Enter the CloudThinker user in **User** and a short description in **Audience**.
+
+    Set an **Expiration**. Left blank, Splunk applies your deployment's global default, which is 30 days unless an administrator changed it.
+
+    Click **Create**, then copy the whole **Token** field before closing the dialog. Splunk shows a token once and cannot recover it.
+  </Step>
+  <Step title="Connect in CloudThinker">
+    Go to **Connections → Splunk Platform** and enter the token, the management port, and your management host: `<deployment-name>.splunkcloud.com` on Splunk Cloud Platform, or your instance's hostname. Leave **TLS certificate** on **Verify TLS certificate**.
+
+    Click **Connect**. CloudThinker reads your server info and reports **Connected** with the Splunk product and version it found.
+  </Step>
+</Steps>
+
+## Connection details
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| **Management host** | Hostname only, with no scheme, port, path, or credentials | `acme.splunkcloud.com` |
+| **Management port** | Splunk's management port | `8089` |
+| **Authentication token** | The token you created, issued to the CloudThinker user | — |
+| **TLS certificate** | Whether to verify the certificate Splunk presents | Verify TLS certificate |
+
+<Warning>
+The management port is not the port you browse to: Splunk Web defaults to **8000** and the management port to **8089**. Point this connection at 8000 and Splunk answers with a web page instead of a clean error. Splunk treats both as recommendations, so an instance that found 8089 taken at install time was assigned another.
+</Warning>
+
+<Note>
+A token works only on the instance that issued it, except across the nodes of a search head cluster.
+</Note>
+
+## Required permissions
+
+The token authenticates as the Splunk user it was issued to, so that user's roles decide everything the connection can reach. Issue it to a user created for CloudThinker rather than to a person's account: the scope stays visible in one role, and revoking the token affects nothing else.
+
+| Grant | Why |
+|-------|-----|
+| A role with the **`search`** capability | Splunk defines it as letting the user run a search using SPL. The default `user`, `power`, `admin`, and `sc_admin` roles all carry it |
+| **Only the indexes you want read** | A Splunk role sets which indexes a user can search. This is the control that decides what agents can see |
+
+Start from the narrowest role that carries `search` and widen only if you have to. Connecting also reads your server info, and Splunk publishes no capability requirement for that endpoint, so a narrow role can be refused there even though searching would have worked.
+
+<Warning>
+Splunk's search endpoint runs whatever SPL the token's roles permit, including SPL that writes. CloudThinker refuses those commands before sending them, and refuses SPL it cannot fully inspect, but that refusal lives in CloudThinker. The durable boundary is the role: restrict the token's user to the indexes it should read, and to no capability beyond searching them.
+</Warning>
+
+## Agent capabilities
+
+Once connected, Alex can:
+
+| Capability | Description |
+|------------|-------------|
+| **Deployment overview** | Report the Splunk product, version, and license state, and the roles this connection works under |
+| **Index review** | List indexes with their event counts, and name the ones holding nothing |
+| **Log search** | Run an SPL search over a time window and return a bounded sample of the matches |
+| **Aggregation** | Answer a question about shape with a query such as a count grouped by host or sourcetype |
+| **Saved searches** | List the saved searches this token can see, with their schedules, and flag ones that are disabled but still scheduled, or that notify nothing |
+
+### Verify the connection
+
+```text
+@alex #report summarize my Splunk deployment: product and version, the indexes this connection can read with their event counts, and the roles it is working under
+```
+
+### Example prompts
+
+```text
+@alex search Splunk for 5xx errors from the api service over the last 6 hours
+@alex count Splunk events by sourcetype over the last 24 hours and #report the noisiest ones
+@alex which Splunk saved searches are scheduled but disabled
+```
+
+<Note>
+Searches are bounded so a broad question cannot pull your whole deployment: the window defaults to 24 hours and reaches back at most 90 days, rows are capped, and each search runs under a time budget. Agents report the window and limits they used, and say when a search was cut short rather than presenting a partial result as a total.
+</Note>
+
+## Troubleshooting
+
+<Accordion title="Splunk rejected the token">
+The token value is wrong, or token authentication is off. Check the value, then check **Settings → Tokens** for the disabled message. A rejected token never means the deployment is empty.
+</Accordion>
+
+<Accordion title="The token is valid, but its roles cannot read the server info endpoint">
+The user's roles are too narrow for that endpoint. Issue the token to a user with a search-capable role, and if a role that can already search is still refused, widen it a step at a time. Splunk publishes no capability requirement for this endpoint, so there is no single capability to name.
+</Accordion>
+
+<Accordion title="Nothing answered, or the answer was not Splunk's server info">
+On Splunk Cloud Platform, nothing answering is the expected result before CloudThinker is on the search head API allow list. Add the addresses and allow time to propagate. On Splunk Enterprise, check the host, the port, and any firewall or security group between them. An answer that is not server info usually means the web port on 8000 rather than the management port, or a proxy in front of the deployment. If the host field is rejected outright, it carries a scheme, port, path, or credentials: enter the hostname alone.
+</Accordion>
+
+<Accordion title="The connection stopped working on its own">
+The token expired. Splunk applies your deployment's global default when a token is created without an expiration, 30 days unless an administrator changed it. Create a replacement with an explicit expiration and update the connection. A token also stops working if an administrator disables or deletes it, deletes the user, or turns token authentication off.
+</Accordion>
+
+<Accordion title="A search was refused before it ran">
+The SPL writes or sends data, or it hides SPL that cannot be inspected. CloudThinker refuses commands such as `| delete`, `| outputlookup`, `| collect`, `| script`, and `| sendemail`, and refuses shapes whose real SPL it cannot see, such as a macro, a nested search, or an unterminated quote. Rewriting the query to get around a refusal is not the fix; make the change in Splunk yourself.
+</Accordion>
+
+<Accordion title="Something you expected is missing, or a search returned nothing">
+Check what this token can reach before reading a result as absence. Roles decide which indexes a user can search, so an excluded index never appears at all, and an empty result over an unreachable index is a permission boundary rather than a quiet system. Saved searches carry their own permissions, and Splunk gates seeing every one of them behind a capability it tells you to assign only to privileged roles, so a short list is this token's view. An index that does appear with no events genuinely holds nothing, which says nothing about the system it is named after. A search that times out establishes nothing at all: narrow the query, shorten the window, or group by a more specific field.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- **The role is the real boundary** — restrict the token's user to the indexes it should read. The connection's refusals are a second line, not the first.
+- **Keep certificate verification on** — the token is sent with every request. **Skip TLS verification** exists for a self-hosted instance still on Splunk's default certificate, and it sends that token to whichever server answers.
+- **Set an expiration and rotate it** — Splunk shows a token once, and an expired token takes the connection down with no other warning.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Graylog Connection" icon="/images/icons/graylog.svg" href="/guide/connections/graylog">
+    Read-only log search, cluster and stream inspection, and message count analysis
+  </Card>
+  <Card title="Elasticsearch Connection" icon="/images/icons/elasticsearch.svg" href="/guide/connections/elasticsearch">
+    Log analysis, index management, and search performance optimization
+  </Card>
+</CardGroup>
