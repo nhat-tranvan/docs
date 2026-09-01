@@ -1,138 +1,93 @@
 ---
-title: Clusters & Suppression
-description: "Understand how Pulse groups signals into clusters and cuts noise through seven automatic suppression layers."
+title: "Signal Clusters"
+description: "Understand how Pulse groups related provider events into Signals and moves operational problems through a clear lifecycle."
 icon: layer-group
 ---
 
-Two concepts sit at the heart of what makes Pulse useful: **suppression** (cutting noise before it reaches you) and **clustering** (grouping what remains into single units of action).
+A Cluster groups related surviving raw events into one candidate Signal. It gives operators one place to assess impact, ownership, timing, and whether the problem should become an Incident.
 
----
-
-## Suppression — cutting the noise
-
-Every signal that arrives passes through seven layers before it reaches your feed. If any layer fires, the signal is stored but hidden. It won't create noise, but it's still there if you need to audit it.
-
-<AccordionGroup>
-  <Accordion title="Duplicate" icon="copy">
-    If an identical event already arrived within the last hour, the dedup count on the existing signal is incremented instead of creating a new row. You see one signal marked "×47" rather than 47 separate items. Typically the largest suppression category.
-  </Accordion>
-  <Accordion title="Rate Limited" icon="gauge-high">
-    If a source emits more than 100 signals per minute, signals above that threshold are suppressed for the duration of the burst. Prevents a misconfigured alert from flooding your feed.
-  </Accordion>
-  <Accordion title="Snoozed" icon="clock">
-    Signals matching an active snooze rule are suppressed. This is the only layer you control directly — see [Snooze](#snooze) below.
-  </Accordion>
-  <Accordion title="Noise Signature" icon="waveform">
-    Known-noisy AWS patterns are suppressed automatically — KMS grant lifecycle events, EBS volume churn, AutoScaling internal operations, Signin token redirects. These are AWS bookkeeping events that almost never indicate a real problem.
-  </Accordion>
-  <Accordion title="Flapping" icon="arrows-left-right">
-    If a signal toggles state four or more times within 10 minutes, it is suppressed for 5 minutes. A resource oscillating between healthy and unhealthy collapses into a single notification once state stabilizes.
-  </Accordion>
-  <Accordion title="Cascade" icon="sitemap">
-    When a parent resource is suppressed, signals from its child resources are also suppressed for 30 minutes — so you don't get child alerts for something that's already known noise.
-  </Accordion>
-  <Accordion title="Severity Normalization" icon="arrow-down">
-    AWS automation services sometimes emit events with inflated severity. Pulse detects events from AWS internal actors and downgrades the severity before routing. The original severity is preserved for auditing.
-  </Accordion>
-</AccordionGroup>
-
-<Frame>
-  <img src="/images/pulse/04-pulse-suppression-heatmap.jpg" alt="Suppression by reason chart showing weekly trends for Duplicate, Flapping, Noise Signature, Rate Limited, Severity Normalized, Snoozed, and Cascade layers alongside a conversion rate heatmap" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Suppression breakdown over time — visible in the Analytics tab</p>
-
-To review suppressed signals, enable **Show suppressed** in the filter bar. They appear at reduced opacity with a label showing which layer caught them.
-
-### Snooze
-
-Snooze is the only suppression layer you control. Hover over any signal and click the snooze button. Choose a duration (1 minute to 30 days) and a scope:
-
-| Scope | What it silences |
-|---|---|
-| **Signal** | This exact signal only |
-| **Pattern** | All signals with the same source, type, and title pattern |
-| **Resource** | All signals from this resource ID |
-
-<Tip>
-  Use **Pattern** for recurring maintenance windows. Use **Resource** when decommissioning a resource during teardown.
-</Tip>
-
----
-
-## Clusters — one unit of action
-
-A **cluster** is the primary unit of work in Pulse. Instead of presenting every individual signal separately, Pulse groups related signals — the same EKS node pool firing nine alerts in 15 minutes becomes one cluster. You investigate once, act once, resolve once.
-
-### Status lifecycle
-
-Every cluster moves through four statuses:
-
-<div style={{display: 'flex', justifyContent: 'center'}}>
+## Cluster lifecycle
 
 ```mermaid
 stateDiagram-v2
-    direction LR
-    [*] --> Forming : first signal
-    Forming --> Active : more signals arrive
-    Active --> Routed : Escalate → Incident created
-    Active --> Resolved : Resolve
-    Routed --> Resolved : Incident closed
-    Resolved --> [*]
+    [*] --> Forming
+    Forming --> Active
+    Forming --> Routed
+    Active --> Routed
+    Forming --> Resolved
+    Active --> Resolved
+    Routed --> Resolved
 ```
 
-</div>
-
-| Status | Meaning |
+| State | Meaning |
 |---|---|
-| **Forming** | First signal arrived; collecting related signals |
-| **Active** | Signals continuing to arrive; open and needs attention |
-| **Routed** | Escalated — a linked Incident has been created |
-| **Resolved** | Closed by a user or automatically |
+| Forming | Pulse is collecting related raw events and updating the Cluster. |
+| Active | The Cluster represents a current operational problem. |
+| Routed | The Cluster has an open Incident. New matching Signals still join this Cluster rather than starting a new one. |
+| Resolved | The operational problem is closed. Only this state is terminal. |
 
-Use the **Active / All** toggle in the feed to switch between active clusters only (default) or all statuses.
+A single-signal Cluster can route straight from **Forming**, without waiting for correlation. A critical-severity signal takes this path.
 
-### The cluster detail panel
+Resolving an Incident does not close its Cluster. A later matching Signal opens a successor Incident, and the Cluster follows it.
 
-Click any cluster to open the detail panel.
+The Pulse lanes add an attention view on top of this lifecycle. **Needs you** shows unacknowledged high or critical forming Clusters without an owner. **All** shows Clusters across every visible state.
+
+## Noise suppression
+
+Before a Signal contributes to a Cluster, Pulse applies eight suppression layers:
+
+| Layer | What it prevents |
+|---|---|
+| Deduplication | Exact repeated events inside the deduplication window. |
+| Rate limit | Excessive events from one source or pattern. |
+| Snooze | Signals covered by an active operator snooze. |
+| Verdict | Repeated events that match a stable-noise verdict recorded by Pulse Memory. |
+| Noise signature | Known non-actionable event patterns. |
+| Flapping | Rapid state changes that do not represent separate problems. |
+| Cascade | Downstream symptoms already explained by a parent problem. |
+| Severity normalization | Source-specific severity differences that would distort routing. |
+
+A Cluster the classifier judges non-actionable is also suppressed, and appears as **Not Actionable** in the suppression breakdown.
 
 <Frame>
-  <img src="/images/pulse/02-pulse-cluster-detail.jpg" alt="Cluster detail panel showing EKS node pool cluster with 9 signals correlated via time_window at 85% confidence, signal timeline, resource metadata, and action buttons" />
+  <img src="/images/pulse/04-pulse-suppression-heatmap.jpg" alt="Pulse suppression analysis for operational signals" />
 </Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>AI-generated description, signal timeline, resource details, and actions</p>
+<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Suppression analysis helps identify which sources create the most avoidable noise.</p>
 
-The panel shows:
+## Review a Cluster
 
-- **AI-generated description** — plain-English summary of what happened and likely impact
-- **Cluster context** — all member signals listed chronologically
-- **Correlation info** — technique used (e.g. `time_window`) and confidence score
-- **Resource metadata** — id, type, region, tags of the selected signal
-- **Tabs** — Overview for signal detail, Routing for escalation history, Raw for the full event payload
+Open a Cluster to inspect its event history, severity, source, timestamps, and routing state.
 
-### Actions
+<Frame>
+  <img src="/images/pulse/02-pulse-cluster-detail.jpg" alt="Pulse Cluster detail with related operational signals" />
+</Frame>
+<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Cluster detail keeps the evidence for one operational problem together.</p>
 
-| Action | What it does |
+Use the available actions to move the work forward:
+
+| Action | Result |
 |---|---|
-| **Acknowledge** | Mark as seen without closing. Signals the cluster is on your radar. Reversible. |
-| **Assign** | Hand to a team member. They're notified and their avatar appears in the feed. |
-| **Escalate** | Create a linked Incident. Cluster moves to Routed and RCA begins automatically — the cluster summary and all member signals are passed to the RCA agent as starting context, so investigation begins with full signal history already loaded. |
-| **Resolve** | Close the cluster when the issue is addressed and no Incident is needed. |
+| Acknowledge | Mark the Cluster as seen. |
+| Assign | Give the Cluster an owner. |
+| Escalate | Route the problem into an Incident. |
+| Resolve | Close the Cluster. |
+| Snooze | Temporarily suppress matching Signals. |
 
-### Automatic escalation
-
-Pulse auto-escalates clusters where any signal has **Critical** or **High** severity, or where the AI marks the signal **actionable**. These go directly to Routed and trigger root cause analysis — no manual escalation needed.
-
----
+When you snooze a Cluster, choose the duration. Pulse uses resource scope when the Signal has a resource ID; otherwise it uses the source and event-type pattern.
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Pulse analytics" icon="chart-bar" href="/guide/pulse/analytics">
-    Measure signal volume, noise reduction, cluster resolution time, and source conversion rates.
+  <Card title="Connect Pulse sources" icon="plug" href="/guide/pulse/setup">
+    Add webhook, polling, or chat signal paths.
   </Card>
-  <Card title="Pulse setup" icon="bolt" href="/guide/pulse/setup">
-    Connect monitoring sources and configure detection rules for your workspace.
+  <Card title="Analyze Pulse" icon="chart-line" href="/guide/pulse/analytics">
+    Review correlation yield, suppression, volume, and Cluster MTTR.
   </Card>
-  <Card title="Root cause analysis" icon="magnifying-glass" href="/guide/incident/root-cause-analysis">
-    Understand how AI agents investigate escalated clusters and build evidence chains.
+  <Card title="Investigate incidents" icon="magnifying-glass" href="/guide/incident/root-cause-analysis">
+    Follow a routed Cluster into RCA.
+  </Card>
+  <Card title="Tune DRE behavior" icon="sliders" href="/guide/incident/settings">
+    Control automatic RCA and re-investigation sensitivity.
   </Card>
 </CardGroup>

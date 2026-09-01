@@ -1,0 +1,249 @@
+---
+title: InfluxDB
+description: "Connect InfluxDB to CloudThinker for bucket and database inventory, retention review, and bounded time-series queries on both InfluxDB 2 and InfluxDB 3"
+icon: "/images/icons/influxdb.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+
+Connect your InfluxDB instance to let [Tony](/guide/agents/tony) (Database Engineer) list what your instance stores, show how long each container keeps its data, and answer questions by querying the data itself.
+
+InfluxDB authenticates with a single **API token**. Reads need nothing else. Changing retention or creating and deleting a container is possible, but only after you turn it on and approve each change. **Your stored data points are never writable through this connection.**
+
+## Supported platforms
+
+| Platform | Supported | Notes |
+|----------|-----------|-------|
+| **InfluxDB OSS 2.x** | Yes | Self-hosted. Buckets, organizations, and Flux |
+| **InfluxDB Cloud 2** | Yes | Same as OSS 2.x, hosted by InfluxData |
+| **InfluxDB 3 Core** | Yes | Databases, no organizations, and SQL |
+| **InfluxDB 3 Enterprise** | Yes | Same as Core, and it can issue a read-only token |
+| **InfluxDB 1.x** | No | Predates the token API this connection uses |
+| **InfluxDB Cloud Dedicated** | No | Its management API is a separate product |
+
+<Note>
+You do not tell CloudThinker which one you run. The connection asks the instance when you connect, and the **Connected** message names what it found. That answer decides everything afterwards, because InfluxDB 2 and InfluxDB 3 are different products: InfluxDB 2 keeps **buckets** inside an **organization** and queries in **Flux**, while InfluxDB 3 keeps **databases**, has no organizations, and queries in **SQL**.
+</Note>
+
+## Prerequisites
+
+- An **InfluxDB instance** reachable from CloudThinker over its **HTTP API**. Self-hosted InfluxDB 2 usually answers on `8086`, InfluxDB 3 Core on `8181`, and InfluxDB Cloud 2 on a URL like `https://us-east-1-1.aws.cloud2.influxdata.com`.
+- An **API token** with read access to the buckets or databases you want the agent to see.
+- On **InfluxDB 2 only**: the name of the **organization**, if this token reaches more than one.
+
+<Info>
+Create a token for CloudThinker rather than reusing one. A token is the whole credential here, so a dedicated one keeps the access visible in the InfluxDB token list and revocable on its own.
+</Info>
+
+## Setup
+
+<Tabs>
+  <Tab title="InfluxDB 2">
+    <Steps>
+      <Step title="Create a read token">
+        In the InfluxDB UI, open **Load Data → API Tokens**, then click **Generate** and choose **Read/Write API Token**.
+
+        Give it a description you will recognize, then select the buckets you want CloudThinker to read in the **Read** pane. Leave the **Write** pane empty. See the [InfluxDB 2 token guide](https://docs.influxdata.com/influxdb/v2/admin/tokens/create-token/) for the provider steps.
+
+        Grant write access to bucket resources only if you plan to let the agent change retention or create and delete buckets.
+      </Step>
+      <Step title="Copy the token">
+        InfluxDB shows the token value **once, immediately after it is created**. Copy it now. If you lose it, create another one; the value cannot be shown again.
+      </Step>
+      <Step title="Add the connection in CloudThinker">
+        Go to **Connections → InfluxDB** and enter:
+        - **Base URL**: scheme, host, and port, such as `https://influx.example.com:8086`
+        - **API token**: the token you just copied
+        - **Organization**: your organization name, but only if this token reaches more than one. Leave it blank otherwise.
+
+        Click **Connect**.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="InfluxDB 3">
+    <Steps>
+      <Step title="Create a token">
+        On **InfluxDB 3 Core**, create an admin token with the `influxdb3` CLI:
+        ```bash
+        influxdb3 create token --admin --name cloudthinker
+        ```
+        Core issues admin tokens only, so this token has full permissions on the server. Read [Security](#security) before you use one. See the [InfluxDB 3 Core token guide](https://docs.influxdata.com/influxdb3/core/admin/tokens/admin/create/) for other creation methods.
+
+        On **InfluxDB 3 Enterprise**, create a resource token scoped to read the databases you want instead, which is the narrower option and the one to prefer.
+      </Step>
+      <Step title="Copy the token">
+        The token value is returned once, in the command output. Copy it now.
+      </Step>
+      <Step title="Add the connection in CloudThinker">
+        Go to **Connections → InfluxDB** and enter:
+        - **Base URL**: scheme, host, and port, such as `https://influx.example.com:8181`
+        - **API token**: the token you just created
+        - **Organization**: leave blank. InfluxDB 3 has no organizations and ignores this field.
+
+        Click **Connect**.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+<Warning>
+Enter the **Base URL only**: scheme, host, port, and an optional reverse-proxy prefix such as `/influx`. Do not paste an API endpoint, query string, fragment, username, or password. Anything you put in the URL is carried into every request the connection makes.
+</Warning>
+
+<Note>
+Use `https` for a public or remote endpoint because the token is sent on every request. Plain `http` is supported for a local instance or a trusted private network.
+</Note>
+
+## Connection details
+
+| Field | Description | Required |
+|-------|-------------|----------|
+| **Base URL** | Scheme, host, port, and optional reverse-proxy prefix; no API endpoint, query string, fragment, or embedded credentials | Yes |
+| **API token** | An InfluxDB API token with read access to the buckets or databases you want seen | Yes |
+| **Organization** | InfluxDB 2 only, and only when the token reaches more than one organization | No |
+
+<Tip>
+When you connect, CloudThinker asks the instance which generation it is, then reads one container to prove the token works. The **Connected** message names what it found, such as `InfluxDB 2 connection verified (v2.7.12)`. A failure comes back as one specific reason — see [Troubleshooting](#troubleshooting).
+</Tip>
+
+## Required permissions
+
+The token needs **read** access to the containers you want inspected, and nothing more:
+
+| Generation | Minimum | How to grant it |
+|------------|---------|-----------------|
+| **InfluxDB 2** | Read on the buckets you want seen | A Read/Write API Token with buckets selected in the **Read** pane only |
+| **InfluxDB 3 Enterprise** | Read on the databases you want seen | A resource token scoped to those databases |
+| **InfluxDB 3 Core** | Not available | Core issues admin tokens only |
+
+Write access is needed **only** if you also turn the write tool on, and then only to change retention and to create or delete a container. It is never needed to read.
+
+<Warning>
+**InfluxDB 3 Core cannot issue a narrow token.** Fine-grained tokens are an Enterprise feature, so any token a Core instance gives you has full admin permissions on that server. The connection itself still only reads unless you turn the write tool on, but the token is broader than the connection. Weigh that before connecting a Core instance you care about, and prefer Enterprise or InfluxDB 2 where a scoped token is possible.
+</Warning>
+
+## Agent capabilities
+
+Once connected, Tony can read what your instance holds.
+
+| Capability | Description |
+|------------|-------------|
+| **Container inventory** | List the buckets or databases on the instance, with the retention set on each |
+| **Retention review** | Name every container that keeps its data forever, which is the usual reason this connection is added |
+| **One named container** | Confirm a single bucket or database by name, including one the inventory did not reach |
+| **Bounded queries** | Answer a question from the data itself, in Flux on InfluxDB 2 and SQL on InfluxDB 3 |
+
+### Verify the connection
+
+```text
+@tony list the InfluxDB buckets or databases and the retention on each
+```
+
+### Example prompts
+
+```text
+@tony #report which InfluxDB containers keep their data forever and explain the resulting storage exposure
+@tony #report count the points written to the telemetry bucket in the last 24 hours
+@tony #recommend a retention policy for our highest-volume container
+```
+
+<Note>
+Answers are bounded so a broad question cannot pull the whole instance: the inventory reads at most **25** containers, and a query returns at most **50** rows by default within a **60 second** budget. When a result is cut short the agent says so, and a row sample is never reported as a total. Name the container you care about, or ask for a count in the query itself, to get an exact answer.
+</Note>
+
+<Warning>
+A retention the token cannot read is reported as **unreadable**, which is not the same as forever. It means the exposure was not measured. The two are never merged into one count.
+</Warning>
+
+## Write access
+
+The connection ships with writes turned **off**, and there are two separate barriers before anything changes.
+
+| Barrier | What it means |
+|---------|---------------|
+| **The write tool is off by default** | A workspace owner turns it on. Until then, every change is refused |
+| **Every change asks you first** | Even with the tool on, the agent states the exact container and the exact change and waits for your approval. Reads never ask |
+
+What a change can and cannot touch:
+
+| Action | Allowed |
+|--------|---------|
+| Change a container's retention | Yes, after approval |
+| Create a bucket or database | Yes, after approval |
+| Delete a bucket or database | Yes, after approval |
+| Write, edit, or delete stored data points | **Never.** The connection has no path to it at all |
+
+Three things to weigh before turning it on:
+
+- **Shortening retention deletes data immediately.** Setting a finite retention on a container that kept everything expires every point already older than the new window, with no copy kept. This is the most destructive thing the connection can do, and it does not look destructive.
+- **Deleting works differently on each generation.** InfluxDB 2 removes the bucket and all of its data at once, with no undo. InfluxDB 3 soft-deletes: it renames the database with a timestamp suffix, keeps it listed as deleted, and hard-deletes it later — so your storage is **not** freed when the agent reports success.
+- **The token is still the real limit.** Turning the tool on does not grant a permission your token does not already have. A read-only token stays read-only no matter what is switched on in CloudThinker.
+
+## Troubleshooting
+
+<Accordion title="InfluxDB rejected this API token">
+The token was revoked, or it belongs to a different instance. Create a new token and reconnect. InfluxDB shows a token's value only when it is created, so an incompletely copied token fails the same way.
+</Accordion>
+
+<Accordion title="InfluxDB accepted the token but it has no read permission">
+The token is valid but its permissions do not cover the buckets or databases. Widen its read scope in InfluxDB, or create a token that includes them, then test the connection again.
+</Accordion>
+
+<Accordion title="This URL answered, but not on the InfluxDB API path">
+Something answered, but it was not the InfluxDB API. Check that the **Base URL** points at the InfluxDB HTTP port — usually `8086` on InfluxDB 2 and `8181` on InfluxDB 3 Core — and that any path you added is the proxy prefix and nothing more.
+</Accordion>
+
+<Accordion title="It did not identify itself as InfluxDB 2 or InfluxDB 3">
+The URL reaches something that is not an InfluxDB HTTP port, or it reaches an InfluxDB 1.x instance. This connection does not support 1.x, and it does not support the InfluxDB Cloud Dedicated management API. Confirm the port before reconnecting.
+</Accordion>
+
+<Accordion title="Nothing answered at this URL">
+No response at all. Check the host and port, that the instance is running, and that it is reachable from CloudThinker rather than only from inside your network.
+</Accordion>
+
+<Accordion title="The listing endpoint did not answer with the expected shape">
+The token worked and the instance identified itself, but the response was not what the InfluxDB API returns. This is almost always a proxy in front of the instance rewriting API responses. Point the **Base URL** at the instance directly.
+</Accordion>
+
+<Accordion title="A redirect was refused">
+Something in front of the instance is steering the API call to another host. CloudThinker never follows it, because that would send your token somewhere you did not name. Point the connection at the host that serves InfluxDB itself.
+</Accordion>
+
+<Accordion title="An agent says the token reaches several organizations">
+On InfluxDB 2, a token that reaches more than one organization leaves no bucket or query unambiguously scoped. Reconnect and set the **Organization** field to the one you want.
+</Accordion>
+
+<Accordion title="An agent refuses to run a query">
+Some statements are refused because they would stop being reads. On InfluxDB 2 the InfluxDB server itself evaluates Flux, so a statement that writes points or opens an outbound connection from the server is blocked. On InfluxDB 3, a SQL statement that starts with `INSERT`, `UPDATE`, `DELETE`, `DROP`, `CREATE`, `ALTER`, `TRUNCATE`, `GRANT`, `REVOKE`, or `COPY` is blocked. The refusal names what was blocked, and nothing was sent to your instance. Rewrite the question as a read.
+</Accordion>
+
+<Accordion title="An agent reports fewer containers than the InfluxDB UI shows">
+Either the token cannot see the rest, or the inventory stopped at its limit of 25. Check the token's read scope first, then ask about the specific bucket or database by name, which is looked up directly.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- **The token is the whole credential** — there is no second factor and no separate username, so scope it to the containers you want seen and nothing else.
+- **Stored data points are unreachable** — the connection ships no path to write or delete a point, so no permission you grant and no switch you turn on makes your time-series data writable through CloudThinker.
+- **Writes are off, then gated** — the write tool is off until a workspace owner turns it on, and every change still asks you first. Reads never ask.
+- **Redirects are never followed** — the token goes to the host you configured, or nowhere.
+- **Prefer a scoped token** — InfluxDB 2 and InfluxDB 3 Enterprise can both issue one. InfluxDB 3 Core cannot, so treat a Core token as an admin credential.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Prometheus Connection" icon="/images/icons/prometheus.svg" href="/guide/connections/prometheus">
+    Metric queries, alert rules, and target health
+  </Card>
+  <Card title="ClickHouse Connection" icon="/images/icons/clickhouse.svg" href="/guide/connections/clickhouse">
+    Schema inspection and analytical query investigation
+  </Card>
+  <Card title="Grafana Connection" icon="/images/icons/grafana.svg" href="/guide/connections/grafana">
+    Dashboards, panels, and data source inventory
+  </Card>
+  <Card title="Tony Agent" icon="database" href="/guide/agents/tony">
+    Database-focused engineering agent
+  </Card>
+</CardGroup>

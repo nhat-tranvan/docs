@@ -1,0 +1,226 @@
+---
+title: Rancher
+description: "Connect Rancher to CloudThinker for read-only cluster and project inventory, cluster and node health, and a review of who has access"
+icon: "/images/icons/rancher.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+
+Connect your Rancher server to let [Kai](/guide/agents/kai) (Kubernetes) list the clusters, projects, and nodes Rancher manages, check the health conditions of one cluster and the readiness of its nodes, and review who holds Rancher access to a cluster or a project.
+
+Rancher authenticates with an **API key bearer token**. The connection is **read-only** and deliberately narrow: agents can describe what Rancher manages and can change none of it.
+
+---
+
+## Prerequisites
+
+- A **Rancher server** on **2.8 or later**, reachable from CloudThinker over **HTTPS**. 2.8 is the first release to support the Rancher Kubernetes API, which is the only thing this connection reads.
+- A **dedicated Rancher user** for CloudThinker with read access to the clusters and projects you want inspected — see [Required permissions](#required-permissions).
+- A **Rancher API key** for that user.
+- Optional: a **PEM certificate bundle** if your Rancher certificate is issued by a private CA.
+
+<Info>
+Create a dedicated Rancher user rather than reusing a person's account. The token inherits that user's access, so a dedicated reader keeps the scope visible and revocable in one place.
+</Info>
+
+---
+
+## Setup
+
+<Steps>
+  <Step title="Create a read-only Rancher user">
+    Add a user for CloudThinker and give it read access to the clusters and projects it should see. Rancher's built-in **Cluster Member** role lets a user view most cluster-level resources, and the **Read Only** project role lets a user view everything in a project without creating, updating, or deleting anything. For a tighter scope, build a custom role — see [Required permissions](#required-permissions).
+  </Step>
+  <Step title="Create an API key">
+    Sign in as that user, open the **user avatar → Account & API Keys** in the upper right, and click **Create API Key**.
+
+    Set an **Expiry**. Rancher caps it at the server's `auth-token-max-ttl-minutes` setting and silently uses that cap when you ask for longer.
+
+    Leave **Scope** as **No Scope**. A scoped key works only against the Kubernetes API of the cluster you scope it to, not against the Rancher API this connection reads. Narrow the access through the user's roles instead, not through the key.
+
+    Copy the **Bearer Token**. Rancher shows it once, along with the Access Key and Secret Key.
+  </Step>
+  <Step title="Add the connection in CloudThinker">
+    Navigate to **Connections → Rancher** and enter:
+    - **Rancher URL**: the address you sign in to, such as `https://rancher.example.com`
+    - **API token**: the Bearer Token you just copied
+    - **CA certificate bundle**: leave blank unless Rancher uses a private CA
+
+    Click **Connect**. CloudThinker reads a single cluster from Rancher to verify the token, and the status turns **Connected**.
+  </Step>
+</Steps>
+
+<Warning>
+Enter the **Rancher address only** — the same one you sign in to, such as `https://rancher.example.com`. Do not append an API path, a query string, a fragment, or a username and password. CloudThinker adds the API path itself and rejects a URL that carries anything else.
+</Warning>
+
+<Warning>
+A Rancher API key stops working at its expiry, and the connection then fails with a rejected-token error. Set an expiry that matches your rotation schedule and update the connection with a new token before the old one lapses.
+</Warning>
+
+---
+
+## Connection details
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| **Rancher URL** | The address you sign in to, with no API path, query, fragment, or credentials | `https://rancher.example.com` |
+| **API token** | The Bearer Token from the API key you created | — |
+| **CA certificate bundle** | Optional. The PEM certificates of a private certificate authority | — |
+
+<Note>
+The Rancher URL must use `https`. The token is sent with every request, so plain `http` is rejected.
+</Note>
+
+<Warning>
+**TLS verification cannot be turned off.** There is no skip-verification option, because the token is sent to whichever server answers. If Rancher uses a private CA, paste that CA's certificates into **CA certificate bundle** instead. The field accepts PEM certificates only — it must begin with `-----BEGIN CERTIFICATE-----` and end with `-----END CERTIFICATE-----`, stay under 256 KB, and contain no private key.
+</Warning>
+
+---
+
+## Required permissions
+
+The token needs **read** access to the Rancher management resources the connection inspects:
+
+| Resource | Used for |
+|----------|----------|
+| **Clusters** | Managed-cluster inventory and health conditions |
+| **Nodes** | Node readiness for one cluster |
+| **Projects** | Project inventory and which cluster each belongs to |
+| **Cluster and project role bindings** | Who holds Rancher access to a cluster or a project |
+
+Start from a built-in role and narrow it:
+
+| Role | What it gives |
+|------|---------------|
+| **Cluster Member** | Views most cluster-level resources and can create new projects |
+| **Read Only** (project) | Views everything in a project, and cannot create, update, or delete |
+| **Custom role** | Grants only the reads above, when Cluster Member is wider than you want |
+
+<Tip>
+No Rancher permission beyond read is ever needed. There is no Rancher action an agent can ask you to approve, because there is no Rancher action it can take at all — granting write access only widens what a leaked token could do.
+</Tip>
+
+---
+
+## What this connection cannot reach
+
+The connection can only ask Rancher to read, and only from the small set of management resources listed above. Everything below stays out of reach even when the token itself is allowed to read it:
+
+- **Secrets** and **kubeconfigs**
+- **API tokens** and **cluster registration tokens**
+- **Cloud credentials** and **authentication settings**
+- **Global settings**
+- **Every change to Rancher** — creating, updating, deleting, or scaling anything
+- The **older Rancher v3 API**, which the connection never calls
+
+<Note>
+Ask an agent to change something in Rancher and it will tell you the connection cannot do it, and that nothing changed. It will not try another route.
+</Note>
+
+---
+
+## Agent capabilities
+
+Once connected, agents can read what Rancher knows about your clusters.
+
+| Capability | Description |
+|------------|-------------|
+| **Cluster inventory** | List the clusters Rancher manages, the projects on them, and their nodes |
+| **Cluster health** | Report the current conditions of one named cluster and the readiness of its nodes |
+| **Who has access** | Show which users, groups, and service accounts are granted a role on one cluster or project, and which role |
+| **Project scope** | Show which cluster a project belongs to |
+
+### Verify the connection
+
+```text
+@kai summarize the clusters Rancher manages, their projects, and node health
+```
+
+### Example prompts
+
+```text
+@kai check the health conditions and node readiness of the prod-sea cluster in Rancher and #report
+@kai show who has Rancher access to the prod-sea cluster and #recommend anything to tighten
+@kai list the Rancher projects on staging-cluster and which nodes are not ready
+```
+
+<Note>
+Answers are bounded so a broad question cannot pull everything Rancher manages: each lookup returns one page of at most **50** results. When Rancher does not report a total, agents say "returned 12" rather than "12 exist" — a full page is not proof that you have seen everything. Name the cluster or project you care about to get an exact answer.
+</Note>
+
+<Note>
+Each message gets **one** look at Rancher. Ask two Rancher questions at once and the agent answers the second from what the first returned, rather than fetching again. Send a follow-up message when you want fresh data.
+</Note>
+
+<Warning>
+Agents read the roles granted **in Rancher** only. They do not inspect the RBAC rules inside the Kubernetes cluster itself, so they cannot tell you what a user can do once they are in. Use the [Kubernetes connection](/guide/connections/kubernetes) for that.
+</Warning>
+
+---
+
+## Troubleshooting
+
+<Accordion title="Rancher rejected the API token">
+The key expired, was deleted, or was copied incompletely. Rancher shows the Bearer Token only once, so create a new key under **Account & API Keys** and update the connection.
+</Accordion>
+
+<Accordion title="The token lacks read access to managed clusters">
+The token authenticated, but its Rancher user cannot read the clusters. Give that user the required read-only role on the clusters you want inspected, then test the connection again.
+</Accordion>
+
+<Accordion title="The Rancher server did not expose the management.cattle.io RK-API">
+The URL points somewhere other than Rancher, or this Rancher is older than 2.8, the first release to support the Rancher Kubernetes API. Reconnect with the Rancher address only, such as `https://rancher.example.com`, and check your Rancher version.
+</Accordion>
+
+<Accordion title="Rancher applied a rate limit">
+Rancher, or a proxy or load balancer in front of it, returned HTTP 429. Wait, then ask one narrow question rather than several broad ones.
+</Accordion>
+
+<Accordion title="Could not reach the Rancher server">
+Nothing answered at that URL. Check the host, the network path from CloudThinker, and — if Rancher uses a private CA — that the CA certificate bundle is the one that issued its certificate.
+</Accordion>
+
+<Accordion title="A redirect was refused">
+The address you entered does not answer directly; something in front of it redirects elsewhere. CloudThinker never follows a redirect, because that would hand your token to a server you did not name. Point the connection at the address that serves Rancher itself.
+</Accordion>
+
+<Accordion title="Rancher URL must use HTTPS">
+The address is plain `http`, which would send the token in clear text. Serve Rancher over HTTPS and reconnect.
+</Accordion>
+
+<Accordion title="Invalid Rancher CA certificate bundle">
+The bundle is not plain PEM certificates. It must begin with `-----BEGIN CERTIFICATE-----`, end with `-----END CERTIFICATE-----`, stay under 256 KB, and contain no private key. Paste the CA certificate chain only, never a server key.
+</Accordion>
+
+<Accordion title="Invalid Rancher connection configuration">
+The API token is empty, or it carries whitespace or quoting that cannot be sent safely in a request header. Re-copy the Bearer Token from Rancher without surrounding quotes or line breaks.
+</Accordion>
+
+<Accordion title="An agent reports fewer clusters than Rancher shows">
+Either the token's user cannot see the rest, or the answer came from a single page of results. Check the user's cluster access first, then narrow the question to the cluster or project you care about.
+</Accordion>
+
+---
+
+## Security
+
+<ConnectionSecurity />
+
+- **TLS verification is always on** — it cannot be disabled, so a private CA needs its bundle pasted in rather than a skipped check.
+- **Narrow through roles, not the key** — a Rancher API key has no read-only setting, so what the token can see is exactly what its user can see. Give that user the least access it needs.
+- **Watch the expiry** — a key that lapses silently breaks the connection; rotate it on schedule and update the connection with the new token.
+- **Read-only by construction** — the connection can only ask Rancher to read, so no permission you grant turns it into a way to change anything.
+
+---
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Kubernetes Connection" icon="/images/icons/kubernetes.svg" href="/guide/connections/kubernetes">
+    Workload analysis, resource optimization, and cluster operations
+  </Card>
+  <Card title="Kai Agent" icon="dharmachakra" href="/guide/agents/kai">
+    Kubernetes-focused operations agent
+  </Card>
+</CardGroup>
