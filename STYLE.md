@@ -2,12 +2,12 @@
 
 The rulebook for every page in this repo. Rewrite agents and human contributors follow it mechanically. Golden exemplars: `quickstart.mdx` (task/tutorial register), `guide/auto-mode.mdx` (concept), `guide/connections/coralogix.mdx` (connection), `guide/code-review/setup.mdx` (multi-procedure task page).
 
-Source-of-truth hierarchy for facts: **app UI (screenshots in repo) → confirmed product facts (below) → CLAUDE.md canonical naming → app-adjacent reference pages → everything else.** Marketing copy is never a source of facts.
+Source-of-truth hierarchy for facts: **current app UI → confirmed product facts (below) → CLAUDE.md canonical naming → current screenshots in repo → app-adjacent reference pages → everything else.** Marketing copy is never a source of facts.
 
 ## Confirmed product facts (override any conflicting page text)
 
 1. **Autonomy has exactly two modes: Manual / Auto.** Any 3-level (Suggest/Approve/Autonomous) or 4-level (notify→suggest→approve→autonomous) model is wrong — remove on sight. Use `/snippets/autonomy-modes.mdx`.
-2. **Finding statuses: New / Acknowledged / Active / Resolved / Dismissed.** Use `/snippets/finding-statuses.mdx`. (Recommendation lifecycle is a separate object — never conflate.)
+2. **General finding statuses: New / Acknowledged / Active / Resolved / Dismissed.** Use `/snippets/finding-statuses.mdx`. **Optimize Findings** instead uses Pending / In Progress / Implemented / Ignored because those rows follow the recommendation workflow. Never conflate the two.
 3. **Prompt syntax: `@agent #tool instruction`** — tool tag immediately after the mention, instruction after.
 4. **Code-review bot mention: `@cloudthinker-ai`.** The skip-review token is unconfirmed — link to `/guide/code-review/mention-commands` instead of restating it.
 
@@ -16,8 +16,7 @@ Source-of-truth hierarchy for facts: **app UI (screenshots in repo) → confirme
 | Canonical | Banned |
 |---|---|
 | Autonomous Cloud Operations / AgenticOps (category) | "Multi-Agent System (MAS) orchestration", "AI DevOps platform" |
-| Modules: Code Review · Deep Response Engine · CostOps · SecOps · ChatOps · Skills | "Cost Optimization" as product name (lowercase activity is fine) |
-| CloudKeepers (feature, first mention per page); **Keepers** in UI references; keeper (lowercase, one monitor) | "pilots", "CloudKeeper" |
+| Modules: Optimize · Review · Cyber · Resolve | `CostOps`, `Code Review`, `SecOps`, `App Pentesting`, `AppSec`, `Deep Response Engine`, `DRE`, Stack, or Infrastructure as product names |
 | Manual / Auto (autonomy modes) | any 3- or 4-level autonomy model |
 | `@agent #tool instruction` | `@agent [instruction] [#tool] [context]` |
 | Tool tags: `#dashboard` `#report` `#recommend` `#alert` `#chart` `#kb` | inventing tags in examples |
@@ -40,7 +39,7 @@ Source-of-truth hierarchy for facts: **app UI (screenshots in repo) → confirme
    - `Accordion` only for Troubleshooting, FAQ, optional deep detail. Primary content in an Accordion is a defect.
    - `Card` must have `href` — a Card without a link becomes bullets or a table.
    - `CardGroup` max 1 per page (the closing block); exceptions: `index.mdx` (3), module overviews (closing + none elsewhere).
-   - `Frame`: every UI procedure keeps at least one screenshot; **never delete an image reference during a rewrite**.
+   - `Frame`: keep at least one screenshot per UI procedure when a current screenshot exists. Remove a screenshot that contradicts the current UI or canonical product name when no current replacement exists.
    - Callouts max 1 per section, 4 per page (Troubleshooting excluded). `Warning` only for data-loss/lockout/cost risk.
 6. **Code blocks**: prompts fenced ` ```text `, shell ` ```bash `, JSON ` ```json `. Prompt caps: 5 blocks per reference page, 4 per scenario, 2 per connection page, ≤3 prompts per block. Every prompt names a real agent + real tool tag + verifiable output.
 7. **Frontmatter**: `title` unique site-wide; `description` verb-first, 50–150 chars, states what the reader accomplishes, never restates the title.
@@ -50,7 +49,7 @@ Source-of-truth hierarchy for facts: **app UI (screenshots in repo) → confirme
 
 ## Page templates (hard body-word budgets; split the page rather than exceed 1.5×)
 
-**(a) Site landing** (`index.mdx`, 700w): intro (1 sentence, canonical category) → `## Start here` (CardGroup, 3 cards) → `## Choose your goal` (CardGroup 4–6) → `## How CloudThinker works` (THE agentic-loop home, ~120w + diagram) → `## The six modules` (CardGroup 6) → `## Why CloudThinker` (1 paragraph ≤120w).
+**(a) Site landing** (`index.mdx`, 700w): intro (1 sentence, canonical category) → `## Start here` (CardGroup, 3 cards) → `## Choose your goal` (CardGroup 4–6) → `## How CloudThinker works` (THE agentic-loop home, ~120w + diagram) → `## The four modules` (CardGroup 4) → `## Why CloudThinker` (1 paragraph ≤120w).
 
 **(b) Module overview** (400–800w): intro ≤2 sentences → optional ≤80w "why" paragraph → `## How it works` (3–5 stages, ordered list/table + 1 Frame — NOT Steps) → `## What you can do` (table: capability | description | link) → optional `## Key concepts` (table) → `## Get started` (CardGroup 2–4).
 
@@ -75,21 +74,21 @@ Source-of-truth hierarchy for facts: **app UI (screenshots in repo) → confirme
 | `/snippets/finding-statuses.mdx` | cloudkeepers, recommendations | contradicting status sets |
 | `/snippets/connection-security.mdx` | all connection pages | per-page security boilerplate |
 
-Import syntax: `import Snippet from '/snippets/name.mdx';` then `<Snippet />`. Rule: identical wording needed in 3+ pages and context-free → snippet; otherwise canonical page + link. Canonical single homes: agentic loop → index; syntax reference → `/guide/language`; skill file example → `/guide/skills/skill-format`; recommendation lifecycle → `/guide/infrastructure/cloudkeepers`.
+Import syntax: `import Snippet from '/snippets/name.mdx';` then `<Snippet />`. Rule: identical wording needed in 3+ pages and context-free → snippet; otherwise canonical page + link. Canonical single homes: agentic loop → index; syntax reference → `/guide/language`; skill file example → `/guide/skills/skill-format`; Optimize finding lifecycle → `/guide/cost-optimization/recommendations`.
 
 ## Rewrite algorithm (per page)
 
 1. Read old page + matching template + this file. Classify: reader *does* → task; reader *learns behavior* → concept; reader *looks up* → reference.
-2. Preserve exactly: verified facts (UI paths, field names, scopes, defaults, limits), all image paths + alt text, valid internal links, frontmatter `icon`, the file slug.
+2. Preserve exactly: verified facts (UI paths, field names, scopes, defaults, limits), current image paths + alt text, valid internal links, frontmatter `icon`, the file slug.
 3. Drop: competitor tables, "The Problem" sections, stats, href-less Cards, Accordion-hidden primary content (promote to H2), invented scenarios beyond caps, restatements of other pages (link instead), the losing side of any contradiction (per Confirmed facts; keep the screenshot-backed version).
 4. Write top-to-bottom against the template; grep your draft for every banned term before finishing.
 5. Frontmatter last: unique title, verb-first description.
 
 ## Verifier checklist (mechanical)
 
-- Banned strings: `How Existing Tools Compare`, `Suggest / Approve / Autonomous`, `notify → suggest`, `pilots`, `4.4M`, `96%`, `## **`, `democratiz`, bot `@cloudthinker ` (with space), `Pending / In Progress / Implemented` on finding pages.
+- Banned strings: `How Existing Tools Compare`, `Suggest / Approve / Autonomous`, `notify → suggest`, `pilots`, `4.4M`, `96%`, `## **`, `democratiz`, bot `@cloudthinker ` (with space).
 - Frontmatter titles unique (`grep '^title:' -r | sort | uniq -d`), descriptions 50–150 chars ≠ title.
 - No `<Card ` without `href=`; ≤1 `<CardGroup` outside index/overviews; final H2 is `Next steps` or `Related`.
 - ≤2 sentences before first `##`; sentence-case headings; prompt blocks ` ```text ` and within caps.
-- Every `/images/` path in the old page still present in the new one.
+- Every retained `/images/` path resolves, and no retained screenshot contradicts the current UI or canonical product names.
 - `mintlify broken-links` passes.
