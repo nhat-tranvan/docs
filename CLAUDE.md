@@ -9,7 +9,7 @@ This is a **Mintlify-based documentation site** for CloudThinker, an **autonomou
 **Canonical naming** (keep docs consistent with the app and landing page; the in-product values in the app are the source of truth when sources disagree):
 
 - **Category**: "Autonomous Cloud Operations" / "AgenticOps" — not "Multi-Agent System (MAS) orchestration".
-- **Module names**: Code Review · Deep Response Engine · CostOps (not "Cost Optimization" as a product name — lowercase "cost optimization" is fine for the activity) · SecOps · ChatOps · Skills. CloudKeepers is shown as "Keepers" in the app sidebar.
+- **Module names**: Optimize · Review · Cyber · Resolve. These replace `CostOps`, `Code Review`, `SecOps`/`App Pentesting`, and `Deep Response Engine`/`DRE` in user-facing copy. Keep the existing route paths and code identifiers. The learned-rule surface is **Learnings**, not `Convention Rules`.
 
 ## Development Commands
 
