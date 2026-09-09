@@ -1,0 +1,128 @@
+---
+title: CLI Authentication
+description: "브라우저로 CloudThinker CLI에 로그인하고, 워크스페이스를 전환하며, 스크립트에 전용 자격 증명을 전달하세요"
+icon: key
+---
+
+CLI는 브라우저로 로그인하고 워크스페이스마다 자격 증명을 하나씩 저장합니다. API 키를 붙여 넣는 단계는 없습니다.
+
+## 로그인 동작 방식
+
+`cloudthinker login`은 브라우저에서 동의 페이지를 열고, 루프백 콜백으로 승인이 돌아오기를 기다립니다. CLI는 항상 URL을 먼저 출력하므로, 브라우저를 열 수 없는 터미널에서도 다음 단계로 갈 수 있습니다.
+
+<Frame>
+  <img src="/images/cli/login-consent-url.png" alt="브라우저를 열기 전에 동의 URL을 출력하는 cloudthinker login" />
+</Frame>
+
+계정이 여러 워크스페이스에 접근할 수 있으면 동의 페이지에서 어떤 워크스페이스를 승인할지 묻습니다. 이후 터미널이 저장한 워크스페이스를 확인해 줍니다.
+
+## 로그인하기
+
+<Steps>
+  <Step title="로그인 시작">
+    ```bash
+    cloudthinker login
+    ```
+  </Step>
+
+  <Step title="브라우저에서 승인">
+    로그인되어 있지 않다면 로그인하고, 워크스페이스를 고른 뒤 요청을 승인합니다. 동의 코드는 5분간 유효합니다.
+
+    **성공 상태:** 터미널에 `Logged in to <workspace>.`가 표시됩니다.
+  </Step>
+
+  <Step title="자격 증명 검증">
+    ```bash
+    cloudthinker whoami
+    ```
+
+    응답은 로컬 파일이 아니라 API에서 오므로, 자격 증명이 실제로 동작한다는 증거가 됩니다.
+  </Step>
+</Steps>
+
+### 브라우저가 없는 컴퓨터에서
+
+원격 셸을 위한 플래그가 두 개 있습니다.
+
+```bash
+cloudthinker login --no-browser    # URL만 출력하고 아무것도 열지 않음
+cloudthinker login --device-auth   # 다른 기기에서 입력할 짧은 코드 표시
+```
+
+루프백 포트를 열 수 없을 때는 CLI가 알아서 디바이스 코드로 전환합니다.
+
+## 여러 워크스페이스 사용
+
+같은 호스트에서도 워크스페이스마다 자격 증명을 따로 보관하므로, 워크스페이스별로 한 번 로그인한 뒤 `--workspace`로 전환합니다. 워크스페이스 ID 또는 정확한 워크스페이스 이름을 받습니다.
+
+```bash
+cloudthinker --workspace Production whoami
+cloudthinker --workspace 11111111-1111-4111-8111-111111111111 chat -p "Check the error budget"
+```
+
+`CLOUDTHINKER_WORKSPACE`는 셸 세션 전체에 같은 지정을 적용합니다.
+
+## 스크립트나 CI 작업 인증
+
+파이프라인에는 브라우저가 없습니다. 두 가지 방법이 있습니다.
+
+| 방법 | 사용하는 경우 |
+| --- | --- |
+| `CLOUDTHINKER_TOKEN` | 시크릿 저장소 등에서 작업이 이미 CloudThinker 베어러 토큰을 갖고 있을 때. CLI가 이 토큰을 쓰고 저장된 자격 증명은 무시합니다 |
+| `cloudthinker auth token` | CLI가 아닌 도구에 베어러가 필요할 때. 현재 액세스 토큰만 stdout으로 출력하며, 만료가 가까우면 먼저 갱신합니다 |
+
+```bash
+export CLOUDTHINKER_TOKEN="$CI_CLOUDTHINKER_TOKEN"
+cloudthinker chat -p "Summarize last night's failed runs" --json
+
+curl -H "Authorization: Bearer $(cloudthinker auth token)" \
+  https://app.cloudthinker.io/api/v1/...
+```
+
+<Warning>
+`auth token`이 출력하는 값은 만료될 때까지 사용자 본인으로 인증됩니다. 비밀번호처럼 다루세요. 로그에 남기지 말고, 커밋하지 말고, 채팅에 붙여 넣지 마세요.
+</Warning>
+
+`CLOUDTHINKER_TOKEN`과 `--workspace`는 함께 쓸 수 없습니다. 토큰 자체가 워크스페이스를 지정하므로 둘 다 전달하면 사용법 오류로 거부됩니다.
+
+## 자격 증명 저장 위치
+
+자격 증명은 운영체제 설정 디렉터리의 `cloudthinker/credentials.json`에 소유자만 읽을 수 있는 권한으로 기록됩니다. 한 파일이 호스트별 모든 워크스페이스 자격 증명을 오리진과 워크스페이스 기준으로 보관하므로, 두 번째 워크스페이스에 로그인해도 첫 번째가 사라지지 않습니다.
+
+## 로그아웃
+
+```bash
+cloudthinker logout          # 선택했거나 활성화된 워크스페이스만
+cloudthinker logout --all    # 이 호스트에 저장된 모든 워크스페이스
+```
+
+## 문제 해결
+
+<AccordionGroup>
+  <Accordion title="로그인되지 않았다고 나오며 종료 코드가 3입니다">
+    자격 증명이 없거나 만료되었습니다. `cloudthinker login`을 다시 실행하세요. 비대화형 셸에서는 CLI가 브라우저를 열지 않고, 실행할 명령을 출력한 뒤 종료합니다.
+  </Accordion>
+
+  <Accordion title="CLOUDTHINKER_TOKEN의 자격 증명이 거부됩니다">
+    환경 변수 토큰이 저장된 자격 증명보다 우선하므로 다시 로그인해도 달라지지 않습니다. 토큰을 교체하거나, 변수를 해제하고 `cloudthinker login`을 실행하세요.
+  </Accordion>
+
+  <Accordion title="브라우저 승인이 시간 초과됩니다">
+    동의 코드는 5분간 유효합니다. `cloudthinker login --device-auth`로 다른 기기에서 승인하세요.
+  </Accordion>
+
+  <Accordion title="워크스페이스 이름이 인식되지 않습니다">
+    `--workspace`는 정확한 이름 또는 워크스페이스 ID와 일치해야 합니다. API가 쓰는 이름은 `cloudthinker whoami`로 확인하고, 공백이 있는 이름은 따옴표로 감싸세요.
+  </Accordion>
+</AccordionGroup>
+
+## 관련 문서
+
+<CardGroup cols={2}>
+  <Card title="CLI 개요" icon="terminal" href="/ko/guide/cli/overview">
+    CLI를 설치하고 첫 세션 실행하기
+  </Card>
+  <Card title="레퍼런스" icon="book" href="/ko/guide/cli/reference">
+    모든 플래그, 환경 변수, 종료 코드
+  </Card>
+</CardGroup>

@@ -1,0 +1,128 @@
+---
+title: CLI Authentication
+description: "ブラウザーで CloudThinker CLI にログインし、ワークスペースを切り替え、スクリプトに専用の認証情報を渡します"
+icon: key
+---
+
+CLI はブラウザー経由でログインし、ワークスペースごとに 1 つの認証情報を保存します。API キーを貼り付ける手順はありません。
+
+## ログインの仕組み
+
+`cloudthinker login` はブラウザーで同意ページを開き、ループバックコールバックで承認が返るのを待ちます。CLI は必ず先に URL を表示するため、ブラウザーを開けないターミナルでも先に進めます。
+
+<Frame>
+  <img src="/images/cli/login-consent-url.png" alt="ブラウザーを開く前に同意 URL を表示する cloudthinker login" />
+</Frame>
+
+アカウントが複数のワークスペースにアクセスできる場合、同意ページでどのワークスペースを認可するか尋ねられます。その後、ターミナルが保存したワークスペースを表示します。
+
+## ログインする
+
+<Steps>
+  <Step title="ログインを開始する">
+    ```bash
+    cloudthinker login
+    ```
+  </Step>
+
+  <Step title="ブラウザーで承認する">
+    未サインインならサインインし、ワークスペースを選び、リクエストを承認します。同意コードの有効期間は 5 分です。
+
+    **成功状態:** ターミナルに `Logged in to <workspace>.` と表示されます。
+  </Step>
+
+  <Step title="認証情報を検証する">
+    ```bash
+    cloudthinker whoami
+    ```
+
+    結果はローカルファイルではなく API から返るため、認証情報が実際に有効であることを証明できます。
+  </Step>
+</Steps>
+
+### ブラウザーのないマシンでは
+
+リモートシェル向けに 2 つのフラグがあります。
+
+```bash
+cloudthinker login --no-browser    # URL を表示するだけで何も開かない
+cloudthinker login --device-auth   # 別デバイスで入力する短いコードを表示
+```
+
+ループバックポートを開けない場合、CLI は自動でデバイスコードに切り替えます。
+
+## 複数ワークスペースを扱う
+
+同じホストでもワークスペースごとに認証情報を保持するため、ワークスペース単位で 1 回ログインし、`--workspace` で切り替えます。ワークスペース ID か、正確なワークスペース名を指定できます。
+
+```bash
+cloudthinker --workspace Production whoami
+cloudthinker --workspace 11111111-1111-4111-8111-111111111111 chat -p "Check the error budget"
+```
+
+`CLOUDTHINKER_WORKSPACE` はシェルセッション全体に同じ指定を適用します。
+
+## スクリプトや CI ジョブの認証
+
+パイプラインにブラウザーはありません。方法は 2 つです。
+
+| 方法 | 使う場面 |
+| --- | --- |
+| `CLOUDTHINKER_TOKEN` | シークレットストアなどから、ジョブが CloudThinker のベアラートークンをすでに持っている場合。CLI はそれを使い、保存済みの認証情報を無視します |
+| `cloudthinker auth token` | CLI 以外のツールがベアラーを必要とする場合。現在のアクセストークンだけを stdout に出力し、期限が近ければ先に更新します |
+
+```bash
+export CLOUDTHINKER_TOKEN="$CI_CLOUDTHINKER_TOKEN"
+cloudthinker chat -p "Summarize last night's failed runs" --json
+
+curl -H "Authorization: Bearer $(cloudthinker auth token)" \
+  https://app.cloudthinker.io/api/v1/...
+```
+
+<Warning>
+`auth token` が出力する値は、期限が切れるまであなたとして認証されます。パスワードと同様に扱い、ログに残さず、コミットせず、チャットに貼らないでください。
+</Warning>
+
+`CLOUDTHINKER_TOKEN` と `--workspace` は併用できません。トークン自体がワークスペースを示すため、両方を渡すと使用方法エラーとして拒否されます。
+
+## 認証情報の保存場所
+
+認証情報は OS の設定ディレクトリ配下の `cloudthinker/credentials.json` に、所有者のみ読み取り可能な権限で書き込まれます。1 つのファイルがホストごとの全ワークスペース分をオリジンとワークスペース単位で保持するため、2 つ目のワークスペースにログインしても 1 つ目が消えることはありません。
+
+## ログアウトする
+
+```bash
+cloudthinker logout          # 選択中または有効なワークスペースのみ
+cloudthinker logout --all    # このホストに保存されたすべてのワークスペース
+```
+
+## トラブルシューティング
+
+<AccordionGroup>
+  <Accordion title="未ログインと表示され、終了コードが 3 になる">
+    認証情報が存在しないか期限切れです。`cloudthinker login` を再実行してください。非対話シェルでは CLI はブラウザーを開かず、実行すべきコマンドを表示して終了します。
+  </Accordion>
+
+  <Accordion title="CLOUDTHINKER_TOKEN の認証情報が拒否される">
+    環境変数のトークンは保存済み認証情報より優先されるため、ログインし直しても状況は変わりません。トークンを差し替えるか、変数を解除して `cloudthinker login` を実行してください。
+  </Accordion>
+
+  <Accordion title="ブラウザーの承認がタイムアウトする">
+    同意コードの有効期間は 5 分です。`cloudthinker login --device-auth` で別デバイスから承認してください。
+  </Accordion>
+
+  <Accordion title="ワークスペース名が受け付けられない">
+    `--workspace` は正確な名前かワークスペース ID に一致します。API が使う名前は `cloudthinker whoami` で確認し、空白を含む名前は引用符で囲んでください。
+  </Accordion>
+</AccordionGroup>
+
+## 関連
+
+<CardGroup cols={2}>
+  <Card title="CLI 概要" icon="terminal" href="/ja/guide/cli/overview">
+    CLI をインストールして最初のセッションを実行
+  </Card>
+  <Card title="リファレンス" icon="book" href="/ja/guide/cli/reference">
+    すべてのフラグ、環境変数、終了コード
+  </Card>
+</CardGroup>
