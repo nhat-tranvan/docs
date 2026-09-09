@@ -1,0 +1,128 @@
+---
+title: CLI Authentication
+description: "Đăng nhập CloudThinker CLI bằng trình duyệt, chuyển giữa các workspace và cấp cho script một credential riêng"
+icon: key
+---
+
+CLI đăng nhập qua trình duyệt và lưu một credential cho mỗi workspace. Không có bước nào bắt bạn dán API key.
+
+## Đăng nhập hoạt động ra sao
+
+`cloudthinker login` mở trang đồng ý trên trình duyệt và chờ phê duyệt quay về qua callback loopback. CLI luôn in URL trước, nên một terminal không có trình duyệt vẫn có đường đi tiếp.
+
+<Frame>
+  <img src="/images/cli/login-consent-url.png" alt="cloudthinker login in ra URL đồng ý trước khi mở trình duyệt" />
+</Frame>
+
+Khi tài khoản của bạn truy cập được nhiều workspace, trang đồng ý sẽ hỏi cấp quyền cho workspace nào. Terminal sau đó xác nhận workspace đã lưu.
+
+## Đăng nhập
+
+<Steps>
+  <Step title="Bắt đầu đăng nhập">
+    ```bash
+    cloudthinker login
+    ```
+  </Step>
+
+  <Step title="Phê duyệt trên trình duyệt">
+    Đăng nhập nếu chưa, chọn workspace và phê duyệt yêu cầu. Mã đồng ý có hiệu lực trong năm phút.
+
+    **Trạng thái thành công:** terminal in ra `Logged in to <workspace>.`
+  </Step>
+
+  <Step title="Xác minh credential">
+    ```bash
+    cloudthinker whoami
+    ```
+
+    Kết quả đến từ API chứ không phải file cục bộ, nên nó chứng minh credential thực sự hoạt động.
+  </Step>
+</Steps>
+
+### Trên máy không có trình duyệt
+
+Hai cờ dành cho shell từ xa:
+
+```bash
+cloudthinker login --no-browser    # chỉ in URL, không mở gì
+cloudthinker login --device-auth   # hiện mã ngắn để nhập trên thiết bị khác
+```
+
+CLI cũng tự chuyển sang mã thiết bị khi không mở được cổng loopback.
+
+## Làm việc với nhiều workspace
+
+Mỗi workspace giữ credential riêng cho cùng một host, nên bạn đăng nhập một lần cho mỗi workspace rồi chuyển bằng `--workspace`. Cờ này nhận workspace ID hoặc đúng tên workspace.
+
+```bash
+cloudthinker --workspace Production whoami
+cloudthinker --workspace 11111111-1111-4111-8111-111111111111 chat -p "Check the error budget"
+```
+
+`CLOUDTHINKER_WORKSPACE` làm điều tương tự cho cả một phiên shell.
+
+## Xác thực cho script hoặc CI
+
+Pipeline không có trình duyệt. Có hai đường:
+
+| Cách | Dùng khi |
+| --- | --- |
+| `CLOUDTHINKER_TOKEN` | Job đã có sẵn bearer token CloudThinker, ví dụ từ secret store. CLI dùng token đó và bỏ qua credential đã lưu |
+| `cloudthinker auth token` | Một công cụ khác cần bearer. Lệnh in access token hiện tại ra stdout và không in gì thêm, tự làm mới trước nếu token sắp hết hạn |
+
+```bash
+export CLOUDTHINKER_TOKEN="$CI_CLOUDTHINKER_TOKEN"
+cloudthinker chat -p "Summarize last night's failed runs" --json
+
+curl -H "Authorization: Bearer $(cloudthinker auth token)" \
+  https://app.cloudthinker.io/api/v1/...
+```
+
+<Warning>
+Giá trị mà `auth token` in ra xác thực với danh nghĩa của bạn cho tới khi hết hạn. Hãy coi nó như mật khẩu: không ghi log, không commit, không dán vào chat.
+</Warning>
+
+`CLOUDTHINKER_TOKEN` và `--workspace` không dùng chung được. Token đã tự xác định workspace của nó, nên truyền cả hai sẽ bị từ chối như một lỗi sử dụng.
+
+## Credential nằm ở đâu
+
+Credential được ghi vào `cloudthinker/credentials.json` trong thư mục cấu hình của hệ điều hành, chỉ chủ sở hữu đọc được. Một file chứa mọi credential workspace của từng host, khóa theo origin và workspace, nên đăng nhập workspace thứ hai không bao giờ ghi đè workspace thứ nhất.
+
+## Đăng xuất
+
+```bash
+cloudthinker logout          # workspace đang chọn hoặc đang hoạt động
+cloudthinker logout --all    # mọi workspace đã lưu cho host này
+```
+
+## Xử lý sự cố
+
+<AccordionGroup>
+  <Accordion title="Lệnh báo bạn chưa đăng nhập, mã thoát 3">
+    Credential thiếu hoặc đã hết hạn. Chạy lại `cloudthinker login`. Trong shell không tương tác, CLI không bao giờ mở trình duyệt; nó in lệnh cần chạy rồi dừng.
+  </Accordion>
+
+  <Accordion title="Credential trong CLOUDTHINKER_TOKEN bị từ chối">
+    Token môi trường được ưu tiên hơn credential đã lưu, nên đăng nhập lại cũng không thay đổi gì. Hãy thay token, hoặc bỏ biến đó rồi chạy `cloudthinker login`.
+  </Accordion>
+
+  <Accordion title="Hết thời gian chờ phê duyệt trên trình duyệt">
+    Mã đồng ý sống trong năm phút. Chạy `cloudthinker login --device-auth` để phê duyệt từ thiết bị khác.
+  </Accordion>
+
+  <Accordion title="Tên workspace không được chấp nhận">
+    `--workspace` khớp đúng tên hoặc workspace ID. Chạy `cloudthinker whoami` để xem tên mà API dùng, và đặt trong dấu nháy nếu tên có khoảng trắng.
+  </Accordion>
+</AccordionGroup>
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Tổng quan CLI" icon="terminal" href="/vi/guide/cli/overview">
+    Cài đặt CLI và chạy phiên đầu tiên
+  </Card>
+  <Card title="Tra cứu" icon="book" href="/vi/guide/cli/reference">
+    Mọi cờ, biến môi trường và mã thoát
+  </Card>
+</CardGroup>

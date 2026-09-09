@@ -1,0 +1,117 @@
+---
+title: Headless Chat
+description: "Gửi một prompt tới Anna từ script, nhận câu trả lời trên stdout và lấy kết quả các run dài sau đó hoặc trong CI"
+icon: message-code
+---
+
+`cloudthinker chat -p` gửi một prompt tới Anna và chờ câu trả lời. Chỉ mỗi câu trả lời của Anna đi ra stdout, nên lệnh này ghép thẳng vào pipe được.
+
+## Gửi một prompt
+
+```bash
+cloudthinker chat -p "Name the three biggest cost drivers in a typical AWS account, one line each."
+```
+
+<Frame>
+  <img src="/images/cli/headless-chat-run.png" alt="cloudthinker chat -p gửi một run và in câu trả lời của Anna" />
+</Frame>
+
+Tiến trình, run ID và gợi ý tiếp tục đi ra stderr. Chính sự tách bạch đó giữ cho lệnh pipe được:
+
+```bash
+cloudthinker chat -p "Summarize yesterday's incidents" > summary.md
+cloudthinker chat -p "List unused EBS volumes" | grep vol-
+```
+
+## Tiếp tục một cuộc hội thoại
+
+Mỗi run kết thúc đều in `continue_with=<conversation_id>` ra stderr. Truyền ID đó, hoặc run ID, để giữ mạch hội thoại:
+
+```bash
+cloudthinker chat -p "Draft the rollout plan"
+cloudthinker chat -p "Remove the risky step" --continue 0f9e364e-9c34-406e-be7d-52a143fede85
+```
+
+Cùng cuộc hội thoại đó xem được trên ứng dụng web qua `web_url` in kèm gợi ý.
+
+## Gửi trước, lấy kết quả sau
+
+Một cuộc điều tra dài không cần giữ terminal của bạn. `--no-wait` trả về ngay khi run được xếp hàng:
+
+```bash
+cloudthinker chat -p "Which S3 buckets have no lifecycle policy?" --no-wait --json
+```
+
+<Frame>
+  <img src="/images/cli/json-envelope.png" alt="Gói JSON trả về bởi chat --no-wait" />
+</Frame>
+
+Lấy câu trả lời sau đó từ bất kỳ máy nào:
+
+```bash
+cloudthinker chat status 7d5fae84-be6f-45fa-802f-5041f0ff5d42 --wait
+cloudthinker chat ls --limit 10
+cloudthinker chat ls --conversation 0f9e364e-9c34-406e-be7d-52a143fede85 --json
+```
+
+Hết thời gian chờ phía client không bao giờ hủy run. `--timeout` chỉ giới hạn thời gian CLI chờ; run vẫn chạy tiếp trên server và CLI in ra lệnh `chat status` để lấy tiếp.
+
+## Đầu ra cho máy đọc
+
+`--json` ghi một gói dữ liệu ra stdout thay cho câu trả lời thuần văn bản.
+
+| Trường | Ý nghĩa |
+| --- | --- |
+| `run_id` | Run để tra bằng `chat status` |
+| `conversation_id` | Mạch hội thoại để truyền vào `--continue` |
+| `status` | `pending`, `running`, `succeeded`, `failed`, hoặc `approval required` |
+| `answer` | Câu trả lời cuối của Anna, hoặc `null` khi run chưa xong |
+| `web_url` | Chính cuộc hội thoại đó trên ứng dụng web |
+
+```bash
+cloudthinker chat -p "Check the error budget" --json | jq -r '.answer'
+```
+
+## Mã thoát
+
+Pipeline có thể rẽ nhánh theo kết quả mà không cần đọc chuỗi văn bản.
+
+| Mã | Ý nghĩa |
+| --- | --- |
+| 0 | Run đã xong và câu trả lời đã được in |
+| 1 | Run thất bại, hoặc run ID không tồn tại |
+| 2 | Sai cách dùng, hoặc yêu cầu bị chính sách workspace từ chối |
+| 3 | Chưa đăng nhập, hoặc credential đã hết hạn |
+| 4 | CLI ngừng chờ. Run vẫn tiếp tục trên server |
+| 5 | Run tạm dừng chờ phê duyệt trên trình duyệt |
+
+`chat status` và `chat ls` là thao tác đọc: chúng thoát 0 mỗi khi lấy dữ liệu thành công, bất kể run đang ở trạng thái nào.
+
+## Dùng trong CI
+
+Cấp cho job một token, giữ stdout cho câu trả lời, và để mã thoát quyết định kết quả:
+
+```bash
+export CLOUDTHINKER_TOKEN="$CLOUDTHINKER_CI_TOKEN"
+
+if cloudthinker chat -p "Review last night's failed deployments" --timeout 900 > report.md; then
+  echo "report ready"
+else
+  case $? in
+    4) echo "still running, collect it in the next job" ;;
+    5) echo "waiting for an approval in the browser" ;;
+    *) exit 1 ;;
+  esac
+fi
+```
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Xác thực" icon="key" href="/vi/guide/cli/authentication">
+    Cấp cho pipeline một credential riêng
+  </Card>
+  <Card title="Tra cứu" icon="book" href="/vi/guide/cli/reference">
+    Mọi lệnh, cờ, biến môi trường và mã thoát
+  </Card>
+</CardGroup>
