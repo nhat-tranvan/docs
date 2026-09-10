@@ -4,9 +4,7 @@ description: "Route LLM inference through your own AWS Bedrock account for unlim
 icon: key
 ---
 
-Bring Your Own Key (BYOK) lets workspaces on Scale and above plans run LLM inference through their own AWS Bedrock credentials instead of platform credits. Usage bills to your AWS account, and you choose which regions serve inference.
-
----
+Bring Your Own Key (BYOK) lets organizations on Scale and above plans run LLM inference — the AI-model calls behind every agent response — through their own AWS Bedrock credentials instead of platform credits. Usage bills to your AWS account, and you choose which regions serve inference.
 
 ## Why BYOK
 
@@ -16,11 +14,9 @@ Bring Your Own Key (BYOK) lets workspaces on Scale and above plans run LLM infer
 - **Compliance** — you control where inference happens and who can audit it.
 - **No model management** — CloudThinker selects Claude Sonnet 4.5 or Opus 4.5 automatically per task.
 
----
-
 ## Prerequisites
 
-- **Scale, Scale +, or Enterprise plan** — see [Pricing & Plans](/guide/billing/pricing)
+- **Scale, Scale+, or Enterprise plan** — see [Pricing & Plans](/guide/billing/pricing)
 - **AWS account** with Amazon Bedrock access enabled
 - **IAM credentials** (access key ID and secret access key) with Bedrock invoke permissions
 - **Model access** for both Claude Sonnet 4.5 and Claude Opus 4.5 in your AWS account
@@ -30,8 +26,6 @@ CloudThinker authenticates with AWS IAM credentials: an access key ID, a secret 
 <Info>
 Long-term credentials (AKIA prefix) support automatic session token refresh. Temporary credentials (ASIA prefix) cannot be refreshed — reconfigure when they expire.
 </Info>
-
----
 
 ## Request Claude model access
 
@@ -56,8 +50,6 @@ Claude models require a one-time use case form in the Bedrock console before you
 <Info>
 Request access to **both** Sonnet 4.5 and Opus 4.5. CloudThinker switches between them based on task requirements.
 </Info>
-
----
 
 ## Create IAM credentials
 
@@ -133,13 +125,11 @@ Your IAM user needs permission to invoke both models. Create one with the AWS CL
 These commands require an AWS profile with IAM administrative permissions (`iam:CreateUser`, `iam:PutUserPolicy`, `iam:CreateAccessKey`).
 </Info>
 
----
-
 ## Connect Bedrock in CloudThinker
 
 <Steps>
   <Step title="Open BYOK settings">
-    Go to **Settings → BYOK Settings** and choose **AWS Bedrock** as the provider.
+    Go to **Admin Settings → BYOK** and choose **AWS Bedrock** as the provider.
   </Step>
   <Step title="Enter credentials">
     Provide your **Access Key ID** (AKIA or ASIA prefix), **Secret Access Key**, and — only for temporary credentials — a **Session Token**.
@@ -156,8 +146,6 @@ These commands require an AWS profile with IAM administrative permissions (`iam:
 
 Credentials are encrypted at rest and never exposed in API responses or logs.
 
----
-
 ## Inference profiles
 
 Bedrock inference profiles control which AWS regions can serve your requests. For region coverage, see the [AWS inference profile documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html).
@@ -169,56 +157,24 @@ Bedrock inference profiles control which AWS regions can serve your requests. Fo
 | **EU** | EU regions only | GDPR compliance |
 | **APAC** | APAC regions only | Regional data residency |
 
----
-
 ## How it works
 
 - **Model selection** — CloudThinker picks the appropriate Claude model per task; you never select models manually. See the [supported foundation models list](https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html).
-- **Workspace inheritance** — the workspace owner configures BYOK once; every member inherits it. All member LLM usage routes through the owner's AWS account, and the owner manages the credentials centrally.
-
----
+- **Organization inheritance** — the organization Owner configures BYOK once; every workspace and member inherits it. All member LLM usage routes through the organization's AWS account, and the Owner manages the credentials centrally.
 
 ## Fallback behavior
 
-CloudThinker can retry a failed BYOK call on platform-managed Bedrock credentials, but this is **opt-in per workspace** and **disabled by default for Enterprise and BYOC plans**. With fallback off, a failed call surfaces the error — no request leaves your credential boundary.
-
-### When fallback triggers (if enabled)
-
-A BYOK call falls back to the platform path only when **all three** are true:
-
-1. The error is retryable — credential expiration, throttling, transient 5xx — not a content or policy violation.
-2. The operation is marked **fallback-eligible** (most read operations; never autonomous write actions in production).
-3. The workspace's fallback policy is **Allow**.
-
-A fallback re-sends the request to the platform-managed Bedrock account in **the same region** as the original call — never a different jurisdiction. Every fallback emits an audit event (original error code, serving endpoint, user, workspace, model, token count) in **Admin Settings → Audit log**.
-
-### Set the fallback policy
-
-<Steps>
-  <Step title="Open the fallback policy">
-    Go to **Admin Settings → BYOK → Fallback policy**.
-  </Step>
-  <Step title="Choose a policy">
-    | Policy | Behavior on BYOK failure | Typical use |
-    |---|---|---|
-    | **Allow** | Retry on platform credentials in-region | Dev / sandbox tenants |
-    | **Warn** | Retry in-region, but require user re-confirmation next session | Mixed workloads |
-    | **Strict** *(default and recommended for Enterprise / BYOC)* | Surface the error; never retry on different credentials | Regulated environments |
-  </Step>
-  <Step title="Lock it at the org level (optional)">
-    Toggle **Enforce across all workspaces** so workspace admins can't change the policy locally. Only org owners with the `byok:admin` permission can flip this toggle.
-  </Step>
-</Steps>
-
-<Warning>
-**Strict mode trade-off:** if BYOK credentials are misconfigured or revoked, agent operations fail until you fix them. Plan for credential rotation and quota management, and set up [notifications](/guide/notifications) on BYOK health.
-</Warning>
+BYOK credentials apply to the primary model call. If that call still fails after automatic retries, CloudThinker retries once more on a platform-managed fallback model using platform credentials, so agent work keeps moving instead of stopping on a transient error. Fallback calls count against platform credits, not your AWS bill.
 
 ### What inference calls send
 
-Regardless of policy, each BYOK call sends the agent's system prompt and tool definitions, the relevant conversation history, and any retrieved context (topology, memory, runbooks). It never sends raw cloud credentials, other workspaces' data, or — when tokenization is configured in **Admin Settings → Data Protection** — customer PII.
+Each BYOK call sends the agent's system prompt and tool definitions, the relevant conversation history, and any retrieved context (topology, memory, runbooks). It never sends raw cloud credentials or other workspaces' data, and known secret values and detected personal identifiers are replaced with placeholders before they travel — see [Data Protection](/guide/security/data-protection).
 
----
+## Automatic disable on credential errors
+
+When Bedrock rejects the credentials themselves — an expired session token, a revoked access key, a signature mismatch, an access-denied error — CloudThinker turns BYOK off automatically instead of letting every following request fail the same way. Agent work continues on CloudThinker's platform-managed credentials, which counts against platform credits again, until you restore BYOK.
+
+You get one high-severity [notification](/guide/notifications) naming the AWS error code; rapid repeat failures don't send duplicate alerts. To restore BYOK, update the credentials under **Admin Settings → BYOK**, click **Test Connection**, and switch the configuration back to **Enabled**.
 
 ## Troubleshooting
 
@@ -248,19 +204,25 @@ Regardless of policy, each BYOK call sends the agent's system prompt and tool de
   </Accordion>
 
   <Accordion title="BYOK not working in workspace">
-    - Verify the workspace owner has configured BYOK and it's enabled in settings
-    - Confirm the owner's plan is Scale, Scale +, or Enterprise
+    - Verify the organization Owner has configured BYOK and it's enabled in settings
+    - Confirm the owner's plan is Scale, Scale+, or Enterprise
     - Check the owner's credentials are still valid
+    - Check whether BYOK [disabled itself](#automatic-disable-on-credential-errors) after a credential error
+  </Accordion>
+
+  <Accordion title="BYOK turned itself off">
+    - A Bedrock call failed with a credential error — expired session token, revoked access key, or access denied — which [disables BYOK automatically](#automatic-disable-on-credential-errors)
+    - Check the notification titled **BYOK Credentials Error — Auto-Disabled**; it names the exact AWS error code
+    - Update the credentials under **Admin Settings → BYOK**, click **Test Connection**, then switch BYOK back to **Enabled**
+    - Temporary credentials (ASIA prefix) expire on a schedule — switch to long-term credentials to stop repeats
   </Accordion>
 
   <Accordion title="Session token expiration">
     - Long-term credentials (AKIA) refresh automatically
     - Temporary credentials (ASIA) can't be refreshed — reconfigure with new credentials
-    - Check the `session_token_expires_at` timestamp in the configuration
+    - Check the session token expiry shown in the BYOK configuration
   </Accordion>
 </AccordionGroup>
-
----
 
 ## Related
 

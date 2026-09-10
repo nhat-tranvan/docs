@@ -6,165 +6,115 @@ icon: "/images/icons/mcp.svg"
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Model Context Protocol (MCP) enables CloudThinker to connect to custom tools and services. Use MCP to extend agent capabilities with your own [connections](/guide/connections/overview).
+Model Context Protocol (MCP) is an open protocol for connecting AI agents to external tools and data sources. Add any service that exposes an MCP server — an internal metrics system, a ticketing platform, a legacy integration — as a custom [connection](/guide/connections/overview), and every agent can call its tools.
 
----
+CloudThinker authenticates to your server with the **HTTP headers you configure**, typically an `Authorization` header carrying a token your server validates.
 
-## What is MCP?
+## Prerequisites
 
-MCP (Model Context Protocol) is an open protocol for connecting AI agents to external tools and data sources. It provides a standardized way to:
-
-- Expose tools that agents can call
-- Provide context and data to agents
-- Enable custom integrations with any service
-
----
+- An **MCP server** reachable from CloudThinker over HTTPS, speaking either the **Streamable HTTP** or **SSE** transport.
+- The server's endpoint **URL**.
+- Any **header values** your server requires for authentication, such as a bearer token.
 
 ## Setup
 
 <Steps>
-  <Step title="Prepare MCP server">
-    Ensure your MCP server is running and accessible:
-    - Supports Server-Sent Events (SSE) transport
-    - Has a publicly accessible endpoint (or VPN access)
-    - Returns proper MCP protocol responses
-  </Step>
-  <Step title="Create connection">
+  <Step title="Create the connection">
     Navigate to **Connections → MCP** and click **Add MCP Connection**.
   </Step>
-  <Step title="Configure basic info">
-    Enter connection details:
-    - **Name**: descriptive name for the connection
-    - **Prefix**: tool prefix (e.g., `mytools` → `mytools_function_name`)
+  <Step title="Name it and choose a prefix">
+    Enter:
+    - **Connection Name**: a descriptive display name
+    - **Description**: optional
+    - **Prefix**: a short handle for this server. Its tools appear to agents as `prefix__tool_name`, so a server with prefix `weather` exposing `get_forecast` becomes `weather__get_forecast`.
   </Step>
-  <Step title="Configure transport">
-    Set up the connection transport:
-    - **Transport Type**: Server-Sent Events
-    - **URL**: your MCP server endpoint
-    - **Timeout**: connection timeout (default: 5 seconds)
-    - **SSE Read Timeout**: event stream timeout (default: 30 seconds)
+  <Step title="Configure the transport">
+    Select the **Transport Type** your server speaks — **Streamable HTTP** or **SSE** — and enter:
+    - **URL**: the server endpoint, such as `https://example.com/mcp`
+    - **Timeout**: connection timeout in seconds (default 30)
+    - **SSE Read Timeout**: event stream timeout in seconds (default 300)
   </Step>
-  <Step title="Add environment variables">
-    Configure any required environment variables:
-    - API keys
-    - Authentication tokens
-    - Custom configuration
+  <Step title="Add headers">
+    Add any HTTP headers your server needs, as key-value pairs — typically `Authorization` with a value like `Bearer your-token`. Headers are sent to the MCP server on every request.
   </Step>
-  <Step title="Test & create">
-    Test the connection and save. CloudThinker shows a **Connected** status when the server responds correctly.
+  <Step title="Connect">
+    Click **Connect**. CloudThinker contacts the server, loads its tool definitions, and shows a **Connected** status when the server responds correctly.
   </Step>
 </Steps>
 
----
+<Warning>
+The URL must not embed credentials (`user:password@host`). Put authentication in a header instead — for basic auth, `Authorization` with `Basic <base64(user:password)>`.
+</Warning>
 
 ## Connection details
 
 | Field | Description | Required |
 |-------|-------------|----------|
-| **Name** | Connection display name | Yes |
-| **Prefix** | Tool name prefix | Yes |
-| **URL** | MCP server endpoint | Yes |
-| **Timeout** | Connection timeout (seconds) | No (default: 5) |
-| **SSE Read Timeout** | Event stream timeout (seconds) | No (default: 30) |
-| **Environment Variables** | Key-value pairs for configuration | No |
+| **Connection Name** | Display name | Yes |
+| **Prefix** | Tool name prefix; tools appear as `prefix__tool_name` | Yes |
+| **Transport Type** | Streamable HTTP or SSE | Yes |
+| **URL** | MCP server endpoint, with no embedded credentials | Yes |
+| **Headers** | Key-value pairs sent on every request, such as `Authorization` | No |
+| **Timeout** | Connection timeout in seconds | No (default 30) |
+| **SSE Read Timeout** | Event stream timeout in seconds | No (default 300) |
 
----
+## Required permissions
 
-## Example MCP server
+Authentication is between CloudThinker and your server: whatever token or credential you place in the headers defines what the connection can do. Issue your server a credential dedicated to CloudThinker, scoped to the least access its tools need, and have the server validate it on every request.
 
-A simple MCP server that provides a weather lookup tool:
+<Tip>
+Only expose the tools agents should have. A tool your server does not serve cannot be called, which is a stronger boundary than any setting inside CloudThinker.
+</Tip>
 
-```python
-from mcp import Server, Tool
+## Agent capabilities
 
-server = Server("weather-tools")
+Once connected, every tool your server exposes becomes an agent tool named `prefix__tool_name`, available to all agents in the workspace alongside the built-in connections.
 
-@server.tool()
-async def get_weather(location: str) -> str:
-    """Get current weather for a location."""
-    # Your implementation here
-    return f"Weather for {location}: Sunny, 72°F"
+You stay in control per tool: open the connection's **Tool permissions** panel to disable individual tools or mark a tool as requiring your approval before each call. Tools your server marks as changing state should carry the approval requirement, so agents state the inputs and wait for your confirmation first.
 
-if __name__ == "__main__":
-    server.run()
+### Verify the connection
+
+```text
+@alex list the tools available from my custom MCP connection and call the simplest read-only one to confirm it responds
 ```
 
-Once connected with prefix `weather`, agents can call:
+### Example prompts
+
+```text
+@alex #report the current status of our internal metrics service using the mytools connection
+@alex #visualize the trend in today's records from the mytools connection
+@anna #report which tools the mytools connection exposes and what each one does
 ```
-weather_get_weather(location="San Francisco")
-```
-
----
-
-## Use cases
-
-### Custom data sources
-
-Connect proprietary databases or APIs:
-- Internal metrics systems
-- Custom monitoring tools
-- Business intelligence platforms
-
-### Specialized tools
-
-Add domain-specific capabilities:
-- Custom compliance checks
-- Internal automation scripts
-- Legacy system integrations
-
-### External services
-
-Integrate third-party services:
-- Communication platforms
-- Ticketing systems
-- Cloud services not built-in
-
----
-
-## Best practices
-
-- **HTTPS endpoints** — expose your MCP server only over HTTPS.
-- **Rotate API keys** — rotate credentials stored in environment variables on your normal schedule.
-- **Implement authentication** — validate incoming requests from CloudThinker before processing.
-- **Set appropriate timeouts** — tune Timeout and SSE Read Timeout to match your server's response characteristics.
-- **Monitor server health** — track error rates and latency so connection drops are caught early.
-- **Handle errors gracefully** — return structured MCP error responses rather than crashing the server.
-
----
 
 ## Troubleshooting
 
 <Accordion title="Connection timeout">
-Verify the MCP server is running, check network connectivity, increase timeout values, and confirm the firewall allows traffic.
+Verify the MCP server is running, check network connectivity from CloudThinker, increase the **Timeout** value, and confirm the firewall allows the traffic.
 </Accordion>
 
-<Accordion title="Tool not appearing">
-Verify the prefix is set correctly, check that the MCP server returns tool definitions, ensure the protocol version is compatible, and review server logs for errors.
+<Accordion title="Tools not appearing">
+Verify the prefix is set, check that the server returns tool definitions, ensure the protocol version is compatible, and review the server's own logs for errors. Also check the **Tool permissions** panel — a disabled tool is hidden from agents.
 </Accordion>
 
 <Accordion title="Authentication errors">
-Verify environment variables are set correctly, check that API keys are valid, and ensure the server validates credentials correctly.
+Verify the header values are set correctly, that the token or key is still valid on your server, and that the server validates the credential the way you expect.
 </Accordion>
 
 <Accordion title="SSE connection drops">
-Increase the SSE read timeout, check for proxy interference, verify the server sends keepalive events, and review network stability.
+Increase the **SSE Read Timeout**, check for proxy interference, verify the server sends keepalive events, and review network stability.
 </Accordion>
-
----
 
 ## Security
 
 <ConnectionSecurity />
 
-- **HTTPS endpoints** — expose your MCP server only over HTTPS and validate the CloudThinker request origin.
-- **Scoped credentials** — store API keys and tokens in environment variables rather than hardcoding them in server code.
-
----
+- **HTTPS endpoints only** — the headers, including your credential, are sent on every request, and your server should validate them before processing.
+- **Rotate header credentials** — replace the token on your server and in the connection's headers on your normal rotation schedule.
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Overview" icon="plug" href="/guide/connections/overview">
+  <Card title="Connections Overview" icon="plug" href="/guide/connections/overview">
     All connection types
   </Card>
   <Card title="Agents" icon="robot" href="/guide/agents">

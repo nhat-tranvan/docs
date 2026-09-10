@@ -8,8 +8,12 @@ Source-of-truth hierarchy for facts: **current app UI → confirmed product fact
 
 1. **Autonomy has exactly two modes: Manual / Auto.** Any 3-level (Suggest/Approve/Autonomous) or 4-level (notify→suggest→approve→autonomous) model is wrong — remove on sight. Use `/snippets/autonomy-modes.mdx`.
 2. **General finding statuses: New / Acknowledged / Active / Resolved / Dismissed.** Use `/snippets/finding-statuses.mdx`. **Optimize Findings** instead uses Pending / In Progress / Implemented / Ignored because those rows follow the recommendation workflow. Never conflate the two.
-3. **Prompt syntax: `@agent #tool instruction`** — tool tag immediately after the mention, instruction after.
-4. **Code-review bot mention: `@cloudthinker-ai`.** The skip-review token is unconfirmed — link to `/guide/code-review/mention-commands` instead of restating it.
+3. **Prompt syntax: `@agent #tool instruction`** — tool tag immediately after the mention, instruction after. Verified picker tags: `#visualize` `#dashboard` `#report` `#tabular_engine` `#slide` `#alert` `#schedule` `#search` `#search-knowledge-base`; `#recommend` survives as a typed tag. `#chart` and `#kb` do NOT exist in the product — knowledge-base scoping is `#<knowledge-base-name>` from the picker or `#search-knowledge-base`. Canonical home: `/guide/language`.
+4. **Code-review bot mention: `@cloudthinker-ai`.** Re-review IS a mention command (`@cloudthinker-ai review`, aliases `review again` / `continue review`); skip-review is NOT a mention command — it is the `@cloudthinker:ignore` marker in the MR/PR description. Canonical home: `/guide/code-review/mention-commands`.
+
+5. **Roles**: org roles Owner / Admin / Developer / Viewer ("Member" is legacy = Developer); workspace roles Admin / Developer / Viewer. Org Owner and Admin hold workspace Admin in every workspace.
+6. **Plans: Free / Team / Scale / Scale+ / Enterprise**, spelled "Scale+" in docs. Never Standard/Advanced/Pro/Professional. (Product frontend renders "Scale Plus" — if the production billing UI settles on that spelling, update this fact first, then sweep.)
+7. **BYOK = bring your own LLM credentials** (Admin Settings → BYOK) — never encryption/KMS keys. Canonical UI paths: identity = **Admin Settings → Identity and access**; audit logs = **Admin Settings → Audit Logs**; MFA = **Account Settings → 2FA**.
 
 ## Terminology (canonical → banned)
 
@@ -19,7 +23,7 @@ Source-of-truth hierarchy for facts: **current app UI → confirmed product fact
 | Modules: Optimize · Review · Cyber · Resolve | `CostOps`, `Code Review`, `SecOps`, `App Pentesting`, `AppSec`, `Deep Response Engine`, `DRE`, Stack, or Infrastructure as product names |
 | Manual / Auto (autonomy modes) | any 3- or 4-level autonomy model |
 | `@agent #tool instruction` | `@agent [instruction] [#tool] [context]` |
-| Tool tags: `#dashboard` `#report` `#recommend` `#alert` `#chart` `#kb` | inventing tags in examples |
+| Tool tags: `#visualize` `#dashboard` `#report` `#recommend` `#alert` `#schedule` `#search` `#tabular_engine` `#slide` `#search-knowledge-base`, plus `#<knowledge-base-name>` for KB scoping | `#chart`, `#kb`, or inventing tags in examples |
 | `@cloudthinker-ai` (bot) | `@cloudthinker` |
 | Agents: Alex (Cloud Engineer), Oliver (Security Engineer), Tony (Database Engineer), Kai (Kubernetes Engineer), Anna (General Manager) | role-title drift |
 | CloudThinker Language (the syntax; page `/guide/language`) | "Prompt" as a page title |
@@ -41,7 +45,7 @@ Source-of-truth hierarchy for facts: **current app UI → confirmed product fact
    - `CardGroup` max 1 per page (the closing block); exceptions: `index.mdx` (3), module overviews (closing + none elsewhere).
    - `Frame`: keep at least one screenshot per UI procedure when a current screenshot exists. Remove a screenshot that contradicts the current UI or canonical product name when no current replacement exists.
    - Callouts max 1 per section, 4 per page (Troubleshooting excluded). `Warning` only for data-loss/lockout/cost risk.
-6. **Code blocks**: prompts fenced ` ```text `, shell ` ```bash `, JSON ` ```json `. Prompt caps: 5 blocks per reference page, 4 per scenario, 2 per connection page, ≤3 prompts per block. Every prompt names a real agent + real tool tag + verifiable output.
+6. **Code blocks** (connection-page exemption: the single verify-connection prompt is exempt from the tool-tag requirement; the de-facto `## Write access` H2 is an approved optional section on connection pages): prompts fenced ` ```text `, shell ` ```bash `, JSON ` ```json `. Prompt caps: 5 blocks per reference page, 4 per scenario, 2 per connection page, ≤3 prompts per block. Every prompt names a real agent + real tool tag + verifiable output.
 7. **Frontmatter**: `title` unique site-wide; `description` verb-first, 50–150 chars, states what the reader accomplishes, never restates the title.
 8. **Endings**: every guide page ends with exactly one CardGroup — `## Next steps` (sequential content) or `## Related` (reference/concept), `cols={2}`, 2–4 linked cards. Exempt: `learn/aio/*`, `learn/aio-engineer/*`, `api-reference/*`.
 9. **Links**: root-relative (`/guide/...`); first mention of another feature is a link, later mentions plain text.
