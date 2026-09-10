@@ -1,0 +1,284 @@
+---
+title: "Day 02 · Investigate"
+description: "Why production observability is too noisy to rank, how a reduction pipeline makes an investigator agent affordable, the 30-minute read-only lab on a Kubernetes demo cluster, and what a good incident report contains."
+icon: magnifying-glass
+---
+
+Day 02 of [Prove It](/learn/workshops/prove-it/overview), the Agentic Cloud Investigation Series. Not registered yet? [Register for Day 02](https://luma.com/fu5qdqnc). Day 01 asked what exists in an account. Day 02 asks a harder question: what caused this, right now. Nothing about access changes. You still never type credentials, and the agent still cannot change anything.
+
+<Info>
+**Using this page with CloudThinker.** Paste this page's URL into a chat and try:
+
+- "Explain the suppression layers on this page to me like I am new to on-call."
+- "Quiz me on the difference between a trigger, a root cause and a contributing factor."
+- "Help me outline my Day 02 incident report following the five criteria on this page."
+</Info>
+
+## Rules of the room
+
+- **150 minutes.** Learn 35, a keynote 25, Practice 30 with no break, Share 20.
+- **The Kubernetes demo cluster is read-only.** The agent can inspect. It cannot restart, scale, deploy or edit anything, and it cannot read secrets.
+- **You never enter credentials.** You pick the demo environment and click **Use demo**. Nothing to fill in.
+- **The agent recommends. People decide.** No fix is applied today.
+- **Redact.** Anything that identifies a real system comes out of the report before it is shared or shown on screen.
+- **One report file per team.** Submitted before Share starts.
+
+## Learn · 35 minutes
+
+Day 01 gave you a boundary for the agent. Day 02 starts one step earlier, with the boundary you never set for the signal.
+
+### 1. You cannot investigate what you cannot rank
+
+A production night does not hand you one incident. It hands you a stream. One access finding fires on a production role at 02:14, 180 AccessDenied lines land in the audit log in the same minute, three near-identical alerts arrive from three services, and by 02:16 the on-call has five pages open for one problem.
+
+In one CloudThinker workspace, an overnight stream of roughly 13,000 raw events collapses to about 40 clusters worth acting on. The investigation is not the hard part at that hour. Choosing what to investigate is.
+
+Every team already has an answer to alert volume, and all four cost something:
+
+| The usual fix | What it costs |
+|---|---|
+| Hire more on-call | Burnout, and the same volume again next quarter. |
+| Raise the thresholds | The one critical that mattered is now under the line. |
+| Mute the noisy channel | A blind spot nobody owns, and nobody remembers creating. |
+| Add another dashboard | One more screen nobody reads at 02:14. |
+
+Each of those is a decision about what you agree to lose. They are usually made once, informally, and never written down. That is the same governance gap Day 01 opened, pointed at the signal instead of at the agent.
+
+### 2. Noise dies in layers, not in one filter
+
+Reduction is a pipeline with four steps: **ingest**, **suppress**, **correlate**, then **classify and route**. Almost everything happens in the second step, and it is not one filter. It is eight, and they run in priority order. The first one to match wins, so the order of the layers is the policy.
+
+| Layer | What it drops |
+|---|---|
+| Deduplication | Exact repeats of the same event. |
+| Rate limit | Bursts above a per-key ceiling. |
+| Snooze | Signals a person muted on purpose. |
+| Prior verdict | A pattern already judged to be noise. |
+| Noise signature | Known benign static patterns. |
+| Flapping | Metrics oscillating across a threshold. |
+| Cascade | Downstream effects of a root signal you already know about. |
+| Severity normalization | Nothing. It re-grades a severity the provider mislabelled. |
+
+Cascade removes the most, and it is also the one that will hide a real outage if the root signal it collapsed onto was wrong. Severity normalization says something uncomfortable but true: the severity stamped on an event by the tool that sent it is a guess, and you are allowed to re-grade it.
+
+The layers CloudThinker uses are described in [Pulse overview](/guide/pulse/overview). The teaching point is not the product. It is that reduction is layered and ordered whatever tool you use.
+
+### 3. Every suppression rule needs an escape hatch
+
+Silence has to expire and it has to be overridable, or it becomes a blind spot nobody remembers creating.
+
+| Property | How it behaves |
+|---|---|
+| The window grows | A pattern confirmed as noise is silenced for 6 hours. Confirmed again, 24 hours. Again, 7 days. |
+| The bypass wins | A high or critical signal matching the same pattern still goes through, and it resets the window to zero. |
+| The release | One person unmuting it, or one route into a real incident, clears the window outright. |
+
+A suppressed event is stored, not deleted, so you can still ask what the system silenced last night.
+
+<Warning>
+A rule with no bypass will eventually hide the outage it was written for. An expiring window forces the system to re-confirm that a pattern is still noise. A permanent mute is a decision nobody revisits.
+</Warning>
+
+### 4. Reduction is what makes the agent affordable
+
+Only now does the investigator agent arrive, and it arrives for an economic reason rather than a magical one.
+
+One CloudWatch alarm in a CloudThinker workspace flapped 18 times in 53 minutes. Every fire opened its own root cause analysis: eleven separate investigations of one problem, eleven answers to the same question, and a bill for all eleven. Point an agent at a raw alert stream and that is what you buy.
+
+Three things have to be true before a cluster is worth an investigation:
+
+| Gate | Why |
+|---|---|
+| At least one actionable signal | A cluster made only of suppressed signals never pays for an agent. |
+| A new signature, not a repeat | Volume alone does not re-arm the trigger. Novelty does. |
+| No recent run on the same cluster | A cooldown, tuned once per workspace, not per alert. |
+
+Investigation is the expensive step. Everything before it exists to protect it. A team with no agent at all can still use those three gates as a checklist.
+
+### 5. The agent splits the question, not the work
+
+An investigation runs in phases: gather **context**, reach a **checkpoint** where it decides whether to split, run **hypotheses** in parallel, then record one **verdict**.
+
+The fan-out is by hypothesis, not by workload. Two to four read-only investigators run at once, eight at the very most. Each one tests a different explanation against the same evidence at the same time. The investigators record nothing; the lead writes one verdict, so there is one record to read later instead of several.
+
+The skill worth taking home is the question each split is looking for: **the query whose result differs depending on which hypothesis is true.** Every other query confirms what you already believe. Read-only also means the agent cannot test an idea by changing something. It has to reason, and you have to be able to check the reasoning, which is why the log matters more than the answer.
+
+### 6. Order in time is not proof of cause
+
+Three ways a confident timeline turns out to prove nothing:
+
+| Shape | What it looks like |
+|---|---|
+| **After is not because** | Deploy at 10:02, latency at 10:05, and no path between them that anyone can draw. That is a coincidence with good timing. |
+| **Both are symptoms** | Two metrics rise together because one thing upstream moved. Neither caused the other. A shared cause makes many correlations. |
+| **The trigger is gone** | The surge that started it ended an hour ago and the system still has not come back. What changed is no longer there to find. |
+
+If you cannot draw the path, you have a coincidence, not a cause. The obvious answer is usually the trigger, and the trigger is often the thing that has already stopped.
+
+### 7. The root cause is the resource that changed
+
+A causal graph has five kinds of node, and only one of them is the answer.
+
+| Node | What it means |
+|---|---|
+| **Trigger** | The event that set the incident off. It may already be over. |
+| **Root cause** | The one resource whose own configuration diverged from its baseline, its previous revision, or its siblings. |
+| **Contributing factor** | A condition you cannot show has changed. |
+| **Impact** | What the customer lost, in their words. |
+| **Recovery** | What brought it back, if anything did. |
+
+Divergence is a claim about time, so it is settled by dating each candidate: creation timestamp, revision history, last-applied configuration. Never by which resource currently reads the most abnormal. The resource showing the worst symptoms is usually a victim, and repairing a victim is a workaround, so a definition built around "what would I edit to clear the alert" names the wrong resource almost every time.
+
+Contributing factor is the honest label for everything you suspect but cannot date. It is not a weaker root cause. It is a different kind of claim.
+
+### 8. A system that scores itself proves nothing
+
+The interesting part of an autonomous system is the list of things it refuses to claim.
+
+| The claim | What has to back it |
+|---|---|
+| "92 percent accurate" | A verdict a person wrote. Never the agent scoring its own run. |
+| "This caused that" | A path you can trace from the change to the customer impact. |
+| "The fix held" | A re-check that actually ran, and whatever it returned. |
+| "I am confident" | A rival explanation that was tested, and lost. |
+
+After a remediation is applied, CloudThinker schedules one re-check roughly thirty minutes later and records the outcome as verified, unverified or failed. Beyond that window the honest answer is that the system does not know, so no number is printed for it.
+
+A remediation also passes a policy gate whose default is approval, and turning autonomy off still leaves detection running: the system correlates and files the incident, it just will not investigate without you. Yesterday you labelled every claim verified or assumed. Today the system holds itself to the same rule.
+
+## Keynote · 25 minutes
+
+**The Integration Problem Was a Context Problem.** Why writing code for an agent to call beats packing tool schemas into its context, and how the team built 100+ connections to cloud and observability platforms in a very short time. It picks up where Learn ends: the agent can investigate because it can reach the data, and this is how that layer got built.
+
+## Practice · 30 minutes
+
+**The task:** one live incident on a Kubernetes cluster CloudThinker runs. One team, one read-only agent, one report. Thirty minutes, no break.
+
+> **Hotel Search Degradation After Traffic Recovery**
+
+That is the same title the on-call would get. The dashboards will not agree with the users, so start from what the customer lost.
+
+| You can | You cannot |
+|---|---|
+| Read deployments, pods, events, logs, configuration and the traffic telemetry. | Restart, scale, deploy, edit anything, or read secrets. |
+
+The permissions are real. If your team hits a wall, that wall is part of the exercise. Write it down as blocked, the same way you did on Day 01.
+
+| Time | Step |
+|---|---|
+| T+00 | Connect and read the symptom. |
+| T+05 | Write the incident question: what is broken, for whom, since when. |
+| T+10 | Two hypotheses in the log. |
+| T+18 | Find the query whose result separates them. |
+| T+25 | Write the report. |
+
+The rail is a pace, not a rule. A team that reaches T+18 with one hypothesis has skipped the part that matters.
+
+### Connect to the demo environment
+
+<Steps>
+  <Step title="Sign in and open the demo environment">
+    Sign in at [app.cloudthinker.io](https://app.cloudthinker.io). In the left sidebar, click **Try a demo environment**. It is described as "a read-only cloud we run".
+  </Step>
+
+  <Step title="Open Connections and pick Kubernetes">
+    The Connections panel for the demo environment lists the connections you can try with demo data. Click **Kubernetes**.
+  </Step>
+
+  <Step title="Click Use demo">
+    A banner at the top of the dialog offers the read-only demo. Click **Use demo**. Ignore the forms below it. They are for connecting your own cluster, and today you do not need them.
+
+    **Success state:** Kubernetes no longer appears under **Not connected**. Open a new chat and ask about the cluster.
+  </Step>
+</Steps>
+
+<Warning>
+Nobody types credentials into a slide, a chat or a shared document. If your team chooses to run the task on its own cluster, the person who owns it connects it on their own screen.
+</Warning>
+
+### What to ask the agent
+
+Most teams start by asking what is wrong. Push past the first answer instead. Starting points:
+
+```text
+Something is degraded in this cluster. Describe the symptom in terms of what a user would notice, and tell me what your role could not read.
+```
+
+```text
+Give me two different explanations for this symptom that are both consistent with the evidence so far.
+```
+
+```text
+Which single query would come out differently depending on which of those two explanations is true? Run it and show me the raw output.
+```
+
+```text
+Which resource here can you show actually changed, with a timestamp? Which ones are you only assuming changed?
+```
+
+Keep the raw output. You need it to support every claim in the report.
+
+### Stuck?
+
+- **The agent reports a healthy system.** Ask it what the users are seeing rather than what the dashboards say. Healthy dashboards are part of the exercise.
+- **The agent gives you one confident cause immediately.** Ask for the rival explanation, then for the query that separates the two.
+- **The agent says it cannot read something.** Good. Write it down as blocked. A blocked check is a result.
+- **You run out of time.** Submit what you have with the gap named. That is a complete report.
+
+## Your output is one report
+
+PDF, doc or markdown. There is no template. Five things, not eight, because you only have thirty minutes.
+
+| Block | What it contains |
+|---|---|
+| **01 · The incident question and scope** | What is broken, for whom, and since when. |
+| **02 · Two hypotheses in the log** | With the evidence you found for each one. |
+| **03 · Key evidence with source, scope and time** | The same three fields you used on Day 01. |
+| **04 · Your mechanism** | What caused what, and the edge you could not show. |
+| **05 · Root cause separated from contributing factors** | Say which one you could date, and which you could not. |
+
+A report that says "insufficient evidence" and shows the log is a complete report. A confident answer with no path is worth less. No remediation proposal is required; thirty minutes is not enough for one, and a team that produces one anyway earns credit.
+
+One file per team, submitted before Share starts. Redact anything that identifies a real system first.
+
+## Share · 20 minutes
+
+Volunteers present. Every team that presents gets a prize. No scoring, no ranking, no vote.
+
+| Minutes | Show |
+|---|---|
+| 3 | **Your mechanism and evidence.** Which two hypotheses, which query separated them, and what the evidence was. |
+| 2 | **Questions from the room.** |
+
+Then the room compares: same cluster, same read-only access, different answers. That comparison is the point, and it is why the log and the evidence fields matter more than the verdict.
+
+## Glossary
+
+| Term | Meaning on Day 02 |
+|---|---|
+| Signal | One operational event after the noise layers have run on it. |
+| Cluster | Related signals grouped together as one candidate problem. |
+| Suppression | Dropping or silencing an event by a stated, ordered rule rather than by muting a channel. |
+| Flapping | A metric oscillating across a threshold, firing repeatedly for one underlying condition. |
+| Cascade | Downstream effects of a root signal that is already known. |
+| Trigger | The event that set the incident off. It may already be over. |
+| Root cause | The one resource whose own configuration diverged from its baseline, previous revision, or siblings. |
+| Contributing factor | A condition you cannot show has changed. |
+| Hypothesis | An explanation stated well enough that a query could contradict it. |
+| Blocked | The role could not look. Write it down; it is a valid result. |
+
+## What comes next
+
+Day 03 · Prove It Arena, Sep 19. An unfamiliar environment, an unexpected incident, and judges. Bring the vocabulary from today: trigger, root cause, contributing factor, and the gap you cannot close.
+
+## Further reading
+
+Sources the Learn block draws on.
+
+- [Google SRE Book · Effective troubleshooting](https://sre.google/sre-book/effective-troubleshooting/)
+- [Google SRE Book · Postmortem culture](https://sre.google/sre-book/postmortem-culture/)
+- [NIST SP 800-61r3 · Incident response recommendations](https://csrc.nist.gov/pubs/sp/800/61/r3/final)
+- [AWS Well-Architected · Reliability pillar](https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html)
+- [Anthropic · Building effective agents](https://www.anthropic.com/engineering/building-effective-agents)
+- [CloudThinker · Pulse overview](/guide/pulse/overview)
+- [CloudThinker · Root cause analysis](/guide/incident/root-cause-analysis)
