@@ -1,0 +1,158 @@
+---
+title: Outpost Worker
+description: "Run an outpost in a terminal or native user service, then assign Automations to a shared worker"
+icon: server
+---
+
+<Note>
+**Upcoming preview** — This guide describes the unreleased outpost worker preview. It requires matching CLI and CloudThinker backend builds that include the worker service commands. Command names and service behavior may change before general availability.
+</Note>
+
+An outpost worker keeps your machine available for CloudThinker. The Automation trigger and agent reasoning stay in CloudThinker Cloud; the worker runs file and shell actions in the directory you choose.
+
+## Prerequisites
+
+- The [CloudThinker CLI](/guide/cli/overview) is installed and logged in.
+- You have permission to create a shared outpost in the workspace.
+- The worker directory already exists on the machine.
+- The machine runs Linux with `systemd --user` or macOS with `launchd`.
+
+<Warning>
+File tools stay in the worker directory. Shell commands run as the operating-system user without a CloudThinker sandbox, so review the directory, machine account, and network access before selecting the outpost for an Automation.
+</Warning>
+
+## Create and check an outpost
+
+Create one shared outpost and save its worker credential in the CLI's private credential store:
+
+```bash
+cloudthinker worker outpost create team-build --shared
+```
+
+List the outposts visible to you and check the selected outpost's availability:
+
+```bash
+cloudthinker worker outpost ls
+cloudthinker worker status --outpost team-build
+```
+
+The outpost must be available before a new Automation can select it. Personal outposts are not available as unattended Automation targets.
+
+## Run the worker in a terminal
+
+Start the worker in the directory it will serve:
+
+```bash
+cloudthinker worker start \
+  --outpost team-build \
+  --workdir "$PWD"
+```
+
+The command stays attached to the terminal. It serves up to four assignments at once by default; set `--concurrency` from 1 to 32 when you need a different limit. Press `Ctrl-C` to stop accepting work and drain current assignments. Wait for the foreground process to exit before starting a service for the same outpost and directory; only one worker can serve that pair at a time.
+
+The worker banner names the outpost folder. When the worker stops, check the outpost status before starting an Automation run.
+
+## Keep the worker running as a service
+
+The service commands write a per-user service definition. Installation does not start the worker, so start it explicitly after installing:
+
+```bash
+cloudthinker worker service install \
+  --outpost team-build \
+  --workdir "$PWD" \
+  --concurrency 4
+
+cloudthinker worker service start \
+  --outpost team-build \
+  --workdir "$PWD"
+```
+
+Check or stop the service with the same outpost and directory:
+
+```bash
+cloudthinker worker service status \
+  --outpost team-build \
+  --workdir "$PWD"
+
+cloudthinker worker service stop \
+  --outpost team-build \
+  --workdir "$PWD"
+```
+
+Remove the service definition when you no longer want this machine to start the worker:
+
+```bash
+cloudthinker worker service uninstall \
+  --outpost team-build \
+  --workdir "$PWD"
+```
+
+Uninstall removes the service definition but keeps the outpost, stored worker credential, project files, and directory identity.
+
+<Tabs>
+  <Tab title="Linux">
+    The CLI writes a `systemd --user` unit, reloads the user manager, and enables the unit. `install` does not start it. `start` returns after the user manager launches the worker. Stopping gives the worker up to five minutes to drain active assignments.
+
+    User-manager lingering is not enabled by the CLI. Configure that Linux policy separately if the worker must continue after logout or a reboot.
+  </Tab>
+  <Tab title="macOS">
+    The CLI writes a per-user LaunchAgent in `~/Library/LaunchAgents`. `install` does not load it. `start` loads it in your logged-in GUI session and launches the worker. It is not a pre-login system daemon, so the worker requires your macOS user session. Stopping sends the worker `SIGTERM` and allows up to five minutes for it to drain.
+  </Tab>
+</Tabs>
+
+`status` reports whether the service is absent, inactive, active, failed, activating, or deactivating on Linux. macOS can also report a service loaded without a running process. A successful service start means the native manager accepted the launch; use `worker status` to confirm that the worker connected to CloudThinker.
+
+## Select an outpost for an Automation
+
+Open **Automations → New automation** and choose a value under **Run in**. The field offers **CloudThinker-managed (default)** and available shared workspace outposts. Only workspace admins can change where an Automation runs.
+
+<Frame>
+  <img src="/images/automation/outpost-worker/01-run-in-shared-outpost.png" alt="Automation form with a shared outpost selected in the Run in menu" />
+</Frame>
+<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Choose a shared outpost from **Run in** when its worker is available.</p>
+
+CloudThinker keeps the target selected for the run. If the worker goes offline, the Automation does not silently switch to CloudThinker-managed execution:
+
+<Frame>
+  <img src="/images/automation/outpost-worker/02-run-in-offline-outpost.png" alt="Automation form preserving an unavailable shared outpost without falling back to managed execution" />
+</Frame>
+<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>An unavailable shared outpost stays selected until you restore it or choose another target.</p>
+
+Changing **Run in** changes future runs. A run already queued keeps its original target. The agent cannot change this target from a prompt or tool call.
+
+## What runs on the worker
+
+The trigger, prompt, model calls, approvals, cloud memory, and cloud connections remain in CloudThinker Cloud. The worker supplies the selected directory for project file operations, shell commands, and supported artifacts.
+
+Auto Mode still decides whether an eligible agent action may run; **Run in** decides where it runs. When allowed, a foreground shell command goes through the selected worker. See [Auto Mode](/guide/auto-mode).
+
+When an agent loads a cloud skill, CloudThinker can send its supporting scripts and reference files to the worker. The copy is read-only and stored outside the project directory. Your machine must already provide any runtime the script needs, such as Python or Bun. Loading a skill does not install software or run setup scripts. See [Skills](/guide/skills/overview) for the skill workflow.
+
+Worker-local Connection and MCP execution is not included in this preview. Connections configured in CloudThinker remain cloud-managed.
+
+Detached background shell commands are not available for outpost-bound Automations in this preview.
+
+## Understand failures and recovery
+
+If an outpost is unavailable when a schedule becomes due, the Automation's trigger card shows why it did not run. Restore the worker to let the pending schedule run on a later scheduling check. The warning clears when CloudThinker starts the run.
+
+The service manager can restart a worker after an unexpected process exit. A clean stop drains active assignments. If the worker stops while a mutation is in progress and CloudThinker cannot prove whether it finished, the result is marked **Unknown**. CloudThinker does not replay that mutation automatically; inspect its effect before requesting it again.
+
+Process-crash recovery is covered for the supported Linux path. Physical power loss, filesystem durability across an unclean machine shutdown, and full native macOS service lifecycle behavior remain unverified in this preview.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Automations" icon="calendar-check" href="/guide/automation/tasks">
+    Create recurring or future one-time Automations
+  </Card>
+  <Card title="Skills" icon="sparkles" href="/guide/skills/overview">
+    Load cloud skills and their supporting files
+  </Card>
+  <Card title="CLI Overview" icon="book" href="/guide/cli/overview">
+    Install the CLI and explore its commands
+  </Card>
+  <Card title="Connections" icon="plug" href="/guide/connections/overview">
+    Configure the cloud services your agents can use
+  </Card>
+</CardGroup>
