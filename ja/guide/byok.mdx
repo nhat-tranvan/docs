@@ -1,76 +1,52 @@
 ---
 title: Bring Your Own Key (BYOK)
-description: "独自のAWS Bedrockアカウントを通じてLLM推論をルーティングし、無制限の使用量、コスト管理、データレジデンシーを実現する"
+description: "エージェントのモデル呼び出しを自社のAWS BedrockまたはAnthropicのキーで実行し、モードごとのClaudeモデルとBedrockリージョンを選択する"
 icon: key
 ---
 
-Bring Your Own Key (BYOK) を利用すると、Scaleプランおよびそれ以上のプランのワークスペースが、プラットフォームクレジットの代わりに自社のAWS Bedrockクレデンシャルを通じてLLM推論を実行できます。使用料はAWSアカウントに請求され、どのリージョンで推論を処理するかを選択できます。
-
----
+Bring Your Own Key (BYOK) は、エージェントの応答を支えるAIモデル呼び出しを、プラットフォームクレジットではなく自社のAWS BedrockまたはAnthropicのクレデンシャルで実行します。組織のOwnerが **Admin Settings → BYOK** で一度設定すると、組織内のすべてのワークスペースがそのキーを使います。
 
 ## BYOKを使う理由
 
-- **無制限の使用量** — プラットフォームのクレジット制限ではなく、自社のBedrockのクォータが適用されます。
-- **コスト管理** — すでに予算とコスト配分タグを持っているAWSの請求書に料金が計上されます。
-- **データレジデンシー** — USのみ、EUのみ、またはAPACのみの[推論プロファイル](#推論プロファイル)を通じて推論をルーティングできます。
-- **コンプライアンス** — 推論の場所と監査者を自分でコントロールできます。
-- **モデル管理不要** — CloudThinkerがタスクに応じてClaude Sonnet 4.5またはOpus 4.5を自動的に選択します。
-
----
+- **自社の支出。** キーで実行したモデル呼び出しは、CloudThinkerクレジットではなくAWSまたはAnthropicのアカウントに請求されます。
+- **自社のクォータ。** プラットフォームのクレジット上限ではなく、プロバイダーの上限が適用されます。
+- **モデルの選択。** モードとモジュールごとにClaudeモデルを選ぶか、デフォルトのままにします。
+- **Bedrockのデータレジデンシー。** AWSリージョンを選び、推論を米国、EU、またはアジア太平洋の中に留めます。
 
 ## 前提条件
 
-- **Scale、Scale +、またはEnterpriseプラン** — [料金・プラン](/ja/guide/billing/pricing)を参照
-- Amazon Bedrockアクセスが有効な **AWSアカウント**
-- Bedrockの呼び出し権限を持つ **IAMクレデンシャル**（アクセスキーIDとシークレットアクセスキー）
-- AWSアカウントでClaude Sonnet 4.5とClaude Opus 4.5の両方への **モデルアクセス**
+- Scale、Scale+、またはEnterpriseプラン。[料金・プラン](/ja/guide/billing/pricing)を参照してください。
+- 組織のOwnerロール。Adminやその他のメンバーはキーの状態を見られますが、クレデンシャルは見られません。
+- 次のいずれかのクレデンシャル:
+  - Bedrockの呼び出し権限を持つAWS IAMアクセスキー。下の **AWS Bedrockの準備** を参照してください。
+  - `sk-ant` で始まるAnthropic Console APIキー。
 
-CloudThinkerはAWS IAMクレデンシャル（アクセスキーID、シークレットアクセスキー、一時クレデンシャル用のオプションのセッショントークン）でAWSに認証します。直接BedrockのAPIキーは計画されていますが、まだサポートされていません。
+## 対応モデル
 
-<Info>
-長期クレデンシャル（AKIAプレフィックス）はセッショントークンの自動更新をサポートします。一時クレデンシャル（ASIAプレフィックス）は更新できません——有効期限が切れたら再設定してください。
-</Info>
+キーで次のClaudeモデルを実行します。CloudThinkerが各行のデフォルトを決め、あなたが変更できます。
 
----
+| モデル | BedrockモデルID | AnthropicモデルID | デフォルトの対象 |
+|---|---|---|---|
+| Claude Opus 5 | `anthropic.claude-opus-5` | `claude-opus-5` | Ultra、Review、Cyber |
+| Claude Sonnet 5 | `anthropic.claude-sonnet-5` | `claude-sonnet-5` | Pro、Resolve |
+| Claude Haiku 4.5 | `anthropic.claude-haiku-4-5-20251001-v1:0` | `claude-haiku-4-5-20251001` | Light |
 
-## Claudeモデルアクセスのリクエスト
+モデルは6つの行で選びます。**Light**、**Pro**、**Ultra** のチャットモードと、**Review**、**Cyber**、**Resolve** のモジュールです。Review conventionsは **Review** 行に、Cyber chatは **Cyber** 行に従います。**CloudThinker credits** に設定した行は、キーではなくプラットフォームで実行されます。
 
-Claudeモデルは、Bedrockコンソールで一度だけユースケースフォームを送信する必要があります。詳細は[AWS Bedrockモデルアクセスドキュメント](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html)を参照してください。
+## AWS Bedrockの準備
 
-<Steps>
-  <Step title="BedrockコンソールでModel accessを開く">
-    [AWSコンソール](https://console.aws.amazon.com/)にログインし、[Amazon Bedrock](https://console.aws.amazon.com/bedrock/)を開いて、左のナビゲーションで **Model access** をクリックします。
-  </Step>
-  <Step title="モデルアクセスを変更する">
-    **Modify model access** をクリックして、以下の両方を有効にします:
-    - **Claude Sonnet 4.5** (`anthropic.claude-sonnet-4-5-20250929-v1:0`)
-    - **Claude Opus 4.5** (`anthropic.claude-opus-4-5-20251101-v1:0`)
-  </Step>
-  <Step title="ユースケースの詳細を送信する">
-    ユースケースの説明、予想される使用パターン、および該当する場合はコンプライアンス要件をフォームに入力します。
-
-    **成功の状態:** Model accessページに両方のモデルがアクセス許可済みとして表示されます——通常は送信直後に反映されます。
-  </Step>
-</Steps>
-
-<Info>
-**Sonnet 4.5とOpus 4.5の両方**へのアクセスをリクエストしてください。CloudThinkerはタスクの要件に応じてそれらを切り替えます。
-</Info>
-
----
-
-## IAMクレデンシャルの作成
-
-IAMユーザーは両方のモデルを呼び出す権限が必要です。AWS CLIまたは[AWSコンソール](https://console.aws.amazon.com/iam/)から作成します。
+Anthropic APIキーを使う場合、このセクションは飛ばしてください。
 
 <Steps>
-  <Step title="IAMユーザーを作成する">
+  <Step title="BedrockでAnthropicモデルを有効にする">
+    AWS Consoleで[Amazon Bedrock](https://console.aws.amazon.com/bedrock/)を開きます。BedrockがAnthropicのユースケースフォームを求めた場合は、AWSアカウントごとに一度提出します。[AWSのモデルアクセスのドキュメント](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html)を参照してください。
+  </Step>
+  <Step title="IAMユーザーとポリシーを作成する">
+    ユーザーを作成し、BedrockでClaudeモデルを呼び出せるポリシーをアタッチします。
+
     ```bash
     aws iam create-user --user-name bedrock-byok-user
-    ```
-  </Step>
-  <Step title="ポリシーファイルを作成する">
-    ```bash
+
     cat > bedrock-policy.json << 'EOF'
     {
       "Version": "2012-10-17",
@@ -82,16 +58,8 @@ IAMユーザーは両方のモデルを呼び出す権限が必要です。AWS C
             "bedrock:InvokeModelWithResponseStream"
           ],
           "Resource": [
-            "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0",
-            "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-5-20251101-v1:0",
-            "arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            "arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-opus-4-5-20251101-v1:0",
-            "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-opus-4-5-20251101-v1:0",
-            "arn:aws:bedrock:*:*:inference-profile/eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            "arn:aws:bedrock:*:*:inference-profile/eu.anthropic.claude-opus-4-5-20251101-v1:0",
-            "arn:aws:bedrock:*:*:inference-profile/apac.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            "arn:aws:bedrock:*:*:inference-profile/apac.anthropic.claude-opus-4-5-20251101-v1:0"
+            "arn:aws:bedrock:*::foundation-model/anthropic.claude-*",
+            "arn:aws:bedrock:*:*:inference-profile/*.anthropic.claude-*"
           ]
         },
         {
@@ -102,179 +70,152 @@ IAMユーザーは両方のモデルを呼び出す権限が必要です。AWS C
       ]
     }
     EOF
-    ```
-  </Step>
-  <Step title="ポリシーをアタッチする">
-    ```bash
+
     aws iam put-user-policy \
       --user-name bedrock-byok-user \
       --policy-name BedrockInvokePolicy \
       --policy-document file://bedrock-policy.json
     ```
+
+    これらのコマンドには、`iam:CreateUser` と `iam:PutUserPolicy` の権限を持つAWSプロファイルが必要です。
   </Step>
   <Step title="アクセスキーを作成する">
     ```bash
     aws iam create-access-key --user-name bedrock-byok-user
     ```
 
-    出力から `AccessKeyId` と `SecretAccessKey` を保存します——これらをCloudThinkerに入力します。
-  </Step>
-  <Step title="クレデンシャルを確認する">
-    ```bash
-    aws configure --profile bedrock-byok-user
-    aws sts get-caller-identity --profile bedrock-byok-user
-    ```
-
-    **成功の状態:** `get-caller-identity` が `bedrock-byok-user` のARNを返します。
+    出力の `AccessKeyId` と `SecretAccessKey` を保存します。CloudThinkerに入力します。
   </Step>
 </Steps>
 
-<Info>
-これらのコマンドには、IAM管理権限（`iam:CreateUser`、`iam:PutUserPolicy`、`iam:CreateAccessKey`）を持つAWSプロファイルが必要です。
-</Info>
+<Tip>
+`anthropic.claude-*` のワイルドカードは、CloudThinkerが今後追加するモデルも対象にします。ポリシーを絞る場合は、対応モデルの表のモデルIDを1つずつ列挙してください。`us.anthropic.claude-opus-5` のように各推論プロファイルも追加します。
+</Tip>
 
----
-
-## CloudThinkerでBedrockを接続する
+## キーを接続する
 
 <Steps>
   <Step title="BYOK設定を開く">
-    **Settings → BYOK Settings** に移動し、プロバイダーとして **AWS Bedrock** を選択します。
+    **Admin Settings → BYOK** に移動します。
+  </Step>
+  <Step title="プロバイダーを選ぶ">
+    **Step 1 Provider** で **AWS Bedrock** または **Anthropic** を選びます。
   </Step>
   <Step title="クレデンシャルを入力する">
-    **Access Key ID**（AKIAまたはASIAプレフィックス）、**Secret Access Key**、および一時クレデンシャルの場合のみ **Session Token** を入力します。
-  </Step>
-  <Step title="推論プロファイルを選択する">
-    [データレジデンシーのニーズ](#推論プロファイル)に応じて **Global**、**US**、**EU**、または **APAC** を選択します。
-  </Step>
-  <Step title="テストして保存する">
-    **Test Connection** をクリックしてクレデンシャルが有効で両方のモデルに到達可能であることを確認し、**Save** をクリックします。
+    **Step 2 Credentials** を入力します。
 
-    **成功の状態:** Sonnet 4.5とOpus 4.5の両方のテストが通過します。
+    <Tabs>
+      <Tab title="AWS Bedrock">
+        - **Access key ID**: 永続キーは `AKIA`、一時キーは `ASIA` で始まります。
+        - **Secret access key**: そのキーのシークレットです。
+        - **Session token**: 一時的な `ASIA` キーの場合のみ必要です。
+        - **Region**: **Global (recommended)** のままにするか、AWSリージョンを1つ選びます。下の **Bedrockリージョンの選択** を参照してください。
+      </Tab>
+      <Tab title="Anthropic">
+        - **API key**: `sk-ant` で始まるAnthropic Consoleのキーです。
+        - **Base URL**: キーがゲートウェイを経由する場合のみ設定します。公開URLである必要があります。
+      </Tab>
+    </Tabs>
+  </Step>
+  <Step title="モデルを確認する">
+    **Step 3 Models on your key** に各行のモデルが表示されます。**Customize models** をクリックして行を変更するか、**CloudThinker credits** に設定します。少なくとも1行はキーで実行する必要があります。
+  </Step>
+  <Step title="検証して有効にする">
+    **Verify and activate** をクリックします。CloudThinkerは選んだ各モデルに短いテスト呼び出しを送り、キーを保存します。
+
+    **成功状態:** キーカードに **Active**、キーのヒント、リージョン、各行のモデルが表示されます。
   </Step>
 </Steps>
 
-クレデンシャルは保存時に暗号化され、APIレスポンスやログには公開されません。
+CloudThinkerはクレデンシャルを保存時に暗号化します。保存済みのシークレットがブラウザに返されることはありません。
 
----
+## Bedrockリージョンの選択
 
-## 推論プロファイル
+選んだ **Region** がBedrockの推論プロファイルを決めます。Bedrockは、そのプロファイル内のどのAWSリージョンでもリクエストを処理できます。
 
-Bedrockの推論プロファイルは、リクエストを処理できるAWSリージョンを制御します。リージョンのカバレッジについては、[AWS推論プロファイルドキュメント](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles-support.html)を参照してください。
-
-| プロファイル | ルーティング | 一般的な用途 |
+| 選んだリージョン | 推論プロファイル | Bedrockがリクエストを処理する場所 |
 |---|---|---|
-| **Global** | 任意の商用AWSリージョン | 最大スループット |
-| **US** | USリージョンのみ | USデータレジデンシー |
-| **EU** | EUリージョンのみ | GDPRコンプライアンス |
-| **APAC** | APACリージョンのみ | リージョナルデータレジデンシー |
+| **Global (recommended)** | `global.` | すべての商用AWSリージョン |
+| 米国またはカナダのリージョン（例: `us-east-1`） | `us.` | 米国のリージョン |
+| EUのリージョン（例: `eu-west-1`） | `eu.` | EUのリージョン |
+| アジア太平洋のリージョン（例: `ap-southeast-1`） | `apac.` | アジア太平洋のリージョン |
+| South America (Sao Paulo) | `global.` | すべての商用AWSリージョン |
 
----
+データを1つの地域内に留める必要がある場合は、地域のリージョンを選びます。Sao Pauloには地域プロファイルがないため、Globalプロファイルを使います。
+
+## キーの管理
+
+キーカードには、プロバイダー、状態、キーのヒント、リージョン、最終検証日時が表示されます。
+
+| 操作 | 内容 |
+|---|---|
+| **Rotate key** | クレデンシャルを置き換えます。CloudThinkerは新しいキーを検証し、モデルの選択を保ったままキーを有効にします。 |
+| **Edit models** | 各行のモデルを変更し、**Verify and save** をクリックします。 |
+| **Re-verify** | 保存済みのキーを再テストします。 |
+| **Pause** / **Activate** | キーでのモデル呼び出しを停止または再開します。一時停止したキーもクレデンシャルを保持します。 |
+| **Remove** | キーを削除します。すべてのターンがCloudThinkerクレジットに戻ります。 |
+
+カードには **Active**、**Saved, paused**、**Key expired**、**Disabled after error** のいずれかの状態が表示されます。一度に有効にできるプロバイダーは1つです。プロバイダーを切り替えるには、キーを削除してもう一方のプロバイダーを接続します。
 
 ## 仕組み
 
-- **モデル選択** — CloudThinkerはタスクごとに適切なClaudeモデルを選択します。手動でモデルを選択する必要はありません。[サポートされているファウンデーションモデルのリスト](https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html)を参照してください。
-- **ワークスペースの継承** — ワークスペースオーナーがBYOKを一度設定すると、すべてのメンバーがそれを継承します。全メンバーのLLM使用量はオーナーのAWSアカウントを通じてルーティングされ、オーナーがクレデンシャルを一元管理します。
+- **組織で1つのキー。** すべてのワークスペースとメンバーがOwnerのキーを使います。
+- **「Your key」バッジ。** チャットでは、キーで実行されクレジットを消費しないターンに **Your key** バッジが付きます。
+- **セッショントークン。** 永続的な `AKIA` キーでは、CloudThinkerがセッショントークンを自動で更新します。一時的な `ASIA` キーは更新できないため、期限切れの前にローテーションしてください。
+- **フォールバック。** キーでの呼び出しがリトライ後も失敗すると、CloudThinkerはプラットフォームのクレデンシャルでプラットフォームのモデルを使って実行します。フォールバック呼び出しはプラットフォームクレジットを消費します。
+- **各呼び出しが送る内容。** 呼び出しは、エージェントのシステムプロンプト、ツール定義、会話履歴、取得されたコンテキストを送ります。CloudThinkerは、既知のシークレットと検出された個人識別情報を先にプレースホルダーに置き換えます。
 
----
+## クレデンシャルエラー時の自動無効化
 
-## フォールバック動作
+プロバイダーがクレデンシャルを拒否すると、CloudThinkerはBYOKをオフにします。期限切れのセッショントークン、失効したアクセスキー、access deniedエラーなどが該当します。キーを復旧するまで、エージェントの作業はプラットフォームクレジットで続きます。
 
-CloudThinkerは失敗したBYOK呼び出しをプラットフォーム管理のBedrockクレデンシャルで再試行できますが、これは**ワークスペースごとのオプトイン**であり、**EnterpriseおよびBYOCプランではデフォルトで無効**です。フォールバックがオフの場合、呼び出しが失敗するとエラーが表示されます——リクエストがクレデンシャルの境界から出ることはありません。
-
-### フォールバックが発動するタイミング（有効な場合）
-
-BYOK呼び出しがプラットフォームパスにフォールバックするのは、**3つすべて**が真の場合のみです:
-
-1. エラーが再試行可能である——クレデンシャルの有効期限切れ、スロットリング、一時的な5xx——コンテンツやポリシー違反ではない。
-2. 操作が**フォールバック対象**としてマークされている（ほとんどの読み取り操作が対象。本番環境での自律的な書き込みアクションは対象外）。
-3. ワークスペースのフォールバックポリシーが **Allow** である。
-
-フォールバックは、元の呼び出しと**同じリージョン**のプラットフォーム管理のBedrockアカウントにリクエストを再送します——別の管轄エリアには送りません。すべてのフォールバックは、**Admin Settings → Audit log** に監査イベント（元のエラーコード、サービングエンドポイント、ユーザー、ワークスペース、モデル、トークン数）を記録し、[webhooks](/ja/guide/webhooks/overview)経由でSIEMにエクスポートできます。
-
-### フォールバックポリシーの設定
-
-<Steps>
-  <Step title="フォールバックポリシーを開く">
-    **Admin Settings → BYOK → Fallback policy** に移動します。
-  </Step>
-  <Step title="ポリシーを選択する">
-    | ポリシー | BYOKの失敗時の動作 | 一般的な用途 |
-    |---|---|---|
-    | **Allow** | 同リージョンのプラットフォームクレデンシャルで再試行 | 開発・サンドボックステナント |
-    | **Warn** | 同リージョンで再試行するが、次のセッションでユーザーの再確認が必要 | 混在したワークロード |
-    | **Strict** *（EnterpriseおよびBYOCのデフォルトかつ推奨）* | エラーを表示。別のクレデンシャルでは再試行しない | 規制対象の環境 |
-  </Step>
-  <Step title="組織レベルでロックする（オプション）">
-    **Enforce across all workspaces** をトグルして、ワークスペース管理者がポリシーをローカルで変更できないようにします。このトグルを切り替えられるのは、`byok:admin` 権限を持つ組織オーナーのみです。
-  </Step>
-</Steps>
-
-<Warning>
-**Strictモードのトレードオフ:** BYOKクレデンシャルが誤設定または失効した場合、修正するまでエージェントの操作が失敗します。クレデンシャルのローテーションとクォータ管理を計画し、BYOKヘルスに関する[通知](/ja/guide/notifications)を設定してください。
-</Warning>
-
-### 推論呼び出しが送信するもの
-
-ポリシーに関わらず、各BYOK呼び出しはエージェントのシステムプロンプトとツール定義、関連する会話履歴、および取得されたコンテキスト（トポロジー、メモリ、ランブック）を送信します。生のクラウドクレデンシャル、他のワークスペースのデータ、または **Admin Settings → Data Protection** でトークン化が設定されている場合は顧客のPIIを送信することはありません。
-
----
+**BYOK Credentials Error — AWS Bedrock Auto-Disabled** または **BYOK Credentials Error — Anthropic Auto-Disabled** という重要度の高い[通知](/ja/guide/notifications)が1件届きます。通知にはプロバイダーのエラーコードが含まれます。キーカードには **Disabled after error** と同じコードが表示されます。BYOKを復旧するには、**Rotate key** をクリックし、有効なクレデンシャルを入力して **Verify and save** をクリックします。
 
 ## トラブルシューティング
 
 <AccordionGroup>
-  <Accordion title="モデルアクセス拒否エラー">
-    - Bedrockコンソールでユースケースフォームを送信したことを確認する
-    - **Model access** ページでSonnet 4.5とOpus 4.5の両方が有効になっていることを確認する
-    - アクセスが反映されるまで送信後数分待つ
+  <Accordion title="検証に失敗する">
+    - ボタンの下のエラーを確認してください。プロバイダーのメッセージと失敗したモデルが表示されます。
+    - Bedrockの場合、AWSアカウントでAnthropicのユースケースフォームが承認されていることを確認してください。
+    - IAMポリシーが、モデルと選んだリージョンの推論プロファイルを対象にしていることを確認してください。
+    - 処理できない行を **CloudThinker credits** に設定してから再検証してください。
   </Accordion>
 
-  <Accordion title="IAM権限エラー">
-    - ポリシーに `bedrock:InvokeModel` と `bedrock:InvokeModelWithResponseStream` が含まれていることを確認する
-    - モデルと推論プロファイルのARNが使用するモデルとプロファイルと一致していることを確認する
-    - AWSコンソールで直接権限をテストする
+  <Accordion title="特定のリージョンでaccess deniedになる">
+    - 地域のリージョンは `us.`、`eu.`、`apac.` の推論プロファイルを使います。
+    - IAMポリシーが `inference-profile/*.anthropic.claude-*`、またはそのプロファイル名を許可していることを確認してください。
+    - Bedrockがその地域でモデルを提供していることを確認するか、**Region** を **Global (recommended)** に変更してください。
   </Accordion>
 
-  <Accordion title="クレデンシャル検証の失敗">
-    - アクセスキーIDとシークレットアクセスキーが正しく、ローテーションまたは失効されていないことを確認する
-    - 一時クレデンシャルの場合、セッショントークンが有効期限切れでないことを確認する
-    - `aws sts get-caller-identity` でテストする
+  <Accordion title="行にModel retired, pick anotherと表示される">
+    - CloudThinkerはそのモデルをキーで提供しなくなりました。
+    - **Edit models** をクリックし、行に別のモデルを選んで **Verify and save** をクリックしてください。
   </Accordion>
 
-  <Accordion title="接続テストの失敗">
-    - Sonnet 4.5とOpus 4.5の両方がアクセス可能でIAMポリシーでカバーされていることを確認する
-    - AWSアカウントでBedrockが有効になっていることを確認する
-    - リージョンの選択がモデルアクセスと一致していることを確認する
+  <Accordion title="BYOKが自動でオフになった">
+    - プロバイダーがクレデンシャルを拒否しました。上の自動無効化のセクションを参照してください。
+    - キーカードまたは通知のエラーコードを確認してください。
+    - **Rotate key** をクリックし、有効なクレデンシャルを入力してください。
+    - 一時的な `ASIA` キーは期限切れになります。再発を防ぐには永続的な `AKIA` キーに切り替えてください。
   </Accordion>
 
-  <Accordion title="ワークスペースでBYOKが機能しない">
-    - ワークスペースオーナーがBYOKを設定し、設定で有効になっていることを確認する
-    - オーナーのプランがScale、Scale +、またはEnterpriseであることを確認する
-    - オーナーのクレデンシャルがまだ有効であることを確認する
-  </Accordion>
-
-  <Accordion title="セッショントークンの有効期限切れ">
-    - 長期クレデンシャル（AKIA）は自動的に更新される
-    - 一時クレデンシャル（ASIA）は更新できない——新しいクレデンシャルで再設定する
-    - 設定内の `session_token_expires_at` タイムスタンプを確認する
+  <Accordion title="ターンにYour keyバッジが表示されない">
+    - キーカードが **Saved, paused** ではなく **Active** であることを確認してください。
+    - 組織がScale、Scale+、またはEnterpriseプランであることを確認してください。
+    - モードまたはモジュールの行が **CloudThinker credits** ではなくキーで実行されることを確認してください。
   </Accordion>
 </AccordionGroup>
-
----
 
 ## 関連
 
 <CardGroup cols={2}>
   <Card title="料金・プラン" icon="credit-card" href="/ja/guide/billing/pricing">
-    BYOKが含まれるプランと各ティアの内容
+    BYOKを含むプラン
   </Card>
   <Card title="使用量" icon="chart-line" href="/ja/guide/billing/usage">
-    ワークスペース全体のクレジットとLLM使用量を追跡する
+    ワークスペースのクレジットとモデル使用量を追跡する
   </Card>
   <Card title="通知" icon="bell" href="/ja/guide/notifications">
-    BYOKクレデンシャルのヘルスが業務をブロックする前にアラートを設定する
-  </Card>
-  <Card title="Webhooks" icon="webhook" href="/ja/guide/webhooks/overview">
-    監査イベントをSIEMにエクスポートする
+    BYOKキーが停止したときにアラートを受け取る
   </Card>
 </CardGroup>
