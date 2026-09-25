@@ -1,0 +1,214 @@
+---
+title: Workers
+description: "Run a chat or Automation on a machine you control, set what the agent can reach, and choose whether it uses your workspace connections"
+icon: server
+---
+
+A Worker runs the agent on a machine you control — your laptop, a server, or a CI runner — instead of CloudThinker Cloud. You pick where each chat and each Automation runs, name one folder for the agent to work in, and decide whether the run may use your workspace connections.
+
+<Note>
+**Beta** — Workers are in beta and ship with the [CloudThinker CLI](/guide/cli/overview), which is in early access. Command names and flags may change before general availability.
+</Note>
+
+## Why a Worker
+
+- **Reach a private machine.** The agent edits files and runs commands where your code and tools already live, without exposing them to the cloud.
+- **Keep credentials in the cloud.** A connection command runs in CloudThinker Cloud with its credential injected there. A credential never leaves the cloud onto a Worker.
+- **Share one machine, or keep it personal.** A personal Worker is visible only to you. A shared Worker is visible to every authorized member of the workspace.
+- **Route Automations too.** A scheduled Automation can run on a Worker every time it fires.
+- **Fall back to nothing.** When a Worker is unavailable, the run reports the error. It does not silently move to the cloud.
+
+## Choose where a chat runs
+
+You pick where a chat runs in the composer, before the first message. After the first message, the choice is fixed for that conversation.
+
+<Steps>
+  <Step title="Open the + menu">
+    Open the **+** menu beside the chat prompt box. The **Run in** row appears when there is a choice — a Worker, a Desktop folder, or a load retry.
+
+    <Frame>
+      <img src="/images/workers/01-plus-menu-run-in-row.png" alt="The + menu with a Run in row showing CloudThinker Cloud" />
+    </Frame>
+  </Step>
+  <Step title="Select Run in">
+    Select **Run in**, then choose **CloudThinker Cloud** or a Worker by name.
+
+    **Success state:** a chip appears in the toolbar with the Worker's name. Its tooltip says what runs where.
+
+    <Frame>
+      <img src="/images/workers/02-worker-chip-tooltip.png" alt="The toolbar chip for a Worker, with a tooltip that explains what runs where" />
+    </Frame>
+  </Step>
+  <Step title="Send the first message">
+    Send your first message. The conversation is now bound to that Worker.
+
+    **Success state:** the chip shows a lock and becomes read-only. A fork or a Room thread inherits where it runs.
+  </Step>
+</Steps>
+
+When the only choice is CloudThinker Cloud, the **Run in** row does not appear, and the chat runs in the cloud.
+
+## Set up a Worker
+
+You register and run a Worker from the CLI. Install and log in first — see [CLI](/guide/cli/overview).
+
+<Steps>
+  <Step title="Register the Worker">
+    ```bash
+    cloudthinker worker outpost create "my-laptop" --shared
+    ```
+
+    Omit `--shared` for a personal Worker. This stores the Worker's credential on this machine. List what the workspace has with `cloudthinker worker outpost ls`.
+  </Step>
+  <Step title="Serve one folder">
+    ```bash
+    cloudthinker worker start --outpost "my-laptop" --workdir ~/projects/app
+    ```
+
+    File tools are confined to `--workdir`. Shell commands start there, under your own OS account. The process serves work over outward HTTPS until you interrupt it.
+  </Step>
+  <Step title="Confirm it is available">
+    ```bash
+    cloudthinker worker status --outpost "my-laptop"
+    ```
+
+    **Success state:** the status reads available. Registration alone is not enough — the Worker first passes server-driven file, shell, cancel, and artifact checks before the workspace can select it.
+  </Step>
+</Steps>
+
+## What a Worker can access
+
+The two ways the agent touches your machine have different reach. Know both before you serve a folder.
+
+| The agent does this | Where it can reach |
+|---------------------|--------------------|
+| Read, write, edit, or list files with a file tool | Only inside `--workdir`. A path outside the folder, or a `..` that climbs out, is rejected. |
+| Run a shell command | The whole machine, as your OS account. `--workdir` is only the starting directory. |
+
+The file boundary is enforced on the machine itself, not only in the cloud. The Worker opens `--workdir` as a directory handle, so even a symlink cannot point a file tool outside the folder.
+
+A shell command has no such boundary. CloudThinker adds no container, sandbox, or reduced privileges on your machine, so the command can do anything your account can — read `~/.ssh`, write outside the folder, or reach the network.
+
+<Warning>
+A shell command on a Worker runs with your OS account's full access to the machine, not only `--workdir`. Serve a folder from an account whose reach you accept. On a machine that holds sensitive files, keep the agent in Manual mode and use [Approval](/guide/approval) for shell actions.
+</Warning>
+
+A shell command sees a reduced environment by default: only `PATH`, `HOME`, `LANG`, `TERM`, `USER`, and `TMPDIR`. CloudThinker strips its own launcher variables. Pass one variable with `--env NAME=VALUE`, repeat the flag for more, or pass your whole shell with `--inherit-env`.
+
+## Command reference
+
+Every command starts with `cloudthinker worker`. Set `CLOUDTHINKER_OUTPOST_ID` to omit `--outpost` on repeat calls.
+
+| Command | What it does |
+|---------|--------------|
+| `outpost create "<name>" [--shared]` | Register an outpost and store its credential on this machine. |
+| `outpost ls` | List the outposts the workspace can run work on. |
+| `outpost archive "<name>"` | Retire an outpost so no more work routes to it. |
+| `start --outpost "<name>" --workdir <path>` | Serve one folder until you interrupt it. |
+| `status --outpost "<name>"` | Show the outpost's availability as the workspace sees it. |
+| `service install --outpost "<name>" --workdir <path>` | Register a background service (see [Keep a Worker running](#keep-a-worker-running)). |
+
+These flags tune `worker start`:
+
+| Flag | Default | What it does |
+|------|---------|--------------|
+| `--outpost <name\|id>` | — | The outpost to serve. Reads `CLOUDTHINKER_OUTPOST_ID` when omitted. |
+| `--workdir <path>` | — | The one folder file tools are confined to; shell starts here. |
+| `--concurrency <1-32>` | 4 | How many assignments the Worker serves at once. |
+| `--name <label>` | folder name | Short display name for the served folder. |
+| `--env NAME=VALUE` | — | Pass one variable to shell commands; repeat for more. |
+| `--inherit-env` | off | Pass this shell's whole environment to shell commands. |
+
+## Workspace Connections
+
+**Workspace Connections** is a switch on the Worker. It controls whether the run may use the connections saved in your workspace. It does not move the whole run to the cloud.
+
+| Switch | A connection command | File tools and plain shell |
+|--------|----------------------|----------------------------|
+| **On** | Runs in CloudThinker Cloud, with the credential injected there | Run on the Worker |
+| **Off** | Does not run; the agent is told the connection is unavailable | Run on the Worker |
+
+CloudThinker Cloud always has the switch on. The first message fixes the switch together with the Worker, and later messages cannot change it. For an Automation, flipping the switch takes effect on the next run.
+
+<Frame>
+  <img src="/images/workers/03-workspace-connections-switch.png" alt="The Run in menu with the Workspace Connections switch and its description" />
+</Frame>
+
+## What always runs in CloudThinker Cloud
+
+A few workloads read state that only CloudThinker Cloud holds. In a Worker conversation, each one reports an error instead of running on the Worker:
+
+- A [Cyber](/guide/security/cyber-overview) pentest run and its report download.
+- A browser-driven session.
+- Repository code-graph indexing.
+
+The agent's memory, schedules, workspace, and skills also live in the cloud, not in `--workdir`. A file tool reaches them there. A shell command on the Worker sees only the machine, so it cannot read or change them.
+
+## Keep a Worker running
+
+`cloudthinker worker start` runs in the foreground and stops when you interrupt it. To keep a Worker available across logins, install it as a per-user service — `systemd --user` on Linux, `launchd` on macOS.
+
+| Command | What it does |
+|---------|--------------|
+| `service install --outpost "<name>" --workdir <path>` | Register the service without starting it. |
+| `service start --outpost "<name>" --workdir <path>` | Start the registered service now. |
+| `service status --outpost "<name>" --workdir <path>` | Report absent, inactive, loaded, or active. |
+| `service stop --outpost "<name>" --workdir <path>` | Stop it; the Worker drains its assignments first. |
+| `service uninstall --outpost "<name>" --workdir <path>` | Remove the service, keep the credential. |
+
+A user service lives only as long as your OS session allows; a `launchd` agent does not run before you log in.
+
+## Automations
+
+An [Automation](/guide/automation/automations) stores the same Worker and **Workspace Connections** switch. Open the Automation form, set **Run in**, then set the switch. Only a workspace admin can change where an Automation runs.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="The Worker never becomes available">
+    Registration is not enough. The Worker must pass server-driven file, shell, cancel, and artifact checks. Run `cloudthinker worker status --outpost "<name>"` and read the failing check. Confirm the process is still running and `--workdir` still exists.
+  </Accordion>
+  <Accordion title="A shell command cannot find a variable or tool">
+    A shell command sees only `PATH`, `HOME`, `LANG`, `TERM`, `USER`, and `TMPDIR` by default. Add what it needs with `--env NAME=VALUE`, or pass your whole shell with `--inherit-env`, then restart the Worker.
+  </Accordion>
+  <Accordion title="A file tool is rejected for a path outside the folder">
+    File tools are confined to `--workdir`. A path outside it, or a `..` that climbs out, is rejected by design. Serve the higher folder with a new Worker if the agent must reach it, or use a shell command, which is not confined.
+  </Accordion>
+  <Accordion title="I moved the folder and the Worker stopped">
+    A Worker is pinned to one directory identity. A different directory needs a new outpost. Register one with `cloudthinker worker outpost create` and start it against the new path.
+  </Accordion>
+</AccordionGroup>
+
+## FAQ
+
+<AccordionGroup>
+  <Accordion title="Can I change where a chat runs after the first message?">
+    No. The first message fixes the Worker and the switch. Start a new conversation to run somewhere else.
+  </Accordion>
+  <Accordion title="Does a Worker see my connection credentials?">
+    No. A connection command runs in CloudThinker Cloud with its credential injected there. The credential never reaches the Worker.
+  </Accordion>
+  <Accordion title="What account do commands run as?">
+    The OS account that started the Worker, or the service's login user. CloudThinker adds no separate user and no sandbox on your machine.
+  </Accordion>
+  <Accordion title="Can two Workers serve the same folder?">
+    No. One Worker holds an exclusive lock on its folder. Its own state is stored outside the served folder, so the agent never sees it.
+  </Accordion>
+</AccordionGroup>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="CLI" icon="terminal" href="/guide/cli/overview">
+    Install the CLI, log in, and run the agent from your terminal
+  </Card>
+  <Card title="Approval" icon="shield-check" href="/guide/approval">
+    Decide which agent actions need your approval before they run
+  </Card>
+  <Card title="Automations" icon="robot" href="/guide/automation/automations">
+    Schedule an agent to run on a trigger, in the cloud or on a Worker
+  </Card>
+  <Card title="Connections" icon="plug" href="/guide/connections/overview">
+    Set up the workspace connections a run can use
+  </Card>
+</CardGroup>
