@@ -1,0 +1,146 @@
+---
+title: AWS CodeCommit
+description: "Connect AWS CodeCommit to CloudThinker for repository, pull request, and review comment context, and to power Review"
+icon: "/images/icons/aws-codecommit.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+
+Connect your AWS CodeCommit repositories to let CloudThinker agents list and read them, and to run [Review](/guide/code-review/setup) on their pull requests. AWS CodeCommit authenticates with an **IAM role** (recommended) or **IAM user access keys**, scoped to one AWS Region.
+
+## Prerequisites
+
+- An **AWS account** that holds the CodeCommit repositories you want CloudThinker to reach.
+- Permission to create an IAM role or IAM user in that account, and to open [AWS CloudShell](https://docs.aws.amazon.com/cloudshell/latest/userguide/getting-started.html). AWS grants CloudShell access through the `AWSCloudShellFullAccess` managed policy.
+- The **AWS Region** where your repositories live. A CodeCommit repository exists in one Region.
+
+<Info>
+A workspace holds one AWS CodeCommit connection, and one connection covers one Region. Repositories in other Regions are not reachable through it.
+</Info>
+
+## Setup
+
+Navigate to **Connections → AWS CodeCommit** in your CloudThinker workspace, click **Connect**, and choose the **AWS Region** where your repositories live. Then pick an authentication method.
+
+<Tabs>
+  <Tab title="IAM role (recommended)">
+    <Steps>
+      <Step title="Open AWS CloudShell">
+        On the **IAM Role** tab, click **Open CloudShell**. It runs in your browser, so there is nothing to install.
+      </Step>
+      <Step title="Run the setup script">
+        Click **Copy Script to Clipboard**, paste the script into CloudShell, and run it. It creates the role `CloudThinkerCodeCommitAccessRole` with a trust policy that includes a unique external ID, then prints the **Role ARN**. The wizard also lists the same steps as manual commands.
+      </Step>
+      <Step title="Paste the Role ARN">
+        Paste the ARN into **Role ARN** and click **Connect**. CloudThinker assumes the role, lists your repositories, and shows a **Connected** status with the number of repositories it can reach.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Access keys">
+    <Steps>
+      <Step title="Run the setup script">
+        On the **Access Keys** tab, click **Open CloudShell**, copy the script with **Copy Script to Clipboard**, and run it. It creates the IAM user `CloudThinkerCodeCommitUser`, attaches the CodeCommit permissions, and prints an access key pair.
+      </Step>
+      <Step title="Paste the keys">
+        Paste the values into **Access Key ID** and **Secret Access Key**, then click **Connect**. CloudThinker verifies the keys and shows a **Connected** status.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+<Warning>
+AWS does not show a secret access key again after you create it. Copy it from the script output before you close CloudShell.
+</Warning>
+
+Review also needs pull request events from AWS. Finish the [webhook step](/guide/code-review/provider-auth#configure-webhooks) after you connect.
+
+## Connection details
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| **AWS Region** | Region that holds your repositories | `us-east-1` |
+| **Role ARN** | IAM role CloudThinker assumes (IAM role method) | `arn:aws:iam::<your-account-id>:role/CloudThinkerCodeCommitAccessRole` |
+| **Access Key ID** | Access key for the dedicated IAM user (access keys method) | `<your-access-key-id>` |
+| **Secret Access Key** | Secret for that access key (access keys method) | `<your-secret-access-key>` |
+
+## Required permissions
+
+The setup script attaches an inline policy with these CodeCommit actions:
+
+| Purpose | Actions |
+|---------|---------|
+| **Find repositories** | `ListRepositories`, `GetRepository` |
+| **Read pull requests** | `ListPullRequests`, `GetPullRequest`, `GetDifferences`, `GetCommentsForPullRequest`, `GetCommentReactions` |
+| **Read code** | `GetBlob`, `GetFile`, `GetFolder`, `GitPull` |
+| **Write review comments** | `PostCommentForPullRequest`, `PostCommentReply`, `UpdateComment` |
+
+The policy also lets CloudThinker manage Amazon EventBridge rules whose names start with `CloudThinker-CodeCommit-`, so pull request events can reach Review.
+
+<Tip>
+Follow least privilege: keep the policy the script attaches and add nothing broader. Use the IAM role method so no long-lived key is stored.
+</Tip>
+
+## Agent capabilities
+
+Once connected, agents can:
+
+| Capability | Description |
+|------------|-------------|
+| **Repositories** | List the repositories in the connection's Region and clone one to read its code |
+| **Pull requests** | Read a pull request's changes and comments during a review |
+| **Review comments** | Post summaries, findings, and replies as pull request comments |
+
+### Verify the connection
+
+```text
+List the AWS CodeCommit repositories CloudThinker can reach
+```
+
+### Example prompts
+
+```text
+Clone the payments repository from AWS CodeCommit and summarize how it is structured
+Which AWS CodeCommit pull requests did Review flag with high-severity findings this week
+```
+
+CodeCommit supports fewer [mention commands](/guide/code-review/mention-commands) than GitHub or GitLab: questions in top-level comments only, with no `review` or `autofix`.
+
+## Troubleshooting
+
+<Accordion title="Failed to connect to AWS CodeCommit. Please verify your credentials.">
+CloudThinker could not use the credentials. For the IAM role method, the role's trust policy must include the external ID the wizard shows for this connection, so re-run the script if you changed it. For access keys, check the key pair and that the user is allowed to list repositories. Also check that the **AWS Region** is valid, and that the workspace does not already have an AWS CodeCommit connection.
+</Accordion>
+
+<Accordion title="Failed to connect to AWS CodeCommit. Please try again.">
+An unexpected error stopped the check. Try again; if it repeats, contact support.
+</Accordion>
+
+<Accordion title="Connected — no repositories found yet">
+The credentials work, but the chosen Region holds no repositories the role or user can list. Confirm the **AWS Region** and that the permissions above are attached.
+</Accordion>
+
+<Accordion title="An expected repository is missing">
+Repositories in another Region do not appear. Check the **AWS Region** on the connection.
+</Accordion>
+
+<Accordion title="Review does not start on new pull requests">
+AWS sends no pull request events until the webhook step is done. Run the webhook script from the wizard, then mark it configured. See [provider authentication](/guide/code-review/provider-auth#configure-webhooks).
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- **External ID** — the role's trust policy requires it, which protects against the confused deputy problem. AWS does not treat an external ID as a secret.
+- **Dedicated identity** — use the IAM user or role the script creates only for CloudThinker, so you can revoke it without touching anything else.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Review Setup" icon="gear" href="/guide/code-review/setup">
+    Turn on automated AI code reviews for your CodeCommit repositories
+  </Card>
+  <Card title="Provider Authentication" icon="key" href="/guide/code-review/provider-auth">
+    Authentication and webhook details for every Review provider
+  </Card>
+</CardGroup>
