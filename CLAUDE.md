@@ -4,11 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Overview
 
-This is a **Mintlify-based documentation site** for CloudThinker, an **autonomous AI cloud operations platform** (the **AgenticOps** category) where specialized AI agents manage infrastructure, review code, resolve incidents, and optimize costs across AWS, Azure, GCP, and Kubernetes. The documentation is written in MDX format and uses Mintlify's tooling for development and deployment.
+This is a **Mintlify-based documentation site** for CloudThinker, a **self-healing ops platform** where **frontier investigation agents** investigate every issue and propose the fix while engineers set intent and approve. Customers start with Resolve, then expand into Review, Optimize, and Cyber across AWS, Azure, GCP, and Kubernetes. The documentation is written in MDX format and uses Mintlify's tooling for development and deployment.
 
 **Canonical naming** (keep docs consistent with the app and landing page; the in-product values in the app are the source of truth when sources disagree):
 
-- **Category**: "Autonomous Cloud Operations" / "AgenticOps" — not "Multi-Agent System (MAS) orchestration".
+- **Category**: "Self-healing ops platform", led by "frontier investigation agents" — not "Autonomous Cloud Operations", "intelligent OS for your cloud", or "Multi-Agent System (MAS) orchestration". "AgenticOps" remains the name of the method (field guide, tutorial), not the category.
+- **Hero order**: investigation and Resolve lead; Review, Optimize, and Cyber are presented as expansion. Marketing stats (e.g. "87% of engineer effort") stay on the landing site — STYLE.md bans unsourced percentages in docs.
 - **Module names**: Optimize · Review · Cyber · Resolve. These replace `CostOps`, `Code Review`, `SecOps`/`App Pentesting`, and `Deep Response Engine`/`DRE` in user-facing copy. Keep the existing route paths and code identifiers. The learned-rule surface is **Learnings**, not `Convention Rules`.
 
 ## Development Commands
@@ -55,13 +56,7 @@ mintlify broken-links
 
 ### Platform-Specific Details
 
-**CloudThinker Platform**: Multi-cloud AI operations platform with specialized agents:
-
-- **Alex**: Cloud Engineer (infrastructure, cost optimization)
-- **Oliver**: Security Professional (compliance, vulnerability assessment)
-- **Tony**: Database Engineer (performance tuning)
-- **Kai**: Kubernetes Engineer (container orchestration)
-- **Anna**: General Manager (multi-agent orchestration, executive reporting)
+**CloudThinker Platform**: one built-in assistant, **CloudThinker** (`@CloudThinker`), which spawns temporary subagents for parallel work, plus custom agents each workspace defines. The former personas (Anna, Alex, Oliver, Tony, Kai) are retired from customer-facing copy; see STYLE.md fact 8 and `/guide/agents/overview`.
 
 **Multi-cloud support**: AWS, Azure, GCP with unified operations interface
 
