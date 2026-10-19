@@ -1,12 +1,12 @@
 # CloudThinker Docs Style Guide & Content System
 
-The rulebook for every page in this repo. Rewrite agents and human contributors follow it mechanically. Golden exemplars: `quickstart.mdx` (task/tutorial register), `guide/auto-mode.mdx` (concept), `guide/connections/coralogix.mdx` (connection), `guide/code-review/setup.mdx` (multi-procedure task page).
+The rulebook for every page in this repo. Rewrite agents and human contributors follow it mechanically. Golden exemplars: `quickstart.mdx` (task/tutorial register), `guide/approvals/approval-mode.mdx` (concept), `guide/connections/coralogix.mdx` (connection), `guide/code-review/setup.mdx` (multi-procedure task page).
 
 Source-of-truth hierarchy for facts: **current app UI → confirmed product facts (below) → CLAUDE.md canonical naming → current screenshots in repo → app-adjacent reference pages → everything else.** Marketing copy is never a source of facts.
 
 ## Confirmed product facts (override any conflicting page text)
 
-1. **Autonomy has exactly two modes: Manual / Auto.** Any 3-level (Suggest/Approve/Autonomous) or 4-level (notify→suggest→approve→autonomous) model is wrong — remove on sight. Use `/snippets/autonomy-modes.mdx`.
+1. **Autonomy has exactly two Approval modes: Manual / Auto** (Auto has four choices: Rules or Rules + AI, then Ask me or Refuse). Any 3-level (Suggest/Approve/Autonomous) or 4-level (notify→suggest→approve→autonomous) model is wrong — remove on sight. Use `/snippets/autonomy-modes.mdx`.
 2. **General finding statuses: New / Acknowledged / Active / Resolved / Dismissed.** Use `/snippets/finding-statuses.mdx`. **Optimize Findings** instead uses Pending / In Progress / Implemented / Ignored because those rows follow the recommendation workflow. Never conflate the two.
 3. **Prompt syntax: `@agent #connection request`, both optional** — plain language works; with no mention, CloudThinker answers. The `#` picker selects a connection (or a knowledge base), not an output tool; `/` runs a skill or command. Output shapes such as dashboards or reports are asked for in words ("as a dashboard"). `#dashboard`, `#report`, `#recommend` survive only as typed text — don't teach them as picker tools. `#chart` and `#kb` do NOT exist. Canonical home: `/guide/commands` and the `prompt-syntax-basics` snippet.
 4. **Code-review bot mention: `@cloudthinker-ai`.** Re-review IS a mention command (`@cloudthinker-ai review`, aliases `review again` / `continue review`); skip-review is NOT a mention command — it is the `@cloudthinker:ignore` marker in the MR/PR description. Canonical home: `/guide/code-review/mention-commands`.
@@ -14,7 +14,7 @@ Source-of-truth hierarchy for facts: **current app UI → confirmed product fact
 5. **Roles**: org roles Owner / Admin / Developer / Viewer ("Member" is legacy = Developer); workspace roles Admin / Developer / Viewer. Org Owner and Admin hold workspace Admin in every workspace.
 6. **Plans: Free / Team / Scale / Scale+ / Enterprise**, spelled "Scale+" in docs. Never Standard/Advanced/Pro/Professional. (Product frontend renders "Scale Plus" — if the production billing UI settles on that spelling, update this fact first, then sweep.)
 7. **BYOK = bring your own LLM credentials** (Admin Settings → BYOK) — never encryption/KMS keys. Canonical UI paths: identity = **Admin Settings → Identity and access**; audit logs = **Admin Settings → Audit Logs**; MFA = **Account Settings → 2FA**.
-8. **Agent model**: one built-in assistant, **CloudThinker** (always on, mention `@CloudThinker` or none), which spawns temporary subagents; plus workspace custom agents. The five personas are retired from customer-facing copy. New workspaces default to **Auto** approval mode.
+8. **Agent model**: one built-in assistant, **CloudThinker** (always on, mention `@CloudThinker` or none), which spawns temporary subagents; plus workspace custom agents. The five personas are retired from customer-facing copy. New workspaces default to the **Auto · Rules + AI · Ask me** Approval mode. Rules decide before the mode; canonical home: `/guide/approvals/overview`.
 
 ## Terminology (canonical → banned)
 
@@ -60,7 +60,7 @@ Source-of-truth hierarchy for facts: **current app UI → confirmed product fact
 
 **(c) Task/how-to** (500–1200w): intro ≤2 sentences → `## Prerequisites` (bullets, link don't re-teach) → one `##` + `Steps` per procedure (imperative titles, bold UI paths **Settings → Connections**, Frame per UI step, "**Success state:**" line when the outcome isn't obvious) → Tabs for provider forks → optional `## Troubleshooting` (Accordions: cause/check/fix) → `## Next steps`.
 
-**(d) Concept** (600–1200w, model = auto-mode.mdx): intro definition ≤2 sentences → `## Why <concept>` (≤5 bolded bullets) → `## Turn it on` (short Steps only if a toggle exists) → 2–4 behavior H2s (decision tables over prose) → optional `## Examples` (max 2, contrasting) → optional `## FAQ` (≤6) → `## Related`. One stated behavior per fact — never two descriptions of the same mechanism.
+**(d) Concept** (600–1200w, model = approvals/approval-mode.mdx): intro definition ≤2 sentences → `## Why <concept>` (≤5 bolded bullets) → `## Turn it on` (short Steps only if a toggle exists) → 2–4 behavior H2s (decision tables over prose) → optional `## Examples` (max 2, contrasting) → optional `## FAQ` (≤6) → `## Related`. One stated behavior per fact — never two descriptions of the same mechanism.
 
 **(e) Reference** (≤1500w): intro ≤2 sentences → canonical form in ONE code block + component table → reference H2s as tables (every enumerable thing is a table row) → `## Examples` (≤5 blocks) → `## Related`.
 
