@@ -397,7 +397,7 @@ export const CustomizeScene = ({ className }) => {
         ['Teach', cT],
         ['Connect', cC],
         ['Run', cR],
-        ['Guardrails', cG],
+        ['Approvals', cG],
     ];
     // Icons the shared kit lacks, in top-face coordinates.
     const chatIcon = (c) => (<g fill="none" stroke={c} strokeWidth="3.2" strokeLinejoin="round">
@@ -459,14 +459,14 @@ export const CustomizeScene = ({ className }) => {
         { at: cR + 0.2, who: 'Run', text: 'Weekly cost report, on a schedule' },
         {
             at: RUN1 + 0.5,
-            who: 'Always allow',
+            who: 'Allow',
             text: 'aws: describe_instances',
             tone: 'ok',
         },
-        { at: RUN2 + 0.5, who: 'Needs approval', text: 'aws: stop_instances' },
+        { at: RUN2 + 0.5, who: 'Ask first', text: 'aws: stop_instances' },
         {
             at: RUN3 + 0.5,
-            who: 'Never allow',
+            who: 'Deny',
             text: 'kubectl: delete namespace',
             tone: 'alert',
         },
@@ -604,15 +604,15 @@ export const CustomizeScene = ({ className }) => {
             <Packet T={T} route={TO_GATE} a={RUN3 + 0.6} b={RUN3 + 1.1} rev color={pal.alert}/>
 
             {/* rule pills over the gate */}
-            {pill(okK, 'Always allow', pal.ok)}
-            {pill(waitK, 'Needs approval', pal.accent)}
-            {pill(blockK, 'Never allow', pal.alert)}
+            {pill(okK, 'Allow', pal.ok)}
+            {pill(waitK, 'Ask first', pal.accent)}
+            {pill(blockK, 'Deny', pal.alert)}
 
             {/* labels */}
             <Label x={P(AGENT[0], AGENT[1], 140)[0] + 20} y={P(AGENT[0], AGENT[1], 140)[1] - 90} text="YOUR AGENT" sub="Your rules, your workspace" anchor="middle"/>
             <Label x={P(-105, 145)[0]} y={P(-160, 90, 64)[1] - 76} text="SKILLS" sub="Runbooks, checklists, commands" anchor="middle"/>
             <Label x={P(40, 430)[0]} y={P(40, 430)[1] + 72} text="SCHEDULE" sub="Cron, webhook or repo event" anchor="middle"/>
-            <Label x={1044} y={686} text="GUARDRAILS" sub="Allow, approve or never" anchor="end"/>
+            <Label x={1044} y={686} text="APPROVALS" sub="Allow, ask first or deny" anchor="end"/>
             <Label x={P(740, 360)[0]} y={P(740, 360)[1] + 50} text="YOUR TOOLS" sub="AWS, Slack, your MCP server" anchor="middle"/>
             <Label x={P(200, -120)[0]} y={P(150, -170, 52)[1] - 76} text="ENGINEERS" sub="Approve what waits" anchor="middle"/>
           </g>

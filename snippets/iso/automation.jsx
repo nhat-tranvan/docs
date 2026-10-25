@@ -378,7 +378,7 @@ export const AutomationScene = ({ className }) => {
     /*
      * Automation's daily routine, on the same isometric stage as the homepage
      * workflow. A 12s loop built from the page's own mockup (the daily cost
-     * anomaly sweep): the 07:00 schedule fires, the Optimize agent reads spend
+     * anomaly sweep): the 07:00 schedule fires, CloudThinker reads spend
      * across your cloud, finds an anomaly and explains the why, the proposed
      * write waits for an engineer's approval, then the fix lands and the run is
      * logged. Simulated product UI, so it stays English in every locale.
@@ -456,7 +456,7 @@ export const AutomationScene = ({ className }) => {
         { at: cT + 0.4, who: 'Schedule', text: 'Every day at 07:00, run started' },
         {
             at: cR + 0.4,
-            who: 'Optimize agent',
+            who: 'CloudThinker',
             text: "Reading yesterday's spend",
         },
         {
@@ -568,7 +568,7 @@ export const AutomationScene = ({ className }) => {
                 </Box>
               </g>))}
 
-            {/* hub with the Optimize agent above it */}
+            {/* hub with CloudThinker above it */}
             <Box x={-40} y={60} w={180} d={180} h={40} pal={pal} top={mix(pal.hub, pal.hubHot, agentK)} sw={2}/>
             <polyline points={pts([
                 [50, 150, 40],
@@ -610,7 +610,7 @@ export const AutomationScene = ({ className }) => {
             <Packet T={T} route={TO_LOG} a={cD + 0.8} b={cD + 1.4} color={pal.accent}/>
 
             {/* labels */}
-            <Label x={P(50, 150, agentZ)[0] + 110} y={P(50, 150, agentZ)[1] - 70} text="OPTIMIZE AGENT" sub="Finds the why, proposes the fix"/>
+            <Label x={P(50, 150, agentZ)[0] + 110} y={P(50, 150, agentZ)[1] - 70} text="CLOUDTHINKER" sub="Finds the root cause, proposes the fix"/>
             <Label x={900} y={70} text="TRIGGERS" sub="Schedule, webhook, repo event"/>
             <Label x={P(110, 500)[0] - 20} y={P(110, 500)[1] + 50} text="ENGINEERS" sub="Approve every write" anchor="middle"/>
             <Label x={P(310, 400)[0] + 30} y={P(310, 400)[1] + 40} text="RUN LOG" sub="Every run auditable"/>
@@ -633,7 +633,7 @@ export const AutomationScene = ({ className }) => {
     }
     /** Automation's daily routine on its stage. Starts from the first frame on mount. */
     function AutomationStage({ className }) {
-        return (<IsoMotionStage loop={LOOP} label="A daily schedule fires an automation. The Optimize agent reads spend across your cloud, finds a cost anomaly and explains why, the proposed write waits for an engineer's approval, then the fix is applied and the run is logged." className={className} frame={(T) => <AutomationFrame T={T}/>}/>);
+        return (<IsoMotionStage loop={LOOP} label="A daily schedule fires an automation. CloudThinker reads spend across your cloud, finds a cost anomaly and explains why, the proposed write waits for an engineer's approval, then the fix is applied and the run is logged." className={className} frame={(T) => <AutomationFrame T={T}/>}/>);
     }
 
     return AutomationStage;

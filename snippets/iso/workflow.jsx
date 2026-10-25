@@ -589,7 +589,7 @@ export const WorkflowScene = ({ className }) => {
           {/* labels */}
           <Label x={P(760, 380)[0]} y={P(760, 380)[1] + 44} text="YOUR STACK" sub="Cloud, code, observability, apps" anchor="middle"/>
           <Label x={P(140, 380)[0] - 130} y={P(140, 380)[1] + 42} text="UNIFIED LAYER" sub="Connections, memory, policy, audit" anchor="middle"/>
-          <Label x={P(50, 290, 170)[0] + 175} y={P(50, 290, 170)[1] - 70} text="AGENTS" sub="Review, Cyber, Resolve, Optimize, Customize"/>
+          <Label x={P(50, 290, 170)[0] + 175} y={P(50, 290, 170)[1] - 70} text="CLOUDTHINKER" sub="Subagents for incidents, code, security and cost"/>
           <Label x={P(-480, 120)[0] - 10} y={P(-360, 120)[1] + 38} text="ENGINEERS" sub="Approve and decide" anchor="middle"/>
           <Label x={P(-200, 620)[0] - 10} y={P(-80, 620)[1] + 38} text="COMPANY MEMORY" anchor="middle"/>
           <Label x={1470} y={170} text="OUTCOMES"/>

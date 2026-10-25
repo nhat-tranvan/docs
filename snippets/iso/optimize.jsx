@@ -377,7 +377,7 @@ export const OptimizeScene = ({ className }) => {
 
     /*
      * Optimize on the same isometric stage as the homepage workflow. A 12s loop:
-     * the Optimize agent reads every cloud, finds an oversized fleet, reads the
+     * CloudThinker reads every cloud, finds an oversized fleet, reads the
      * why from tags, IAM bindings and traffic, opens the merge request, an
      * engineer approves it in the normal queue, and the fleet is right-sized.
      * The findings reuse the page's existing mockup. Simulated product UI, so it
@@ -562,7 +562,7 @@ export const OptimizeScene = ({ className }) => {
                 })()
                 : null}
 
-            {/* hub with the Optimize agent above it */}
+            {/* hub with CloudThinker above it */}
             <Box x={-40} y={60} w={180} d={180} h={40} pal={pal} top={mix(pal.hub, pal.hubHot, agentK)} sw={2}/>
             <polyline points={pts([
                 [50, 150, 40],
@@ -605,7 +605,7 @@ export const OptimizeScene = ({ className }) => {
                 </g>) : null)}
 
             {/* labels */}
-            <Label x={P(50, 150, agentZ)[0] + 110} y={P(50, 150, agentZ)[1] - 70} text="OPTIMIZE AGENT" sub="Finds the why behind the bill"/>
+            <Label x={P(50, 150, agentZ)[0] + 110} y={P(50, 150, agentZ)[1] - 70} text="CLOUDTHINKER" sub="Finds the root cause of the bill"/>
             <Label x={P(-230, -60)[0] + 40} y={P(-230, -60)[1] - 6} text="ENGINEERS" sub="Approve the change" anchor="start"/>
             <Label x={P(110, 500)[0] - 20} y={P(110, 500)[1] + 50} text="SIGNALS" sub="Tags, IAM, traffic, incidents" anchor="middle"/>
             <Label x={P(740, 80)[0]} y={P(740, 80)[1] + 50} text="YOUR CLOUDS" sub="AWS, Azure, GCP, Kubernetes" anchor="middle"/>
@@ -616,7 +616,7 @@ export const OptimizeScene = ({ className }) => {
     }
     /** Optimize's daily loop on its stage. Starts from the first frame on mount. */
     function OptimizeStage({ className }) {
-        return (<IsoMotionStage loop={LOOP} label="The Optimize agent reads AWS, Azure, GCP and Kubernetes, finds an oversized fleet, reads why from tags, IAM bindings and traffic, opens a merge request, an engineer approves it, and the fleet is right-sized." className={className} frame={(T) => <OptimizeFrame T={T}/>}/>);
+        return (<IsoMotionStage loop={LOOP} label="CloudThinker reads AWS, Azure, GCP and Kubernetes, finds an oversized fleet, reads why from tags, IAM bindings and traffic, opens a merge request, an engineer approves it, and the fleet is right-sized." className={className} frame={(T) => <OptimizeFrame T={T}/>}/>);
     }
 
     return OptimizeStage;

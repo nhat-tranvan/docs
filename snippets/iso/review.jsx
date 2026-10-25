@@ -744,7 +744,7 @@ export const ReviewScene = ({ className }) => {
             {/* labels */}
             <Label x={P(ENG.x, ENG.s / 2)[0]} y={P(ENG.x, ENG.s / 2)[1] + 50} text="ENGINEER" sub="Writes the change" anchor="middle"/>
             <Label x={P(PR.x, -PR.s / 2, PR.h)[0]} y={P(PR.x, -PR.s / 2, PR.h)[1] - 60} text="PULL REQUEST" sub="GitHub or GitLab" anchor="middle"/>
-            <Label x={P(CHECKS[2].x + RACK_S + 20, RACK_Y - 20)[0] + 30} y={P(CHECKS[2].x + RACK_S + 20, RACK_Y - 20)[1] + 30} text="REVIEW AGENT CHECKS" sub="Security, logic, conventions"/>
+            <Label x={P(CHECKS[2].x + RACK_S + 20, RACK_Y - 20)[0] + 30} y={P(CHECKS[2].x + RACK_S + 20, RACK_Y - 20)[1] + 30} text="CLOUDTHINKER CHECKS" sub="Security, logic, conventions"/>
             <Label x={P(SBX.x, SBX.y + SBX.d)[0] - 20} y={P(SBX.x, SBX.y + SBX.d)[1] + 10} text="YOUR SANDBOX" sub="Runs the build, checks the UI" anchor="end"/>
             <Label x={P(MERGE.x + MERGE.s / 2, MERGE.s / 2)[0]} y={P(MERGE.x + MERGE.s / 2, MERGE.s / 2)[1] + 50} text="MERGE" anchor="middle"/>
             <Label x={P(PROD.x + PROD.s, PROD.s / 2)[0]} y={P(PROD.x + PROD.s, PROD.s / 2)[1] + 50} text="PRODUCTION" sub="And its incident history" anchor="middle"/>

@@ -623,7 +623,7 @@ export const CyberScene = ({ className }) => {
                 : null}
 
             {/* labels */}
-            <Label x={P(50, 150, agentZ)[0] + 110} y={P(50, 150, agentZ)[1] - 70} text="CYBER AGENT" sub="Attacks like a hacker"/>
+            <Label x={P(50, 150, agentZ)[0] + 110} y={P(50, 150, agentZ)[1] - 70} text="CLOUDTHINKER" sub="Attacks like a hacker"/>
             <Label x={P(-230, -60)[0] + 40} y={P(-230, -60)[1] - 6} text="ENGINEERS" sub="Review and merge" anchor="start"/>
             <Label x={P(110, 500)[0] - 20} y={P(110, 500)[1] + 50} text="SANDBOX" sub="Read-only proof" anchor="middle"/>
             <Label x={P(740, 80)[0]} y={P(740, 80)[1] + 50} text="YOUR APPS AND APIS" sub="Web app, auth, API, code" anchor="middle"/>

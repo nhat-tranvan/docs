@@ -381,13 +381,13 @@ export const ResolveScene = ({ className }) => {
      *
      *   top     monitoring tools (Datadog, Prometheus, Grafana) and Detectors
      *   middle  Pulse, a funnel: alert noise in, one incident out
-     *   bottom  Resolve, five specialists investigating in parallel
+     *   bottom  Resolve, CloudThinker subagents investigating in parallel
      *
      * A 13s loop: Detectors catch a database drift no alert fired for, the
      * monitoring tools fire an alert storm, everything falls through the Pulse
-     * funnel as one incident into Resolve, the specialists investigate the stack,
+     * funnel as one incident into Resolve, subagents investigate the stack,
      * the evidence converges on one root cause, an engineer approves the fix, the
-     * service is back to baseline and a runbook is written. The evidence lines
+     * service is back to baseline and the lesson goes to memory. The evidence lines
      * reuse the page's Analyze mockup. Simulated product UI, so it stays English
      * in every locale.
      */
@@ -481,7 +481,7 @@ export const ResolveScene = ({ className }) => {
         [ENG.x + ENG.s / 2, 210],
         [ENG.x + ENG.s / 2, ENG.y],
     ];
-    // Five specialists on a ring just above the hub, around the funnel spout.
+    // Subagents on a ring just above the hub, around the funnel spout.
     const SPECIALISTS = [
         { key: 'app', icon: 'apps' },
         { key: 'cloud', icon: 'cloud' },
@@ -816,9 +816,9 @@ export const ResolveScene = ({ className }) => {
             {/* labels around the tower */}
             <Label x={P(C[0] + 100, C[1] - 100, TOP_Z)[0] + 40} y={P(C[0] + 100, C[1] - 100, TOP_Z)[1] - 10} text="MONITORING AND DETECTORS" sub="Datadog, Prometheus, Grafana, Detectors"/>
             <Label x={P(C[0] + 88, C[1] - 88, FUNNEL.z1)[0] + 40} y={P(C[0] + 88, C[1] - 88, FUNNEL.z1)[1] + 20} text="PULSE" sub="Alert noise in, one incident out"/>
-            <Label x={P(HUB.x + HUB.s, HUB.y, HUB.h)[0] + 40} y={P(HUB.x + HUB.s, HUB.y, HUB.h)[1] - 60} text="RESOLVE AGENT" sub="Five specialists in parallel"/>
+            <Label x={P(HUB.x + HUB.s, HUB.y, HUB.h)[0] + 40} y={P(HUB.x + HUB.s, HUB.y, HUB.h)[1] - 60} text="CLOUDTHINKER" sub="Subagents investigate in parallel"/>
             <Label x={P(ENG.x + ENG.s, ENG.y + ENG.s)[0] + 30} y={P(ENG.x + ENG.s, ENG.y + ENG.s)[1] + 10} text="ENGINEERS" sub="Approve the fix"/>
-            <Label x={P(C[0] + 60, 500)[0] - 20} y={P(C[0] + 60, 500)[1] + 50} text="RUNBOOK" sub="Written for next time" anchor="middle"/>
+            <Label x={P(C[0] + 60, 500)[0] - 20} y={P(C[0] + 60, 500)[1] + 50} text="MEMORY" sub="Lessons for next time" anchor="middle"/>
             <Label x={P(740, 80)[0]} y={P(740, 80)[1] + 50} text="YOUR STACK" sub="Kubernetes, cloud, checkout, payments DB" anchor="middle"/>
           </g>
 
@@ -845,7 +845,7 @@ export const ResolveScene = ({ className }) => {
     }
     /** Resolve's tower on its stage. Starts from the first frame on mount. */
     function ResolveStage({ className }) {
-        return (<IsoMotionStage loop={LOOP} label="Monitoring tools like Datadog and CloudThinker Detectors feed signals down through the Pulse funnel, which folds the alert noise into one incident for Resolve. Five specialists investigate the stack in parallel, the evidence converges on one root cause, an engineer approves the fix, the service is back to baseline and a runbook is written for next time." className={className} frame={(T) => <ResolveFrame T={T}/>}/>);
+        return (<IsoMotionStage loop={LOOP} label="Monitoring tools like Datadog and CloudThinker Detectors feed signals down through the Pulse funnel, which folds the alert noise into one incident for Resolve. CloudThinker subagents investigate the stack in parallel, the evidence converges on one root cause, an engineer approves the fix, the service is back to baseline and the lesson is saved to memory for next time." className={className} frame={(T) => <ResolveFrame T={T}/>}/>);
     }
 
     return ResolveStage;
