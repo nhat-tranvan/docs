@@ -379,8 +379,8 @@ export const CustomizeScene = ({ className }) => {
      * Customize, on the same isometric stage as the homepage workflow. A 12s
      * loop: a team builds its own agent, teaches it skills and runbooks, plugs
      * in its tools, and puts it on a schedule. When the run starts, every action
-     * passes the team's guardrails: always allow goes straight through, needs
-     * approval waits for an engineer, never allow is stopped. Details come from
+     * passes the team's Approvals Rules: Allow goes straight through, Ask first
+     * waits for an engineer, Deny is refused. Details come from
      * the page's own mockups (Cost Guardian, SKILL.md, approval rules).
      * Simulated product UI, so it stays English in every locale.
      */
@@ -390,7 +390,7 @@ export const CustomizeScene = ({ className }) => {
     const cT = 2; // teach skills
     const cC = 3.6; // connect tools
     const cR = 5.2; // run on schedule
-    const cG = 7.0; // guardrails
+    const cG = 7.0; // approvals
     const cL = 11; // settle
     const STEPS = [
         ['Build', cB],
@@ -622,7 +622,7 @@ export const CustomizeScene = ({ className }) => {
     }
     /** Customize's loop on its stage. Starts from the first frame on mount. */
     function CustomizeStage({ className }) {
-        return (<IsoMotionStage loop={LOOP} label="A team builds its own agent, teaches it skills and runbooks, connects its tools and puts it on a schedule. Every action then passes the team's guardrails: always allow runs, needs approval waits for an engineer, never allow is stopped." className={className} frame={(T) => <CustomizeFrame T={T}/>}/>);
+        return (<IsoMotionStage loop={LOOP} label="A team builds its own agent, teaches it skills and runbooks, connects its tools and puts it on a schedule. Every action then passes the team's Approvals Rules: Allow runs, Ask first waits for an engineer, Deny is refused." className={className} frame={(T) => <CustomizeFrame T={T}/>}/>);
     }
 
     return CustomizeStage;
