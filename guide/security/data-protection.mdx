@@ -1,6 +1,6 @@
 ---
 title: Data Protection
-description: "Handle a secret caught in chat, read the placeholders agents show in place of secrets, and know what a shared replay hides."
+description: "Handle a secret caught in chat, read the placeholders agents show in place of secrets, and know what the model sees."
 icon: user-shield
 ---
 
@@ -8,7 +8,7 @@ CloudThinker catches secrets on the way in, when you paste them into chat, and o
 
 ## Prerequisites
 
-- A workspace you can chat in (Developer or Admin role).
+- Protection is always on, for everyone who can chat. There's nothing to turn on.
 - To save a caught secret as a [credential](/guide/credentials): the **Admin** workspace role. Developers can still redact or keep the text.
 
 ## What's protected, and where
@@ -16,9 +16,12 @@ CloudThinker catches secrets on the way in, when you paste them into chat, and o
 | Moment | What CloudThinker does | What you see |
 |---|---|---|
 | You send a message, or paste long text | Scans it for credential-shaped values such as API keys, tokens, passwords, and connection strings | The **Review detected secrets** dialog, before anything sends |
-| An agent's tool returns a known secret | Replaces the value before the model, the chat, or stored output gets it | A placeholder such as `ct:secret:v3:openai-api-key:2d9c4e7a0b16` |
+| An agent's tool returns a secret | Replaces the value before the model, the chat, or stored output gets it. It checks two ways: an exact match against secrets CloudThinker holds, and the **API keys** and **Cloud credentials** pattern rules in [Guardrails](/guide/security/custom-guardrails#what-agents-see), on by default. So an AWS secret key in a config file an agent prints is hidden even if you never saved it. | A placeholder such as `ct:secret:v3:openai-api-key:2d9c4e7a0b16` |
 | An agent's tool returns a protected identifier, such as an email address | Replaces it the same way, using your [Guardrails](/guide/security/custom-guardrails) settings | A placeholder such as `ct:pii:v3:email:4c1f0a9e27b3 [op***@ma***.com]` |
-| Someone opens a public conversation replay | Scans the whole conversation again | `***REDACTED***` in place of each secret or identifier |
+
+## What the model sees
+
+The model gets your message after the paste scan, and agent tool output after placeholders replace secrets and protected identifiers. It never gets the real value behind a placeholder.
 
 ## Handle a secret you pasted
 
@@ -38,29 +41,39 @@ Check why this key gets 401s from the billing API: sk-live-...
   <Step title="Choose what happens to the rest">
     | Button | Result |
     |---|---|
-    | **Save secrets** (Admin only) | Stores each value as a workspace credential under its key name, and rewrites your message to say `$KEY` |
+    | **Save secrets** (Admin only) | Stores each value as a workspace credential under its key name, and puts the key name in your message where the value was |
     | **Redact from message** | Replaces each value with `[sensitive data removed]` |
     | **Keep in message** | Shows instead of **Save secrets** when you've marked every item as not a secret. Sends the text unchanged. |
+    | Close the dialog (Esc) | Nothing sends. A typed message stays in the box with the value still flagged, so you can edit it. A long paste is discarded. |
 
-    **Success state:** the message sends with `$KEY` or `[sensitive data removed]` where the raw value was. The raw value never enters the conversation.
+    With **Save secrets**, the example message sends as:
+
+    ```text
+    Check why this key gets 401s from the billing API: $BILLING_API_KEY
+    ```
+
+    A command that uses `$BILLING_API_KEY` gets the real value when it runs. The model and the chat only see the name.
+
+    **Success state:** the message sends with a `$KEY` name or `[sensitive data removed]` where the raw value was. The raw value never enters the conversation. The dialog has no "send anyway" for a real secret, by design: save it or redact it.
   </Step>
 </Steps>
 
-Next time, skip the dialog: type `$` in the chat box and pick a saved key. See [Use a credential in chat](/guide/credentials#use-a-credential-in-chat).
+The scan covers the text you type and the text you paste, including a long paste that becomes an attachment. Next time, skip the dialog: type `$` in the chat box and pick a saved key. See [Use a credential in chat](/guide/credentials#use-a-credential-in-chat).
 
 ## Read a placeholder in agent output
 
-When an agent's work would show a secret CloudThinker knows (a connection credential, a workspace credential, or a value saved from chat), you see a placeholder instead.
+When an agent's work would show a secret (one CloudThinker holds, or one that matches a Guardrails credential rule) or a protected identifier, you see a placeholder instead.
 
-- **The same value gets the same placeholder** within a conversation, so you and the agent can still tell that two references point to one secret.
+- **The same value gets the same placeholder** within a conversation, so you and the agent can still tell that two references point to one secret. In another conversation, the same value gets a different placeholder.
 - **A placeholder can't be turned back into the value**, by you or by an agent. There's no reveal button.
+- **The parts of a placeholder:** `ct`, then `secret` or `pii`, the format version (`v3`), the category (such as `openai-api-key`), and an ID. The ID is a keyed HMAC-SHA256 value that mixes in the conversation, so it can't be brute-forced back to a short password without CloudThinker's key.
 - **Identifier placeholders may carry a hint** in brackets, such as `[***-***-**89]` for a phone number, so the output stays readable.
 
 To change the secret itself, update it in [Connections](/guide/connections/overview) or [Credentials](/guide/credentials). To choose which identifiers are hidden, use [Custom Guardrails](/guide/security/custom-guardrails).
 
-## Public conversation replays
-
-A public replay plays a conversation back to people outside your workspace. Customer workspaces can't create replay links yet, but you may open one, for example from a CloudThinker demo. Before any viewer sees it, CloudThinker scans message text, tool activity, plans, and attachment names again, and replaces detected secrets and identifiers with `***REDACTED***`. If a message can't be scanned cleanly, its content is withheld rather than shown unscanned. See [Sharing](/guide/sharing).
+<Note>
+If you open a CloudThinker demo replay, secrets and identifiers show as `***REDACTED***`. Customer workspaces can't create replay links yet. See [Sharing](/guide/sharing).
+</Note>
 
 ## Unsent drafts
 
@@ -91,14 +104,20 @@ The secret scan runs when you send, not while you type. On a shared computer, lo
   <Accordion title="A secret got through the scan">
     **Cause:** the scan looks for known credential formats. An unusual format can be missed.
 
-    **Fix:** rotate the secret at its provider, then save the new value as a credential. Ask a workspace Admin to add a [custom pattern](/guide/security/custom-guardrails) if it's an identifier format your team uses.
+    **Fix:**
+
+    1. Rotate the secret at its provider. Assume the model saw it.
+    2. Ask a workspace Admin to delete the conversation (**Delete Conversation** in the conversation's title menu), so the raw value isn't kept in its history.
+    3. Save the new value as a credential and reference it as `$KEY`.
+
+    To catch that format next time, a workspace Admin can add a [custom pattern](/guide/security/custom-guardrails#add-a-custom-pattern). It masks matches in tool output (as a `ct:pii` placeholder), not in the paste scan. For a secret format the scan should know, tell CloudThinker support.
   </Accordion>
 </AccordionGroup>
 
 ## Next steps
 
 <CardGroup cols={2}>
-  <Card title="Custom Guardrails" icon="square-asterisk" href="/guide/security/custom-guardrails">
+  <Card title="Custom Guardrails" icon="eye-slash" href="/guide/security/custom-guardrails">
     Choose which identifiers agents see as placeholders
   </Card>
   <Card title="Credentials" icon="vault" href="/guide/credentials">

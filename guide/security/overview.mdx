@@ -16,10 +16,10 @@ CloudThinker agents read your cloud accounts, clusters, and tools through connec
 | Can agents change things on their own? | Reads always run. Every write goes through Rules and the Approval mode, and can wait for a person or be refused. A read-only credential can't write at all. | [Approvals](/guide/approvals/overview) |
 | Who can sign in, and how? | Google, GitHub, SSO (SAML 2.0 or OIDC), or a code emailed to your work address. An authenticator app adds a second factor. | [Single sign-on](/guide/security/sso) |
 | Who can do what? | Organization roles and workspace roles: Admin, Developer, Viewer, plus an organization Owner. | [Roles](/guide/security/roles) |
-| Are secrets kept out of chat and model calls? | Pasted secrets are caught before a message sends. Known secrets and protected identifiers are replaced with placeholders before the model or the screen sees them. | [Data protection](/guide/security/data-protection) |
-| Is there an audit trail? | Yes, on [Scale, Scale+, and Enterprise](/guide/billing/pricing). User, agent, and system actions across the organization, kept 90 days by default, exportable as CSV. | [Audit logs](/guide/security/audit-logs) |
+| Are secrets kept out of chat and model calls? | Pasted values in known credential formats are caught before a message sends, though an unusual format can get through ([what to do](/guide/security/data-protection#troubleshooting)). Saved secrets, common credential formats, and protected identifiers in tool output are replaced with placeholders before the model or the screen sees them. | [Data protection](/guide/security/data-protection) |
+| Is there an audit trail? | Yes, on [Scale, Scale+, and Enterprise](/guide/billing/pricing). User, agent, and system actions across the organization, kept 90 days, exportable as CSV. | [Audit logs](/guide/security/audit-logs) |
 | Can we use our own LLM account? | Yes, with BYOK on [Scale, Scale+, and Enterprise](/guide/billing/pricing). | [BYOK](/guide/byok) |
-| Compliance reports, hosting region, subprocessors, model-provider data terms? | Not covered in these docs. Ask for them when you start a vendor review. | [Contact us](https://cloudthinker.io/contact) |
+| Compliance reports, hosting region, subprocessors, model-provider data terms? | These docs don't cover them. Ask for them when you start a vendor review. | [Contact us](https://cloudthinker.io/contact) |
 
 ## Data CloudThinker handles
 
@@ -27,9 +27,9 @@ CloudThinker agents read your cloud accounts, clusters, and tools through connec
 |---|---|---|
 | Connection credentials (cloud keys, tokens, database logins) | So agents can query the systems you connected | Encrypted at rest. Injected into the managed sandbox when a command runs, never sent to a Worker. |
 | Workspace [credentials](/guide/credentials) (other API keys a command needs) | So a command can call a vendor API without anyone pasting a key | Encrypted at rest, never sent back to the browser. Chat shows key names only. |
-| Conversations, findings, reports, and artifacts | The record of what agents found and did | Scoped to the workspace and visible by role. Known secrets are replaced with placeholders before they're stored. |
+| Conversations, findings, reports, and artifacts | The record of what agents found and did | Scoped to the workspace and visible by role. Secrets and protected identifiers in tool output are replaced with placeholders before they're stored. A workspace Admin can delete a conversation from its title menu (**Delete Conversation**). |
 
-Model calls go to CloudThinker's LLM provider unless your organization uses [BYOK](/guide/byok), which routes them through your own AWS Bedrock or Anthropic key.
+Model calls go to CloudThinker's LLM provider unless your organization uses [BYOK](/guide/byok), which routes them through your own AWS Bedrock, Anthropic, or FPT Cloud account. With BYOK, those calls fall under your own agreement with that provider, except when a failed call falls back to CloudThinker's models ([details](/guide/byok#when-a-key-stops-working)).
 
 <Warning>
 Anything a connection's credential can read can reach the model, because command output is part of the conversation. With AWS `ReadOnlyAccess`, that includes S3 object contents. Scope each credential's policy to the accounts, regions, and services agents need.
@@ -44,6 +44,8 @@ Every chat and Automation runs in one of two places:
 
 A run doesn't fall back from a Worker to the cloud. If the Worker is unavailable, the run reports an error. See [Workers](/guide/workers).
 
+These docs don't list egress IP ranges. If you need to allowlist CloudThinker in a security group or firewall, [contact us](https://cloudthinker.io/contact).
+
 ## Who can act
 
 Access works at two levels. An organization role applies across every workspace. A workspace role sets what a member can do inside one workspace.
@@ -56,11 +58,15 @@ Access works at two levels. An organization role applies across every workspace.
 
 Organization Owners and Admins hold workspace Admin in every workspace. Full matrix: [Roles](/guide/security/roles).
 
+**Who can approve a write:** by default, any Developer or Admin in the workspace, including the person who started the run. Viewers never can. To stop people approving their own runs, turn on the two-person rule, or send a Rule's asks to a named approver group. See [Approvers](/guide/approvals/approvers).
+
+**Admin Settings** is the organization console, for organization Owners and Admins. The one page a workspace Admin can also open there is **Guardrails**, which shows that workspace's settings.
+
 ### Sign-in controls
 
 | Control | Where | Plans |
 |---|---|---|
-| Authenticator app (TOTP) with one-time backup codes | **Account Settings → 2FA** | All |
+| Authenticator app (TOTP) with one-time backup codes. Each person turns it on for their own account; there's no organization-wide 2FA requirement. | **Account Settings → 2FA** | All |
 | SSO with SAML 2.0 or OIDC, domain verification, and enforced SSO | **Admin Settings → Identity and access** | [Scale, Scale+, Enterprise](/guide/billing/pricing) |
 | SCIM user and group sync | **Admin Settings → Identity and access** | [Scale, Scale+, Enterprise](/guide/billing/pricing) |
 
@@ -70,12 +76,23 @@ See [Single sign-on](/guide/security/sso) and [SCIM](/guide/security/scim).
 
 A **write** is any agent call that changes a connected system, such as restarting a service. Reads always run. Each write passes these checks in order:
 
-1. **Always blocked**, a built-in list of calls that never run. No Rule, person, or break-glass can override it.
+1. **Always blocked**, a built-in list of calls that never run, such as stopping CloudTrail logging, closing an AWS account, or deleting the `kube-system` namespace. Nothing overrides it, not a Rule, a person, or break-glass (an opt-in emergency override that lets an owner or admin run one call a Deny Rule refused).
 2. Your **Rules**, which allow, ask first, or deny a named kind of write.
-3. The **Approval mode** for the run: **Manual** asks a person for every write. **Auto** lets AI judgment allow a write no Rule covers, then asks you or refuses the rest.
+3. The **Approval mode** for the run, described below.
 4. The approver, who approves or declines.
 
-New workspaces start on **Auto · Rules + AI · Ask me**. Here's what AI judgment does in that mode:
+The Approval mode is either **Manual** or **Auto**. An Auto label, such as **Auto · Rules + AI · Ask me**, adds two more choices after the mode:
+
+| Part | Options | What it does |
+|---|---|---|
+| Mode | **Manual** | Asks a person for every write |
+| | **Auto** | Lets writes run without a person when the next part allows them |
+| What can allow a write | **Rules** | Only your Allow Rules |
+| | **Rules + AI** | Your Allow Rules, plus AI judgment for writes no Rule covers |
+| What happens to the rest | **Ask me** | Waits for a person |
+| | **Refuse** | Refused, with no wait |
+
+New workspaces start on **Auto · Rules + AI · Ask me**. Automations default to **Auto · Rules + AI · Refuse**, since no one may be there to answer. Here's what AI judgment does:
 
 | Write | Result |
 |---|---|
@@ -83,7 +100,7 @@ New workspaces start on **Auto · Rules + AI · Ask me**. Here's what AI judgmen
 | Destructive, or its effect is unclear | Waits for a person. A destructive write also raises a high-severity alert. |
 | AI judgment can't finish its check | Waits for a person. It never allows a write by default. |
 
-A write also needs the connection to permit it. If **Allow writes** is off on the connection, or the credential is read-only, the write is refused whatever the mode says. To require a person for every write, switch the workspace to **Manual**. See [Approvals](/guide/approvals/overview) and [Approval mode](/guide/approvals/approval-mode).
+A write also needs the connection to permit it. If **Allow writes** is off on the connection's detail panel in **Connections**, or the credential is read-only, the write is refused whatever the mode says. To require a person for every write, switch the workspace to **Manual**. See [Approvals](/guide/approvals/overview) and [Approval mode](/guide/approvals/approval-mode).
 
 ## Audit and retention
 
@@ -93,8 +110,8 @@ A write also needs the connection to permit it. If **Allow writes** is off on th
 |---|---|
 | Who can view | Organization Owner and Admin |
 | Plans | [Scale, Scale+, Enterprise](/guide/billing/pricing) |
-| Retention | 90 days by default, then deleted automatically |
-| Export | **Export CSV**, respecting your current filters |
+| Retention | 90 days, then deleted automatically. There's no in-app setting to change it. |
+| Export | **Export CSV**, respecting your current filters. There's no streaming feed to a SIEM, so export on a schedule to keep a longer record. |
 
 Credential entries never include the value or the key name. See [Audit logs](/guide/security/audit-logs).
 
@@ -105,7 +122,7 @@ On Free or Team, audit what agents did in AWS from your own CloudTrail: filter e
 | Layer | What CloudThinker does |
 |---|---|
 | In transit | The app and API are served over HTTPS |
-| Stored secrets | Connection credentials, workspace credentials, BYOK keys, and integration tokens are encrypted at rest with Fernet (AES-128 with HMAC-SHA256). CloudThinker manages the key. [BYOK](/guide/byok) covers LLM credentials, not encryption keys. |
+| Stored secrets | Connection credentials, workspace credentials, BYOK keys, and integration tokens are encrypted at rest with Fernet (AES-128 with HMAC-SHA256). CloudThinker manages the key. Customer-managed encryption keys aren't offered. [BYOK](/guide/byok) covers LLM credentials, not encryption keys. |
 | Passwords | Any account password is stored as a bcrypt hash |
 | Sessions | Access tokens are signed with RS256. Refresh tokens rotate on use and are stored as hashes. |
 
@@ -113,7 +130,7 @@ On Free or Team, audit what agents did in AWS from your own CloudTrail: filter e
 
 - Start each connection with read-only credentials, scoped to the accounts and regions agents need.
 - Keep production workspaces on **Manual**, or add Rules that ask first for the writes you care about.
-- Turn on 2FA for every Owner and Admin, or enforce SSO.
+- Ask every Owner and Admin to turn on 2FA, or enforce SSO so sign-in follows your identity provider's MFA policy.
 - Give each member the lowest role that fits.
 - Check the built-in protections in **Admin Settings → Guardrails**, and add patterns for your own ID formats.
 
@@ -125,7 +142,7 @@ For a security questionnaire or a dedicated deployment, [contact us](https://clo
   <Card title="Data Protection" icon="user-shield" href="/guide/security/data-protection">
     See what happens when a secret is pasted or printed
   </Card>
-  <Card title="Custom Guardrails" icon="square-asterisk" href="/guide/security/custom-guardrails">
+  <Card title="Custom Guardrails" icon="eye-slash" href="/guide/security/custom-guardrails">
     Choose which identifiers agents never see
   </Card>
   <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">

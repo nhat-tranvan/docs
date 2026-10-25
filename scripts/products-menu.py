@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Products tab as a per-product menu with task-based groups (docs v2).
+"""Products tab as a per-product switcher with task-based groups (docs v2).
+
+The products render as anchors: a list at the top of the sidebar that is always
+visible, so readers see every product and switch with one click.
 
 Every language gets the same structure; a page uses <lang>/<page> when that
 translation exists, otherwise the English page. Run from the repo root.
@@ -100,19 +103,15 @@ for block in d["navigation"]["languages"]:
     name = PRODUCTS_TAB[lang]
     menu = [
         {
-            "item": item if lang == "en" else label(item, lang) if item == "Memory and sharing" else item,
+            "anchor": item,
             "icon": icon,
-            # The first group carries the product name so readers always see where they are.
-            "groups": [
-                {"group": (item if j == 0 and g == "Get started" else label(g, lang)), "pages": [page(p, lang) for p in pages]}
-                for j, (g, pages) in enumerate(groups)
-            ],
+            "groups": [{"group": label(g, lang), "pages": [page(p, lang) for p in pages]} for g, pages in groups],
         }
         for item, icon, groups in MENU
     ]
     for i, t in enumerate(block["tabs"]):
         if t.get("tab") == name:
-            block["tabs"][i] = {"tab": name, "menu": menu}
+            block["tabs"][i] = {"tab": name, "anchors": menu}
     for t in block["tabs"]:
         if t.get("tab") != PLATFORM_TAB[lang]:
             continue

@@ -13,16 +13,16 @@ An alert that reaches the webhook doesn't become an incident directly. It goes t
 ```mermaid
 flowchart LR
     A["Monitoring tool"] -->|POST| B["Webhook URL"]
-    B --> C["Pulse: drop noise, group into clusters"]
+    B --> C["Pulse: suppress noise, group into clusters"]
     C -->|actionable| D["Incident"]
     D -->|Auto-investigate on| E["RCA starts"]
 ```
 
-A **signal** is an alert that survived noise suppression. A **cluster** is a group of related signals that Pulse treats as one problem. Only an actionable cluster turns into an incident.
+A **signal** is one raw event Pulse received. Pulse marks some signals as suppressed (noise) and groups the rest into clusters. A **cluster** is a group of related signals that Pulse treats as one problem. Only an actionable cluster turns into an incident.
 
 ## Prerequisites
 
-- Permission to manage Resolve integrations.
+- The workspace **Admin** role.
 - Admin access to the monitoring tool, so you can add a webhook to it.
 - One real alert payload you can trigger on demand, or a sample of its JSON.
 
@@ -39,22 +39,26 @@ A **signal** is an alert that survived noise suppression. A **cluster** is a gro
     Keep or change **Webhook Name** (it defaults to `<Tool> Webhook`) and add an optional **Description**. Click **Next**.
   </Step>
   <Step title="Configure">
-    Check **Field Mapping** and **Severity Mapping**. Both come pre-filled for the tool you picked. Follow the **Setup Guide** for that tool at the bottom of the step. Click **Next**.
+    Check **Field Mapping** and **Severity Mapping**. Both come pre-filled for the tool you picked. Leave **Send directly to CloudThinker** off ([why](#decide-when-rca-starts)). Follow the **Setup Guide** for that tool at the bottom of the step. Click **Next**.
   </Step>
   <Step title="Advanced">
     Pick an **Auth Method** and set **Auto-investigate** (both explained below). Click **Create**.
   </Step>
 </Steps>
 
-**Success state:** a dialog shows the **Webhook URL**, the secret under **Authentication Setup**, and **Integration Examples** in JavaScript, Python, and Node.js. Copy the URL and secret now, then paste them into your monitoring tool.
+**Success state:** a dialog shows the **Webhook URL**, the secret under **Authentication Setup**, and **Integration Examples** with **cURL**, **JavaScript**, **Python**, and **Node.js** tabs. Copy the URL and secret now, then paste them into your monitoring tool. The **cURL** tab is the fastest way to send a test.
 
 <Tip>
-Copy the secret before you click **Done**. If you lose it later, regenerating credentials invalidates the current token and secret, so every tool using them needs the new value.
+Copy the secret before you click **Done**. If you lose it, go to **Resolve → Integrations**, open the tool, and under **Signals to Resolve** open the webhook row's **Manage** menu (**⋯**) → **Regenerate credentials**. That invalidates the current token and secret, so every tool using them needs the new value.
 </Tip>
 
 ## Map the fields
 
-Each mapping field takes a path into the alert's JSON, like `event.data.title`. Only **Title Path** is required.
+Each mapping field takes a path into the alert's JSON. Only **Title Path** is required.
+
+- Use dotted keys, like `event.data.title`, and `[n]` for a list item, like `alerts[0].labels.severity`. A leading `$.` is accepted and dropped.
+- A path can have at most 8 segments. Keys that contain a dot can't be addressed, and there are no fallback paths.
+- A path must end at a single text or number value. A path that ends at a list or object maps to nothing.
 
 | Field | What it fills in |
 |---|---|
@@ -66,23 +70,25 @@ Each mapping field takes a path into the alert's JSON, like `event.data.title`. 
 | **Resource Name Path** | The affected resource's name. |
 | **Timestamp Path** | When the event started. |
 
-For example, the Datadog preset maps a payload like this:
+Your tool decides the payload shape. In Datadog, for example, you write the JSON yourself in the webhook's **Payload** field, using Datadog's template variables. The Datadog preset reads `title`, `body`, and `alert_type`. Add a `service` key with one service name, because the preset's default **Service Path** (`tags`) points at a list and maps to nothing:
 
 ```json
 {
-  "title": "High CPU on web-server-01",
-  "body": "CPU usage exceeded 90% for 5 minutes",
-  "alert_type": "critical",
-  "tags": ["service:web-api", "env:production"]
+  "title": "$EVENT_TITLE",
+  "body": "$EVENT_MSG",
+  "alert_type": "$ALERT_TYPE",
+  "service": "web-api"
 }
 ```
 
-| Field | Path | Value |
+| Field | Path | Example value |
 |---|---|---|
 | **Title Path** | `title` | High CPU on web-server-01 |
 | **Description Path** | `body` | CPU usage exceeded 90% for 5 minutes |
-| **Severity Path** | `alert_type` | critical |
-| **Service Path** | `tags` | service:web-api, env:production |
+| **Severity Path** | `alert_type` | error |
+| **Service Path** | `service` (change it from `tags`) | web-api |
+
+A fixed `service` value applies to every monitor that notifies this webhook. Datadog's `$ALERT_TYPE` sends `error`, `warning`, `info`, or `success`, but the Datadog preset's **Severity Mapping** covers `alert`, `warn`, `ok`, and `no data`. Add rows for the values you actually send.
 
 **Severity Mapping** translates the tool's own words into CloudThinker's five levels: critical, high, medium, low, and info. The generic preset maps `warning` to medium and `error` to high, for example. Add a row for any value your tool sends that isn't covered.
 
@@ -93,8 +99,8 @@ If your tool isn't listed, use [Custom source](/guide/incident/webhook-integrati
 | Auth Method | Your tool sends | Use when |
 |---|---|---|
 | **Bearer Token** | `Authorization: Bearer <secret>` | The tool lets you add a custom header. Default for most tools. |
-| **HMAC Signature** | A signature header computed from the body, such as `X-PagerDuty-Signature` | The tool signs its webhooks, like PagerDuty. |
-| **API Key** | The key in a header you name | The tool only supports API key headers, like CloudWatch through EventBridge. |
+| **HMAC Signature** | A signature header computed from the body, such as `X-PagerDuty-Signature` | The tool signs its webhooks, like PagerDuty. Set the header name in **HMAC Signature Header**. If the tool generates its own signing secret, paste it into **Provider signing secret**. |
+| **API Key** | The key in a header you name | The tool only supports API key headers, like CloudWatch through EventBridge. Set **API Key Header** and an optional **Key Prefix**. |
 | **No Authentication** | Nothing | Only for a quick test. Anyone with the URL could send alerts. |
 
 ## Decide when RCA starts
@@ -104,10 +110,10 @@ If your tool isn't listed, use [Custom source](/guide/incident/webhook-integrati
 | Setting | Effect |
 |---|---|
 | **Auto-investigate** off | No automatic RCA from this webhook. |
-| **Auto-investigate** on, no minimum | Every incident from this webhook gets an RCA. |
-| **Only from a minimum severity** on | Pick a floor, for example **High and above**. Alerts below it still group with related alerts, but get no automatic RCA. |
+| **Auto-investigate** on | Every incident from this webhook gets an RCA. |
+| **Auto-investigate** on, with **Only from a minimum severity** | Pick a floor, for example **High and above**. Alerts below it still group with related alerts, but get no automatic RCA. |
 
-The **On duty** switch on **Resolve → Investigation** also has to be on. When it shows **Paused**, incidents still open, but no RCA starts until someone starts it. See [Resolve settings](/guide/incident/settings).
+The **On duty** switch in the **Resolve → Investigation** header also has to be on. When it shows **Paused**, incidents still open, but no RCA starts until someone starts it. See [Resolve settings](/guide/incident/settings).
 
 **Send directly to CloudThinker** (on the **Configure** step, off by default) skips Pulse filtering and grouping. CloudThinker then judges each event on its own. Leave it off unless the tool already deduplicates its alerts.
 
@@ -115,7 +121,7 @@ The **On duty** switch on **Resolve → Investigation** also has to be on. When 
 
 <Steps>
   <Step title="Fire one real alert">
-    Trigger a representative alert from your tool, or send the request from **Integration Examples**. A successful delivery returns `202 Accepted`.
+    Trigger a representative alert from your tool, or send the request from the **cURL** tab in **Integration Examples**. A successful delivery returns `200` with `"success": true`.
   </Step>
   <Step title="Check Pulse">
     Open **Resolve → Pulse** and find the signal with the title you mapped.
@@ -125,15 +131,27 @@ The **On duty** switch on **Resolve → Investigation** also has to be on. When 
   </Step>
 </Steps>
 
-**Success state:** the signal appears in Pulse with the right title, severity, and service, and an eligible incident shows **AI is handling**. A `202` alone only proves delivery.
+**Success state:** the signal appears in Pulse with the right title, severity, and service, and an eligible incident shows **AI is handling**. A `200` alone only proves delivery.
 
 Test one normal alert and one critical alert, so you know both severity mappings work.
+
+## Limits and responses
+
+| Response | When |
+|---|---|
+| `200` with `"success": true` | The delivery was accepted. |
+| `401` or `403` | Credentials are missing or wrong, or the webhook is disabled. |
+| `404` | The webhook URL doesn't exist. |
+| `413` | The body is larger than 1 MB. |
+| `429` | Too many requests, or too many failed auth attempts. Retry after the time in the `Retry-After` header when it's present. |
+
+Pulse treats a delivery as a duplicate when its source, resource, title, severity, and event time (to the minute) match a signal from the last hour. A duplicate adds to that signal's count instead of creating a new one. A cluster closes after 12 hours with no new signal, or when a person resolves it. See [Cluster lifecycle](/guide/pulse/clusters#cluster-lifecycle).
 
 ## Troubleshooting
 
 <AccordionGroup>
   <Accordion title="The tool reports 401 or 403">
-    **Cause:** the auth header doesn't match the **Auth Method**. **Check:** the header name and secret in your tool against **Authentication Setup**. **Fix:** paste the secret again, or regenerate it from the webhook's details.
+    **Cause:** the auth header doesn't match the **Auth Method**. **Check:** the header name and secret in your tool against **Authentication Setup**. **Fix:** paste the secret again, or use **Regenerate credentials** in the webhook row's **Manage** menu under **Resolve → Integrations**.
   </Accordion>
   <Accordion title="Delivery succeeds but nothing appears in Pulse">
     **Cause:** Pulse suppressed the alert as noise, or the time window hides it. **Check:** widen the window on **Resolve → Pulse**. **Fix:** see [Pulse clusters](/guide/pulse/clusters) for how suppression works.
@@ -155,7 +173,7 @@ Test one normal alert and one critical alert, so you know both severity mappings
   <Card title="Add a custom source" icon="plug" href="/guide/incident/webhook-integrations/custom-source">
     Connect a system with no preset by clicking its payload fields.
   </Card>
-  <Card title="Understand Pulse" icon="pulse" href="/guide/pulse/overview">
+  <Card title="Understand Pulse" icon="wave-pulse" href="/guide/pulse/overview">
     See how signals are filtered, grouped, and routed.
   </Card>
   <Card title="Manage integrations" icon="arrows-rotate" href="/guide/incident/integrations">
