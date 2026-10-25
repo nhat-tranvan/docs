@@ -1,95 +1,143 @@
 ---
 title: "Kubernetes Health Monitoring"
-description: "Use CloudThinker to monitor EKS cluster health, surface resource waste, and get HPA recommendations before problems reach production."
+description: "Connect a Kubernetes cluster, check its health in plain language, and investigate a failing pod without running kubectl by hand."
 icon: heart-pulse
 ---
 
-CloudThinker monitors your Amazon EKS cluster continuously, surfacing over-provisioned pods, underutilized nodes, and missing autoscaling policies before they cause outages.
+CloudThinker reads your Kubernetes cluster through a read-only service account and answers questions about it in chat. This walkthrough takes you from an empty workspace to a cluster health check and a failing-pod investigation in about 15 minutes.
+
+## What you need
+
+| Requirement | Why |
+|-------------|-----|
+| A cluster whose API server is reachable from the internet | Commands run in the CloudThinker cloud, so a private-only endpoint fails the connection test |
+| `kubectl` access that can create a namespace, a ClusterRole, and a ClusterRoleBinding | You create the read-only account CloudThinker signs in as |
+| Optional: [Metrics Server](https://github.com/kubernetes-sigs/metrics-server) | Without it you still get pod status, events, and node conditions, but no live CPU and memory numbers |
+
+<Info>
+A workspace holds **one** Kubernetes connection, and CloudThinker works in the kubeconfig's **current context**. Pick the one cluster you want inspected.
+</Info>
 
 ## The scenario
 
-A platform team runs a production EKS cluster across several namespaces. CPU alerts are intermittent but investigation is slow — engineers run manual `kubectl` commands across hundreds of pods to correlate logs, metrics, and events.
+A platform team runs a production cluster across several namespaces. Alerts fire now and then, and each investigation means someone runs `kubectl get`, `describe`, and `logs` across dozens of pods to line up events, restarts, and resource usage.
 
 <Frame>
-  <img src="/images/use-cases/kubernetes-health-monitoring/01-manual-troubleshooting-challenges.jpg" alt="Manual Kubernetes troubleshooting challenges across namespaces and resources" />
+  <img src="/images/use-cases/kubernetes-health-monitoring/01-manual-troubleshooting-challenges.jpg" alt="Manual Kubernetes troubleshooting across namespaces and resources" />
 </Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Manual Kubernetes troubleshooting challenges</p>
 
-The team asks CloudThinker to assess the cluster end-to-end, identify resource waste, and recommend autoscaling policies where they are missing.
+The team connects the cluster to CloudThinker so they can ask those questions in chat and get one answer that pulls the pieces together.
 
-## Walkthrough
+## Step 1: Connect the cluster
 
 <Steps>
-  <Step title="Connect CloudThinker to your cluster">
-    Follow the [Kubernetes connection guide](/guide/connections/kubernetes) to give CloudThinker access to your EKS cluster. Once the connection shows **Connected**, CloudThinker can query the cluster directly.
-  </Step>
+  <Step title="Create a read-only service account">
+    Save the manifest from the [Kubernetes connection guide](/guide/connections/kubernetes#required-permissions) as `cloudthinker-reader.yaml` and apply it:
 
-  <Step title="Analyze pod resource utilization">
-    ```text
-    #report analyze pod resource utilization in production namespace
+    ```bash
+    kubectl apply -f cloudthinker-reader.yaml
     ```
 
-    <Frame>
-      <img src="/images/use-cases/kubernetes-health-monitoring/02-pod-resource-utilization.jpg" alt="Pod resource utilization analysis showing CPU and memory usage patterns" />
-    </Frame>
-    <p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Pod resource utilization analysis</p>
-
-    <Frame>
-      <img src="/images/use-cases/kubernetes-health-monitoring/03-pod-analysis-visualization.jpg" alt="Pod analysis visualization with performance recommendations" />
-    </Frame>
-    <p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Pod analysis visualization with performance recommendations</p>
-
-    CloudThinker surfaces three findings: auth-service and notification-worker are over-provisioned (18–21% CPU), api-gateway and cache-redis are appropriately sized, and payment-processor is dangerously under-provisioned at 80–86% CPU and 88–94% memory — at high risk of OOM (out-of-memory) kills and service disruption.
+    This creates the `cloudthinker` namespace, a `cloudthinker-reader` service account with `get`, `list`, and `watch` on workloads, nodes, events, logs, and metrics, and a long-lived token Secret. It does not grant access to Secrets.
   </Step>
+  <Step title="Build a kubeconfig for that account">
+    Run the script in the [connection guide](/guide/connections/kubernetes#setup) to write `cloudthinker-kubeconfig.yaml` with the token and CA certificate embedded. Then test it:
 
-  <Step title="Identify underutilized nodes">
-    ```text
-    #visualize nodes with <30% CPU utilization
+    ```bash
+    kubectl --kubeconfig cloudthinker-kubeconfig.yaml get nodes
     ```
 
-    <Frame>
-      <img src="/images/use-cases/kubernetes-health-monitoring/04-node-cpu-utilization.jpg" alt="Node CPU utilization analysis showing underutilized instances and cost waste" />
-    </Frame>
-    <p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Node CPU utilization analysis showing underutilized instances</p>
-
-    CloudThinker finds five nodes averaging below 30% CPU (some as low as 12–15%), wasting approximately $573 per month. Oversized t3.xlarge instances running lightweight workloads — combined with poor pod scheduling — leave some nodes with only 2–3 pods while others carry 8–9.
+    If your nodes are listed, CloudThinker's own connection test will pass too. It runs the same command.
   </Step>
+  <Step title="Upload it in CloudThinker">
+    Open **Connections** in the sidebar, select **Kubernetes**, upload the file in the **KUBECONFIG** field, and click **Connect**.
 
-  <Step title="Get HPA recommendations">
-    ```text
-    #recommend HPA policies for web deployments
-    ```
-
-    <Frame>
-      <img src="/images/use-cases/kubernetes-health-monitoring/05-hpa-policy-recommendations.jpg" alt="HPA policy recommendations for web deployment auto-scaling configuration" />
-    </Frame>
-    <p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>HPA policy recommendations for auto-scaling</p>
-
-    CloudThinker flags payment-processor as critically at risk — only 2 replicas at 80–86% CPU, no autoscaling in place. It recommends adding an HPA (Horizontal Pod Autoscaler — Kubernetes's automatic scaling policy) to api-gateway to handle traffic spikes, and removing excess capacity from user-service and auth-service.
+    The status moves through **Connecting** and **Verifying** to **Connected**.
   </Step>
 </Steps>
 
-## What made this work
+<Warning>
+Don't upload your everyday kubeconfig. Files that point to local paths or sign in through an `exec` plugin (such as a cloud CLI) depend on tools on your machine and fail in CloudThinker. The token-based file from step 2 avoids both.
+</Warning>
 
-- **[CloudThinker](/guide/agents/overview)** queries the cluster API directly, replacing manual `kubectl` sessions and tool-switching.
-- **Cross-layer correlation** links pod utilization, node capacity, and scheduling patterns in a single analysis pass.
-- **[`#report`](/guide/memory) and [`#visualize`](/guide/memory)** format CloudThinker's findings as a structured report and a chart instead of raw command output.
-- **[`#recommend`](/guide/memory)** generates actionable HPA policy changes rather than a raw metrics dump.
-- **[Automations](/guide/automation/automations)** can rerun this analysis on a schedule before on-call engineers are paged.
+## Step 2: Check cluster health
 
-## Try it yourself
+Start with a quick check that the connection sees what you expect:
+
+```text
+Check the Kubernetes connection: list the namespaces, the node count, and any nodes that are not Ready
+```
+
+You get the namespace list, the node count, and each node's status. If usage numbers are missing, the answer tells you Metrics Server is not installed.
+
+Then ask for the wider picture. These prompts each cover one layer of the cluster:
+
+| Goal | Example prompt | What you get back |
+|------|----------------|-------------------|
+| Node pressure | `Which nodes are under memory or disk pressure, and what is using the most memory?` | Node conditions, capacity and allocatable resources, and top consumers (with Metrics Server) |
+| Sizing | `Analyze pod resource utilization in the production namespace` | Requests and limits compared with real usage, with pods flagged as over- or under-provisioned |
+| Idle capacity | `Show nodes with less than 30% CPU utilization` | Underused nodes and how pods are spread across them |
+| Autoscaling | `Recommend HPA policies for the web deployments` | Deployments with no autoscaler or too few replicas, and suggested policies |
+
+<Frame>
+  <img src="/images/use-cases/kubernetes-health-monitoring/02-pod-resource-utilization.jpg" alt="Pod resource utilization analysis showing CPU and memory usage per pod" />
+</Frame>
+
+In the team's cluster, the sizing prompt flagged two services running at about 20% CPU (over-provisioned) and one, `payment-processor`, running above 80% CPU and close to its memory limit. That pod was at risk of OOM (out-of-memory) kills. The autoscaling prompt then showed it had only 2 replicas and no Horizontal Pod Autoscaler (HPA).
+
+<Frame>
+  <img src="/images/use-cases/kubernetes-health-monitoring/05-hpa-policy-recommendations.jpg" alt="HPA policy recommendations for web deployments" />
+</Frame>
+
+## Step 3: Investigate a failing pod
+
+When something is already broken, name the namespace and describe the symptom:
+
+```text
+Which pods in the payments namespace are crash-looping, and what do their logs say?
+```
+
+CloudThinker finds the crash-looping, pending, or restarting pods, reads their logs and warning events, and explains the likely cause in one answer. Follow up in the same conversation to narrow it down:
+
+```text
+Why can't the pending pods in payments be scheduled?
+Compare the memory limit of payment-processor with its current usage
+```
+
+For scheduling problems, the answer compares pod requests with what each node can still allocate. For restarts, it ties the restarts to the logs, events, and resource limits.
+
+### Applying a fix
+
+The read-only account can't change anything. If you ask for a change such as `scale`, `rollout restart`, `cordon`, `drain`, or `apply`, CloudThinker pauses for your approval first, and the read-only role makes the command fail with `403`. To allow a specific change, bind a separate Role with only those verbs in the namespaces involved. See [Approvals](/guide/approvals/overview) and [Write access](/guide/connections/kubernetes#write-access).
+
+## Run it on a schedule
+
+Once a prompt gives you a useful answer, you can rerun it on a schedule so the health check lands before anyone is paged. See [Automations](/guide/automation/automations).
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="The connection test can't reach the cluster">
+    The API server address in the kubeconfig isn't reachable from the internet. Check that it isn't VPN-only and that any API server allowlist permits outside access.
+  </Accordion>
+  <Accordion title="Answers have no CPU or memory numbers">
+    Metrics Server isn't installed or isn't ready. Run `kubectl top nodes` to check. Pod status, events, and node conditions still work without it.
+  </Accordion>
+  <Accordion title="An answer mentions a 403 on some resource">
+    The ClusterRole doesn't cover that resource. The error names it, so add it to the role (or leave it out on purpose, as with Secrets).
+  </Accordion>
+  <Accordion title="Answers are about the wrong cluster">
+    CloudThinker uses the kubeconfig's current context. Rebuild the file from the cluster you want and upload it to the existing connection.
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
 
 <CardGroup cols={2}>
-  <Card title="Agents" icon="robot" href="/guide/agents/overview">
-    What CloudThinker can do in your workspace
-  </Card>
   <Card title="Kubernetes connection" icon="/images/icons/kubernetes.svg" href="/guide/connections/kubernetes">
-    Step-by-step guide to connecting CloudThinker to your EKS cluster
+    Full setup, the permission manifest, and how to revoke access
   </Card>
-  <Card title="Pulse clusters" icon="diagram-project" href="/guide/pulse/clusters">
-    Group related Kubernetes signals before they become incidents
-  </Card>
-  <Card title="Automations" icon="calendar-check" href="/guide/automation/automations">
-    Run this Kubernetes analysis on a recurring schedule
+  <Card title="Approvals" icon="circle-check" href="/guide/approvals/overview">
+    How changes like scale or restart wait for your sign-off
   </Card>
 </CardGroup>

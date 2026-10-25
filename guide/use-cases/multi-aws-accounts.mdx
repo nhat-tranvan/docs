@@ -1,99 +1,182 @@
 ---
-title: 'Multi-Account AWS Operations'
-description: 'Operate multiple AWS accounts from one workspace using IAM AssumeRole shortcuts to switch account context on demand'
+title: Work Across Multiple AWS Accounts
+description: "Connect several AWS accounts to one workspace, then compare spend and find cost and security issues across them with plain prompts."
 icon: layer-group
 ---
 
-A platform team managing production, development, and staging AWS accounts can query costs, audit security, and investigate incidents across all three — from a single CloudThinker workspace.
+Most teams run more than one AWS account: one for production, one for staging, one for development, sometimes more. This walkthrough connects three of them to one CloudThinker workspace and then asks questions that span all three: where the money goes, what's idle, and which IAM access is risky.
 
-## The scenario
+**What you'll need:**
 
-Your organization maintains separate AWS accounts for production, development, and staging. A centralized platform team needs cross-account visibility without giving everyone production access or constantly losing context by switching workspaces. The solution: connect CloudThinker to a primary AWS account, create IAM roles in each target account, and define shortcuts that tell [CloudThinker](/guide/agents/overview) which account to operate in — all from one workspace.
+- A CloudThinker workspace. The [quickstart](/quickstart) creates one.
+- Permission to create IAM roles in each AWS account, and access to [AWS CloudShell](https://console.aws.amazon.com/cloudshell/home) in each one.
+- For cost questions: Cost Explorer turned on in each account. AWS can take up to 24 hours to activate it on a new account.
 
-## Walkthrough
+## How multiple accounts work
+
+Each AWS account is its own connection in CloudThinker. There's no hub account and no role chaining to set up. When you connect an account, CloudThinker assumes a read-only role in that account (`CloudThinkerAccessRole`) and gets short-lived credentials for it.
+
+Agents pick an account from two fields you fill in when you connect it:
+
+| Field | What to put in it | Example |
+|---|---|---|
+| **Alias** | A short name you'll use in prompts | `production` |
+| **Description** | What the account holds. Agents read this to choose between accounts. | `Production AWS account, customer-facing workloads` |
+
+<Tip>
+Write descriptions that tell the accounts apart. "AWS account" three times gives agents nothing to choose on. "Staging, mirrors production, reset weekly" does.
+</Tip>
+
+## Connect the accounts
+
+Repeat these steps once per account. The full reference, including the access-key method, is on the [AWS connection page](/guide/connections/aws).
 
 <Steps>
-  <Step title="Connect the primary AWS account">
-    In **Connections**, add your primary AWS account using [Role-Based authentication](/guide/connections/aws). This is the hub account — all cross-account requests originate from its IAM identity.
-
-    **Success state:** the connection shows **Connected** status in the Connections panel.
+  <Step title="Open the connect dialog">
+    In the sidebar, click **More → Workspace settings → Connections**, select **Amazon Web Services**, and click **Connect**. Keep **Role-Based (recommended)** selected.
   </Step>
-
-  <Step title="Create cross-account IAM roles">
-    In each target AWS account, create an IAM role with the following trust policy. Replace `PRIMARY_ACCOUNT_ID` with your hub account's AWS account ID.
-
-    ```json
-    {
-      "Version": "2012-10-17",
-      "Statement": [
-        {
-          "Effect": "Allow",
-          "Principal": {
-            "AWS": "arn:aws:iam::PRIMARY_ACCOUNT_ID:root"
-          },
-          "Action": "sts:AssumeRole"
-        }
-      ]
-    }
-    ```
-
-    Attach `ReadOnlyAccess` (or a scoped read-only policy) to the role to keep permissions minimal.
-
-    **Success state:** you can verify each role is assumable by running `aws sts assume-role` from the primary account.
+  <Step title="Name the account">
+    Fill in **Alias** and **Description** using the table above. **Default AWS region (optional)** is only a starting point: agents can use any region the role can reach.
   </Step>
+  <Step title="Run the setup script in that account">
+    Click **Open CloudShell** and sign in to the AWS account you're connecting. Back in the dialog, click **Copy Script to Clipboard**, paste it into CloudShell, and press Enter. The script creates `CloudThinkerAccessRole` with the AWS managed `ReadOnlyAccess` policy and prints the role's ARN.
 
-  <Step title="Define account-switching shortcuts">
-    Open the **Shortcuts** panel (top right of any workspace) and create one [command shortcut](/guide/commands) per target account. Set the **Init Step** to instruct the agent to assume the target role ARN before your prompt runs.
-
-    <Frame>
-      <img src="/images/use-cases/01-shortcut-assume-role.png" alt="CloudThinker Shortcuts panel showing account switching shortcut" />
-    </Frame>
-    <p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Shortcuts panel with an AssumeRole init step</p>
-
-    | Shortcut name | Init step |
-    |---|---|
-    | `/switch-to-prod` | `Please assume arn:aws:iam::111111111111:role/CloudThinkerAccessRole and use the STS token for this session.` |
-    | `/switch-to-dev` | `Please assume arn:aws:iam::222222222222:role/CloudThinkerAccessRole and use the STS token for this session.` |
-    | `/switch-to-staging` | `Please assume arn:aws:iam::333333333333:role/CloudThinkerAccessRole and use the STS token for this session.` |
-
-    **Success state:** each shortcut name appears in the Shortcuts autocomplete list when you type `/`.
+    <Warning>
+    Copy the script from the dialog you're completing, every time. Each dialog generates its own **AWS External ID**, and the script bakes it into the role's trust policy. A script copied from another account's dialog won't match.
+    </Warning>
   </Step>
+  <Step title="Paste the Role ARN and connect">
+    Paste the ARN into **AWS Role ARN**, leave **AWS External ID** as it is, and click **Connect**.
 
-  <Step title="Run cross-account operations">
-    Prefix any prompt with the shortcut name. CloudThinker assumes the target role before acting, so every result is scoped to that account.
-
-    ```text
-    /switch-to-prod #dashboard Build an AWS daily cost report
-    ```
-
-    CloudThinker assumes the production role, queries Cost Explorer and CloudWatch in that account, and returns a cost dashboard scoped to production.
-
-    ```text
-    /switch-to-dev #report Summarize unused EC2 instances in the dev account
-    ```
-
-    **Success state:** CloudThinker's response references resources from the target account, not the hub.
+    **Success state:** the account shows a **Connected** status.
+  </Step>
+  <Step title="Set the environment">
+    Open the connection, click **Edit Instance**, and set **Environment** to **Production**, **Staging**, or **Development**. [Approval rules](/guide/approvals/rules) can then treat accounts differently. **Not set** counts as production.
   </Step>
 </Steps>
 
-## What made this work
+When you're done, **Connections** lists three Amazon Web Services connections, for example `production`, `staging`, and `development`, each **Connected**.
 
-- **[Role-Based authentication](/guide/connections/aws)** — the hub account's IAM identity performs the `sts:AssumeRole` call, so no long-term credentials are shared or stored for each target account.
-- **IAM least privilege** — attaching `ReadOnlyAccess` to each cross-account role limits what agents can do, even if a shortcut is misused. Use specific principal ARNs instead of `:root` where your security policy allows.
-- **[Shortcuts](/guide/commands)** — an init step injected before your prompt sets the account context without retyping the role ARN every time. Shortcuts also let you scope knowledge or instructions per account.
-- **[CloudThinker](/guide/agents/overview)** — handles cost analysis, resource auditing, and infrastructure queries across AWS accounts once the role context is set.
-- **[Workspaces](/guide/workspaces)** — when teams need full isolation (separate knowledge bases, audit trails, or access controls per account), create one workspace per account instead of using shortcuts.
+## Check which accounts agents can reach
 
-## Try it yourself
+Before you compare anything, confirm every account answers. In a new conversation, ask:
+
+```text
+List every AWS account you can reach through my connections. For each one, show the alias, the 12-digit account ID, and the regions you can see.
+```
+
+**Expected result:** one row per connection with its real account ID. If an account is missing or shows an error, fix it now (see [Troubleshooting](#troubleshooting)) so later comparisons don't silently skip it.
+
+## Compare spend across accounts
+
+You have two routes. Use Optimize when you want saved, repeatable numbers. Use a chat prompt when you have a one-off question.
+
+| You want | Use | Where |
+|---|---|---|
+| A savings report covering every account, with one section each | [Optimize reports](/guide/cost-optimization/reports) with **All accounts** scope | **Optimize → Reports** |
+| One account's spend by service, region, or account | [Cost Explorer](/guide/cost-optimization/analytics) | **Optimize → Cost Explorer**, pick the account next to the page title |
+| A quick side-by-side answer in your own words | A chat prompt | Any conversation |
+
+### Generate an all-accounts report
+
+<Steps>
+  <Step title="Open Reports">
+    In the sidebar, select **Optimize → Reports**.
+  </Step>
+  <Step title="Pick the scope">
+    Choose **All accounts** in the selector above the report cards.
+  </Step>
+  <Step title="Pick a report">
+    Select **Savings opportunities**.
+
+    **Success state:** a new conversation opens, and the finished report appears as an artifact with one section per account.
+  </Step>
+</Steps>
+
+Reports use the cost data Optimize already stores, so they don't call AWS for fresh data. Missing data shows up as a gap, never as zero, and Optimize never adds different currencies together.
+
+### Ask in chat
+
+Name the accounts by alias so there's no guessing:
+
+```text
+Compare last month's AWS spend for production, staging, and development. Show a table with the top five services in each account and flag any service that grew more than 20% from the month before.
+```
+
+**Expected result:** a table per account (or one combined table) with service names and amounts, and the services that grew past 20% called out.
+
+## Find cost waste in each account
+
+Non-production accounts often collect forgotten resources. Ask the same question of every account at once:
+
+```text
+In staging and development, find EC2 instances with average CPU under 10% over the last two weeks, and unattached EBS volumes. Group the results by account and include instance IDs, types, and regions.
+```
+
+**Expected result:** a list per account with resource IDs you can look up in the AWS console. Nothing is stopped or deleted: the role is read-only.
+
+For ranked savings with estimated amounts, open **Optimize → Findings** and pick each account in the page header. See [Recommendations](/guide/cost-optimization/recommendations).
+
+## Find security issues across accounts
+
+The `ReadOnlyAccess` role lets agents review IAM roles, users, and policies in every connected account. Two prompts that pay off quickly:
+
+```text
+List IAM users and roles that haven't been used in 90 days in production, staging, and development. Group by account and show the last-used date for each.
+```
+
+```text
+Across all my AWS accounts, find IAM users with access keys older than 90 days and any user without MFA. Show one table per account.
+```
+
+**Expected result:** a table per account with identity names and dates. Use it as a cleanup list. Agents report what they find; they don't remove anything.
+
+<Note>
+Every call an agent makes is an ordinary AWS API call. To see exactly what ran in an account, filter CloudTrail in that account by `CloudThinkerAccessRole`.
+</Note>
+
+## Let agents make changes in some accounts only
+
+The setup script's role is read-only, so AWS refuses every write in every account until you grant more. To let agents fix things in, say, development but never in production:
+
+1. Add only the write actions you need to `CloudThinkerAccessRole` in the development account. Leave the production role on `ReadOnlyAccess`.
+2. Check that **Allow writes** is on for the development connection, and turn it off on any connection that should stay read-only even if its role changes later.
+3. Make sure each connection's **Environment** is set, so [approval rules](/guide/approvals/rules) can ask for a person's sign-off on staging or production before anything runs.
+
+See [Write access](/guide/connections/aws#write-access) for how IAM permissions and **Allow writes** combine.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="An account is missing from the answer">
+    **Cause:** the connection isn't **Connected**, or its **Description** is too vague for agents to match it to your prompt.
+
+    **Fix:** check the account's status in **Workspace settings → Connections**. Then edit its **Description** to say what the account holds, and name it by alias in your prompt.
+  </Accordion>
+  <Accordion title="The second account fails with AccessDenied on sts:AssumeRole">
+    **Cause:** the script or trust policy came from a different account's dialog, so the External ID doesn't match.
+
+    **Fix:** open a fresh connect dialog for that account and run the script it shows. If `CloudThinkerAccessRole` already exists there, the script stops; see the [AWS troubleshooting](/guide/connections/aws#troubleshooting) steps for replacing or updating the role.
+  </Accordion>
+  <Accordion title="Cost questions return no data for one account">
+    **Check:** Cost Explorer is on in that account and has had 24 hours to activate. Member accounts in AWS Organizations may be blocked from Cost Explorer by the management account.
+
+    **Fix:** turn on Cost Explorer, or connect the management account to see costs for the whole organization.
+  </Accordion>
+  <Accordion title="A scheduled all-accounts report skips a new account">
+    **Cause:** a report schedule keeps the accounts it captured when you created it. Accounts you connect later aren't added.
+
+    **Fix:** recreate the schedule on **Optimize → Reports** with **All accounts** selected.
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
 
 <CardGroup cols={2}>
   <Card title="Connect an AWS account" icon="/images/icons/aws.svg" href="/guide/connections/aws">
-    Set up Role-Based authentication so CloudThinker can assume roles across accounts.
+    Every field, permission, and fix for a single AWS connection.
   </Card>
-  <Card title="Commands" icon="terminal" href="/guide/commands">
-    Create shortcut commands with Init Steps for reusable prompt setups.
-  </Card>
-  <Card title="Workspaces" icon="layer-group" href="/guide/workspaces">
-    Create dedicated workspaces when you need full isolation between accounts.
+  <Card title="Optimize reports" icon="file-lines" href="/guide/cost-optimization/reports">
+    Generate or schedule savings reports for one account or all of them.
   </Card>
 </CardGroup>
