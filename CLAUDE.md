@@ -151,7 +151,7 @@ Mirror an existing connection of the **same auth style**, then keep the canonica
 - **Token/API-key connections** (Vercel, Coralogix, Datadog, Cloudflare) → copy `guide/connections/coralogix.mdx`.
 - **OAuth connections** (Neon) → copy `guide/connections/neon.mdx`.
 
-Canonical section flow: intro (capabilities + auth mechanism) → `Prerequisites` (`<Info>`) → `Setup` (`<Steps>` + `<Warning>`) → `Connection Details` (table) → `Required Permissions` (`<Tip>`) → `Agent Capabilities` (table + `Example Prompts`) → `Troubleshooting` (`<Accordion>`) → `Security Best Practices` → `Related` (`<CardGroup>`). Also add an icon at `images/icons/<name>.svg` and register the page in both `docs.json` and `llms.txt`.
+Canonical section flow: intro (capabilities + auth mechanism) → `Prerequisites` (`<Info>`) → `Setup` (`<Steps>` + `<Warning>`) → `Connection Details` (table) → `Required Permissions` (`<Tip>`) → `Agent Capabilities` (table + `Example Prompts`) → `Troubleshooting` (`<Accordion>`) → `Security` → `Related` (`<CardGroup>`). Also add an icon at `images/icons/<name>.svg` and register the page in `docs.json`, then run `python3 scripts/build-llms.py` to regenerate `llms.txt`.
 
 ### Updating Navigation
 
