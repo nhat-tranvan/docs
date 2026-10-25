@@ -13,15 +13,29 @@ Connect Snowflake to let CloudThinker show which warehouses burn the most credit
 ## Prerequisites
 
 - `ACCOUNTADMIN`, or an equivalent role, to create a role, a service user, a network policy, and a token.
-- A warehouse the role can use. The connection test needs no compute, so it can pass while real analysis fails without one.
+- A warehouse the role can use. The connection test needs no compute, so it can pass while real analysis fails without one. Setup step 1 creates a capped one.
+- If your account has an authentication policy, its `AUTHENTICATION_METHODS` must include `PROGRAMMATIC_ACCESS_TOKEN`, or the token is refused at sign-in.
+- The workspace Admin role in CloudThinker to add the connection. See [How access works](/guide/connections/overview#how-access-works).
 
 ---
 
 ## Setup
 
+Run all the SQL below as `ACCOUNTADMIN` (start with `USE ROLE ACCOUNTADMIN;`), since creating a resource monitor needs it. The SQL uses `CT_WH` as the warehouse. To use a warehouse you already have, swap in its name everywhere.
+
 <Steps>
+  <Step title="Create a capped warehouse (recommended)">
+    Analysis queries bill credits to this warehouse. A dedicated X-Small one with a short auto-suspend and a resource monitor keeps the cost capped:
+    ```sql
+    USE ROLE ACCOUNTADMIN;
+
+    CREATE WAREHOUSE IF NOT EXISTS CT_WH WAREHOUSE_SIZE = XSMALL AUTO_SUSPEND = 60 AUTO_RESUME = TRUE INITIALLY_SUSPENDED = TRUE;
+    CREATE RESOURCE MONITOR IF NOT EXISTS CT_MONITOR WITH CREDIT_QUOTA = 10 FREQUENCY = MONTHLY START_TIMESTAMP = IMMEDIATELY TRIGGERS ON 100 PERCENT DO SUSPEND;
+    ALTER WAREHOUSE CT_WH SET RESOURCE_MONITOR = CT_MONITOR;
+    ```
+    To size `CREDIT_QUOTA`: an X-Small warehouse uses 1 credit per running hour, billed per second with a 60-second minimum each time it resumes. A quota of 10 covers 10 hours of running time a month. When the quota is used up, the warehouse suspends and analysis queries fail until the next month or until an admin raises it.
+  </Step>
   <Step title="Create a read-only role">
-    Run as `ACCOUNTADMIN`. Replace `COMPUTE_WH` with the warehouse the agent should run on:
     ```sql
     USE ROLE ACCOUNTADMIN;
 
@@ -30,7 +44,7 @@ Connect Snowflake to let CloudThinker show which warehouses burn the most credit
     GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER     TO ROLE CT_READONLY;
     GRANT DATABASE ROLE SNOWFLAKE.GOVERNANCE_VIEWER TO ROLE CT_READONLY;
     GRANT MONITOR USAGE ON ACCOUNT                  TO ROLE CT_READONLY;
-    GRANT USAGE ON WAREHOUSE COMPUTE_WH             TO ROLE CT_READONLY;
+    GRANT USAGE ON WAREHOUSE CT_WH                  TO ROLE CT_READONLY;
     ```
   </Step>
   <Step title="Create a service user">
@@ -39,13 +53,13 @@ Connect Snowflake to let CloudThinker show which warehouses burn the most credit
     CREATE USER IF NOT EXISTS SVC_CLOUDTHINKER
       TYPE = SERVICE
       DEFAULT_ROLE = CT_READONLY
-      DEFAULT_WAREHOUSE = COMPUTE_WH
+      DEFAULT_WAREHOUSE = CT_WH
       COMMENT = 'CloudThinker connection';
     GRANT ROLE CT_READONLY TO USER SVC_CLOUDTHINKER;
     ```
   </Step>
   <Step title="Attach a network policy">
-    Snowflake refuses token sign-in until the user has a network policy. Ask your CloudThinker contact for the current CloudThinker egress IP addresses and put them in `ALLOWED_IP_LIST`:
+    Snowflake refuses token sign-in until the user has a network policy. These docs don't publish CloudThinker's egress IP addresses: ask your CloudThinker contact for the current list, or [contact us](https://cloudthinker.io/contact) if you don't have one. Put them in `ALLOWED_IP_LIST`:
     ```sql
     CREATE NETWORK POLICY IF NOT EXISTS CT_POLICY ALLOWED_IP_LIST = ('<cloudthinker-egress-ip-1>', '<cloudthinker-egress-ip-2>');
     ALTER USER SVC_CLOUDTHINKER SET NETWORK_POLICY = CT_POLICY;
@@ -58,12 +72,12 @@ Connect Snowflake to let CloudThinker show which warehouses burn the most credit
       ROLE_RESTRICTION = 'CT_READONLY'
       DAYS_TO_EXPIRY = 90;
     ```
-    Copy the token now. Snowflake shows it only once, and it stops working on the expiry day. Set a calendar reminder a week before then to [rotate it](#rotate-the-token).
+    Copy the value in the `token_secret` column of the result. Snowflake shows it only once, and it stops working on the expiry day. `DAYS_TO_EXPIRY` goes up to 365 unless your account sets a lower limit. CloudThinker doesn't warn before the token expires, so set a calendar reminder a week before then to [rotate it](#rotate-the-token). To check expiry dates later, run `SHOW USER PROGRAMMATIC ACCESS TOKENS FOR USER SVC_CLOUDTHINKER;` and read the `expires_at` column.
   </Step>
   <Step title="Add the connection in CloudThinker">
     Go to **Connections → Snowflake**, fill in the fields from [Connection details](#connection-details), and click **Connect**.
 
-    **Success state:** Snowflake shows a **Connected** status, and the message names what the token resolved to, for example `Connected to MYORG-MYACCOUNT (AWS_US_WEST_2), role CT_READONLY, warehouse COMPUTE_WH`.
+    **Success state:** Snowflake shows a **Connected** status, and the message names what the token resolved to, for example `Connected to MYORG-MYACCOUNT (AWS_US_WEST_2), role CT_READONLY, warehouse CT_WH`.
   </Step>
 </Steps>
 
@@ -73,10 +87,16 @@ Connect Snowflake to let CloudThinker show which warehouses burn the most credit
 
 | Field | Required | Description | Default |
 |-------|----------|-------------|---------|
-| **Account identifier** | Yes | `MYORG-MYACCOUNT`, from **Snowsight → Account details**, or run `SELECT CURRENT_ORGANIZATION_NAME() \|\| '-' \|\| CURRENT_ACCOUNT_NAME();`. Not the full URL | |
-| **Programmatic access token** | Yes | The token from Setup step 4. Not an account password | |
+| **Account identifier** | Yes | `MYORG-MYACCOUNT`. Not the full URL. See below for how to find it | |
+| **Programmatic access token** | Yes | The token from Setup step 5. Not an account password | |
 | **Role** | No | Role the connection uses. Must be inside the token's `ROLE_RESTRICTION` | User's default role |
 | **Warehouse** | No | Warehouse billed for the credits this connection uses | User's default warehouse |
+
+To find the **Account identifier**, open the account selector at the bottom of the Snowsight left menu and click **View account details**. Or run:
+
+```sql
+SELECT CURRENT_ORGANIZATION_NAME() || '-' || CURRENT_ACCOUNT_NAME();
+```
 
 An identifier written with an underscore (`MYORG_MYACCOUNT`) also works.
 
@@ -131,12 +151,14 @@ Where are time travel and failsafe adding the most storage?
 
 ## Write access
 
-**Allow writes** is off on new Snowflake connections. With it on, each write goes through your [Rules](/guide/approvals/rules) and [Approval mode](/guide/approvals/approval-mode).
+**Allow writes** is off on new Snowflake connections. With it on, each write goes through your [Rules](/guide/approvals/rules) and [Approval mode](/guide/approvals/approval-mode). New workspaces start on Auto mode with Rules plus AI (**Auto · Rules + AI · Ask me**), so AI can approve a warehouse suspend with no person involved. For a production account, add an **Ask first** Rule before you turn writes on: in a chat, type `/create-policy Ask first for every write on the Snowflake connection`, then accept it under **Approvals → Rules → Needs review**. The [Cassandra guide](/guide/connections/cassandra#write-access) walks through checking the proposal.
 
 Write means exactly two actions, not arbitrary SQL:
 
 - Suspend or resume one named warehouse.
-- Keep measured findings in a `CT_FINDINGS` table. CloudThinker creates it in the one schema where the role has `CREATE TABLE`. If the role can write to several schemas, it asks you which one. You can also name it in your prompt, for example `MONITORING.ALERTS`.
+- Keep measured findings in a `CT_FINDINGS` table, when you ask CloudThinker to. On the first save, it creates the table in the one schema where the role has `CREATE TABLE`. If the role can write to several schemas, it asks you which one. You can also name it in your prompt, for example `MONITORING.ALERTS`.
+
+`CT_FINDINGS` has six columns: `RECORDED_AT_UTC`, `CATEGORY`, `SEVERITY`, `SUBJECT`, `DETAIL`, and `SOURCE`. Saving a finding and pruning old ones are both writes, so each goes through approvals. Nothing is pruned automatically: rows stay until you ask CloudThinker to remove those older than a number of days, or delete them yourself.
 
 Resizing a warehouse, changing a resource monitor, or lowering `DATA_RETENTION_TIME_IN_DAYS` is still handed to you as a statement to run in Snowsight.
 
@@ -153,7 +175,7 @@ Resizing a warehouse, changing a resource monitor, or lowering `DATA_RETENTION_T
     GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER     TO ROLE CT_READWRITE;
     GRANT DATABASE ROLE SNOWFLAKE.GOVERNANCE_VIEWER TO ROLE CT_READWRITE;
     GRANT MONITOR USAGE ON ACCOUNT                  TO ROLE CT_READWRITE;
-    GRANT USAGE ON WAREHOUSE COMPUTE_WH             TO ROLE CT_READWRITE;
+    GRANT USAGE ON WAREHOUSE CT_WH                  TO ROLE CT_READWRITE;
 
     GRANT USAGE, OPERATE, MONITOR ON WAREHOUSE DEV_WH     TO ROLE CT_READWRITE;
     GRANT USAGE ON DATABASE MONITORING                    TO ROLE CT_READWRITE;
@@ -164,18 +186,49 @@ Resizing a warehouse, changing a resource monitor, or lowering `DATA_RETENTION_T
       ROLE_RESTRICTION = 'CT_READWRITE'
       DAYS_TO_EXPIRY = 90;
     ```
-    Copy the new token.
+    Copy the value in the `token_secret` column.
   </Step>
   <Step title="Update the connection">
     Open **Connections**, select Snowflake, click the pencil icon on the account's row, and in **Edit Instance** click **Replace…**. Paste the new token into **Programmatic access token**, set **Role** to `CT_READWRITE`, and click **Save and test**.
   </Step>
   <Step title="Turn on Allow writes">
-    On the same detail panel, turn on the **Allow writes** switch.
+    Close **Edit Instance**. On the Snowflake connection's detail panel, turn on the **Allow writes** switch.
+  </Step>
+  <Step title="Remove the read-only token">
+    Once **Save and test** passes, the old token is unused. Run `ALTER USER SVC_CLOUDTHINKER REMOVE PROGRAMMATIC ACCESS TOKEN CT_TOKEN;`.
+  </Step>
+</Steps>
+
+To go back to read-only:
+
+<Steps>
+  <Step title="Turn off Allow writes">
+    On the Snowflake connection's detail panel, turn off the **Allow writes** switch. CloudThinker stops proposing writes at once.
+  </Step>
+  <Step title="Swap back to a read-only token">
+    Create a new read-only token:
+    ```sql
+    ALTER USER SVC_CLOUDTHINKER ADD PROGRAMMATIC ACCESS TOKEN CT_TOKEN_RO
+      ROLE_RESTRICTION = 'CT_READONLY'
+      DAYS_TO_EXPIRY = 90;
+    ```
+    Open **Connections → Snowflake**, click the pencil icon on the account's row, and in **Edit Instance** click **Replace…**. Paste it into **Programmatic access token**, set **Role** to `CT_READONLY`, and click **Save and test**.
+  </Step>
+  <Step title="Remove the write token and role">
+    ```sql
+    ALTER USER SVC_CLOUDTHINKER REMOVE PROGRAMMATIC ACCESS TOKEN CT_TOKEN_RW;
+    REVOKE ROLE CT_READWRITE FROM USER SVC_CLOUDTHINKER;
+    DROP ROLE CT_READWRITE;
+    ```
   </Step>
 </Steps>
 
 <Warning>
-Two or more Snowflake connections in one workspace turn writes off for all of them, because an approved write can't name which account it targets. Also, a suspend can't be made conditional: a query can start between CloudThinker's busy check and the suspend and lose its compute.
+Two or more Snowflake connections in one workspace turn writes off for all of them, because an approved write can't name which account it targets.
+</Warning>
+
+<Warning>
+A suspend can't be made conditional. A query can start between CloudThinker's busy check and the suspend, and lose its compute.
 </Warning>
 
 ---
@@ -184,7 +237,19 @@ Two or more Snowflake connections in one workspace turn writes off for all of th
 
 <Steps>
   <Step title="Create the new token">
-    Run Setup step 4 again with a new token name, such as `CT_TOKEN_2`. Keep the old token until the swap is done.
+    Keep the old token until the swap is done. For a read-only connection:
+    ```sql
+    ALTER USER SVC_CLOUDTHINKER ADD PROGRAMMATIC ACCESS TOKEN CT_TOKEN_2
+      ROLE_RESTRICTION = 'CT_READONLY'
+      DAYS_TO_EXPIRY = 90;
+    ```
+    If writes are on:
+    ```sql
+    ALTER USER SVC_CLOUDTHINKER ADD PROGRAMMATIC ACCESS TOKEN CT_TOKEN_RW_2
+      ROLE_RESTRICTION = 'CT_READWRITE'
+      DAYS_TO_EXPIRY = 90;
+    ```
+    Copy the value in the `token_secret` column.
   </Step>
   <Step title="Replace it in CloudThinker">
     Open **Connections**, select Snowflake, click the pencil icon on the account's row, and in **Edit Instance** click **Replace…**. Paste the new token and click **Save and test**.
@@ -192,7 +257,7 @@ Two or more Snowflake connections in one workspace turn writes off for all of th
     **Success state:** the test passes and the connection stays **Connected**. If it fails, CloudThinker keeps the previous token.
   </Step>
   <Step title="Remove the old token">
-    Run `ALTER USER SVC_CLOUDTHINKER REMOVE PROGRAMMATIC ACCESS TOKEN CT_TOKEN;`.
+    Run `ALTER USER SVC_CLOUDTHINKER REMOVE PROGRAMMATIC ACCESS TOKEN <old_token_name>;`, for example `CT_TOKEN` or `CT_TOKEN_RW`.
   </Step>
 </Steps>
 
@@ -205,7 +270,7 @@ The service user has no network policy. Run `ALTER USER SVC_CLOUDTHINKER SET NET
 </Accordion>
 
 <Accordion title="It worked yesterday and fails today (390318)">
-The token expired or was revoked. Create a new one (Setup step 4) and [rotate it](#rotate-the-token) into the connection.
+The token expired or was revoked. Create a new one (Setup step 5) and [rotate it](#rotate-the-token) into the connection.
 </Accordion>
 
 <Accordion title="Object does not exist or not authorized (002003)">
@@ -247,5 +312,8 @@ Not an error. `ACCOUNT_USAGE` lags by up to a few hours and keeps 365 days of hi
   </Card>
   <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
     Decide which writes run on their own and which wait for you
+  </Card>
+  <Card title="Connections overview" icon="plug" href="/guide/connections/overview">
+    How credentials and write controls work across connections
   </Card>
 </CardGroup>

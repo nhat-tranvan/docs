@@ -9,18 +9,17 @@ Incident memory is the set of notes CloudThinker writes at the end of a [root ca
 ## Prerequisites
 
 - Resolve receiving alerts from at least one source. See [Connect Pulse sources](/guide/pulse/setup).
-- Nothing to switch on: incident memory is on by default. Investigations write it, and workspace Admins start investigations. Developers and Viewers can read the results. See [Roles](/guide/security/roles).
-- In a self-hosted deployment, the instance runtime setting **Incident Memory File Enabled** (`INCIDENT_MEMORY_FILE_ENABLED`, default on) controls it. Turn it off and investigations stop using incident memory.
+- Nothing to switch on. Every investigation that reaches a disposition writes memory, whether **On duty** started it or an Admin clicked **Investigate**. All roles can read the investigation results. See [Roles](/guide/security/roles).
 
 ## What CloudThinker records
 
-CloudThinker writes memory itself. You don't fill in a form, and not every incident produces an entry. Each entry is one of three kinds, and an entry that breaks its rule is discarded when CloudThinker reads memory back.
+CloudThinker writes memory itself. You don't fill in a form, and not every incident produces an entry. Each entry is one of three kinds:
 
-| Kind | What it holds | Kept only if |
-|---|---|---|
-| **Recollection** | One incident's story: symptom, root cause, what changed, the fix, and a check that proves the fix | It's tied to a specific incident |
-| **Observation** | A finding from a live investigation | It includes an `Action:` line telling a responder what to do |
-| **Lesson** | A pattern seen across incidents | It cites at least two source incidents |
+| Kind | What it's for |
+|---|---|
+| **Recollection** | One incident's story: symptom, root cause, what changed, the fix, and a check that proves the fix |
+| **Observation** | A finding from a live investigation, with an `Action:` line telling a responder what to do |
+| **Lesson** | A pattern backed by at least two past incidents, so one odd incident can't become a rule |
 
 CloudThinker writes or updates a recollection after any run where it actually investigated and reached a disposition (it saved an assessment, a severity and a close decision). It writes nothing for a plain question, an aborted run, or a run that never reached a disposition. When an incident reopens, CloudThinker updates that incident's existing recollection instead of adding a second one.
 
@@ -40,14 +39,18 @@ CloudThinker keeps observed facts, inferences and unknown history separate. A fi
 
 When a new investigation starts, CloudThinker reads memory before it forms any hypothesis:
 
-1. It loads the 20 most recently updated valid entries in the workspace, across all three kinds. This step doesn't filter by service. When the workspace holds more, CloudThinker is told the snapshot is partial and can open the memory index, which links every recollection.
+1. It loads the 20 most recently updated entries in the workspace, across all three kinds, without filtering by service. In a busier workspace, an older recollection is found only if CloudThinker opens the memory index, which links every recollection.
 2. It looks for a matching recollection: the same symptom on the same service or component.
 3. If the matching incident was resolved before, it runs one cheap check from that recollection's `Verify-with:` line.
    - **Check passes:** the old fix still holds. CloudThinker reads the current evidence to decide the disposition. A repeated report of the same episode isn't counted as a new occurrence.
    - **Check fails:** CloudThinker investigates the current fault on its own terms. It doesn't assume the old cause came back.
 4. It treats every recalled entry as a lead, not as evidence. The verdict still rests on data from your systems, and memory never upgrades an **Inferred** cause to **Verified**.
 
-Incident memory isn't listed in **Settings → Memory**, which shows [workspace memory](/guide/memory) items. To see what CloudThinker checked, click **Watch live** while it runs, or open **More actions → Open AI Conversation** afterwards.
+<Tip>
+Keep **Service** and **Resource ID Path** names the same on every source, so recall can match a new alert to the old incident.
+</Tip>
+
+Incident memory isn't listed in workspace **Settings → Memory** (under **Agent Configuration**), which shows [workspace memory](/guide/memory) items. To see what CloudThinker checked, click **Watch live** while it runs, or open **More actions → Open AI Conversation** afterwards. When a past fix was rechecked, the conversation shows the `Verify-with:` check CloudThinker ran. There's no separate step that lists the recalled entries.
 
 ## Confirm a fix held
 
@@ -58,9 +61,9 @@ A recollection that records an applied fix starts as **Unverified**. A follow-up
     Go to **Resolve → Investigation**, select the incident, and open **More actions → Open AI Conversation**.
   </Step>
   <Step title="Enable the follow-up card">
-    When CloudThinker applied a fix and recorded a `Verify-with:` check, it proposes a follow-up as a card in the conversation. The card shows when it runs and what it watches for. Click **Enable** (or **Dismiss**). Nothing is scheduled until you do, and you need permission to create automations.
+    When CloudThinker applied a fix itself and recorded a `Verify-with:` check, it proposes a follow-up as a card in the conversation. The card shows when it runs and what it watches for. **Enable** and **Dismiss** need the workspace Admin role. Nothing is scheduled until an Admin clicks **Enable**. Other members see the card without buttons, with the note **Only members who can create automations may enable this.** Send the conversation link to an Admin, or ask for the check yourself (next step).
 
-    The card has no time picker. For a different time, dismiss it and ask for the check yourself (next step).
+    No card appears for a fix your team applied by hand, and the card has no time picker. In either case, ask for the check yourself (next step).
 
     **Success state:** the card shows **Scheduled**, and the follow-up becomes an [automation](/guide/automation/automations) that runs at the proposed time.
   </Step>
@@ -68,8 +71,10 @@ A recollection that records an applied fix starts as **Unverified**. A follow-up
     If no card appeared, ask in the same conversation:
 
     ```text
-    Tomorrow at 09:00, re-run the Verify-with check for this incident and update its recollection with the result.
+    Tomorrow at 09:00 UTC, re-run the Verify-with check for this incident and update its recollection with the result.
     ```
+
+    Name the time zone in the request so the run time isn't ambiguous. **Success state:** the follow-up is listed under your [automations](/guide/automation/automations) with the time you asked for.
   </Step>
   <Step title="Read the result">
     When the follow-up runs, it reports the check result in the conversation and sets the recollection's outcome.
@@ -78,28 +83,31 @@ A recollection that records an applied fix starts as **Unverified**. A follow-up
 
 ### Verification outcomes
 
-| Outcome | Meaning | Effect on later investigations |
-|---|---|---|
-| **Unverified** | No conclusive check yet. The default for any entry without an outcome. | Used as a lead |
-| **Verified** | A follow-up check confirmed the expected result | Used as a lead |
-| **Failed** | The expected result didn't hold | A failed lesson is never shown again as guidance. A failed recollection or observation stays as a counter-example, so the same assumption isn't repeated. |
+You see an outcome only in the follow-up's report in the conversation. No other screen shows it.
+
+| Outcome | Entry kind | Meaning | Effect on later investigations |
+|---|---|---|---|
+| **Unverified** | Any | No conclusive check yet. The default for any entry without an outcome. | Used as a lead. CloudThinker never turns it into a standard procedure. |
+| **Verified** | Any | A follow-up check confirmed the expected result | Used as a lead, labeled as a fix that held |
+| **Failed** | Lesson | The pattern didn't hold | No longer shown as guidance |
+| **Failed** | Recollection or observation | The recorded fix didn't hold | Kept as a counter-example, so the same fix isn't assumed again |
 
 ## How memory stays accurate
 
-There's no screen for viewing, exporting or editing incident memory. Memory is kept per workspace and never shared with another workspace. CloudThinker maintains it as it works:
+There's no screen for viewing, exporting, editing or deleting incident memory. Memory is kept per workspace, in the workspace's managed sandbox, and never shared with another workspace. For how CloudThinker stores and protects workspace data, see the [security overview](/guide/security/overview). If an entry is wrong or holds data that shouldn't be there, email [support@cloudthinker.io](mailto:support@cloudthinker.io) with your workspace name and the incident ID. CloudThinker maintains memory as it works:
 
 - When new evidence contradicts a sentence in a past recollection, CloudThinker edits that sentence and states the observation that corrects it.
 - An unsupported historical claim is marked unverified, not deleted. A different fault today doesn't erase a supported older incident.
 - Two lessons that contradict each other are merged into one corrected lesson, or the obsolete one is deleted.
 - An outdated entry is edited in place rather than duplicated.
 
-You help by letting investigations finish, settling each suggestion in the incident's **Remediation** section with **Mark as Done** or **Dismiss** and a note on what you actually did, and enabling follow-up checks.
+You help by letting investigations finish, settling each suggestion in the incident's **Remediation** section (under the result on **Resolve → Investigation**) with **Mark as Done** or **Dismiss** and a note on what you actually did, and enabling follow-up checks. See [Settle each remediation suggestion](/guide/incident/root-cause-analysis#settle-each-remediation-suggestion).
 
 ## Troubleshooting
 
 <AccordionGroup>
   <Accordion title="A repeat incident started from scratch">
-    **Cause:** the earlier run never reached a disposition, so no recollection was written. Or the new incident has a different symptom, service or component. **Check:** open the earlier incident and confirm it shows a **Current assessment** and a closed outcome. **Fix:** let investigations run to a verdict. For a custom webhook, map **Service** and **Resource ID Path** (in the source's edit view) so incidents name the component consistently. See [custom source](/guide/incident/webhook-integrations/custom-source).
+    **Cause:** the earlier run never reached a disposition, so no recollection was written. Or the new incident has a different symptom, service or component. In a workspace with many incidents, the old recollection may also sit outside the 20 most recent entries, see [How recall works](#how-recall-works). **Check:** open the earlier incident and confirm it shows a **Current assessment** and a closed outcome. **Fix:** let investigations run to a verdict. For a custom webhook, map **Service** and **Resource ID Path** (in the source's edit view) so incidents name the component consistently. See [custom source](/guide/incident/webhook-integrations/custom-source).
   </Accordion>
   <Accordion title="CloudThinker proposed a fix that failed last time">
     **Cause:** the earlier fix was never checked, so its recollection stayed **Unverified**. **Fix:** enable the follow-up card next time, or ask for a follow-up check in the conversation as shown above.
@@ -108,6 +116,10 @@ You help by letting investigations finish, settling each suggestion in the incid
     **Cause:** the card was never enabled. A proposed follow-up isn't an automation until you enable it. **Check:** look for the follow-up under your [automations](/guide/automation/automations). **Fix:** enable the card in the conversation, or ask CloudThinker to schedule the check.
   </Accordion>
 </AccordionGroup>
+
+## Self-hosted
+
+The instance runtime setting **Incident Memory File Enabled** (`INCIDENT_MEMORY_FILE_ENABLED`, default on) controls incident memory for the whole instance. Turn it off and investigations stop using it. There's no per-workspace switch.
 
 ## Next steps
 

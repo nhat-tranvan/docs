@@ -13,6 +13,8 @@ CloudThinker runs the AWS CLI against your account to answer questions about com
 - An AWS account where you can create IAM roles (or IAM users, for the access-key method).
 - Access to [AWS CloudShell](https://console.aws.amazon.com/cloudshell/home) in that account. The setup script runs there, so you install nothing.
 - For cost questions and [Optimize](/guide/cost-optimization/overview): Cost Explorer turned on in the account (**Billing and Cost Management → Cost Explorer → Launch Cost Explorer**, in the management account for an organization). AWS can take up to 24 hours to activate it on a new account.
+- In an AWS Organization, check your service control policies (SCPs). An SCP that denies `sts:AssumeRole` from outside principals blocks the role, and one that denies regions hides those regions from agents. From the management account, list the SCPs on the account under **AWS Organizations → AWS accounts → your account → Policies**, or run `aws organizations list-policies-for-target --target-id <account-id> --filter SERVICE_CONTROL_POLICY`.
+- Opt-in regions, such as `ap-east-1` or `me-south-1`, are invisible to agents until you enable them under **Account → AWS Regions** in the AWS console.
 
 ## Setup
 
@@ -22,6 +24,10 @@ Open the connect dialog first: in the sidebar, click **More → Workspace settin
   <Tab title="Role-Based (recommended)">
     The dialog generates an **External ID** (a secret that only your role's trust policy and CloudThinker know) and builds a setup script around it.
 
+    <Warning>
+    Keep the dialog open until you click **Connect**. Closing it discards the External ID, and a new dialog generates a different one, so a role built from the old ID won't match.
+    </Warning>
+
     <Steps>
       <Step title="Name the account">
         Fill in **Alias** (for example `production`) and **Description** (for example `Production AWS account, main workloads`). Agents read the description to pick the right account. **Default AWS region (optional)** is only a starting point: agents can use any region the role can reach.
@@ -30,12 +36,53 @@ Open the connect dialog first: in the sidebar, click **More → Workspace settin
         Click **Open CloudShell** and sign in to the AWS account you want to connect.
       </Step>
       <Step title="Run the setup script">
-        Click **Copy Script to Clipboard**, paste it into CloudShell, and press Enter. The script:
+        To read the script first, click **View script** in the dialog. Then click **Copy Script to Clipboard**, paste it into CloudShell, and press Enter. The script:
 
         1. Stops if a role named `CloudThinkerAccessRole` already exists.
         2. Creates `CloudThinkerAccessRole` with a trust policy that only CloudThinker can assume, and only with your External ID.
         3. Attaches the AWS managed `ReadOnlyAccess` policy.
         4. Prints the role's ARN.
+
+        <Accordion title="The full script, for review before you run it">
+        The dialog fills in your External ID and the CloudThinker principal. It also prints progress messages, left out here.
+
+        ```bash
+        #!/bin/bash
+        set -e
+        ROLE_NAME="CloudThinkerAccessRole"
+
+        # Stop if the role already exists
+        if aws iam get-role --role-name "$ROLE_NAME" >/dev/null 2>&1; then
+          echo "ERROR: Role '$ROLE_NAME' already exists!"
+          exit 1
+        fi
+
+        # Trust policy: only the CloudThinker principal, only with your External ID
+        cat > trust-policy.json <<'EOF'
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": { "AWS": "<CloudThinker principal shown in the dialog>" },
+              "Action": "sts:AssumeRole",
+              "Condition": { "StringEquals": { "sts:ExternalId": "<your External ID>" } }
+            }
+          ]
+        }
+        EOF
+
+        aws iam create-role --role-name "$ROLE_NAME" \
+          --assume-role-policy-document file://trust-policy.json \
+          --description "Role for CloudThinker to access AWS resources"
+
+        aws iam attach-role-policy --role-name "$ROLE_NAME" \
+          --policy-arn arn:aws:iam::aws:policy/ReadOnlyAccess
+
+        rm -f trust-policy.json
+        aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text
+        ```
+        </Accordion>
 
         The end of the output looks like this:
 
@@ -52,11 +99,17 @@ Open the connect dialog first: in the sidebar, click **More → Workspace settin
       <Step title="Paste the Role ARN and connect">
         Paste the ARN into **AWS Role ARN**. Leave **AWS External ID** as it is: it's filled in for you and must match the script. Click **Connect**.
 
-        **Success state:** the status moves through **Connecting** and **Verifying**, and the account shows a **Connected** status.
+        **Success state:** the status moves through **Connecting** and **Verifying**, and the account shows a **Connected** status. Discovery now runs once in the background and spends credits. Check the **Discovery** section on the detail panel before your first prompt. See [What happens after you connect](/guide/connections/overview#what-happens-after-you-connect).
+      </Step>
+      <Step title="Set the environment">
+        Open **Amazon Web Services** in Connections, click the pencil icon on the account's row, and set **Environment** in **Edit Instance**. Skip this only for a production account: **Not set** counts as production. See [Set the environment](/guide/connections/overview#set-the-environment).
+      </Step>
+      <Step title="Ask a verification question">
+        Open a chat and ask the [verification question](#verify-the-connection). The answer should name your real 12-digit account ID.
       </Step>
     </Steps>
 
-    Prefer to create the role yourself, for example in Terraform or CloudFormation? Expand **Manual steps** in the dialog. It shows the trust policy with your External ID and the CloudThinker principal filled in. The principal is the same for every workspace. Only the External ID changes with each dialog. The shape is:
+    Prefer to create the role yourself, for example in Terraform or CloudFormation? Expand **Manual steps** in the dialog. It shows the trust policy with your External ID and the CloudThinker principal filled in. The principal is the same for every workspace. Only the External ID changes with each dialog. With manual steps you can use any role name, because CloudThinker uses the ARN you paste. The shape is:
 
     ```json
     {
@@ -97,7 +150,15 @@ Open the connect dialog first: in the sidebar, click **More → Workspace settin
       role       = aws_iam_role.cloudthinker.name
       policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
     }
+
+    output "role_arn" {
+      value = aws_iam_role.cloudthinker.arn
+    }
     ```
+
+    Copy both values from an open dialog, and keep that dialog open until `terraform apply` finishes and you've pasted the `role_arn` output into **AWS Role ARN**.
+
+    The dialog has no timer, but the External ID lives only in that open browser tab. Closing the dialog or reloading the page loses it, and there's no way to bring an External ID back into a new dialog. That's a limitation for pull-request-reviewed Terraform, where `apply` can run hours later in CI: keep the dialog open until the pipeline finishes, or start a fresh dialog and update the trust policy's External ID before you click **Connect**.
   </Tab>
   <Tab title="Access Keys">
     Use this only when your organization doesn't allow cross-account roles. Access keys are long-lived, so you have to rotate them yourself, for example every 90 days. See [Rotate a credential](/guide/connections/overview#rotate-a-credential).
@@ -108,13 +169,29 @@ Open the connect dialog first: in the sidebar, click **More → Workspace settin
       </Step>
       <Step title="Run the setup script in CloudShell">
         Click **Open CloudShell**, then **Copy Script to Clipboard**, and run it in CloudShell. It creates an IAM user named `CloudThinkerUser`, attaches `ReadOnlyAccess`, creates an access key, and prints `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+
+        AWS shows the secret only once, so keep CloudShell open until both values are in the dialog. The secret stays in the terminal output, so run `clear` and close the CloudShell session once you've connected.
       </Step>
       <Step title="Enter the keys and connect">
-        Paste both values into the **AWS_ACCESS_KEY_ID** and **AWS_SECRET_ACCESS_KEY** fields and click **Connect**. AWS shows the secret only once, so copy it before you close CloudShell.
+        Paste both values into the **AWS_ACCESS_KEY_ID** and **AWS_SECRET_ACCESS_KEY** fields and click **Connect**.
 
-        **Success state:** the account shows a **Connected** status.
+        **Success state:** the account shows a **Connected** status. Discovery now runs once in the background and spends credits. Check the **Discovery** section on the detail panel before your first prompt. See [What happens after you connect](/guide/connections/overview#what-happens-after-you-connect).
+      </Step>
+      <Step title="Set the environment">
+        Open **Amazon Web Services** in Connections, click the pencil icon on the account's row, and set **Environment** in **Edit Instance**. Skip this only for a production account: **Not set** counts as production. See [Set the environment](/guide/connections/overview#set-the-environment).
       </Step>
     </Steps>
+
+    The user gets `ReadOnlyAccess`, so it can read S3 objects too. To switch it to the narrower set in [Required permissions](#required-permissions), run this in CloudShell:
+
+    ```bash
+    USER=CloudThinkerUser
+    aws iam attach-user-policy --user-name $USER --policy-arn arn:aws:iam::aws:policy/job-function/ViewOnlyAccess
+    aws iam attach-user-policy --user-name $USER --policy-arn arn:aws:iam::aws:policy/SecurityAudit
+    aws iam put-user-policy --user-name $USER --policy-name CloudThinkerCostRead \
+      --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ce:Get*","Resource":"*"}]}'
+    aws iam detach-user-policy --user-name $USER --policy-arn arn:aws:iam::aws:policy/ReadOnlyAccess
+    ```
   </Tab>
 </Tabs>
 
@@ -122,7 +199,9 @@ Open the connect dialog first: in the sidebar, click **More → Workspace settin
 
 Each AWS account is its own connection. Click **Connect** again on **Amazon Web Services**, give the account its own alias, and run the script from that dialog in the new account's CloudShell. Always copy the script from the dialog you're completing, so the trust policy carries the External ID that dialog shows.
 
-There's no organization-wide onboarding, so each account needs its own connection. For costs across an AWS Organization, connect the management account.
+Bulk onboarding isn't supported yet. Each dialog generates its own External ID, so a StackSet or a single Terraform apply can't create roles for several connections at once. Each account needs its own dialog and its own role. For many accounts, the fastest path is the Terraform module above, applied once per account with the values from that account's open dialog.
+
+For costs across an AWS Organization, connect the management account. That gives Optimize organization-wide cost only. Agents see resources in a member account only through that account's own connection.
 
 ## Connection details
 
@@ -136,7 +215,7 @@ There's no organization-wide onboarding, so each account needs its own connectio
 | **AWS_ACCESS_KEY_ID** | Access Keys | The IAM user's access key ID | `AKIA...` |
 | **AWS_SECRET_ACCESS_KEY** | Access Keys | The IAM user's secret key | Shown once by AWS |
 
-After connecting, set **Environment** (**Production**, **Staging**, **Development**, or **Not set**) in **Edit Instance** so [approval rules](/guide/approvals/rules) can treat accounts differently. **Not set** counts as production.
+**Environment** (**Production**, **Staging**, **Development**, or **Not set**) isn't in the connect dialog. Set it after connecting, as in the last setup step, so [approval rules](/guide/approvals/rules) can treat accounts differently.
 
 ## Required permissions
 
@@ -145,12 +224,25 @@ The setup scripts attach the AWS managed `ReadOnlyAccess` policy. It lets agents
 | You want | Grant |
 |---|---|
 | Inventory, health, and security questions | `ReadOnlyAccess` (what the script attaches) |
-| Optimize cost data | Cost Explorer reads. The cost refresh needs `ce:GetCostAndUsage`. Commitment coverage uses the reservation and Savings Plans `ce:Get*` reads. All are in `ReadOnlyAccess`. |
+| Optimize cost data | Included in `ReadOnlyAccess`. With a custom policy, add `ce:Get*`. |
 | Agents to make specific changes | Add only those actions to the role, then see [Write access](#write-access) |
 
 <Tip>
-`ReadOnlyAccess` can read data as well as configuration, such as S3 objects. A narrower option is AWS managed `ViewOnlyAccess` plus `SecurityAudit`, with the `ce:Get*` reads added for Optimize. A missing permission only limits the feature that needs it. It never disconnects the account.
+`ReadOnlyAccess` can read data as well as configuration, such as S3 objects. A narrower option is AWS managed `ViewOnlyAccess` plus `SecurityAudit`, with the `ce:Get*` reads added for Optimize. It covers listing and describing resources, but not data reads such as S3 object contents or log events. A missing permission never disconnects the account: the answer that needed it fails with `AccessDenied`, which names the missing action, so you can add just that action to the inline policy.
 </Tip>
+
+To switch an existing role to the narrower set, run this in CloudShell:
+
+```bash
+ROLE=CloudThinkerAccessRole
+aws iam attach-role-policy --role-name $ROLE --policy-arn arn:aws:iam::aws:policy/job-function/ViewOnlyAccess
+aws iam attach-role-policy --role-name $ROLE --policy-arn arn:aws:iam::aws:policy/SecurityAudit
+aws iam put-role-policy --role-name $ROLE --policy-name CloudThinkerCostRead \
+  --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ce:Get*","Resource":"*"}]}'
+aws iam detach-role-policy --role-name $ROLE --policy-arn arn:aws:iam::aws:policy/ReadOnlyAccess
+```
+
+In Terraform, replace the `read_only` attachment with attachments for those two policy ARNs and an `aws_iam_role_policy` holding the `ce:Get*` statement.
 
 ## Agent capabilities
 
@@ -195,15 +287,20 @@ To lock writes in CloudThinker as well, open **Amazon Web Services** in Connecti
 <Accordion title="The script says CloudThinkerAccessRole already exists">
 **Cause:** an earlier setup in this account created the role, likely with a different External ID.
 
-**Fix:** if no other CloudThinker connection uses that role, detach its policy and delete it, then run the new script:
+**Fix:** if no other CloudThinker connection uses that role, remove its policies and delete it, then run the new script. `delete-role` fails until every attached and inline policy is gone, so list them first:
 
 ```bash
-aws iam detach-role-policy --role-name CloudThinkerAccessRole \
-  --policy-arn arn:aws:iam::aws:policy/ReadOnlyAccess
-aws iam delete-role --role-name CloudThinkerAccessRole
+ROLE=CloudThinkerAccessRole
+aws iam list-attached-role-policies --role-name $ROLE
+aws iam list-role-policies --role-name $ROLE
+# For each attached policy ARN:
+aws iam detach-role-policy --role-name $ROLE --policy-arn <policy-arn>
+# For each inline policy name:
+aws iam delete-role-policy --role-name $ROLE --policy-name <policy-name>
+aws iam delete-role --role-name $ROLE
 ```
 
-Otherwise, use **Manual steps** to update the existing role's trust policy with the External ID shown in this dialog.
+To check whether a CloudThinker connection still uses the role, open CloudTrail **Event history**, filter **Event name** = `AssumeRole`, and look for recent events on `CloudThinkerAccessRole` with a session name starting `cloudthinker-`. If one does, don't replace its External ID. Use **Manual steps** to create a second role with a different name for this workspace instead.
 </Accordion>
 
 <Accordion title="The test fails with AccessDenied on sts:AssumeRole">
@@ -226,13 +323,27 @@ Otherwise, use **Manual steps** to update the existing role's trust policy with 
 **Fix:** turn on Cost Explorer, or connect the management account to see costs for the whole organization.
 </Accordion>
 
+<Accordion title="The test shows Timed out">
+**Cause:** the test didn't finish in time. AWS endpoints are public, so it's rarely your network.
+
+**Fix:** connect again. If it keeps timing out, [contact us](https://cloudthinker.io/contact).
+</Accordion>
+
+<Accordion title="A region or service returns AccessDenied with an explicit deny">
+**Cause:** a service control policy blocks it. The AWS error says the request was denied `with an explicit deny in a service control policy`. If the SCP denies `sts:AssumeRole`, the test itself fails.
+
+**Check:** list the SCPs on the account, as in [Prerequisites](#prerequisites).
+
+**Fix:** ask your AWS Organizations admin to exempt `CloudThinkerAccessRole` from the SCP, or accept that agents can't see that region or service.
+</Accordion>
+
 
 ## Security
 
 <ConnectionSecurity />
 
 - **Prefer the role.** CloudThinker assumes the role through AWS STS and gets short-lived credentials, so there's no long-lived secret to leak. The External ID stops anyone else from using your role through CloudThinker.
-- **Audit with CloudTrail.** Every call agents make is an ordinary AWS API call. To see exactly what ran, filter on `userIdentity.sessionContext.sessionIssuer.userName` = `CloudThinkerAccessRole` in CloudTrail Lake or Athena. For access keys, filter **Event history** by **User name** = `CloudThinkerUser`.
+- **Audit with CloudTrail.** Every call agents make is an ordinary AWS API call. CloudThinker names each role session `cloudthinker-<first 8 characters of your workspace ID>-<Unix timestamp>`, and CloudTrail **Event history** shows that session name as the **User name**. To see every call across sessions, filter on `userIdentity.sessionContext.sessionIssuer.userName` = `CloudThinkerAccessRole` in CloudTrail Lake or Athena. For access keys, filter **Event history** by **User name** = `CloudThinkerUser`.
 
 ## Related
 
@@ -242,5 +353,8 @@ Otherwise, use **Manual steps** to update the existing role's trust policy with 
   </Card>
   <Card title="Connections" icon="plug" href="/guide/connections/overview">
     Rotate credentials, set the environment, and read Discovery results.
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Decide which changes need a person before you grant any write permission.
   </Card>
 </CardGroup>

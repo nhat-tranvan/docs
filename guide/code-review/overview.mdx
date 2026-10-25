@@ -6,9 +6,7 @@ icon: code-pull-request
 
 import { ReviewScene } from '/snippets/iso/review.jsx';
 
-**Nothing breaks in production.**
-
-Review is the Frontier Investigation Agent for code changes: when someone opens a pull request (PR) or merge request (MR), CloudThinker reads the change, posts a summary comment and inline findings on it, and checks the fix when you push again. You connect your Git provider once and pick repositories, and it runs without anyone starting it.
+Review is the Frontier Investigation Agent for code changes: an AI reviewer for your pull requests (PRs) and merge requests (MRs). When someone opens one, CloudThinker reads the change, posts a summary comment and inline findings on it, and checks the fix when you push again. You connect your Git provider once and pick repositories, and it runs without anyone starting it.
 
 <ReviewScene />
 
@@ -30,9 +28,50 @@ The unresolved findings set the review's verdict:
 | Only Medium or Low | **Review suggested** |
 | None | **Approved** |
 
-The verdict is CloudThinker's label on the change. Your provider's branch rules still decide whether it can merge. See [verdicts](/guide/code-review/review-workspace#verdicts).
+The verdict is CloudThinker's label on the change. Your provider's branch rules still decide whether it can merge. While a review runs, or when it doesn't complete or is skipped, the change shows **In review**, **Failed**, **Stopped** or **Ignored** instead. See [verdicts](/guide/code-review/review-workspace#triage-the-reviews-list).
 
-Changed test files, fixtures, snapshots, generated code and Storybook stories aren't reviewed: no finding is ever placed in one. Matching is by file path only, for example `test_*.py`, `*_test.go`, `*.test.ts`, `*.spec.tsx`, `__tests__/`, `fixtures/`, `testdata/`, `__snapshots__/`, `*.snap`, `*.generated.*`, `*.pb.go` and `*.stories.tsx`. File headers such as "generated, do not edit" aren't checked. Review still knows they're part of the change, so it won't report a missing test that the PR adds.
+<Note>
+  CloudThinker clones each selected repository into a sandbox to read it. **Remove setup** tears that sandbox down. Secrets in tool output are replaced with placeholders before the model sees them; see [data protection](/guide/security/data-protection).
+</Note>
+
+Changed test files, fixtures, snapshots, generated code and Storybook stories aren't reviewed: no finding is ever placed in one. Matching is by file path only. The common patterns:
+
+| Kind of file | Example path patterns |
+|---|---|
+| Tests | `test_*.py`, `*_test.py`, `conftest.py`, `*_test.go`, `*.test.ts`, `*.spec.tsx`, `*_spec.rb`, `*Test.java`, `__tests__/` |
+| Fixtures and test data | `fixtures/`, `testdata/` |
+| Snapshots | `__snapshots__/`, `*.snap` |
+| Generated code | `*.generated.*`, `*.gen.go`, `*.pb.go` |
+| Storybook stories | `*.stories.tsx`, `*.stories.mdx` |
+| Other | `prototypes/`, HTML under `docs/`, vendored `*.jsonnet` and `*.libsonnet`, and every Solidity file under a top-level `lib/` folder (`lib/**/*.sol`) |
+
+<Accordion title="Full list of skipped path patterns">
+  ```text
+  **/test_*.py              **/conftest.py              **/*_test.go
+  **/src/test/java/**/*.java                            **/src/test/**/*.{kt,kts}
+  **/*.test.{js,jsx,ts,tsx} **/*.spec.{js,jsx,ts,tsx}   **/__tests__/**
+  **/test/**/*_test.py      **/tests/**/*_test.py       **/*_test.py
+  **/*_spec.rb              **/spec/**/*_spec.rb        **/*Test.java
+  **/*Tests.java            **/*_test.rs                **/oh_modules/**
+  **/*.test.ets             **/test/**/*.jl             **/test/**/*.hs
+  **/*Spec.hs               **/test/**/*.lhs            **/*Spec.lhs
+  **/tests/**/*.nim         **/tests/**/*.R             **/__snapshots__/**
+  **/*.snap                 **/testdata/**              **/fixtures/**
+  **/.ipynb_checkpoints/**  **/*.generated.*            **/*.gen.go
+  **/*.pb.go                **/*.pb.cc                  **/*.pb.h
+  **/*Test.swift            **/*Tests.swift             **/Tests/**/*.swift
+  **/tests/**/*.elm         **/vendor/**/*.{jsonnet,libsonnet}
+  **/test/**/*.zig          **/*_test.zig               **/kitex_gen/**/*.go
+  **/*.capnp.h              **/*.capnp.go               **/*.capnp.ts
+  **/*_capnp.rs             **/*_capnp.py               **/test/**/*.ml
+  **/tb_*.{v,sv,vhd,vhdl}   **/*_tb.{v,sv,vhd,vhdl}     lib/**/*.sol
+  **/*.t.sol                **/test/**/*.sol            **/tests/**/*.sol
+  **/test/**/*.vy           **/tests/**/*.vy            **/*.stories.{js,jsx,ts,tsx,mdx}
+  **/prototypes/**          **/docs/**/*.html
+  ```
+</Accordion>
+
+The list is built in, so you can't add your own patterns. If your own Solidity contracts live in a top-level `lib/` folder, they won't be reviewed. File headers such as "generated, do not edit" aren't checked. Review still knows these files are part of the change, so it won't report a missing test that the PR adds.
 
 ## What Review reads
 
@@ -40,30 +79,50 @@ Besides the diff, Review reads these files from your repository. All of them are
 
 | File | Where it goes | What it does |
 |---|---|---|
-| `BUSINESS.md` | Repository root, on the target branch | Describes your product's modules and the rules (invariants) they must keep. Business flow findings come from it |
+| `BUSINESS.md` | Repository root, on the target branch | Describes your product's modules and the rules (invariants) they must keep. Business flow findings come from it. Read whenever it exists: it doesn't depend on **Repository conventions** |
 | `AGENTS.md`, `CLAUDE.md`, `GEMINI.md` | Repository root or any folder | Coding conventions Review follows, when **Repository conventions** is on |
 | `CONVENTIONS.md` | Repository root | Same as above |
 | Coding agent rule files | Their usual paths, such as `.cursor/rules/`, `.github/copilot-instructions.md`, `.windsurf/rules/`, `.clinerules`, `.amazonq/rules/` or `.kiro/steering/` | Same as above |
 
-`BUSINESS.md` has a fixed structure: a `# Business map: <owner>/<repo>` title, a `## Product` section and a `## Modules` section, with an optional `## Flows` section. Each entry is a `###` heading with an ID, and modules list their code roots and invariants:
+You write `BUSINESS.md` by hand, and it must follow a fixed format. A file that doesn't parse, or is larger than 200 KB, is skipped for that review, and the rest of the review still runs.
 
-```markdown
-# Business map: acme/meterly
+<Accordion title="BUSINESS.md format and example">
+  `BUSINESS.md` has a fixed structure: a `# Business map: <owner>/<repo>` title, a `## Product` section and a `## Modules` section, with an optional `## Flows` section, in that order. Each entry is a `###` heading in the form `### <id>: <title>`, followed by a short description and these optional lines:
 
-## Product
+  | Line | Format | What it's for |
+  |---|---|---|
+  | `Sources:` | Free text, items separated by `; ` | Where the description comes from, such as `README.md` |
+  | `Code roots:` | Paths in backticks, separated by commas | The code that belongs to this entry |
+  | `Depends on:` | Entry IDs, separated by commas | Other entries this one relies on. Each ID must exist in the file |
+  | `Invariant <id>: <rule>` | One line per rule | A rule the code must keep. Review cites its ID in Business flow findings |
 
-### product.meterly: Meterly
-Usage billing.
+  IDs are lowercase and dot-separated, and the first part names the section: `product.`, `modules.` or `flows.` for entries, and `invariants.` for rules. After the first dot, use lowercase letters, digits and hyphens, for example `invariants.plans.trial-fast-only`. Every ID must be unique.
 
-## Modules
+  ```markdown
+  # Business map: acme/meterly
 
-### modules.plans: Plans
-Sources: README.md
-Code roots: `src/plans.py`
-Invariant invariants.plans.trial-fast-only: A Trial workspace starts only Fast runs.
-```
+  ## Product
 
-A file that doesn't parse, or is larger than 200 KB, is skipped for that review. The rest of the review still runs.
+  ### product.meterly: Meterly
+  Usage billing.
+
+  ## Modules
+
+  ### modules.plans: Plans
+  Decides which run types each plan can start.
+  Sources: README.md
+  Code roots: `src/plans.py`
+  Invariant invariants.plans.trial-fast-only: A Trial workspace starts only Fast runs.
+
+  ## Flows
+
+  ### flows.upgrade: Upgrade a trial
+  A Trial workspace moves to a paid plan and unlocks Advanced runs.
+  Code roots: `src/billing/upgrade.py`
+  Depends on: modules.plans
+  Invariant invariants.upgrade.paid-before-advanced: Advanced runs unlock only after the first payment succeeds.
+  ```
+</Accordion>
 
 ## What it checks
 
@@ -77,7 +136,7 @@ Each finding carries one category, so you can tell at a glance what kind of prob
 | Pattern | Breaks a convention your repository already follows | A new handler that skips the shared error wrapper |
 | Deploy, migration, backward compatibility | Changes that break a rollout or existing clients | A migration that drops a column the current release still reads |
 | Test gap | Changed behavior that no test covers | A new error path with no test, in a PR that adds none |
-| Business flow | A change that breaks a rule in your `BUSINESS.md` | A path that reports a recommendation as an executed change |
+| Business flow | A change that breaks a rule in your `BUSINESS.md` | In the `BUSINESS.md` example above, a change that lets a Trial workspace start an Advanced run, breaking `invariants.plans.trial-fast-only` |
 
 ## What you can do
 
@@ -94,20 +153,37 @@ Each finding carries one category, so you can tell at a glance what kind of prob
 
 ## Supported providers
 
-GitHub, GitLab (GitLab.com or self-hosted), Bitbucket Cloud, Azure DevOps and AWS CodeCommit. Each workspace connects one provider, so if your team uses two, set up Review in a separate workspace for each. See [provider authentication](/guide/code-review/provider-auth) for what each one needs.
+GitHub, GitLab (GitLab.com or self-hosted), Bitbucket Cloud, Azure DevOps and AWS CodeCommit. See [provider authentication](/guide/code-review/provider-auth) for what each one needs. Check these limits before you plan a rollout:
+
+- **One provider per workspace.** If your team uses two, set up Review in a separate workspace for each.
+- **No GitHub Enterprise Server or Bitbucket Data Center.** The GitHub connection goes to github.com and the Bitbucket connection to bitbucket.org. Self-hosted GitLab is the only instance URL you can enter.
+- **One Azure DevOps project per workspace.** Repositories in another project need their own workspace.
+- **One AWS account and region per CodeCommit connection.**
 
 Some actions work on only some providers:
 
 | Action | GitHub | GitLab | Bitbucket | Azure DevOps | CodeCommit |
 |---|---|---|---|---|---|
-| Reviews and questions | Yes | Yes | Yes | Yes | Yes |
-| Autofix and **Fix all findings** | Yes | Yes | Yes | Yes | No |
+| Automatic reviews | Yes | Yes | Yes | Yes | Yes |
+| Questions to `@cloudthinker-ai` | Yes | Yes | Yes | Yes | Top-level comments only |
+| Re-run with `@cloudthinker-ai review` | Yes | Yes | Yes | Yes | No |
+| **Fix all findings** | Yes | Yes | Yes | Yes | No |
+| `@cloudthinker-ai autofix` | Yes | Yes | Top-level comments only | Top-level comments only | No |
 | `autofix stacked` | Yes | Yes | No | No | No |
 | **Apply fix** | Yes | Yes | No | Yes | No |
 | **Merge** from CloudThinker | Yes | Yes | No | No | No |
 | Auto-resolve conflicts | Yes | Yes | Yes | No | Yes |
 
-The bot handle is `@cloudthinker-ai`, used in comments. The skip marker you put in a PR description, `@cloudthinker:ignore`, uses a different prefix. Type each one exactly as shown.
+[Mention commands](/guide/code-review/mention-commands#provider-support) has the full comment command matrix.
+
+Two pieces of text look alike but go in different places. Type them exactly as shown:
+
+| Purpose | Exact text | Where to put it |
+|---|---|---|
+| Talk to the bot: ask, re-run, fix | `@cloudthinker-ai` | A PR or MR comment |
+| Skip review on one PR | `@cloudthinker:ignore` | The PR or MR description |
+
+Type `@cloudthinker-ai` as plain text even if your comments come from a bot user with another name. See [mention commands](/guide/code-review/mention-commands) and [Skip a review](/guide/code-review/mention-commands#skip-a-review).
 
 ## Get started
 

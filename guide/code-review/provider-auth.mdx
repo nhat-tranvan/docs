@@ -10,6 +10,7 @@ This page covers the **Connect** and **Events** steps of the Review setup wizard
 
 - Workspace **Admin** in CloudThinker, with the **Review Setup** dialog open at the **Connect** step.
 - On the provider side, permission to install apps, create access tokens, or create IAM roles for the repositories you want reviewed.
+- Azure DevOps: permission to create service hooks in the project (Project Administrator by default).
 
 ## Pick an auth method
 
@@ -21,6 +22,8 @@ This page covers the **Connect** and **Events** steps of the Review setup wizard
 | Azure DevOps | Personal access token (PAT) | Manual (service hooks) |
 | AWS CodeCommit | IAM role (recommended) or access keys | Script in AWS CloudShell |
 
+Self-hosted GitLab is the only self-hosted provider you can connect in the wizard. GitHub connects to github.com and Bitbucket to bitbucket.org, so GitHub Enterprise Server and Bitbucket Data Center aren't options there.
+
 <Tip>
   Prefer a project, group, workspace or repository token over a personal one where your provider offers it. Comments then come from a bot user, access stays scoped to those repositories, and you can revoke it without touching anyone's account.
 </Tip>
@@ -29,7 +32,7 @@ This page covers the **Connect** and **Events** steps of the Review setup wizard
 
 <Steps>
   <Step title="Install the GitHub App">
-    Click **Install GitHub App**. GitHub asks you to pick an organization or account and the repositories to grant. GitHub shows the app's full permission list on that screen before you approve. It includes **Pull requests: Read and write** for comments and **Contents: Read and write**, which **Apply fix**, autofix and conflict resolution need to push commits.
+    Click **Install GitHub App**. GitHub asks you to pick an organization or account, then **All repositories** or **Only select repositories**. Review can only list the repositories you grant here. GitHub shows the app's full permission list on that screen before you approve. It includes **Pull requests: Read and write** for comments and **Contents: Read and write**, which **Apply fix**, autofix and conflict resolution need to push commits.
   </Step>
   <Step title="Return to the wizard">
     After you approve, GitHub sends you back and the wizard continues on its own. Webhooks come with the app, so there's no **Events** step.
@@ -37,6 +40,8 @@ This page covers the **Connect** and **Events** steps of the Review setup wizard
     **Success state:** the dialog shows **Connected** and moves to **Repositories**.
   </Step>
 </Steps>
+
+To grant a repository later, open your organization or account settings on GitHub, go to **GitHub Apps**, click **Configure** next to the CloudThinker app, and add it under **Repository access**. Then add it in Review with **Add repository**.
 
 <Note>
   Installing an app on a GitHub organization needs an organization owner. If you aren't one, ask an owner to approve the install.
@@ -49,14 +54,14 @@ This page covers the **Connect** and **Events** steps of the Review setup wizard
     OAuth connects to GitLab.com only. For self-hosted GitLab, use an access token. With OAuth, comments appear as the person who connected.
 
     1. Open the **OAuth** tab and click **Connect to GitLab**.
-    2. Approve access in GitLab. CloudThinker asks for read and write repository access, API access for webhooks and merge requests, and your profile (email, username).
+    2. Approve access in GitLab. CloudThinker asks for these scopes: `api`, `read_api`, `read_repository`, `write_repository`, `openid`, `email` and `profile`.
     3. Back in the wizard, [add the webhook](#configure-webhooks).
   </Tab>
   <Tab title="Access token">
     Use this for self-hosted GitLab, or to scope access to one project or group.
 
     1. In GitLab, open the project or group, go to **Settings → Access Tokens**, and click **Add new token**.
-    2. Set the role to **Developer** or higher and select the `api` scope. Set an expiration date.
+    2. Set the role and select the `api` scope. Use **Maintainer** if you'll use **Apply fix** or autofix on protected branches, otherwise **Developer**. Set an expiration date. Narrower scopes such as `read_api` or `write_repository` aren't enough: posting findings as merge request comments, resolving their threads and reading pipelines all go through the GitLab API, which needs `api`.
     3. Copy the token.
     4. In the wizard, open the **Access Token** tab and fill in the fields below.
     5. Click **Validate Token**, wait for **Token works**, then click **Connect**.
@@ -69,8 +74,10 @@ This page covers the **Connect** and **Events** steps of the Review setup wizard
     | **Access Token** | The token, starting `glpat-` |
 
     <Note>
-      A Guest or Reporter token can't comment on merge requests, so use **Developer** or higher. Developer can't push to protected branches, so **Apply fix** and autofix fail there. Give the token **Maintainer**, or allow Developers to push to those branches.
+      A Guest or Reporter token can't comment on merge requests. A Developer token can't push to protected branches, so **Apply fix** and autofix fail there unless you allow Developers to push to them. On GitLab.com, Group Access Tokens need GitLab Premium or Ultimate.
     </Note>
+
+    For self-hosted GitLab, CloudThinker must reach your **GitLab URL** over HTTPS, and your instance must reach the webhook URL from the **Events** step.
   </Tab>
 </Tabs>
 
@@ -81,7 +88,7 @@ This page covers the **Connect** and **Events** steps of the Review setup wizard
     1. Open the **OAuth** tab and enter your Bitbucket workspace name (the `<workspace>` in `bitbucket.org/<workspace>/repo`).
     2. Click **Connect to Bitbucket** and approve access.
 
-    Webhooks register automatically.
+    With OAuth, comments appear as the person who connected. Webhooks register automatically.
   </Tab>
   <Tab title="Access token">
     Pick the token type that matches the repositories you want reviewed:
@@ -106,8 +113,17 @@ This page covers the **Connect** and **Events** steps of the Review setup wizard
        | Webhooks | Read and write | Registering the webhook automatically |
        | Pipelines | Read and write | [Pipeline analysis](/guide/code-review/pipelines) |
 
-    3. In the wizard, open the **Access Token** tab, choose the **Token Type**, enter the workspace (and the repository slug for a repository token), and paste the token.
-    4. Click **Validate Token**, then **Connect**.
+       The wizard asks for Pipelines **Read and write**, but CloudThinker only reads pipeline runs, steps and logs. If your policy requires least privilege, **Read** covers pipeline analysis.
+
+    3. In the wizard, open the **Access Token** tab and fill in the fields below.
+    4. Click **Validate Token**, wait for **Token works**, then click **Connect**.
+
+    | Field | Value |
+    |---|---|
+    | **Token Type** | **Workspace Access Token**, **Project Access Token** or **Repository Access Token** |
+    | **Bitbucket Workspace** | The `<workspace>` in `bitbucket.org/<workspace>/repo` |
+    | **Repository slug** | Repository tokens only: the repository's slug |
+    | **Access Token** | The token you copied |
 
     Webhooks register automatically.
   </Tab>
@@ -125,10 +141,12 @@ This page covers the **Connect** and **Events** steps of the Review setup wizard
     | Code | Read & Write |
     | Pull Request Threads | Read & Write |
 
-    Copy the token. Azure DevOps posts comments as the person who owns the PAT, so create it from a dedicated service account. Then reviews keep working when someone leaves.
+    Copy the token. Azure DevOps posts comments as the person who owns the PAT, so create it from a dedicated service account. Then reviews keep working when someone leaves. Give that account the **Basic** access level (Stakeholder can't use Repos) and **Contributor** on the project, so it can read code and comment on pull requests.
   </Step>
   <Step title="Connect in the wizard">
-    Fill in **Organization URL** (for example `https://dev.azure.com/myorg`), **Project** and **Personal Access Token**. Click **Validate PAT**, then **Connect**.
+    Fill in **Organization URL** (for example `https://dev.azure.com/myorg`), **Project** and **Personal Access Token**. Click **Validate PAT**, wait for **Token works**, then click **Connect**.
+
+    The connection covers the repositories in that one project. To review repositories in another project, set up Review in a separate workspace for it.
 
     **Success state:** the dialog shows **Connected** and moves to **Events**.
   </Step>
@@ -137,20 +155,15 @@ This page covers the **Connect** and **Events** steps of the Review setup wizard
   </Step>
 </Steps>
 
-<Warning>
-  Reviews stop when the PAT expires. Note the expiry date and replace the token before then: open **Review → Settings**, and in the **Connection** section open the actions menu (⋯) and click **Update token**. The Review page shows **Reconnect your Git provider** once it fails.
-</Warning>
-
 ## AWS CodeCommit
 
-Both methods use a script you run in AWS CloudShell. The wizard generates it for you.
+Both methods use a script the wizard generates for you. Run it in AWS CloudShell, or in any bash shell with the AWS CLI and credentials for the account (the access keys script also needs `jq`). A connection covers one AWS account and one region: the region you pick in the wizard.
 
 <Tabs>
   <Tab title="IAM role (recommended)">
     1. Select **IAM Role (recommended)** and choose the **AWS Region**. The wizard creates an External ID for your workspace.
-    2. Check that no role named `CloudThinkerCodeCommitAccessRole` exists yet in the account.
-    3. Copy the script and run it in AWS CloudShell. It creates that role with a trust policy scoped to CloudThinker and your External ID.
-    4. Copy the role ARN from the script's output into **Role ARN**, then click **Connect**.
+    2. Copy the script and run it in AWS CloudShell. It creates a role named `CloudThinkerCodeCommitAccessRole` with a trust policy scoped to CloudThinker and your External ID. If that role already exists, for example from an earlier setup, the script reuses it: it refreshes the trust policy for the new External ID and prints the existing ARN.
+    3. Copy the role ARN from the script's output into **Role ARN**, then click **Connect**.
   </Tab>
   <Tab title="Access keys">
     1. Select **Access Keys** and choose the **AWS Region**.
@@ -162,9 +175,22 @@ Both methods use a script you run in AWS CloudShell. The wizard generates it for
 </Tabs>
 
 <Accordion title="What the script creates">
-  The script attaches one inline policy. It grants read access to repositories, pull requests, differences, files and comments, plus `codecommit:GitPull`, and lets CloudThinker post, reply to and update pull request comments. It can also create and delete EventBridge rules, limited to rules named `CloudThinker-CodeCommit-*`.
+  The script attaches one inline policy with these actions:
 
-  The IAM role's trust policy lets only CloudThinker's AWS account assume the role, and only with your workspace's External ID. The **Access Keys** method creates an IAM user named `CloudThinkerCodeCommitUser` with the same policy instead.
+  | Purpose | IAM actions |
+  |---|---|
+  | Read repositories and code | `codecommit:ListRepositories`, `GetRepository`, `GetDifferences`, `GetBlob`, `GetFile`, `GetFolder`, `GitPull` |
+  | Read pull requests | `codecommit:ListPullRequests`, `GetPullRequest`, `GetCommentsForPullRequest`, `GetCommentReactions` |
+  | Post findings | `codecommit:PostCommentForPullRequest`, `PostCommentReply`, `UpdateComment` |
+  | Webhook events | `events:PutRule`, `PutTargets`, `DescribeRule`, `DeleteRule`, `RemoveTargets`, `ListTargetsByRule`, limited to rules named `CloudThinker-CodeCommit-*` |
+
+  It doesn't grant `codecommit:GitPush` or `codecommit:CreatePullRequest`. [Auto-resolve conflicts](/guide/code-review/conflict-resolution) needs both, so add them if you turn it on:
+
+  1. In the IAM console, open **Roles → CloudThinkerCodeCommitAccessRole** (or **Users → CloudThinkerCodeCommitUser** for access keys).
+  2. On **Permissions**, edit the inline policy: `CodeCommitReviewAccess` on the role, `CodeCommitReviewAccessKeyPolicy` on the user.
+  3. Add `codecommit:GitPush` and `codecommit:CreatePullRequest` to the `CodeCommitReviewActions` statement and save.
+
+  The IAM role's trust policy lets only CloudThinker's AWS account assume the role, and only with your workspace's External ID. The script you copy from the wizard contains the full trust policy, with that account ID, so your security team can read it before you run it. The **Access Keys** method creates an IAM user named `CloudThinkerCodeCommitUser` with the same policy instead.
 </Accordion>
 
 If the wizard says **no repositories found yet**, the connection works but the credentials can't see any repositories. Check the IAM permissions and the region.
@@ -176,9 +202,11 @@ GitHub and Bitbucket need nothing here. For the other three, the **Events** step
 <Tabs>
   <Tab title="GitLab">
     1. In GitLab, open the group or project and go to **Settings → Webhooks → Add new webhook**. Group webhooks need GitLab Premium or Ultimate. On the Free tier, add the webhook to each project instead.
-    2. Paste the **URL** and **Secret token** from the wizard.
-    3. Enable **Merge request events** and **Comments**. Add **Pipeline events** if you use [pipeline analysis](/guide/code-review/pipelines), and **Tag push events** if you use [releases](/guide/code-review/releases).
+    2. Paste the **URL** and **Secret token** from the wizard. Leave **Enable SSL verification** on.
+    3. Enable **Merge request events** and **Comments**. Add **Pipeline events** if you use [pipeline analysis](/guide/code-review/pipelines), **Tag push events** if you use [releases](/guide/code-review/releases), and **Push events** if you use [auto-resolve conflicts](/guide/code-review/conflict-resolution). Without Push events, a push to a target branch never reaches CloudThinker, so conflicts it causes aren't checked.
     4. Save the webhook, then click **Mark as Configured** in the wizard.
+
+    To check delivery, click **Test → Merge request events** next to the webhook, then edit it and look under **Recent events**.
   </Tab>
   <Tab title="Azure DevOps">
     Azure DevOps needs one service hook per event. Repeat these steps for each event below.
@@ -186,7 +214,7 @@ GitHub and Bitbucket need nothing here. For the other three, the **Events** step
     1. Go to **Project Settings → Service hooks** and click **+ Create subscription**.
     2. Select **Web Hooks** and click **Next**.
     3. In **Trigger**, pick one event and click **Next**.
-    4. Paste the **URL**. Paste the **Secret token** into the **Basic authentication password** field and leave the username empty. Click **Finish**.
+    4. Leave the repository and branch filters at **[Any]**. Paste the **URL**. Paste the **Secret token** into the **Basic authentication password** field and leave the username empty. Click **Finish**.
 
     | Event | Needed for |
     |---|---|
@@ -200,23 +228,31 @@ GitHub and Bitbucket need nothing here. For the other three, the **Events** step
   </Tab>
   <Tab title="AWS CodeCommit">
     1. Copy the script from the **Events** step. It already contains your webhook URL and secret token.
-    2. Run it in AWS CloudShell with credentials for the account that owns the repositories. It connects Amazon EventBridge to CloudThinker for every CodeCommit repository in the region.
+    2. Run it in AWS CloudShell, or any bash shell with the AWS CLI, with credentials for the account that owns the repositories. It creates Amazon EventBridge rules that send events to CloudThinker, one set per CodeCommit repository that exists in the region when it runs.
     3. When it prints "Webhook setup complete", click **Mark as Configured**.
 
-    The script is safe to re-run. Run it again after you add repositories to the region.
+    Because the rules are per repository, a repository you create later has none. Run the script again after you add repositories. It's safe to re-run.
   </Tab>
 </Tabs>
 
 **Success state:** you open a test PR or MR in a selected repository and a CloudThinker progress comment appears on it.
 
+## Token expiry
+
+GitLab and Bitbucket access tokens and Azure DevOps PATs expire on the date you set. Reviews stop when they do, and the Review page shows **Reconnect your Git provider**. Note the date when you create the token, and replace it before then: open **Review → Settings**, and in the **Connection** section open the actions menu (⋯) and click **Update token**. CodeCommit access keys don't expire on their own, but rotate them the same way. Review doesn't warn you before a token's expiry date, so put a reminder in your own calendar.
+
 ## Disconnect a provider
+
+<Warning>
+  **Remove setup** deletes every reviewed MR/PR on **Review → Reviews** and every pipeline record in the workspace. Setting Review up again doesn't bring them back.
+</Warning>
 
 <Steps>
   <Step title="Remove the setup in CloudThinker">
-    Open **Review → Settings**. In the **Connection** section, open the actions menu (⋯) and click **Remove setup**, then confirm. Review stops on every repository and the provider connection is removed. You can set it up again later.
+    Open **Review → Settings**. In the **Connection** section, open the actions menu (⋯) and click **Remove setup**, then confirm. Review stops on every repository and the provider connection is removed. On GitHub, CloudThinker also uninstalls its app, and on Bitbucket it deletes the webhooks it registered. You can set it up again later.
   </Step>
   <Step title="Revoke access on the provider">
-    Uninstall the GitHub App, revoke the OAuth grant, delete the access token or PAT, or delete the IAM role or user the script created.
+    Confirm the GitHub App is gone from your organization's **GitHub Apps** settings, or revoke the OAuth grant, delete the access token or PAT, or delete the IAM role or user the script created.
   </Step>
 </Steps>
 

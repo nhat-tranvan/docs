@@ -8,13 +8,17 @@ import ConnectionSecurity from '/snippets/connection-security.mdx';
 
 Connect Neon to let CloudThinker agents list your projects, branches, and computes, inspect table schemas, and find slow queries, plus run SQL, branches, and migrations after approval. Neon connects with **OAuth** through Neon's hosted MCP server (MCP is the protocol agents use to call a service's tools), so you don't create or paste an API key.
 
+<Warning>
+Neon has no read-only switch, and under the default Approval mode AI can approve a write on its own, such as a branch delete or reset. Add an [Ask first or Deny Rule](#write-access) before you connect an account with production projects.
+</Warning>
+
 ---
 
 ## Prerequisites
 
 - A Neon account that can see the projects you want to investigate.
 - The workspace Admin role in CloudThinker to add the connection. See [How access works](/guide/connections/overview#how-access-works).
-- Optional: the `pg_stat_statements` extension on the databases where you want slow-query analysis. Run `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` on each one.
+- Optional: the `pg_stat_statements` extension on the databases where you want slow-query analysis. Run `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` in the Neon Console **SQL Editor** (or any Postgres client), once on each database you want analyzed.
 
 ---
 
@@ -25,19 +29,19 @@ Connect Neon to let CloudThinker agents list your projects, branches, and comput
     In CloudThinker, go to **Connections → Neon** and click **Connect**.
   </Step>
   <Step title="Authorize CloudThinker in Neon">
-    CloudThinker opens Neon in a new window. Sign in with the Neon account that owns or can access your projects, then approve access.
+    CloudThinker opens Neon in a new window. Sign in with the Neon account that owns or can access your projects, then approve access. Neon's OAuth has no read-only option, so CloudThinker gets the same access as that account.
 
-    If the window doesn't open, your browser blocked the pop-up. Click **Open Neon** in the dialog instead.
+    If the window doesn't open, your browser blocked the pop-up. CloudThinker shows a dialog instead: click **Open Neon** in it.
   </Step>
   <Step title="Return to CloudThinker">
-    The dialog closes on its own once the connection is ready.
+    Switch back to the CloudThinker tab. If you used the **Open Neon** dialog, it closes on its own once the connection is ready.
 
     **Success state:** Neon shows a **Connected** status.
   </Step>
   <Step title="Run the verify prompt">
     Run the [verify prompt](#verify-the-connection) to confirm the authorized account sees the projects you expect.
 
-    **Success state:** CloudThinker lists your Neon organizations and projects with their branches.
+    **Success state:** CloudThinker lists your Neon organizations and projects with their branches and computes.
   </Step>
 </Steps>
 
@@ -61,14 +65,7 @@ CloudThinker gets the same access as the Neon account you authorize. Neon's OAut
 | Analyze slow queries | Access to the project, plus `pg_stat_statements` enabled on the database |
 | Run SQL, create or delete branches, reset a branch, apply migrations, tune queries, set up Neon Auth or the Data API | Write access in Neon, plus a pass through [approvals](/guide/approvals/overview) |
 
-Every Neon organization member sees every project in that organization. To limit what agents reach, authorize with a separate Neon account that isn't in the organization, and share only the projects agents need with it. Those appear as shared projects.
-
-### How writes are approved
-
-There's no read-only switch on Neon. Each SQL statement, branch change, and migration goes through your [Rules](/guide/approvals/rules) first, then your [Approval mode](/guide/approvals/approval-mode). New workspaces start on **Auto · Rules + AI · Ask me**, so a write no Rule covers is judged by AI, and anything it isn't sure about waits for a person.
-
-- **Approve production writes**: add an **Ask first** Rule on the Neon connection so a person approves every SQL statement and migration.
-- **Make it effectively read-only**: add a **Deny** Rule on the Neon connection that covers every operation. Rules never match reads, so reads keep working. Check **What would change** before you accept it.
+Every Neon organization member sees every project in that organization. To limit what agents reach, authorize with a separate Neon account that isn't in the organization, and share only the projects agents need with it. Those appear as shared projects. For production, that's the safe default: a dedicated account shared only on the projects agents need, plus an **Ask first** Rule added before you connect.
 
 ---
 
@@ -82,15 +79,23 @@ There's no read-only switch on Neon. Each SQL statement, branch change, and migr
 | **SQL** | Run a statement or a transaction. CloudThinker shows the exact SQL first and says whether it changes schema or data. |
 | **Branches** | Create, delete, or reset a branch from its parent |
 | **Migrations and tuning** | Prepare a migration or query tuning, show you the result, then complete it as a separate approved step |
-| **Neon Auth and Data API** | Provision and configure [Neon Auth](https://neon.com/docs/neon-auth/overview) (managed sign-in for your app's users, stored in your database), and provision the [Data API](https://neon.com/docs/data-api/get-started) (an HTTP API over your database tables) |
+| **Neon Auth and Data API** | Provision and configure [Neon Auth](https://neon.com/docs/neon-auth/overview) (managed sign-in for your app's users, stored in your database), and provision the [Data API](https://neon.com/docs/data-api/get-started) (an HTTP API over your database tables). Both are writes that change how your app's users sign in or reach data, so they go through approvals |
+
+Running SQL or `EXPLAIN` on a compute that has scaled to zero wakes it, and Neon bills the compute time while it runs.
 
 CloudThinker never completes a migration in the same step that prepared it. You see what will change before anything is applied.
+
+<Tip>
+Neon Auth and the Data API change what your app's users can reach. Add an **Ask first** Rule for them so a person approves each one, even when the mode would let AI decide.
+</Tip>
 
 ### Verify the connection
 
 ```text
 Check my Neon connection: list my organizations and projects with their branches and computes
 ```
+
+**Success state:** CloudThinker lists your Neon organizations and projects with their branches and computes.
 
 ### Example prompts
 
@@ -99,6 +104,31 @@ Find the slowest queries on my production-db Neon project and suggest indexes
 Describe the schema of the users table on the main branch of production-db
 Prepare a migration on production-db that adds a last_login_at column to users, and show me the plan first
 ```
+
+---
+
+## Write access
+
+There's no read-only switch on Neon. Each SQL statement, branch change, and migration goes through your [Rules](/guide/approvals/rules) first, then your [Approval mode](/guide/approvals/approval-mode). New workspaces start on Auto mode with Rules plus AI, where unclear cases ask a person (shown as **Auto · Rules + AI · Ask me**). Accepted Rules decide first, AI judges any write no Rule covers, and anything AI isn't sure about waits for a person. See [The two modes](/guide/approvals/approval-mode#the-two-modes).
+
+- **Approve production writes**: add an **Ask first** Rule on the Neon connection so a person approves every SQL statement and migration.
+- **Make it effectively read-only**: add a **Deny** Rule on the Neon connection that covers every operation. Every statement through Neon's SQL tool counts as a change, a `SELECT` included, so Deny stops all SQL. Listing projects, branches, and tables, schema reads, and the slow-query list keep working.
+
+To build either Rule:
+
+<Steps>
+  <Step title="Ask for the Rule">
+    In a chat, type `/create-policy Ask first for every write on the Neon connection`. To block instead, ask for a **Deny** Rule.
+  </Step>
+  <Step title="Check the proposal">
+    Open **Approvals** in the sidebar, then **Rules → Needs review**, and open the Rule. Check that **Effect** is **Ask first** (or **Deny**), the Rule carries the **Every operation** badge, and **Connections** names your Neon connection. **What would change** should show recent Neon writes as asking first (or refused).
+  </Step>
+  <Step title="Accept it">
+    Select the Rule and click **Accept**.
+
+    **Success state:** a toast confirms the accepted Rule, and it moves to the **Active** tab.
+  </Step>
+</Steps>
 
 ---
 
@@ -131,6 +161,8 @@ The OAuth authorization expired or was revoked in Neon. Click **Connect** in the
 <ConnectionSecurity />
 
 - **No connection strings by default**: agents don't fetch a database connection string unless you ask for one. A connection string includes the database password, and it shows in the chat, so anyone who can read the conversation can read it.
+- **Data path**: agents call Neon's hosted MCP server at `https://mcp.neon.tech/mcp`. SQL, branch, and migration requests and their results pass through it, and the results show in the chat, so they're kept with the conversation. CloudThinker stores the OAuth tokens.
+- **Cutting access**: click **Disconnect** on the Neon connection. If the grant is revoked on the Neon side instead, the connection shows an error until someone authorizes again.
 - **Rejection is final**: if you decline a SQL statement or migration, CloudThinker doesn't retry it. It asks how you want to proceed.
 
 ---

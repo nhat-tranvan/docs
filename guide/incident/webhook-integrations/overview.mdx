@@ -20,7 +20,7 @@ flowchart LR
 
 A **signal** is one raw event Pulse received. Pulse marks some signals as suppressed (noise) and groups the rest into clusters. A **cluster** is a group of related signals that Pulse treats as one problem. Only an actionable cluster turns into an incident.
 
-## Prerequisites
+## Before you start
 
 - The workspace **Admin** role.
 - Admin access to the monitoring tool, so you can add a webhook to it.
@@ -39,17 +39,17 @@ A **signal** is one raw event Pulse received. Pulse marks some signals as suppre
     Keep or change **Webhook Name** (it defaults to `<Tool> Webhook`) and add an optional **Description**. Click **Next**.
   </Step>
   <Step title="Configure">
-    Check **Field Mapping** and **Severity Mapping**. Both come pre-filled for the tool you picked. Leave **Send directly to CloudThinker** off ([why](#decide-when-rca-starts)). Follow the **Setup Guide** for that tool at the bottom of the step. Click **Next**.
+    Check **Field Mapping** and **Severity Mapping**. Both come pre-filled for the tool you picked. Leave **Send directly to CloudThinker** off ([why](#decide-when-rca-starts)). Click **Next**.
   </Step>
   <Step title="Advanced">
     Pick an **Auth Method** and set **Auto-investigate** (both explained below). Click **Create**.
   </Step>
 </Steps>
 
-**Success state:** a dialog shows the **Webhook URL**, the secret under **Authentication Setup**, and **Integration Examples** with **cURL**, **JavaScript**, **Python**, and **Node.js** tabs. Copy the URL and secret now, then paste them into your monitoring tool. The **cURL** tab is the fastest way to send a test.
+**Success state:** a dialog shows the **Webhook URL**, the secret under **Authentication Setup**, and **Integration Examples** with **cURL**, **JavaScript**, **Python**, and **Node.js** tabs. Copy the URL and secret now: the secret is shown only once. The same dialog shows a **Setup Guide** for your tool: follow it to paste them in. The **cURL** tab is the fastest way to send a test.
 
 <Tip>
-Copy the secret before you click **Done**. If you lose it, go to **Resolve → Integrations**, open the tool, and under **Signals to Resolve** open the webhook row's **Manage** menu (**⋯**) → **Regenerate credentials**. That invalidates the current token and secret, so every tool using them needs the new value.
+Copy the secret before you click **Done**. If you lose it, go to **Resolve → Integrations**, open the tool, and under **Signals to Resolve** open the webhook row's **Manage** menu (**⋯**) → **Regenerate credentials**. That invalidates the current token and secret. The token is the identifier in the **Webhook URL** (it isn't a credential), so the URL changes too. Every tool using the webhook needs the new URL and secret.
 </Tip>
 
 ## Map the fields
@@ -68,7 +68,7 @@ Each mapping field takes a path into the alert's JSON. Only **Title Path** is re
 | **Service Path** | The affected service. Helps Pulse group related alerts. |
 | **Resource ID Path** | The affected resource's identifier. |
 | **Resource Name Path** | The affected resource's name. |
-| **Timestamp Path** | When the event started. |
+| **Timestamp Path** | When the event started, as an ISO 8601 time. Left empty, CloudThinker reads a top-level `timestamp` key. With neither, or a value it can't parse, it uses the time the delivery arrived. |
 
 Your tool decides the payload shape. In Datadog, for example, you write the JSON yourself in the webhook's **Payload** field, using Datadog's template variables. The Datadog preset reads `title`, `body`, and `alert_type`. Add a `service` key with one service name, because the preset's default **Service Path** (`tags`) points at a list and maps to nothing:
 
@@ -88,9 +88,26 @@ Your tool decides the payload shape. In Datadog, for example, you write the JSON
 | **Severity Path** | `alert_type` | error |
 | **Service Path** | `service` (change it from `tags`) | web-api |
 
-A fixed `service` value applies to every monitor that notifies this webhook. Datadog's `$ALERT_TYPE` sends `error`, `warning`, `info`, or `success`, but the Datadog preset's **Severity Mapping** covers `alert`, `warn`, `ok`, and `no data`. Add rows for the values you actually send.
+A fixed `service` value applies to every monitor that notifies this webhook. Datadog's `$ALERT_TYPE` sends `error`, `warning`, `info`, or `success`, but the Datadog preset's **Severity Mapping** covers `alert`, `warn`, `ok`, and `no data`. Under **Severity Mapping**, click **Customize**, then **Add Mapping** for each of these rows (change the levels to suit your team). You can also add them later from the webhook row's **Manage** menu (**⋯**) → **Edit**.
 
-**Severity Mapping** translates the tool's own words into CloudThinker's five levels: critical, high, medium, low, and info. The generic preset maps `warning` to medium and `error` to high, for example. Add a row for any value your tool sends that isn't covered.
+| Source value | Severity |
+|---|---|
+| `error` | high |
+| `warning` | medium |
+| `info` | info |
+| `success` | info |
+
+A `success` (recovery) event doesn't close anything. It arrives as an ordinary signal, and the cluster still closes after 12 quiet hours or when a person resolves it. CloudThinker's classifier treats a recovery or healthy state as not actionable, so its cluster doesn't go to triage on its own. The check is a model judgment, so a recovery can still slip through. A person can always send a cluster to triage with **Escalate**.
+
+**Severity Mapping** translates the tool's own words into CloudThinker's five levels: critical, high, medium, low, and info. The generic preset maps `warning` to medium and `error` to high, for example. Matching ignores case and surrounding spaces, so `ERROR` and `error` hit the same row.
+
+| The value at **Severity Path** | Result |
+|---|---|
+| One of the five levels | Used as is. No row needed. |
+| Has a mapping row | The row's level |
+| Anything else | **medium** |
+| **Severity Path** empty or finds nothing | CloudThinker reads a top-level `severity` or `priority` key instead |
+| No `severity` or `priority` key either | **medium** |
 
 If your tool isn't listed, use [Custom source](/guide/incident/webhook-integrations/custom-source) instead. It captures one real payload and lets you click the fields to map.
 
@@ -98,8 +115,8 @@ If your tool isn't listed, use [Custom source](/guide/incident/webhook-integrati
 
 | Auth Method | Your tool sends | Use when |
 |---|---|---|
-| **Bearer Token** | `Authorization: Bearer <secret>` | The tool lets you add a custom header. Default for most tools. |
-| **HMAC Signature** | A signature header computed from the body, such as `X-PagerDuty-Signature` | The tool signs its webhooks, like PagerDuty. Set the header name in **HMAC Signature Header**. If the tool generates its own signing secret, paste it into **Provider signing secret**. |
+| **Bearer Token** | `Authorization: Bearer <secret>` | The tool lets you add a custom header. Default for most tools. In Datadog, the webhook's **Custom Headers** field takes JSON: `{"Authorization": "Bearer <secret>"}`. |
+| **HMAC Signature** | An HMAC-SHA256 of the raw request body, hex-encoded, sent as `sha256=<hex digest>` in the header you name. PagerDuty's `X-PagerDuty-Signature` (`v1=<hex digest>`) is also accepted. | The tool signs its webhooks, like PagerDuty. Set the header name in **HMAC Signature Header**. If the tool generates its own signing secret, paste it into **Provider signing secret**. |
 | **API Key** | The key in a header you name | The tool only supports API key headers, like CloudWatch through EventBridge. Set **API Key Header** and an optional **Key Prefix**. |
 | **No Authentication** | Nothing | Only for a quick test. Anyone with the URL could send alerts. |
 
@@ -111,7 +128,11 @@ If your tool isn't listed, use [Custom source](/guide/incident/webhook-integrati
 |---|---|
 | **Auto-investigate** off | No automatic RCA from this webhook. |
 | **Auto-investigate** on | Every incident from this webhook gets an RCA. |
-| **Auto-investigate** on, with **Only from a minimum severity** | Pick a floor, for example **High and above**. Alerts below it still group with related alerts, but get no automatic RCA. |
+| **Auto-investigate** on, with **Only from a minimum severity** | Pick a floor: **Info and above**, **Low and above**, **Medium and above**, **High and above**, or **Critical only**. Alerts below it still group with related alerts, but get no automatic RCA. |
+
+<Note>
+Each automatic investigation is billed in credits. Set a minimum severity, or a [Credit limit](/guide/billing/credit-limits), before you connect a noisy tool.
+</Note>
 
 The **On duty** switch in the **Resolve → Investigation** header also has to be on. When it shows **Paused**, incidents still open, but no RCA starts until someone starts it. See [Resolve settings](/guide/incident/settings).
 
@@ -121,19 +142,28 @@ The **On duty** switch in the **Resolve → Investigation** header also has to b
 
 <Steps>
   <Step title="Fire one real alert">
-    Trigger a representative alert from your tool, or send the request from the **cURL** tab in **Integration Examples**. A successful delivery returns `200` with `"success": true`.
+    Trigger a representative alert from your tool, or send the request from the **cURL** tab in **Integration Examples**. With **Bearer Token**, a test looks like this:
+
+    ```bash
+    curl -X POST "https://YOUR_WEBHOOK_URL" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer YOUR_SECRET_KEY" \
+      -d '{"title": "Test: high CPU on web-01", "alert_type": "error", "service": "web-api"}'
+    ```
+
+    A successful delivery returns `200` with a body that includes `"success": true` and a `request_id`. If you haven't added the Datadog rows yet, `error` maps to medium.
   </Step>
   <Step title="Check Pulse">
     Open **Resolve → Pulse** and find the signal with the title you mapped.
   </Step>
   <Step title="Check the incident">
-    If the cluster is actionable, open **Resolve → Investigation**. With **Auto-investigate** and **On duty** both on, the incident shows **AI is handling**.
+    On **Resolve → Pulse**, a cluster that went to triage moves to the **Routed** lane once it's linked to an incident. Then open **Resolve → Investigation**. With **Auto-investigate** and **On duty** both on, the incident shows **AI is handling**. If the cluster never reaches **Routed**, classification may have judged it not actionable. See [Clusters troubleshooting](/guide/pulse/clusters#troubleshooting).
   </Step>
 </Steps>
 
 **Success state:** the signal appears in Pulse with the right title, severity, and service, and an eligible incident shows **AI is handling**. A `200` alone only proves delivery.
 
-Test one normal alert and one critical alert, so you know both severity mappings work.
+Test one alert for each severity row you rely on. With the Datadog example above, send one `error` (maps to high) and one `warning` (maps to medium).
 
 ## Limits and responses
 
@@ -143,9 +173,19 @@ Test one normal alert and one critical alert, so you know both severity mappings
 | `401` or `403` | Credentials are missing or wrong, or the webhook is disabled. |
 | `404` | The webhook URL doesn't exist. |
 | `413` | The body is larger than 1 MB. |
-| `429` | Too many requests, or too many failed auth attempts. Retry after the time in the `Retry-After` header when it's present. |
+| `429` | Too many requests, or too many failed auth attempts: after 10 failures within 15 minutes, the webhook rejects requests until that 15-minute window ends. Retry after the time in the `Retry-After` header when it's present. |
 
-Pulse treats a delivery as a duplicate when its source, resource, title, severity, and event time (to the minute) match a signal from the last hour. A duplicate adds to that signal's count instead of creating a new one. A cluster closes after 12 hours with no new signal, or when a person resolves it. See [Cluster lifecycle](/guide/pulse/clusters#cluster-lifecycle).
+<Warning>
+Each webhook takes up to 1,000 deliveries an hour by default. Deliveries past that still get `200` with `"success": true`, because the limit is checked after the response, but they're dropped silently. They never become signals and don't count in **Signals ingested** on [Pulse analytics](/guide/pulse/analytics). Resolve doesn't show a dropped count, so the only sign is alerts missing from **Resolve → Pulse** during a burst.
+
+To avoid it:
+
+- Raise the limit: open the webhook row's **Manage** menu (**⋯**) → **Edit** and change **Rate limit (requests per hour)**. It goes up to 10,000, and `0` means no limit.
+- Split high-volume monitors across more than one webhook.
+- Deduplicate or group alerts in the tool before they're sent.
+</Warning>
+
+Pulse treats a delivery as a duplicate when its source, resource, title, severity, and event time (to the minute; see **Timestamp Path** for where it comes from) match a signal from the last hour. A duplicate adds to that signal's count instead of creating a new one. A cluster closes after 12 hours with no new signal, or when a person resolves it. See [Cluster lifecycle](/guide/pulse/clusters#cluster-lifecycle).
 
 ## Troubleshooting
 
@@ -154,7 +194,7 @@ Pulse treats a delivery as a duplicate when its source, resource, title, severit
     **Cause:** the auth header doesn't match the **Auth Method**. **Check:** the header name and secret in your tool against **Authentication Setup**. **Fix:** paste the secret again, or use **Regenerate credentials** in the webhook row's **Manage** menu under **Resolve → Integrations**.
   </Accordion>
   <Accordion title="Delivery succeeds but nothing appears in Pulse">
-    **Cause:** Pulse suppressed the alert as noise, or the time window hides it. **Check:** widen the window on **Resolve → Pulse**. **Fix:** see [Pulse clusters](/guide/pulse/clusters) for how suppression works.
+    **Cause:** Pulse suppressed the alert as noise, counted it as a duplicate of an earlier signal, or the time window hides it. **Check:** widen the window on **Resolve → Pulse**, then hover the funnel at the top to see how many events were suppressed. If you sent the same alert twice within a minute, look for the earlier signal: its count went up instead (see [Limits and responses](#limits-and-responses)). **Fix:** see [Noise suppression](/guide/pulse/clusters#noise-suppression) for each check.
   </Accordion>
   <Accordion title="Signals arrive with an empty title or the wrong severity">
     **Cause:** a path doesn't match the payload, or the tool's severity value has no mapping row. **Fix:** compare the paths against a real payload, then add the missing value to **Severity Mapping**.

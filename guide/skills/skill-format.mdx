@@ -38,9 +38,11 @@ description: Enforce our SQL and secrets rules when reviewing code. Use for any 
 
 | Field | Required | Rules |
 |---|---|---|
-| `name` | Yes | Starts with a letter or digit, then letters, digits, `_`, or `-`. Uppercase letters are allowed. No spaces. Up to 255 characters. Must not match a skill CloudThinker ships in the [Skills Hub](https://www.cloudthinker.io/skills). |
+| `name` | Yes | Starts with a letter or digit, then letters, digits, `_`, or `-`. Uppercase letters are allowed. No spaces. Up to 255 characters. Names are case-sensitive, and the `/` command uses the exact name. Must not match a CloudThinker built-in skill, such as `pdf`, `docx`, or `deep-research`. |
 | `description` | Yes | A non-empty sentence saying what the skill does and when to use it. Agents read descriptions to decide which skill fits a task, so a vague one means the skill rarely gets picked. Quote it if it contains a colon: `description: "Use when: reviewing PRs"`. Up to 2,000 characters. |
-| `argument-hint` | No | Text shown next to the skill in the chat `/` menu, such as `<service-name>`, to tell people what to type after the command. It doesn't change behavior. Whatever people type after `/skill-name` reaches the agent as part of their message. |
+| `argument-hint` | No | Applies only when someone runs the skill from the chat `/` menu. Text shown next to the skill in that menu, such as `<service-name>`, to tell people what to type after the command. It doesn't change behavior. Whatever people type after `/skill-name` reaches the agent as part of their message. |
+
+Other fields, such as `license` or `allowed-tools` from SKILL.md files written for other tools, don't block an upload, and CloudThinker doesn't use them. A skill ported from another tool loads as long as it has `name` and `description`.
 
 Name examples:
 
@@ -58,7 +60,7 @@ When you create a skill with **Write skill instructions**, CloudThinker builds t
 
 ## Zip package layout
 
-Use a `.zip` when a skill needs supporting files, or to move a skill between workspaces. Upload it from **Settings → Skills → New Skill → Upload zip file**.
+Use a `.zip` when a skill needs supporting files, or to move a skill between workspaces. Upload it from **Settings → Skills → +** (next to **Search skills**) **→ Upload zip file**.
 
 ```text
 security-review-checklist.zip
@@ -69,7 +71,8 @@ security-review-checklist.zip
     └── schemas/            optional: schemas the skill validates against
 ```
 
-- Put `SKILL.md` at the root of the zip or inside one top-level folder.
+- Put `SKILL.md` at the root of the zip or inside one top-level folder. The skill takes its name from `name` in the frontmatter, so the folder name doesn't need to match.
+- Name the zip file exactly after the frontmatter `name`, including case (for example `security-review-checklist.zip`). CloudThinker uses the zip's file name to spot an existing skill and offer **Replace**. If the two differ, **Replace** can delete the skill the zip name matches and upload a skill under another name. With no match, an upload whose frontmatter `name` is taken fails with **This skill name is already in use.**
 - Only `scripts/`, `schemas/`, and `references/` are kept. Other files and folders are ignored.
 - Refer to supporting files from `SKILL.md` by relative path. Agents don't read them automatically: they open a file when the instructions point to it, for example:
 
@@ -77,18 +80,34 @@ security-review-checklist.zip
   For the escalation order, read references/escalation-matrix.md.
   ```
 
-- For a script, name it and say when to run it, for example "Run `scripts/check_tags.sh` with the account ID." The agent runs it with the same command tool it uses for any other command, so the script gets your workspace [Credentials](/guide/credentials) as environment variables, and any write it makes goes through [Approvals](/guide/approvals/overview) like any other command.
+- For a script, name it and say when to run it, for example "Run `scripts/check_tags.sh` with the account ID." Scripts can be Bash or TypeScript (run with `bun`). The agent runs a script with the same command tool it uses for any other command, so any write it makes goes through [Approvals](/guide/approvals/overview) like any other command.
+- The script gets your workspace [Credentials](/guide/credentials) as environment variables, named by each credential's **Key**. A credential with the key `DATADOG_API_KEY` is `$DATADOG_API_KEY` in the script.
+
+<Note>
+Credentials aren't specific to skill scripts: every command an agent runs gets every workspace credential, whether or not the skill or prompt uses it. You can't scope a credential to one skill or agent. Store only the keys your skills need and prefer read-only vendor keys. See [how agents use credentials](/guide/credentials#how-agents-use-credentials).
+</Note>
 
 ## Limits
 
 | Item | Limit |
 |---|---|
-| Instructions field, or `SKILL.md` when you edit it in the app | 50,000 characters |
+| `SKILL.md` created or edited in the app | 50,000 characters |
+| `SKILL.md` uploaded in a zip | No limit beyond the zip limits below. A file over 50,000 characters can't be saved from the in-app editor. |
 | Description | 2,000 characters |
 | Skill name | 255 characters |
 | Zip upload size | 5 MB |
 | Files in a zip | 1,024 |
-| Zip size after extraction | 50 MB |
+| Zip size after extraction | 50 MB, the only limit on files in `references/`, `scripts/`, and `schemas/` |
+
+## Check before you upload
+
+- `SKILL.md` is named in uppercase and sits at the zip root or one folder down.
+- The file starts with `---` on the first line, and the frontmatter closes with `---`.
+- `name` starts with a letter or digit and uses only letters, digits, `_`, and `-`.
+- `name` isn't a built-in skill name, such as `pdf` or `deep-research`.
+- `description` is filled in, and quoted if it contains a colon.
+- The zip file name matches `name` exactly.
+- Supporting files sit in `references/`, `scripts/`, or `schemas/`.
 
 ## Write instructions agents follow
 
@@ -122,7 +141,7 @@ through unsanitized input, so always be careful with queries...
 - Booleans start with `is_`, `has_`, or `should_`.
 ```
 
-**Keep one topic per skill.** Separate security rules from performance rules so you can make each available in different places. If a skill runs past about 300 lines, split it: that's advice for keeping agents on track, well below the 50,000-character hard limit.
+**Keep one topic per skill.** Separate security rules from performance rules so you can make each available in different places. If a skill runs past about 300 lines, split it, or move long reference tables into `references/` and point to them. That's advice for keeping agents on track, well below the 50,000-character hard limit.
 
 ## Complete example
 
@@ -152,7 +171,7 @@ argument-hint: <pull request link>
 
 ## Comment format
 
-```
+```text
 **[severity]** Short title
 
 What is wrong and why it matters.
@@ -160,21 +179,27 @@ What is wrong and why it matters.
 **Suggestion:** How to fix it.
 ```
 
-Severity is one of `critical`, `warning`, `suggestion`, `nitpick`.
+Severity is one of `critical`, `warning`, `suggestion`, `nitpick`. For example:
+
+```text
+**[warning]** New endpoint has no tests
+
+`create_invoice()` is public and has no test, so a regression would reach production unnoticed.
+
+**Suggestion:** Add a test in `tests/test_invoices.py` that covers the happy path and an invalid amount.
+```
 ````
 
-After you save it, tick **Review** under **Available in** so it applies to pull request reviews. See [custom skills](/guide/skills/custom-skills#choose-where-the-skill-applies).
+After you save it, tick **Review** under **Available in** so it applies to pull request reviews. Reviews never use `argument-hint`; it only helps someone who runs the skill from the `/` menu in chat. See [custom skills](/guide/skills/custom-skills#choose-where-the-skill-applies).
 
 ## Troubleshooting
 
 <AccordionGroup>
-  <Accordion title="Upload fails with Failed to upload skill to executor">
-    The most common cause is the frontmatter: it's missing, it has a YAML error, or `name` or `description` is empty. Check that `SKILL.md` starts with `---`, that the header closes with `---`, and that both fields have values. Put a description that contains a colon in quotes. Also check that `name` follows the naming rules above.
+  <Accordion title="Failed to upload skill to executor">
+    - **Frontmatter.** It's missing, it has a YAML error, or `name` or `description` is empty. Check that `SKILL.md` starts with `---`, that the header closes with `---`, and that both fields have values. Put a description that contains a colon in quotes. Also check that `name` follows the naming rules above.
+    - **No `SKILL.md` where CloudThinker looks.** It must be at the zip root or one folder down, and the file name is case-sensitive. Rename `skill.md` to `SKILL.md` and zip again.
   </Accordion>
-  <Accordion title="No SKILL.md found in zip archive">
-    `SKILL.md` must be at the zip root or one folder down, and the file name is case-sensitive. Rename `skill.md` to `SKILL.md` and zip again.
-  </Accordion>
-  <Accordion title="Manual edit rejected: name must match">
+  <Accordion title="SKILL.md name must match the selected skill">
     When you edit an existing skill by hand, the `name` in the frontmatter must stay exactly the same. To rename a skill, download it, change the name, and upload it as a new skill. Then delete the old skill, and re-tick **Available in** on the new one, since it starts on **Chat** only.
   </Accordion>
   <Accordion title="My scripts or docs are missing after upload">

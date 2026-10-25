@@ -11,11 +11,11 @@ Connect vCenter Server so CloudThinker can inventory your VMs, hosts, clusters, 
 ## Prerequisites
 
 - A **vCenter Server** that CloudThinker can reach over HTTPS by hostname or IP address. The default port is `443`.
-- Permission in the vSphere Client to create a user and assign a global permission.
+- A vSphere Client account in the SSO **Administrators** group, such as `administrator@vsphere.local`, to create the user and assign a global permission.
 - A CloudThinker workspace with no VMware vCenter connection yet.
 
 <Info>
-A workspace holds **one** VMware vCenter connection. Commands run in the CloudThinker cloud, so a vCenter on a private network that CloudThinker cannot reach fails the connection test. To expose vCenter only to CloudThinker, allowlist CloudThinker's egress IPs. See [Reaching private services](/guide/connections/overview#reaching-private-services).
+A workspace holds **one** VMware vCenter connection. The connection runs in the CloudThinker cloud, so vCenter must accept HTTPS on its port from the internet. To keep it otherwise private, allow only CloudThinker's egress IPs. See [Reaching private services](/guide/connections/overview#reaching-private-services) for the egress IP allowlist.
 </Info>
 
 ## Setup
@@ -31,18 +31,22 @@ A workspace holds **one** VMware vCenter connection. Commands run in the CloudTh
   <Step title="Give the user the Read-only role">
     Open **Administration → Access Control → Global Permissions** and click **Add**. Choose the domain, search for the user, select the **Read-only** role, and tick **Propagate to children**. Click **OK**.
 
-    **Success state:** the user appears in the global permissions list with the **Read-only** role.
+    <Warning>
+    Without **Propagate to children**, the user sees only the root object and agents report an empty inventory.
+    </Warning>
+
+    To share less, skip the global permission and assign the role per object: select a datacenter, cluster, or folder, open its **Permissions** tab, click **Add**, choose the user and the **Read-only** role, and tick **Propagate to children**.
+
+    **Success state:** the user appears in the global permissions list (or the object's **Permissions** tab) with the **Read-only** role.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Open **Connections** in the sidebar and select **VMware vCenter**. Fill in the fields from [Connection details](#connection-details): the host, `cloudthinker@<sso-domain>` as the user name (for example `cloudthinker@vsphere.local`), the password, and the port. Leave **Verify SSL certificate** selected. Click **Connect**.
+    Open **Connections** in the sidebar and select **VMware vCenter**. Fill in the fields from [Connection details](#connection-details): the host, `cloudthinker@<sso-domain>` as the user name (for example `cloudthinker@vsphere.local`), the password, and the port.
+
+    Before you click **Connect**, open `https://<vcenter-host>` in a browser. If the browser trusts the certificate, leave **Verify SSL certificate** selected. If it warns, install a certificate from a trusted authority on vCenter, or, on a lab system only, select **Skip SSL verification**. Otherwise the test fails. Click **Connect**.
 
     **Success state:** the connection shows **Connecting** and **Verifying**, then a **Connected** status. CloudThinker signs in to vCenter and reads its version to prove the credentials work.
   </Step>
 </Steps>
-
-<Note>
-Without **Propagate to children**, the user sees only the root object and agents report an empty inventory. To share less, skip the global permission and assign the role per object: select a datacenter, cluster, or folder, open its **Permissions** tab, click **Add**, choose the user and the **Read-only** role, and tick **Propagate to children**.
-</Note>
 
 ## Connection details
 
@@ -75,13 +79,17 @@ To let agents power, reconfigure, migrate, snapshot, or delete VMs, create a cus
 
 A permission set directly on an object overrides the inherited **Read-only** role there. Every custom role includes read access, so agents still see those objects.
 
-| Change | vSphere privileges |
-|--------|--------------------|
-| Power on, off, or reset | `VirtualMachine.Interact.PowerOn`, `VirtualMachine.Interact.PowerOff`, `VirtualMachine.Interact.Reset` |
-| Change CPU or memory | `VirtualMachine.Config.CPUCount`, `VirtualMachine.Config.Memory` |
-| Create or remove snapshots | `VirtualMachine.State.CreateSnapshot`, `VirtualMachine.State.RemoveSnapshot` |
-| Migrate | `Resource.HotMigrate`, `Resource.ColdMigrate`, `Resource.AssignVMToPool`, plus `Datastore.AllocateSpace` when storage moves. Assign the role on the destination host or cluster, resource pool, and datastore too |
-| Delete | `VirtualMachine.Inventory.Delete` |
+| Change | vSphere privileges | Where they sit in the role's privilege tree |
+|--------|--------------------|--------------------------------------------|
+| Power on, off, or reset | `VirtualMachine.Interact.PowerOn`, `VirtualMachine.Interact.PowerOff`, `VirtualMachine.Interact.Reset` | **Virtual machine → Interaction** |
+| Change CPU or memory | `VirtualMachine.Config.CPUCount`, `VirtualMachine.Config.Memory` | **Virtual machine → Change Configuration** |
+| Create or remove snapshots | `VirtualMachine.State.CreateSnapshot`, `VirtualMachine.State.RemoveSnapshot` | **Virtual machine → Snapshot management** |
+| Migrate | `Resource.HotMigrate`, `Resource.ColdMigrate`, `Resource.AssignVMToPool`, plus `Datastore.AllocateSpace` when storage moves | **Resource** and **Datastore** |
+| Delete | `VirtualMachine.Inventory.Delete` | **Virtual machine → Edit Inventory** |
+
+For migrations, also assign the role on the destination host or cluster, resource pool, and datastore.
+
+To change CPU or memory on a powered-on VM, the VM needs CPU or memory hot-add enabled in vSphere. Without it, the VM must be powered off first, which means downtime.
 
 If a change fails with a permission error, vCenter names the missing privilege. Add that one and nothing broader. Each change still pauses for your approval in CloudThinker before it runs. See [Approvals](/guide/approvals/overview) for who approves and how rules apply.
 
@@ -91,13 +99,23 @@ If a change fails with a permission error, vCenter names the missing privilege. 
 |------------|----------------|
 | **Inventory** | List datacenters, clusters, hosts, VMs, datastores, and networks, and inspect one object in detail |
 | **Tags** | Read tag categories and the objects they are attached to |
-| **Right-sizing** | Flag powered-on VMs with 8 or more vCPUs whose average CPU usage is under 15%. Agents request up to 14 days of 5-minute samples; how much history comes back depends on your vCenter statistics settings |
-| **Snapshots** | List snapshots by VM and flag old ones |
-| **Datastore capacity** | Show used and free space and flag datastores running low |
+| **Right-sizing** | Flag powered-on VMs with 8 or more vCPUs whose average CPU usage is under 15%, from vCenter's 5-minute samples |
+| **Snapshots** | List snapshots by VM and flag ones older than 7 days |
+| **Datastore capacity** | Show used and free space and flag datastores more than 85% full |
 | **Drift** | Compare host settings (NTP, syslog, SSH service, lockdown mode) and flag risky port group security options such as promiscuous mode |
 | **Changes** | Power, change CPU or memory, migrate, snapshot, or delete VMs. Each change **requires approval** |
 
-Answers cover only what the user's role can see.
+The 15% CPU, 8 vCPU, 7-day, and 85% thresholds are defaults. Name a different number in your question, such as `snapshots older than 30 days`. Answers cover only what the user's role can see.
+
+### Get better right-sizing data
+
+Agents request up to 14 days of 5-minute samples, but vCenter keeps them for 1 day by default (5 days at most). Agents don't use the longer 30-minute interval. To keep 5 days:
+
+1. In the vSphere Client, select the vCenter Server.
+2. Open **Configure → Settings → General** and click **Edit**.
+3. Open **Statistics** and set the 5-minute interval to keep samples for 5 days. Save.
+
+The right-sizing average then covers up to the last 5 days.
 
 ### Verify the connection
 
@@ -137,6 +155,10 @@ The host field is empty. Enter your vCenter hostname or IP address and connect a
 This workspace already has a VMware vCenter connection. Edit that connection or disconnect it first.
 </Accordion>
 
+<Accordion title="Failed to connect to VMware vCenter on a connection that used to work">
+The CloudThinker user's SSO password most likely expired (90 days by default) or the account is locked. An SSO administrator opens **Administration → Single Sign On → Users and Groups**, selects the user on the **Users** tab, and unlocks it or sets a new password. Then enter the new password through [Rotate a credential](/guide/connections/overview#rotate-a-credential).
+</Accordion>
+
 <Accordion title="An agent cannot see a VM, host, or datastore">
 The user's role does not cover that object. Check that the global permission has **Propagate to children** ticked, or assign the role on the object's parent folder or cluster.
 </Accordion>
@@ -147,6 +169,7 @@ The user's role does not cover that object. Check that the global permission has
 
 - **Use a dedicated user.** A separate vCenter user keeps CloudThinker's access visible in vCenter events and lets you revoke it without touching anyone's account.
 - **Keep certificate checks on.** Reserve **Skip SSL verification** for lab systems with self-signed certificates.
+- **Plan for password expiry.** Local SSO passwords expire after 90 days by default. Change the policy, or update the password before it expires through [Rotate a credential](/guide/connections/overview#rotate-a-credential).
 - **Revoke at the source.** Remove the user's permission in vCenter, or disable the user in **Single Sign On → Users and Groups**.
 
 ## Related

@@ -1,6 +1,6 @@
 ---
 title: Cloudflare
-description: "Connect Cloudflare with an API token so CloudThinker can review zones, traffic analytics, firewall events, and Workers"
+description: "Connect Cloudflare with an API token so CloudThinker can review zones, traffic analytics, firewall events, and Workers."
 icon: "/images/icons/cloudflare.svg"
 ---
 
@@ -17,18 +17,29 @@ Connect Cloudflare so CloudThinker can list your accounts and zones, summarize H
 
 <Steps>
   <Step title="Create a custom API token">
-    In the Cloudflare dashboard, go to **My Profile → API Tokens → Create Token**. Under **Create Custom Token**, click **Get started**. Add the read permissions from [Required permissions](#required-permissions).
+    In the Cloudflare dashboard, go to **My Profile → API Tokens → Create Token**. Under **Create Custom Token**, click **Get started**. Add each permission from the [Required permissions](#required-permissions) table. Each row in the Cloudflare form has three dropdowns, so **Zone → Analytics → Read** means group **Zone**, permission **Analytics**, access **Read**.
   </Step>
   <Step title="Limit the token to the account and zones you need">
     Under **Account Resources**, choose **Include → your account**. Under **Zone Resources**, choose **Include → Specific zone** for each zone CloudThinker should see. Use **All zones** only if you want CloudThinker to cover every zone.
   </Step>
-  <Step title="Create and copy the token">
-    Click **Continue to summary → Create Token**. Copy the token now. Cloudflare shows it only once.
+  <Step title="Set an expiry, then create and copy the token">
+    Under **TTL**, set an end date, for example 90 days from today. Leave **Client IP Address Filtering** empty: API calls reach Cloudflare through its hosted MCP server, not from an address you control. Click **Continue to summary → Create Token**. Copy the token now. Cloudflare shows it only once.
+
+    To check the token before you paste it:
+
+    ```bash
+    curl -H "Authorization: Bearer <token>" https://api.cloudflare.com/client/v4/user/tokens/verify
+    ```
+
+    **Success state:** the response includes `"status": "active"`.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    In the sidebar, click **More → Workspace settings → Connections**, select **Cloudflare**, and click **Connect**. Paste the token as **CLOUDFLARE_API_TOKEN**, and click **Connect**.
+    In the sidebar, click **More → Workspace settings → Connections**, select **Cloudflare**, and click **Connect**. Fill in **Alias** (for example `main-account`) and **Description** (for example `Main Cloudflare account, production zones`). Agents read the description to pick the right connection when you have several. Paste the token as **CLOUDFLARE_API_TOKEN**, and click **Connect**.
 
-    **Success state:** the connection shows **Connecting** and **Verifying**, then a **Connected** status.
+    **Success state:** the connection shows **Connecting** and **Verifying**, then a **Connected** status. Discovery now runs once in the background and spends credits. See [What happens after you connect](/guide/connections/overview#what-happens-after-you-connect).
+  </Step>
+  <Step title="Set the environment">
+    Open **Cloudflare** in Connections, click the pencil icon on the connection's row, and set **Environment** in **Edit Instance**, so [approval rules](/guide/approvals/rules) can treat the connection correctly. **Not set** counts as production.
   </Step>
 </Steps>
 
@@ -36,37 +47,31 @@ Connect Cloudflare so CloudThinker can list your accounts and zones, summarize H
 
 | Field | What to enter |
 |-------|---------------|
+| **Alias** | Short name for this connection. Blank picks one for you. |
+| **Description** | What the account covers. Agents use it to choose between connections. |
 | **CLOUDFLARE_API_TOKEN** | The API token you created. CloudThinker sends it as a Bearer token to Cloudflare's hosted MCP server at `https://mcp.cloudflare.com/mcp`, directly from CloudThinker Cloud. |
+
+The data path is CloudThinker Cloud → Cloudflare's [hosted MCP server](https://github.com/cloudflare/mcp-server-cloudflare) → the Cloudflare API, so the token and API responses pass through Cloudflare's own service.
 
 You don't enter an account ID. CloudThinker finds the accounts and zones the token can see. If a token covers several zones and your request matches more than one, CloudThinker asks which zone you mean. You can add more than one Cloudflare connection, for example one token per account.
 
-After connecting, set **Environment** in **Edit Instance** so [approval rules](/guide/approvals/rules) can treat the connection correctly. **Not set** counts as production.
-
 ## Required permissions
 
-This read-only set covers zone inventory, traffic analytics, and firewall events:
+Each permission is written as it appears in the Cloudflare form: group → permission → access.
 
-| Permission group | Permission | Access |
-|------------------|------------|--------|
-| Account | Account Settings | Read |
-| Account | Account Analytics | Read |
-| Zone | Zone | Read |
-| Zone | Analytics | Read |
-| Zone | DNS | Read |
-
-Each capability needs these permissions:
-
-| Capability | Permission |
-|---|---|
-| List accounts | Account Settings Read |
-| List zones and read zone settings | Zone Read, DNS Read |
-| Traffic analytics and firewall events | Zone Analytics Read |
-| Inspect Workers | Account Workers Scripts Read (not in the base set, so add it) |
+| Permission | Unlocks | Needed |
+|---|---|---|
+| **Account → Account Settings → Read** | List accounts | Yes |
+| **Account → Account Analytics → Read** | Account-level analytics | Yes |
+| **Zone → Zone → Read** | List zones and read zone settings | Yes |
+| **Zone → DNS → Read** | Read DNS records | Yes |
+| **Zone → Analytics → Read** | Traffic analytics and firewall events | Yes |
+| **Account → Workers Scripts → Read** | Inspect Workers | Only to inspect Workers |
 
 CloudThinker can only reach what the token allows.
 
 <Tip>
-Keep the token read-only and scoped to specific zones. If you add edit permissions, every Cloudflare API call still waits for approval.
+Keep the token read-only and scoped to specific zones. There's no fixed list of write actions: **execute** can call any Cloudflare API endpoint, so any edit permission you add to the token, such as **Zone → DNS → Edit**, becomes a change agents can propose. Each call still waits for approval.
 </Tip>
 
 ## Agent capabilities
@@ -77,7 +82,9 @@ The connection has three tools. Two run freely. The third calls the Cloudflare A
 |------|------------------------|----------|
 | **docs** | Searches Cloudflare's documentation | No |
 | **search** | Finds the right Cloudflare API endpoint for a request | No |
-| **execute** | Calls the Cloudflare API: lists accounts and zones, reads zone settings, runs GraphQL analytics, reads firewall events, inspects Workers | Yes |
+| **execute** | Calls the Cloudflare API: lists accounts and zones, reads zone settings and DNS records, runs GraphQL analytics, reads firewall events, inspects Workers | Yes |
+
+Because every **execute** call needs a person, nothing that reads Cloudflare runs unattended. Discovery never waits for approval, so it skips **execute** calls and finds little on Cloudflare. An automation that calls **execute** waits for a person or is refused, depending on its [Approval mode](/guide/approvals/approval-mode). [Rules](/guide/approvals/rules) never match reads, so you can't write a Rule that lets these read calls run without asking.
 
 Built-in query limits keep results small: traffic summaries cover up to 7 days of hourly data for one zone, and firewall reviews cover up to 24 hours and 50 sample events. Firewall output doesn't include client IP addresses.
 
@@ -87,7 +94,7 @@ Built-in query limits keep results small: traffic summaries cover up to 7 days o
 List the Cloudflare accounts and zones this token can see
 ```
 
-The answer lists your real account name and zone names.
+CloudThinker posts an approval request in the chat first, because the answer comes from the **execute** tool. Approve it, and the answer lists your real account name and zone names.
 
 ### Example prompts
 
@@ -98,10 +105,6 @@ How do I set up a WAF custom rule to rate limit a login path? Use the Cloudflare
 ```
 
 ## Troubleshooting
-
-<Accordion title="Connection moved to Cloudflare's hosted endpoint">
-Older Cloudflare connections show an **Error** status with the message *Cloudflare moved to Cloudflare's hosted endpoint*. CloudThinker reconnects them on its own. If the status doesn't change, open the connection and click **Retry**. The old Account ID and Enabled Services values are no longer used, so you don't need to change them.
-</Accordion>
 
 <Accordion title="Permission denied">
 CloudThinker reports `CLOUDFLARE_PERMISSION_DENIED`. The token is missing the read permission for what you asked about. Edit the token in **My Profile → API Tokens**, add the permission, and ask again.
@@ -119,12 +122,16 @@ Every Cloudflare API call waits for approval. Check the chat for a pending appro
 A new zone or a zone with little traffic may have no analytics yet. Confirm the zone receives traffic through Cloudflare and that the token has **Zone → Analytics → Read**.
 </Accordion>
 
+<Accordion title="Legacy: an older connection shows 'Cloudflare moved to Cloudflare's hosted endpoint'">
+New connections never hit this. A connection created before the move to Cloudflare's hosted MCP server shows **Error** with this message, and CloudThinker reconnects it on its own. If the status doesn't change, open the connection and click **Retry**. The old Account ID and Enabled Services values are no longer used.
+</Accordion>
+
 ## Security
 
 <ConnectionSecurity />
 
 - **Restrict zones**: limit the token to specific zones rather than all zones to reduce blast radius.
-- **Set a TTL**: give the token an expiration date under **TTL** when you create it, and rotate it before it lapses.
+- **Rotate before the TTL ends**: [rotate the token](/guide/connections/overview#rotate-a-credential) before the **TTL** end date you set when you created it.
 
 ## Related
 

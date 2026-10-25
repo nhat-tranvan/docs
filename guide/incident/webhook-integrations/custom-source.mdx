@@ -19,7 +19,7 @@ A custom source isn't the same as a conversation webhook. A custom source feeds 
 ## Prerequisites
 
 - The workspace **Admin** role. Developers and Viewers can see sources but can't add or change them. See [Roles](/guide/security/roles).
-- A system that can send `POST` requests with a JSON object body and a custom `Authorization` header.
+- A system that can send `POST` requests with a JSON object body. A new source expects an `Authorization` header. If your system can't set headers, see [Authentication options](#authentication-options).
 - A way to fire one representative event on demand, such as a test button or a `curl` command.
 
 ## Create the source
@@ -37,28 +37,42 @@ Go to **Resolve → Integrations**, open the **Custom source** card, and click *
   </Step>
   <Step title="Send one real event">
     <Warning>
-    The capture event goes through Pulse like any other event. **Auto-investigate** is already on, and until you save a mapping the signal is titled from a top-level `title` key or `Webhook signal`. If Pulse judges it actionable, it opens an incident and starts an investigation. To avoid that, pause **On duty** on **Resolve → Investigation** before you send, and turn it back on after setup.
+    The capture event goes through Pulse like any other event, and **Auto-investigate** is already on. If Pulse judges it actionable, it opens an incident and starts an investigation. To make that unlikely, add a top-level `"title": "Test notification, ignore"` and `"severity": "info"` to the capture body, next to your real fields. Until you save a mapping, Resolve reads those two keys, and Pulse treats a test notification as not actionable. It isn't guaranteed: if an incident opens anyway, close it.
+
+    Those two keys show up in the picker. Don't map them. Pick your real fields instead, such as `event.data.title`.
     </Warning>
 
-    Trigger the event from your system. The dialog waits and updates itself when the event arrives.
+    Trigger the event from your system. The dialog waits and updates itself when the event arrives. If it doesn't update after you send, resend and click **Check again**.
 
     Send a representative event, not an empty test body. You can only map fields that this event contains.
   </Step>
   <Step title="Map the fields">
     When the dialog says **Payload received**, click **Map the fields**. Every field in the captured JSON is listed with its value. Pick the one for **Incident title**, then any of **Severity**, **Service**, **Resource**, and **Description**. Click **Save mapping**. The dialog closes.
+
+    Fields inside a list show with their index, such as `alerts[0].labels.severity`, for the first three items. Here you can only pick from the captured event. To use a path the event doesn't contain, type it into the matching field in **Edit**, where every path is a text field.
+
+    **Resource** here is a display name only (the Edit view calls it **Resource Name Path**). Grouping uses **Resource ID Path**, which you set in the next step.
+
+    If a later event lacks a mapped field, Resolve falls back: the title to a top-level `title` key or `Webhook signal`, severity to Medium, service to `unknown`, and the timestamp to the receive time.
   </Step>
-  <Step title="Set Resource ID Path">
-    Open the source's **...** menu under **Signals to Resolve** and choose **Edit**. Set **Resource ID Path** to a stable identifier, such as a host ID or check ID. Pulse uses it to group repeats of the same fault. Without it, every event can open its own cluster.
+  <Step title="Finish in Edit">
+    Open the source's **...** menu under **Signals to Resolve** and choose **Edit**. Setup isn't finished until you set these three fields, which the setup dialog doesn't have:
+
+    - **Resource ID Path**: a stable identifier, such as a host ID or check ID. Pulse uses it to group repeats of the same fault. Without it, every event can open its own cluster.
+    - **Severity Mapping**: a row for each severity value your system sends that isn't `critical`, `high`, `medium`, `low` or `info`. Without one, those events arrive as Medium.
+    - **Rate limit (requests per hour)**: raise it from 1,000 if your system can send more in an hour.
+
+    This is also where you turn **Auto-investigate** off, or set **Only from a minimum severity**.
   </Step>
 </Steps>
 
-**Success state:** the source appears under **Signals to Resolve** on the Custom source card. The next event arrives in Pulse with the title you mapped.
+**Success state:** the source appears under **Signals to Resolve** on the Custom source card. The next event arrives in Pulse with the title and severity you mapped, and repeats of the same fault join one cluster.
 
 ## Edit a source
 
 Open **Resolve → Integrations → Custom source**, find the source under **Signals to Resolve**, and choose **Edit** from its **...** menu. The edit view has every mapping field (including **Resource ID Path** and **Timestamp Path**), **Severity Mapping**, **Auto-investigate** with **Only from a minimum severity**, and **Rate limit (requests per hour)**.
 
-**Severity Mapping** lives only here. Add a row for each value your system sends that isn't `critical`, `high`, `medium`, `low`, or `info`. Matching ignores case. Without a row, those events arrive as Medium.
+**Severity Mapping** matching ignores case. For example:
 
 | Your value | CloudThinker severity |
 |---|---|
@@ -68,7 +82,7 @@ Open **Resolve → Integrations → Custom source**, find the source under **Sig
 
 ## Send events
 
-A custom source accepts one auth scheme: `Authorization: Bearer <secret>`, with the **Secret Key** as the token. It doesn't accept `x-api-key`. Here's a complete example:
+A new custom source expects `Authorization: Bearer <secret>`, with the **Secret Key** as the token. It doesn't accept `x-api-key` until you change the method (see [Authentication options](#authentication-options)). Here's a complete example:
 
 ```bash
 curl -X POST "<your-webhook-url>" \
@@ -99,6 +113,19 @@ Mapped to this payload, the fields look like this:
 | **Description** | Setup or Edit | `event.data.summary` | Gives responders and CloudThinker the symptom in your system's words. |
 | **Timestamp** | Edit only (**Timestamp Path**) | none here | When the event started. Must be ISO 8601, like `2026-10-25T14:02:00Z`. A value without a time zone is read as UTC. Unmapped, or in another format such as epoch seconds, the receive time is used. |
 
+With the mapping from the table above, this event arrives in Pulse as a signal titled `Checkout latency above 2s`, severity **Critical**, service `checkout-api`, resource `web-03`.
+
+## Authentication options
+
+Change the method in the source's edit view under **Auth Method**. Changing it breaks current senders at once.
+
+| Auth Method | What the sender sends | Risk |
+|---|---|---|
+| **Bearer Token** (default) | `Authorization: Bearer <secret>` | The secret travels in a header. Fine over HTTPS for most senders. |
+| **HMAC Signature** | `X-Webhook-Signature: sha256=<hex digest>` of the raw body (the header name is configurable) | The strongest option: the secret never leaves the sender, and a changed body fails the check. |
+| **API Key** | The secret in a header you name, such as `X-Api-Key`, with an optional prefix | Same as Bearer. Use it when the sender only supports a named key header. |
+| **No Authentication** | Nothing | The URL is the only credential. Anyone who has it can post events. Use it only when the sender can't set any header. |
+
 ## Responses
 
 Write your sender's retry logic against these responses:
@@ -106,15 +133,21 @@ Write your sender's retry logic against these responses:
 | Status | Meaning | What to do |
 |---|---|---|
 | `2xx` | Accepted and queued. It doesn't yet mean a signal was created. | Check Pulse (see [Verify the whole path](#verify-the-whole-path)). |
-| `400` | The source is turned off. | Turn it back on in Resolve. Don't retry until then. |
+| `400` | CloudThinker has paused or disabled the source. No Resolve screen does this, and your sender didn't cause it. | Don't retry. Email [support@cloudthinker.io](mailto:support@cloudthinker.io) with the source name and workspace, and ask for the source to be re-enabled. |
 | `401` | The `Authorization` header is missing, or the URL isn't a current **Webhook URL** (wrong, or replaced by **Regenerate credentials**). | Fix the header or the URL. Don't retry unchanged. |
 | `403` | The secret is wrong, or the header isn't in the form `Bearer <secret>`. | Fix the header. Don't retry with the same secret. |
 | `413` | The body is larger than 1 MB. | Send a smaller body. |
 | `422` | The body isn't a JSON object: invalid JSON, an array, or a plain value. | Fix the body. Don't retry unchanged. |
-| `429` | Over 10 times the hourly rate limit, 10 failed authentication attempts within 15 minutes, or CloudThinker briefly busy. | Retry with backoff, after the `Retry-After` header when present. Fix the secret first if `401`s or `403`s came before it. |
+| `429` | Over 10 times the hourly rate limit, 10 failed authentication attempts within 15 minutes, or CloudThinker briefly busy. | Retry with backoff, after the `Retry-After` header when present. For an auth lockout, fix the secret, then wait: the window starts at the first failure and clears 15 minutes later. **Regenerate credentials** doesn't clear it. |
 | `5xx` | A temporary problem on CloudThinker's side. | Retry with backoff. |
 
-Each source allows 1,000 requests per hour by default. Change it in the edit view under **Rate limit (requests per hour)**: up to 10,000, or `0` for no limit. Events over the limit still get a `2xx` and are then dropped before Pulse, so a sender sees no error. Raise the limit before a planned burst.
+Each source allows 1,000 requests per hour by default. Change it in the edit view under **Rate limit (requests per hour)**: up to 10,000, or `0` for no limit. A `429` comes back only at 10 times the limit: at the default 1,000, after 10,000 requests within the same hour.
+
+<Warning>
+Events over the hourly limit still get a `2xx`, then are dropped before Pulse, whatever their severity. The sender sees no error, and no Resolve screen lists the dropped events. Raise the limit before a planned burst.
+
+To check for drops after a burst, set the **Resolve → Pulse** time window to **Last 1 hour** and read the **raw events** count in the header. Compare it with what your sender reports sending in the same hour. Raw events counts every source in the workspace, so a lower number means events were dropped.
+</Warning>
 
 ## Rules for payloads and paths
 
@@ -124,14 +157,14 @@ Each source allows 1,000 requests per hour by default. Change it in the edit vie
 | Paths are dotted | `event.data.title` reads `title` inside `data` inside `event`. A list index is `[0]`, as in `alerts[0].labels.severity`. |
 | At most 8 segments | A path deeper than 8 levels is rejected. Send a flatter body if your value is nested deeper. |
 | JSONPath prefix is optional | A leading `$.` is accepted and removed, so `$.event.data.title` works too. |
-| Severity values | `critical`, `high`, `medium`, `low`, and `info` are understood as-is. Map other values (like `P1` or `sev2`) in **Severity Mapping**, or they're treated as Medium. |
-| Repeats are dropped | Pulse drops an event that repeats an earlier one: same title, severity and resource ID, with a timestamp in the same minute. Without **Timestamp Path**, that's two sends within a minute. With it, an identical resend within an hour is dropped. When you resend a test, change the title. |
+| Severity values | Only `critical`, `high`, `medium`, `low`, and `info` are understood as-is (any case). Everything else, including `warning`, `error`, `sev1` and `P1`, becomes Medium unless you map it in **Severity Mapping**. |
+| Repeats are dropped | Pulse drops an exact repeat: same title, severity and resource ID, with an event timestamp in the same minute as an event it saw in the last hour. Without **Timestamp Path**, the timestamp is the receive time, so only two sends within the same minute match. With it, a resend carrying the original timestamp is dropped for up to an hour. When you resend a test, change the title. See [noise suppression](/guide/pulse/clusters#noise-suppression). |
 
 ## Verify the whole path
 
 A successful HTTP response only proves delivery. Open **Resolve → Pulse**: the signal should appear within a few seconds. Confirm its title and severity. If **Auto-investigate** is on and the severity clears its minimum, the incident shows **AI is handling** on **Resolve → Investigation**.
 
-A test event is treated like a real one, so with **Auto-investigate** on it can start a real investigation. To test delivery only, turn **Auto-investigate** off in the edit view first, or pause **On duty** on **Resolve → Investigation**.
+A test event is treated like a real one, so with **Auto-investigate** on it can start a real investigation. To test delivery only, turn **Auto-investigate** off in the edit view first, and back on after. Avoid pausing **On duty** for this: it affects every source in the workspace.
 
 ## Rotate or replace credentials
 
@@ -140,10 +173,32 @@ A test event is treated like a real one, so with **Auto-investigate** on it can 
 To rotate without a gap:
 
 1. Create a second custom source and map it from one real event, as in [Create the source](#create-the-source).
-2. Point each sender at the new URL and secret.
-3. When the old source's events stop arriving in Pulse, delete the old source.
+2. In the new source's edit view, copy over what the setup dialog doesn't carry: **Resource ID Path**, **Timestamp Path**, **Severity Mapping**, **Rate limit (requests per hour)**, **Auto-investigate** and **Only from a minimum severity**, and **Auth Method** if you changed it.
+3. Point each sender at the new URL and secret.
+4. When the old source's events stop arriving in Pulse, delete the old source.
 
 If a short gap is fine, regenerate and update every sender right after.
+
+## Security and data
+
+| Topic | What to know |
+|---|---|
+| URL | Each source gets its own **Webhook URL** with a long random token, so one source's URL can't be guessed from another's. |
+| Authentication | By default, every request needs the **Secret Key** as `Authorization: Bearer <secret>`. After 10 failed attempts within 15 minutes, the source answers `429` until the window clears (see [Responses](#responses)). |
+| Payload signing | With **HMAC Signature**, the sender signs the raw body with HMAC-SHA256. Paste your own secret into **Provider signing secret** in the edit view, which keeps the **Webhook URL**. Or click **Regenerate credentials** after saving to get a new secret, which also changes the **Webhook URL**. See the example below. |
+| Stored payloads | Stored event bodies expire after 90 days. |
+
+To send a signed event, set **Auth Method** to **HMAC Signature** in the edit view and save. Then put the signing secret (your **Provider signing secret**, or the secret from **Regenerate credentials**) in `SECRET` and sign the exact bytes you send. The example uses the default header name:
+
+```bash
+read -rs SECRET   # paste the signing secret, then press Enter
+BODY='{"title":"Checkout latency above 2s","severity":"high"}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.* //')
+curl -X POST "<your-webhook-url>" \
+  -H "X-Webhook-Signature: sha256=$SIG" \
+  -H "Content-Type: application/json" \
+  --data-raw "$BODY"
+```
 
 ## Troubleshooting
 

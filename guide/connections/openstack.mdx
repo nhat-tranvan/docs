@@ -10,12 +10,14 @@ Connect your OpenStack cloud to let CloudThinker agents inventory servers, volum
 
 ## Prerequisites
 
-- An OpenStack cloud whose Keystone v3 address, and every catalog endpoint (Nova, Neutron, Cinder, Glance, Placement), is reachable from the internet. Commands run in the CloudThinker cloud. Use an `https` address. Behind a firewall, see [Reaching private services](/guide/connections/overview#reaching-private-services) for the egress IP allowlist.
+- A Keystone v3 address and catalog endpoints (Nova, Neutron, Cinder, Glance, Placement) with public hostnames that are reachable from the internet, because commands run in the CloudThinker cloud. Use `https`: `http` works but sends the password unencrypted. Behind a firewall, see [Reaching private services](/guide/connections/overview#reaching-private-services) for the egress IP allowlist. If the catalog lists internal hostnames, see the endpoint overrides in [Connection details](#connection-details).
+- A Keystone user that signs in with a **password alone**. Application credentials and federated sign-in are not supported, and the user must not have multi-factor rules enforced in Keystone.
 - A **dedicated Keystone user** with a role on the project you want inspected. See [Required permissions](#required-permissions).
 - The project name, the domain names of the user and the project, and the region.
+- Cloud admin rights, or an admin who can create a user and assign it a role.
 
 <Info>
-A workspace holds one OpenStack connection, and it covers one project in one region. The connection uses a user name and password. Federated sign-in and application credentials are not supported, and the user must not have multi-factor rules enforced in Keystone, because the connection signs in with the password alone. Use a dedicated user with a long random password.
+A workspace holds one OpenStack connection, and it covers one project in one region. For more projects or regions, [create one workspace per project](/guide/workspaces#create-a-workspace). Use a dedicated user with a long random password.
 </Info>
 
 ## Setup
@@ -35,6 +37,17 @@ A workspace holds one OpenStack connection, and it covers one project in one reg
 
     **Success state:** `openstack role assignment list --user cloudthinker --names` shows `reader` on your project. You can widen the role later if you want agents to make changes.
   </Step>
+  <Step title="Check access from outside your network">
+    The RC file from step 1 signs in as you. Copy it, change `OS_USERNAME` to `cloudthinker` (and `OS_USER_DOMAIN_NAME` if that user lives in another domain), then on a machine outside your network source the copy, enter the `cloudthinker` password at the prompt, and run:
+
+    ```bash
+    source cloudthinker-openrc.sh
+    openstack token issue
+    openstack server list
+    ```
+
+    **Success state:** `token issue` prints a token with an `expires` time, and `server list` prints your servers (or an empty table) without a timeout. CloudThinker runs the same `openstack token issue` to test the connection, so if it fails here, it fails in CloudThinker too.
+  </Step>
   <Step title="Add the connection in CloudThinker">
     Open **Connections** in the sidebar, select **OpenStack**, and fill in the fields from [Connection details](#connection-details). Leave the five endpoint override fields blank unless your service catalog is incomplete. Click **Connect**.
 
@@ -53,13 +66,15 @@ A workspace holds one OpenStack connection, and it covers one project in one reg
 | **OS_USER_DOMAIN_NAME** | Yes, prefilled | Domain that holds the user. Defaults to `Default` | `Default` |
 | **OS_PROJECT_DOMAIN_NAME** | Yes, prefilled | Domain that holds the project. Defaults to `Default` | `Default` |
 | **OS_REGION_NAME** | Yes, prefilled | Region in your service catalog. Letters, digits, `_`, and `-`, up to 64 characters. Defaults to `RegionOne` | `RegionOne` |
-| **OS_INTERFACE** | Yes, prefilled | **Public endpoint** (default), **Internal endpoint**, or **Admin endpoint** | **Public endpoint** |
+| **OS_INTERFACE** | Yes, prefilled | **Public endpoint** (default), **Internal endpoint**, or **Admin endpoint**. Keep **Public endpoint**. Pick **Internal endpoint** or **Admin endpoint** only if those catalog URLs are reachable from the internet through your allowlist; otherwise the connection times out | **Public endpoint** |
 | **OS_VERIFY_SSL** | Yes, prefilled | **Verify SSL certificate** (default) or **Skip SSL verification** | **Verify SSL certificate** |
 
 Five optional fields bypass the Keystone catalog for one service each: **OS_IMAGE_ENDPOINT_OVERRIDE** (Glance), **OS_COMPUTE_ENDPOINT_OVERRIDE** (Nova), **OS_NETWORK_ENDPOINT_OVERRIDE** (Neutron), **OS_VOLUMEV3_ENDPOINT_OVERRIDE** (Cinder), and **OS_PLACEMENT_ENDPOINT_OVERRIDE** (Placement). Each takes a full `http` or `https` URL.
 
+To check whether you need them, run `openstack catalog list` and confirm that every `public` URL resolves from outside your network. Set an override only for a service whose URL doesn't.
+
 <Warning>
-There is no field for a custom certificate authority. For a cloud with a self-signed certificate, **Skip SSL verification** is the only way to connect, and it removes protection against someone impersonating your cloud. Use it for lab clouds only. **Internal endpoint** works only if CloudThinker can reach your control-plane network.
+There is no field for a custom certificate authority. For a cloud with a self-signed certificate, **Skip SSL verification** is the only way to connect, and it removes protection against someone impersonating your cloud. Use it for lab clouds only.
 </Warning>
 
 ## Required permissions
@@ -69,15 +84,32 @@ Keystone ships three default roles: `admin`, `member`, and `reader`. OpenStack d
 | You want agents to | Role on the project |
 |--------------------|---------------------|
 | Inventory and audit the project | `reader` |
-| Stop, reboot, resize, or delete resources | `member`, or the narrowest role your cloud's policies accept. `member` can delete only resources the project owns, not shared or public images or shared networks |
-| Answer questions across all projects | Usually `admin`. Without it, OpenStack returns `403 Forbidden` |
+| Stop, reboot, resize, or delete resources | A custom role your cloud's policy files allow for each action (recommended), or `member`. See the table below |
+| Answer questions across all projects | Not supported: keep to one project per workspace. Cross-project calls usually need `admin`, which this connection shouldn't have (see the warning below) |
+
+`member` also lets agents create servers, networks, and volumes, which goes past the changes agents make. For least privilege, create a custom role and allow only these policies:
+
+| Approved change | Policy |
+|-----------------|--------|
+| Stop, reboot, resize, delete a server (Nova) | `os_compute_api:servers:stop`, `os_compute_api:servers:reboot`, `os_compute_api:servers:resize`, `os_compute_api:servers:delete` |
+| Delete a volume (Cinder) | `volume:delete` |
+| Delete an image (Glance) | `delete_image` |
+| Delete a network (Neutron) | `delete_network` |
+
+Your cloud operator wires the role into each service's policy file (Nova, Cinder, Glance, Neutron) and deploys it there. A Nova entry looks like this:
+
+```yaml
+"os_compute_api:servers:stop": "role:cloudthinker-ops"
+```
+
+See the [Nova policy reference](https://docs.openstack.org/nova/latest/configuration/policy.html). Either way, agents can delete only resources the project owns, not shared or public images or shared networks.
 
 <Warning>
 In most deployments the default `admin` role is effectively cloud-wide, even when you assign it on one project. Don't give it to this connection. Keep cross-project questions to a person with admin access.
 </Warning>
 
 <Tip>
-Start with `reader`. Default policies may hide some sensitive details from it, so check what your cloud returns before you rely on it for an audit.
+Start with `reader`. Default policies keep some admin-only details from it, such as hypervisors and the host a server runs on. Check what your cloud returns before you rely on it for an audit.
 </Tip>
 
 ## Agent capabilities
@@ -85,11 +117,13 @@ Start with `reader`. Default policies may hide some sensitive details from it, s
 | Capability | What agents can do |
 |------------|--------------------|
 | **Inventory** | List servers, volumes, networks, subnets, images, flavors, projects, and the service catalog, and inspect one in detail. Listing every project usually needs `admin` |
-| **Idle and unused** | Flag right-sizing candidates from flavor size, power state, and launch time, and find volumes unattached for more than 30 days. CPU metrics are used only if your cloud runs Telemetry (Ceilometer or Gnocchi) |
+| **Idle and unused** | Flag right-sizing candidates from flavor size, power state, and launch time, and find volumes that are unattached and were created more than 30 days ago (from the volume's `created_at`). CPU metrics are used only if your cloud runs Telemetry (Ceilometer or Gnocchi). Without it, candidates come from flavor, power state, and launch time alone |
 | **Quotas** | Show quota use for instances, cores, RAM, volumes, gigabytes, and networks, and flag anything above 80% |
 | **Capacity** | Review flavors and, with `admin` under default policies, hypervisors |
 | **Network drift** | Flag security group rules open to `0.0.0.0/0` |
 | **Approved changes** | Stop, reboot, resize, or delete servers, and delete volumes, images, or networks |
+
+The 30-day and 80% thresholds are defaults. Name a different number in your question, such as `volumes unattached and older than 90 days`.
 
 Reads run without asking. Every change goes through [Approvals](/guide/approvals/overview) first.
 
@@ -112,7 +146,11 @@ Which quotas in my project are above 80% used?
 ## Troubleshooting
 
 <Accordion title="Failed to connect to OpenStack">
-Keystone did not issue a token. Check the user name, password, project name, and both domain names. Confirm the address is reachable from CloudThinker and the user has a role on the project. A certificate CloudThinker doesn't trust also fails here unless **Skip SSL verification** is selected.
+Keystone did not issue a token. The message doesn't say why, so run `openstack token issue` with the same values from outside your network, as in [step 3](#setup), and read its error:
+
+- `401` or `The request you have made requires authentication`: check the user name, password, project name, both domain names, and that the user has a role on the project.
+- A timeout or `Unable to establish connection`: the address isn't reachable from the internet.
+- An SSL or certificate error: the certificate isn't trusted. Select **Skip SSL verification** for a lab cloud only.
 </Accordion>
 
 <Accordion title="OS_AUTH_URL must be a Keystone v3 URL">

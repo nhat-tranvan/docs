@@ -6,55 +6,7 @@ icon: "plug"
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-A connection is a saved credential for one external service, such as an AWS account, a Kubernetes cluster, or a GitHub organization. Agents can only see and do what your connections allow, so this page covers how to add one, scope it, check it, and keep it healthy.
-
-## How access works
-
-Every connection belongs to one [workspace](/guide/workspaces). Anyone working in that workspace, including [CloudThinker](/guide/agents/overview) and your custom agents, can use it without setting it up again.
-
-| Workspace role | See connections | Add, edit, rotate, delete, rerun Discovery |
-|---|---|---|
-| Admin | Yes | Yes |
-| Developer, Viewer | Yes | No |
-
-Organization Owners and Admins hold workspace Admin in every workspace. See [Workspace roles](/guide/workspace-users#workspace-roles).
-
-Two controls decide what an agent can do with a connection:
-
-| Control | Where it lives | What it decides |
-|---|---|---|
-| The credential's own permissions | Your provider (IAM role, service account, API token scopes) | The ceiling. Agents can never do more than the credential allows. |
-| **Allow writes** | The connection's detail panel in CloudThinker | Off: agents can only read, and every change is refused. On: agents can propose changes, and your [Rules and Approval mode](/guide/approvals/overview) decide each one. |
-
-How writes are controlled depends on the connection. Each setup guide's **Agent capabilities** section says which model applies.
-
-| Write model | How it works | Default | Example |
-|---|---|---|---|
-| **Allow writes** toggle | Connections where agents run the provider's own command-line tool. Reads run without asking. With the toggle on, every write is checked against your Rules and Approval mode. | On | [AWS](/guide/connections/aws), [Google Cloud](/guide/connections/gcp), [Azure](/guide/connections/azure) |
-| Approvals on each change | There's no toggle. The credential's scopes set what's possible, and every change goes through [Approvals](/guide/approvals/overview). Cloudflare's API tool waits for approval on reads too. | n/a | [VMware vCenter](/guide/connections/vmware), [Firebase](/guide/connections/firebase), [Cloudflare](/guide/connections/cloudflare) |
-| Read-only | Agents have no write actions at all. | n/a | [UptimeRobot](/guide/connections/uptimerobot) |
-
-The **Allow writes** switch belongs to each connection. There's no workspace or organization setting that changes its default.
-
-Connections sign in one of two ways:
-
-| Method | How you connect | Examples |
-|---|---|---|
-| Credentials you paste or upload | An IAM role ARN, an access key, a service-account JSON file, or an API token | AWS, Google Cloud, Datadog, PostgreSQL |
-| OAuth sign-in | You sign in to the provider in a pop-up and approve access | GitHub, GitLab, Linear, Sentry |
-
-<Tip>
-Start read-only. Create the credential with viewer or read-only permissions, connect it, and widen it only when you have a specific change you want agents to make. **Allow writes** is on by default for AWS, Google Cloud, and Azure, so the read-only credential is what blocks changes. To block them in CloudThinker too, open the service in Connections and turn off the **Allow writes** switch on its detail panel.
-</Tip>
-
-## Reaching private services
-
-Connections run from CloudThinker Cloud, so the service must accept connections from the internet. That matters for anything on a private network, such as an internal vCenter, PostgreSQL, Prometheus, or Argo CD.
-
-| Option | When to use it |
-|---|---|
-| Expose the endpoint and allowlist CloudThinker's egress IPs | You can put the service behind a firewall rule. These docs don't publish the IP list: ask your CloudThinker contact, or [contact us](https://cloudthinker.io/contact) if you don't have one. Never expose a service with no authentication. |
-| Run a [Worker](/guide/workers) inside your network | The service must stay private. The agent runs your own command-line tools on the Worker machine. Workspace connections still run in CloudThinker Cloud, even in a Worker chat. Workers are in beta. |
+A connection is a saved credential for one external service, such as an AWS account, a Kubernetes cluster, or a GitHub organization. Agents can only see and do what your connections allow, so this page covers how to add one, scope it, check it, and keep it healthy. The full list of services is in the [connection catalog](#connection-catalog).
 
 ## Add a connection
 
@@ -66,8 +18,14 @@ Connections run from CloudThinker Cloud, so the service must accept connections 
       <img src="/images/v2/connections-list.webp" alt="Connections screen with the service list on the left and a selected connection's detail panel on the right" />
     </Frame>
   </Step>
-  <Step title="Create a least-privilege credential">
-    Open the setup guide for your service from the catalog below, or click **Setup guide** on the service's detail panel. Each guide lists the minimum permissions and the order to follow. For AWS, open the connect dialog first: it generates the External ID your role needs.
+  <Step title="Open the setup guide and follow its order">
+    Open the setup guide for your service from the [catalog](#connection-catalog), or click **Setup guide** on the service's detail panel. Each guide lists the minimum permissions for the credential. The order depends on the service:
+
+    | Service | Do this first |
+    |---|---|
+    | AWS | Open the connect dialog. It generates the External ID your role needs. |
+    | OAuth services, such as GitHub, Linear, and Sentry | Nothing. Click **Connect** and sign in. |
+    | Everything else, such as Google Cloud, Azure, Firebase, and Cloudflare | Create the credential at the provider, then open the dialog. |
   </Step>
   <Step title="Connect">
     Select the service and click **Connect**. Enter or upload the credential and click **Connect** in the dialog.
@@ -79,7 +37,16 @@ Connections run from CloudThinker Cloud, so the service must accept connections 
     </Note>
   </Step>
   <Step title="Wait for the test">
-    CloudThinker tests the credential before saving it. The status moves from **Connecting** to **Verifying**, then to **Connected**. If the test fails, the connection shows **Failed** or **Timed out** with the provider's error.
+    CloudThinker tests the credential before saving it.
+
+    | Status | What it means | What to do |
+    |---|---|---|
+    | **Connecting** | The test is starting | Wait |
+    | **Verifying** | CloudThinker is calling the service with your credential | Wait |
+    | **Connected** | The test passed and the connection is saved | Ask a question against it |
+    | **Failed** | The service rejected the credential. The provider's error is shown. | Fix the credential or its permissions, then connect again |
+    | **Timed out** | The test didn't finish in time | Check the service is reachable from CloudThinker Cloud. See [Reaching private services](#reaching-private-services). |
+    | **Error** | It worked before, then failed in the background | See [When a connection breaks](#when-a-connection-breaks) |
 
     **Success state:** the service shows **Connected** in the Connections list.
   </Step>
@@ -96,15 +63,13 @@ Connections run from CloudThinker Cloud, so the service must accept connections 
 
 ## Set the environment
 
-Each connection has an **Environment**: **Production**, **Staging**, **Development**, or **Not set**. [Approval rules](/guide/approvals/rules) can match on it, so changes to production and staging can be treated differently.
+Each connection has an **Environment**: **Production**, **Staging**, **Development**, or **Not set**. [Rules](/guide/approvals/rules) (conditions that decide whether an agent's change runs, waits for a person, or is refused) can match on it, so changes to production and staging can be treated differently.
 
 <Warning>
-**Not set** counts as production. The connect dialog doesn't ask for an environment, so set it right after you connect a non-production account, or production rules apply to it.
+**Not set** counts as production. The connect dialog doesn't ask for an environment, so set it right after you connect a non-production account, or production rules apply to it. Single-connection services, such as Microsoft Azure, and every OAuth service, such as GitHub, Linear, and Sentry, can't be changed from **Not set**, so they always get production rules. To treat one differently, write a [Rule](/guide/approvals/rules#what-a-rule-contains) that names that connection.
 </Warning>
 
 On a service that supports multiple connections, each account shows as a row on the service's detail panel. To set the environment, click the pencil icon on the account's row, and update **Environment** in the **Edit Instance** dialog.
-
-Single-connection services, such as Microsoft Azure and OAuth services, show no account row and no pencil icon, so their environment stays **Not set** and production rules apply.
 
 ## What happens after you connect
 
@@ -116,7 +81,61 @@ The first time a connection reaches **Connected**, CloudThinker runs **Discovery
 | Related connection | A service that would make the evidence more useful | Click **Connect** on the card |
 | Scheduled task | A recurring check suggested from the evidence | Click **Schedule** to create an [automation](/guide/automation/automations) |
 
-Discovery spends credits, and it's often the first useful answer you get: check it before you write your first prompt. It runs once per connection, for at most 30 minutes. There's no fixed price, because the cost depends on how much the service holds. Discovery doesn't use the free daily chat credits, so it needs credits in the workspace balance. If the balance is too low, it pauses with a notice. After you add credits, or after you widen the credential's permissions, click **Run Discovery** to run it again. You need the workspace Admin role to do this.
+Discovery is often the first useful answer you get, so check it before you write your first prompt. It runs automatically once, for at most 30 minutes. You can rerun it with **Run Discovery**, for example after you widen the credential's permissions. You need the workspace Admin role to rerun it.
+
+Discovery spends credits, and the cost depends on how much the service holds. It can't use [daily credits](/guide/billing/usage#credit-types) (the 100 free credits a day that cover chat on the [Light model](/guide/billing/usage#what-makes-a-run-cost-more) only), so it needs credits in the workspace balance. If the balance is too low, it pauses with a notice. Add credits, then click **Run Discovery**.
+
+Discovery uses the same tools and [Approvals](/guide/approvals/overview) as a chat, but no one is there to answer, so it never waits for approval. A call that would ask a person is skipped, and Discovery carries on with the reads it can make. On Cloudflare, where every API call asks, and on Firebase, where project switches and deploy status checks ask, Discovery finds less as a result.
+
+If Discovery hits its time limit, it ends as **Partial discovery** and keeps the results it already verified. If it verified nothing, it shows **Discovery could not finish**. Your connection keeps working either way.
+
+## How access works
+
+Every connection belongs to one [workspace](/guide/workspaces). Anyone working in that workspace, including the built-in [CloudThinker agent](/guide/agents/overview) and your custom agents, can use it without setting it up again.
+
+| Workspace role | See connections | Add, edit, rotate, delete, rerun Discovery |
+|---|---|---|
+| Admin | Yes | Yes |
+| Developer, Viewer | Yes | No |
+
+Organization Owners and Admins hold workspace Admin in every workspace. See [Workspace roles](/guide/workspace-users#workspace-roles).
+
+<Warning>
+On AWS, Google Cloud, and Azure, **Allow writes** starts on. If the credential you connect has any write permission, agents can propose changes the moment you connect, and your Rules and Approval mode decide each one. There's no workspace or organization setting to start it off, so the controls are a read-only credential and turning off **Allow writes** on each connection.
+</Warning>
+
+Two controls decide what an agent can do with a connection:
+
+| Control | Where it lives | What it decides |
+|---|---|---|
+| The credential's own permissions | Your provider (IAM role, service account, API token scopes) | The ceiling. Agents can never do more than the credential allows. |
+| **Allow writes** | The connection's detail panel in CloudThinker | Off: agents can only read, and every change is refused. On: agents can propose changes, and your [Rules](/guide/approvals/rules) and [Approval mode](/guide/approvals/approval-mode) (**Manual** asks a person before each change, **Auto** lets your Rules, and optionally AI judgment, decide) settle each one. |
+
+How writes are controlled depends on the connection. Each setup guide's **Agent capabilities** section says which model applies.
+
+| Write model | How it works | Default | Example |
+|---|---|---|---|
+| **Allow writes** toggle | Connections where agents run the provider's own command-line tool. Reads run without asking. With the toggle on, every write is checked against your Rules and Approval mode. | On | [AWS](/guide/connections/aws), [Google Cloud](/guide/connections/gcp), [Azure](/guide/connections/azure) |
+| Approvals on each change | There's no toggle. The credential's scopes set what's possible, and every change goes through [Approvals](/guide/approvals/overview). Some reads wait too: every Cloudflare API call, and Firebase project switches and deploy status checks. | n/a | [VMware vCenter](/guide/connections/vmware), [Firebase](/guide/connections/firebase), [Cloudflare](/guide/connections/cloudflare) |
+| Read-only | Agents have no write actions at all. | n/a | [UptimeRobot](/guide/connections/uptimerobot) |
+
+**Allow writes** starts on for AWS, Google Cloud, and Azure because the credential is the ceiling: a read-only credential already blocks every change. Start read-only, and widen the credential only when you have a specific change you want agents to make.
+
+Connections sign in one of two ways:
+
+| Method | How you connect | Examples |
+|---|---|---|
+| Credentials you paste or upload | An IAM role ARN, an access key, a service-account JSON file, or an API token | AWS, Google Cloud, Datadog, PostgreSQL |
+| OAuth sign-in | You sign in to the provider in a pop-up and approve access | GitHub, GitLab, Linear, Sentry |
+
+## Reaching private services
+
+Connections run from CloudThinker Cloud, so the service must accept connections from the internet. That matters for anything on a private network, such as an internal vCenter, PostgreSQL, Prometheus, or Argo CD.
+
+| Option | When to use it |
+|---|---|
+| Expose the endpoint and allowlist CloudThinker's egress IPs | You can put the service behind a firewall rule. These docs don't publish the IP list: ask your CloudThinker contact, or [contact us](https://cloudthinker.io/contact) if you don't have one. Never expose a service with no authentication. |
+| Run a [Worker](/guide/workers) inside your network | The service must stay private. A Worker is a folder on a machine you run where the agent can run commands. A Worker doesn't make a connection private: workspace connections still run in CloudThinker Cloud, even in a Worker chat. Instead, install the service's command-line tool (for example `psql`) and its credentials on the Worker machine, and the agent's shell uses them there. The service won't appear in Connections. See [What a Worker can reach](/guide/workers#what-a-worker-can-reach). Workers are in beta. |
 
 ## Rotate a credential
 
@@ -136,7 +155,14 @@ You can replace a saved credential without disconnecting. The connection keeps i
   </Step>
 </Steps>
 
-Single-connection services, such as Microsoft Azure, have no pencil icon. Their **Replace credentials** button appears only while the connection shows **Error**, so to rotate early, disconnect and connect again with the new value. OAuth connections don't have a credential to replace. To switch the signed-in account, disconnect and connect again.
+Single-connection services, such as Microsoft Azure, have no pencil icon. Their **Replace credentials** button appears only while the connection shows **Error**, so to rotate early, disconnect and connect again with the new value. That starts a new connection, so plan it for a quiet period:
+
+- Agents, scheduled automations, and Optimize refreshes can't use the service between the disconnect and the reconnect.
+- Discovery runs again and spends credits.
+- **Allow writes** goes back to on. Turn it off again if you had it off.
+- Check that [Rules](/guide/approvals/rules) naming the connection still list it.
+
+OAuth connections don't have a credential to replace. To switch the signed-in account, disconnect and connect again.
 
 ## When a connection breaks
 
@@ -156,6 +182,12 @@ Open the service in Connections. On a service with account rows, click the trash
 
 Agents lose access to the service as soon as the disconnect finishes. Then delete the role, key, or token at the provider, because disconnecting doesn't remove it there.
 
+If you connect the service again, it's a new connection:
+
+- Discovery runs again and spends credits.
+- **Allow writes** goes back to its default, and **Environment** goes back to **Not set**.
+- [Rules](/guide/approvals/rules) match connections by **Alias**. Reuse the same Alias when you reconnect, and Rules that name the connection keep matching.
+
 ## Security
 
 <ConnectionSecurity />
@@ -167,7 +199,8 @@ How CloudThinker handles what you connect:
 | Where is the credential stored? | Encrypted at rest. It's injected into the CloudThinker-managed sandbox only when a command runs, never sent to a Worker, and never shown back in chat. |
 | Can data reach the model? | Yes. Anything the credential can read can reach the model, because command output is part of the conversation. Scope the credential to what agents need. |
 | Is data used for training, and how long is it kept? | These docs don't cover model-provider data terms. See [Security](/guide/security/overview#at-a-glance) for what they do cover, and ask for the rest in a vendor review. |
-| What's logged? | **Admin Settings → Audit Logs** records connection changes, credential changes, and approval decisions, on the Scale, Scale+, and Enterprise plans. |
+| What's logged? | [Audit Logs](/guide/security/audit-logs) (click your avatar at the bottom of the sidebar, then **Admin settings → Audit Logs**) records connection changes, credential changes, and approval decisions, on the Scale, Scale+, and Enterprise plans. |
+| Are agent commands logged? | Each command an agent runs, and its output, stays in the chat's history. The calls also land in the provider's own audit log, such as AWS CloudTrail or Google Cloud Audit Logs. |
 
 See [Security](/guide/security/overview) for encryption details, retention, and the model provider.
 
@@ -280,7 +313,7 @@ See [Security](/guide/security/overview) for encryption details, retention, and 
 | [Better Stack](/guide/connections/betterstack) | Review incidents, on-call coverage, uptime, and heartbeats. |
 | [FireHydrant](/guide/connections/firehydrant) | Review incidents, severity, alerts, and the service catalog. |
 | [Jira Service Management](/guide/connections/jsm) | Review alerts and on-call, then acknowledge or escalate. |
-| [PagerDuty](/guide/connections/pagerduty) | Send incident events to [Resolve](/guide/incident/overview) through a signed webhook. No API access to schedules or services. |
+| [PagerDuty](/guide/connections/pagerduty) | Send incidents to [Resolve](/guide/incident/overview). |
 | [Rootly](/guide/connections/rootly) | Review incidents, alerts, and severity, then file an action. |
 | [ServiceNow](/guide/connections/servicenow) | Review and update incidents, changes, and problems. |
 

@@ -1,31 +1,56 @@
 ---
 title: Custom Agent Quickstart
-description: "Build a custom agent in about 10 minutes: create it, connect it, give it a runbook as a skill, set approvals, and test it."
+description: "Build a custom agent in about 10 minutes once AWS is connected: add a runbook skill, create the agent, connect it, set approvals, test it."
 icon: rocket
 ---
 
-By the end of this page you have a custom agent, `@ec2-triage`, that investigates high CPU on your EC2 instances by following your team's runbook, and that asks you before it changes anything. It takes about 10 minutes.
+A custom agent is a named agent you create in your workspace, next to the built-in assistant [CloudThinker](/guide/agents/overview), with its own instructions and connections, and you talk to it by its `@mention`. Once AWS is connected, in about 10 minutes you'll build one, `@ec2-triage`, that investigates high CPU on your EC2 instances by following your team's runbook and asks you before it changes anything.
 
 <Info>
 **What you'll need**
 
-- The workspace **Admin** role for step 3 (adding a skill). Developers can do every other step, so a Developer can ask an Admin to add the skill and do the rest. Run the test in step 5 only after the skill appears in **Settings → Skills**; without it, the agent has no runbook to follow.
-- An [AWS connection](/guide/connections/aws) that shows **Connected**. Its role needs to describe instances and read CloudWatch metrics; the `ReadOnlyAccess` policy the setup script attaches covers both (see [required permissions](/guide/connections/aws#required-permissions)). Any other connection works too: swap the names in the examples.
+- The workspace **Admin** role for step 1 (adding a skill). Developers can do every other step. If you're a Developer, ask an Admin to do step 1 first, then start at step 2.
+- An [AWS connection](/guide/connections/aws) that shows **Connected**. If you don't have one yet, set it up first: the 10 minutes don't include it. Its role needs to describe instances and read CloudWatch metrics; the `ReadOnlyAccess` policy the setup script attaches covers both (see [required permissions](/guide/connections/aws#required-permissions)). Any other connection works too: swap the names in the examples.
 - A free custom agent slot on your plan (Free includes 1). See [Customize](/guide/agents/customize#custom-agents-at-a-glance).
 </Info>
 
-A custom agent is a named agent you create in your workspace. It sits next to the built-in assistant, [CloudThinker](/guide/agents/overview), with its own instructions and its own connections. You talk to it by typing its `@mention` in chat.
-
 <Steps>
-  <Step title="Create the agent">
-    Open **Settings → Agents**, click **Create agent**, and pick **Build with form**. On the **Identity** step, fill in:
+  <Step title="Add your runbook as a skill">
+    A skill is a set of instructions agents follow when the task matches. Open **Settings → Skills**, click the **+** button next to **Search skills** (or **New Skill** if the list is empty), and pick **Write skill instructions**. Fill in:
 
-    | Field | Value |
-    |-------|-------|
-    | **Name** | `EC2 Triage` |
-    | **@mention** | `ec2-triage` (set once, can't be changed later) |
-    | **Role** | `AWS Compute Specialist` |
-    | **Goal** | `Find why an EC2 instance is slow and recommend the safest fix` |
+    - **Skill name:** `ec2-high-cpu-runbook`
+    - **Description:** `Steps to investigate an EC2 instance with high CPU`
+    - **Instructions:**
+
+    ```markdown
+    # EC2 high CPU runbook
+
+    Use this when someone reports a slow EC2 instance or high CPU.
+
+    1. Check CPUUtilization for the last hour. Above 90% for 15 minutes or more counts as sustained.
+    2. If the instance is a burstable type (t2, t3, t4g), check its credit specification. In standard mode, check CPUCreditBalance: a balance near zero means the instance is throttled.
+    3. Check NetworkIn and DiskReadOps for a traffic spike that started at the same time.
+    4. Recommend one fix, in this order of preference: wait out a short spike, move a burstable instance in standard mode to unlimited mode, then resize. Recommend only; don't apply it. Unlimited mode and resizing both change cost.
+    5. Never reboot an instance tagged env=prod without a person approving it.
+    ```
+
+    Skills steer what an agent does; they don't block anything. Rule 5 is guidance only. What actually stops a write is the **Manual** mode you set in step 4, plus any Approval [Rules](/guide/approvals/rules).
+
+    Click **Create**. New skills start enabled and available in **Chat**, which is where you test in step 5.
+
+    Skills apply to every agent in the workspace, not only the `@ec2-triage` agent you create next, so CloudThinker also follows this runbook when a chat asks about high CPU. See [Customize](/guide/agents/customize#how-it-works).
+
+    **Success state:** `ec2-high-cpu-runbook` appears in the skills list with its switch on and **Chat** checked under **Available in**.
+  </Step>
+  <Step title="Create the agent">
+    Open **Settings → Agents**, click **Create agent**, and pick **Build with form**. On the **Identity** step, fill in all four fields (each is required):
+
+    | Field | Value | Limit |
+    |-------|-------|-------|
+    | **Name** | `EC2 Triage` | 255 characters |
+    | **@mention** | `ec2-triage` (set once, can't be changed later) | 63 characters |
+    | **Role** | `AWS Compute Specialist` | 255 characters |
+    | **Goal** | `Find why an EC2 instance is slow and recommend the safest fix` | 2,048 characters |
 
     **Role** and **Goal** go at the top of the agent's prompt, ahead of the **Instructions** you add next, so the agent reads them on every request. Keep them short and specific.
 
@@ -33,21 +58,28 @@ A custom agent is a named agent you create in your workspace. It sits next to th
       <img src="/images/agents/create-custom-agent-dialog-1.png" alt="Create Custom Agent dialog, Identity step, with Avatar, Name, @mention, Role, and Goal fields" style={{ maxWidth: '400px' }} />
     </Frame>
 
-    Click **Next**. On the **Configuration** step, keep **Model Tier** on **Pro**, set **Learning Mode** to **Offer**, and paste these **Instructions**:
+    Click **Next**. The dialog moves to the **Configuration** step. There, keep **Model Tier** on **Pro**, leave **Language** on **Match the user** (the agent replies in the language of your message), set **Learning Mode** to **Offer**, and paste these **Instructions**:
+
+    <Frame>
+      <img src="/images/agents/create-custom-agent-dialog-2.png" alt="Create Custom Agent dialog, Configuration step, with Model Tier, Instructions, Language, and Learning Mode" style={{ maxWidth: '400px' }} />
+    </Frame>
 
     ```text
     You investigate EC2 performance problems in our AWS account.
     Always start read-only: describe the instance, then check CloudWatch metrics for the last hour.
     Report findings as a short table: metric, value, what it means.
     Never stop, reboot, or resize an instance without saying why first.
+    Use the ec2-high-cpu-runbook skill for high CPU or slow instance questions.
     ```
 
-    **Learning Mode: Offer** means that when the agent repeats the same tool call several times in a conversation, it asks you in chat before it saves that workflow as a new skill. Reply yes to save it or no to skip. The form defaults to **Auto**, which saves without asking. A saved skill lands in **Settings → Skills**, available in **Chat**, and every agent in the workspace can use it (see [Customize](/guide/agents/customize#custom-agents-at-a-glance)). Click **Next**.
+    Naming the skill in the instructions helps the agent pick it. It doesn't stop other agents from using the skill.
+
+    **Offer** asks you in chat before saving a repeated workflow as a skill. The default, **Auto**, saves without asking. If the agent offers to save a workflow as a skill during the test, reply no. See [Learning Mode](/guide/agents/customize#learning-mode). Click **Next**.
 
     **Success state:** the dialog moves to the **Connect** step.
   </Step>
   <Step title="Give it a connection">
-    On the **Connect** step, open the **Builtin** tab and click **Add** next to your AWS connection. **Builtin** lists the connected connections from **Settings → Connections**; **MCP** lists the [MCP servers](/guide/connections/mcp) you've added. Click **Create Agent**.
+    On the **Connect** step, open the **Builtin** tab and click **Add** next to your AWS connection. **Builtin** lists connections that show **Connected** in **Settings → Connections**; **MCP** lists the [MCP servers](/guide/connections/mcp) you've added. Click **Create Agent**.
 
     <Frame>
       <img src="/images/agents/create-custom-agent-dialog-3.png" alt="Create Custom Agent dialog, Connect step, with Builtin and MCP tabs and a list of connections to attach" style={{ maxWidth: '500px' }} />
@@ -61,39 +93,18 @@ A custom agent is a named agent you create in your workspace. It sits next to th
       <img src="/images/v2/agents-custom.webp" alt="Settings, Agents page listing custom agents with name, @mention, role, goal, and model tier" />
     </Frame>
   </Step>
-  <Step title="Add your runbook as a skill">
-    A skill is a set of instructions agents follow when the task matches. Open **Settings → Skills**, click **New Skill**, and pick **Write skill instructions**. Fill in:
-
-    - **Skill name:** `ec2-high-cpu-runbook`
-    - **Description:** `Steps to investigate an EC2 instance with high CPU`
-    - **Instructions:**
-
-    ```markdown
-    # EC2 high CPU runbook
-
-    Use this when someone reports a slow EC2 instance or high CPU.
-
-    1. Check CPUUtilization for the last hour. Above 90% for 15 minutes or more counts as sustained.
-    2. If the instance is a burstable type (t2, t3, t4g), check CPUCreditBalance. A balance near zero means the instance is throttled.
-    3. Check NetworkIn and DiskReadOps for a traffic spike that started at the same time.
-    4. Recommend one fix, in this order of preference: wait out a short spike, move a burstable instance to unlimited mode, then resize. Recommend only; don't apply it. Unlimited mode and resizing both change cost.
-    5. Never reboot an instance tagged env=prod without a person approving it.
-    ```
-
-    Click **Create**. New skills start enabled and available in **Chat**, which is where you test next.
-
-    Skills apply to every agent in the workspace, not only `@ec2-triage`, so CloudThinker also follows this runbook when a chat asks about high CPU. See [Customize](/guide/agents/customize#how-it-works).
-
-    **Success state:** `ec2-high-cpu-runbook` appears in the skills list with its switch on and **Chat** checked under **Available in**.
-  </Step>
   <Step title="Make it ask before any change">
     Approvals decide whether a write (any call that changes something) runs, waits for a person, or is refused. Reads always run. For this test, make every write wait for you.
 
-    Start a new chat. The approval control sits next to the model picker in the chat prompt box and shows the chat's current mode, **Manual** or **Auto**. A new chat starts on the workspace mode (new workspaces default to **Auto**). Open the control, or type `/` and pick **Approval**, and select **Manual**.
+    <Warning>
+    New workspaces default to **Auto**. In Auto, writes your Rules allow run without asking, and AI judgment can let other safe writes run. Switch this chat to **Manual** before testing.
+    </Warning>
+
+    Start a new chat. The approval control sits on the right of the chat prompt box, next to the model picker, and shows the chat's current mode, **Manual** or **Auto**. A new chat starts on the workspace mode. Open the control, or type `/` and pick **Approval**, and select **Manual**.
 
     **Success state:** the approval control shows **Manual**. This applies to this chat only; your workspace mode doesn't change. Developers can do this step too.
 
-    New chats start on the workspace mode again, and Automations use their own mode (**Auto · Rules + AI · Refuse** by default). To make prod changes always wait for a person, add an **Ask first** [Rule](/guide/approvals/rules).
+    New chats start on the workspace mode again. Automations use their own mode: by default Rules decide first, AI judges the rest, and a write that still needs a person is refused instead of waiting. See [Approvals](/guide/approvals/overview#what-you-get-out-of-the-box). To make prod changes always wait for a person, add an **Ask first** [Rule](/guide/approvals/rules).
   </Step>
   <Step title="Test the agent">
     In the same chat, mention the agent. Send one of these prompts.
@@ -119,19 +130,19 @@ A custom agent is a named agent you create in your workspace. It sits next to th
 
     Followed by one recommendation, such as moving the instance to unlimited mode, with the reason and no change applied.
 
-    If the agent wants to change the instance, the chat shows an approval card with **Approve** and **Decline**. Click **Decline** if you only wanted the diagnosis.
+    If the agent wants to change the instance, the chat shows an approval card with **Approve** and **Decline**. Click **Decline** if you only wanted the diagnosis. With `ReadOnlyAccess`, the agent can't change anything even if you approve: the card shows approvals work, but the write itself fails in AWS.
 
-    **Success state:** the agent's activity includes a **Load Skill** step (the summary reads "read 1 skill" or more), the answer follows your runbook steps without you restating them, and nothing changed in AWS without your approval.
+    If CPU turns out to be normal, expect a table that shows it and a recommendation to wait or look elsewhere. That still counts as success.
+
+    The run uses Pro credits from your premium pool: the free daily credits cover Light chat only. See [usage](/guide/billing/usage#what-makes-a-run-cost-more).
+
+    **Success state:** the agent's reply shows a collapsed activity summary line that includes "read 1 skill". Click it to expand the steps and find the **Load Skill** step. The answer follows your runbook steps without you restating them, and nothing changed in AWS without your approval.
   </Step>
 </Steps>
 
-## You're done when…
+## Clean up
 
-- `@ec2-triage` answers in chat, and its **Connections** tab in **Settings → Agents** lists only your AWS connection
-- Its activity shows a **Load Skill** step and its answer follows the steps in `ec2-high-cpu-runbook`
-- Any write it attempts shows an approval card before it runs
-
-If this was only a trial, delete the agent in **Settings → Agents** (it frees the slot right away; Free includes one) and the skill in **Settings → Skills**.
+If this was only a trial, delete the agent in **Settings → Agents** (it frees the slot right away; Free includes one) and the skill in **Settings → Skills**. Until you delete the skill, every agent, including CloudThinker, follows it for high-CPU questions.
 
 ## Troubleshooting
 
@@ -154,7 +165,7 @@ If this was only a trial, delete the agent in **Settings → Agents** (it frees 
   <Accordion title="The answer ignores the runbook">
     Open **Settings → Skills** and check that the skill's switch is on and **Chat** is checked. Then make the request match the skill's description, for example by saying "high CPU". Agents apply a skill only when it fits the task.
   </Accordion>
-  <Accordion title="I don't see New Skill">
+  <Accordion title="I don't see the + button or New Skill">
     Adding skills needs the workspace **Admin** role. Ask a workspace admin to add the skill or change your role.
   </Accordion>
 </AccordionGroup>

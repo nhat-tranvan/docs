@@ -10,7 +10,8 @@ When an open merge request or pull request (MR/PR) conflicts with its target bra
 
 - A repository connected in [Review setup](/guide/code-review/setup) on GitHub, GitLab, Bitbucket, or AWS CodeCommit. Azure DevOps isn't supported.
 - The workspace Admin role to change the setting (see [Roles](/guide/security/roles)).
-- A provider connection that can push new branches and open MR/PRs. The write scopes in [Provider authentication](/guide/code-review/provider-auth) cover this.
+- A provider connection that can push new branches and open MR/PRs. On GitHub, GitLab and Bitbucket, the write scopes in [Provider authentication](/guide/code-review/provider-auth) cover this. On AWS CodeCommit, add `codecommit:GitPush` and `codecommit:CreatePullRequest` to the setup script's policy, following the steps under **What the script creates** in [AWS CodeCommit](/guide/code-review/provider-auth#aws-codecommit).
+- On GitLab, a webhook with **Push events** enabled, on top of the usual triggers (see [Configure webhooks](/guide/code-review/provider-auth#configure-webhooks)). GitHub, Bitbucket and CodeCommit send target-branch pushes with the webhook setup you already have.
 
 ## Turn on auto-resolve
 
@@ -23,18 +24,25 @@ When an open merge request or pull request (MR/PR) conflicts with its target bra
 
     **Success state:** the switch stays on. The next time an open MR/PR conflicts with its target branch, CloudThinker posts a status comment on it.
 
-    Turning it on doesn't scan MR/PRs that already conflict. CloudThinker acts on one the next time it gets an event for it, such as a push to its source branch.
+    Turning it on doesn't scan MR/PRs that already conflict. CloudThinker acts on one the next time it gets an event for it (see the table below).
   </Step>
 </Steps>
 
-The setting controls only whether CloudThinker resolves conflicts. Detection is always on: a conflicting MR/PR gets a red **Conflict** badge on **Review → Reviews** either way.
+These events start a conflict check:
+
+| Event | What CloudThinker checks |
+|---|---|
+| A push to the MR/PR's source branch | That MR/PR, before it reviews the new commits |
+| A push to a target branch | Open MR/PRs that merge into that branch. On GitLab, only when the webhook has **Push events** on |
+
+Each resolution is an agent run and uses credits (see [usage and credits](/guide/billing/usage)). The setting controls only whether CloudThinker resolves conflicts. Detection is always on: a conflicting MR/PR gets a red **Conflict** badge on **Review → Reviews** either way.
 
 ## How resolution works
 
 A conflict usually appears after someone pushes to the target branch (or your source branch) and the two no longer merge cleanly. CloudThinker then:
 
 1. Posts a **CloudThinker Conflict Resolution In Progress** comment on your MR/PR.
-2. Creates a branch from your MR/PR's source branch, named with a `cloudthinker/` prefix, and **merges** the latest target branch into it. It never rebases, so your history stays as it is.
+2. Creates a branch from your MR/PR's source branch, named `cloudthinker/mr-<MR/PR number>-thread-resolve-conflict-<provider>-<project id>-<MR/PR number>`, and **merges** the latest target branch into it. For MR !42 in GitLab project 1234, that's `cloudthinker/mr-42-thread-resolve-conflict-gitlab-1234-42`. It never rebases, so your history stays as it is.
 3. Resolves each text conflict with an agent edit, and keeps your MR/PR's side when a file was renamed, deleted, added on both sides, or is binary.
 4. Checks that the result contains the latest commits from both branches, then pushes it.
 5. Opens a follow-up MR/PR titled `fix: resolve merge conflicts for <your MR/PR>` that targets your source branch, and links it from the status comment and the **Resolution MR** (or **Resolution PR**) link on the Reviews list.
@@ -42,8 +50,18 @@ A conflict usually appears after someone pushes to the target branch (or your so
 CloudThinker never merges for you and never force-pushes your branch.
 
 <Warning>
-  For renamed, deleted, both-added and binary files, the target branch's version is dropped. Check those files in the follow-up diff, and test the agent's text resolutions before you merge.
+  For renamed, deleted, both-added and binary files, the target branch's version is dropped. The follow-up's description doesn't list those files, so find them yourself, check each one in the follow-up diff, and test the agent's text resolutions before you merge.
 </Warning>
+
+To list every conflicting file and its kind, run a trial merge locally and undo it:
+
+```bash
+git fetch origin
+git switch <source-branch>
+git merge --no-commit --no-ff origin/<target-branch>
+git status --short   # conflicts show as UU (text), AA (both added), DU or UD (deleted)
+git merge --abort
+```
 
 ## Merge the follow-up
 
@@ -52,7 +70,7 @@ CloudThinker never merges for you and never force-pushes your branch.
     Click the link in the status comment, or **Resolution MR** next to the MR/PR on **Review → Reviews**.
   </Step>
   <Step title="Review the resolution">
-    Read the diff the way you'd read any change. CloudThinker doesn't run a code review on its own follow-up branches, so wait for your CI to pass on the follow-up before you merge.
+    Read the diff the way you'd read any change. CloudThinker doesn't run a code review on its own follow-up branches, so wait for your CI to pass on the follow-up before you merge. The follow-up targets your source branch, not your default branch, so if your CI doesn't run on MR/PRs into feature branches, test it locally.
   </Step>
   <Step title="Merge it into your source branch">
     Merge it on your provider.
@@ -62,7 +80,7 @@ CloudThinker never merges for you and never force-pushes your branch.
 </Steps>
 
 <Note>
-  Merge the follow-up **without squash**, on any provider. Squashing drops the merge history your provider needs to see the original conflict as resolved.
+  Merge the follow-up with a **merge commit**, on any provider. Squash and rebase merges both drop the merge history your provider needs to see the original conflict as resolved. If your branch rules allow only squash or rebase, merge the follow-up branch into your source branch locally with `git merge` and push.
 </Note>
 
 ## Status comments
@@ -75,9 +93,9 @@ CloudThinker keeps one status comment on your MR/PR and edits it in place:
 | **CloudThinker Conflict Resolution Complete** | The follow-up is ready, and the comment links to it | Review and merge it |
 | **CloudThinker Conflict Resolution: Already Resolved** | The conflict was fixed outside CloudThinker, for example by a rebase | Nothing |
 | **CloudThinker Conflict Resolution: No Changes Needed** | Resolving produced no changes, so your MR/PR is usually already mergeable | Nothing |
-| **CloudThinker Conflict Resolution Failed** | The run was interrupted before it could publish a resolution | CloudThinker retries on the next update to the target branch. If that branch is quiet, resolve the conflict on your provider |
+| **CloudThinker Conflict Resolution Failed** | The run was interrupted before it could publish a resolution | CloudThinker retries on the next [conflict check event](#turn-on-auto-resolve). If neither branch moves, resolve the conflict on your provider |
 
-<Frame>
+<Frame caption="The status comment on a GitLab MR once the follow-up is ready">
   <img src="/images/code-review/04-conflict-resolution-complete-comment.png" alt="CloudThinker Conflict Resolution Complete comment on a GitLab merge request, linking to the follow-up MR" />
 </Frame>
 
@@ -89,10 +107,10 @@ Auto-resolve isn't a mention command. `@cloudthinker-ai autofix` fixes review fi
 
 <AccordionGroup>
   <Accordion title="I don't see Auto-resolve conflicts in settings">
-    **Cause:** your repositories are on Azure DevOps, which isn't supported. **Fix:** resolve conflicts on your provider as usual.
+    **Cause:** the switch is hidden in two cases: your repositories are on Azure DevOps, which isn't supported, or auto-resolve isn't turned on for your CloudThinker instance. Your role doesn't hide it. **Fix:** on Azure DevOps, resolve conflicts on your provider as usual. Otherwise, ask CloudThinker support.
   </Accordion>
-  <Accordion title="The switch is read-only">
-    **Cause:** your workspace role isn't Admin. **Fix:** ask a workspace Admin to turn it on.
+  <Accordion title="I see On or Off instead of a switch">
+    **Cause:** your workspace role isn't Admin, so the row shows **On** or **Off** instead of a switch. **Fix:** ask a workspace Admin to turn it on.
   </Accordion>
   <Accordion title="A conflicting MR/PR got no status comment">
     **Check:** auto-resolve is on and the MR/PR is open. CloudThinker only acts on MR/PRs it already tracks, so it must have received a webhook for that MR/PR.
@@ -100,10 +118,10 @@ Auto-resolve isn't a mention command. `@cloudthinker-ai autofix` fixes review fi
     **Fix:** push a commit to the MR/PR's source branch. That sends CloudThinker a new event, and it checks for conflicts before it reviews.
   </Accordion>
   <Accordion title="The comment says Failed">
-    **Cause:** the run stopped before it could push, for example on a sandbox or network error. **Fix:** the next update to the target branch retries, and the same comment switches back to **In Progress**. If you can't wait, resolve the conflict on your provider.
+    **Cause:** the run stopped before it could push, for example on a sandbox or network error. **Fix:** the next push to the source or target branch retries, and the same comment switches back to **In Progress**. If you can't wait, resolve the conflict on your provider.
   </Accordion>
   <Accordion title="My original MR/PR still shows a conflict after merging the follow-up">
-    **Cause:** the follow-up was squash-merged. **Fix:** resolve the remaining conflict on your provider, and next time merge the follow-up without squash.
+    **Cause:** the follow-up was squash-merged or rebase-merged. **Fix:** resolve the remaining conflict on your provider, and next time merge the follow-up with a merge commit.
   </Accordion>
 </AccordionGroup>
 

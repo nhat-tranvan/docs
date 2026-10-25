@@ -1,5 +1,5 @@
 ---
-title: Azure
+title: Microsoft Azure
 description: "Connect Microsoft Azure with a service principal so CloudThinker can read resources, audit access, and report spend in Optimize."
 icon: "/images/icons/azure.svg"
 ---
@@ -14,6 +14,12 @@ Connect Azure so CloudThinker can inventory virtual machines, AKS clusters, data
 - Permission to create app registrations in Microsoft Entra ID: the **Application Developer** role, or **Users can register applications** set to **Yes** in Entra ID user settings.
 - Multi-factor authentication registered on your account. Security defaults block app registration without it.
 
+### Limits to know first
+
+- **Client secret only.** The dialog takes a client secret. It has no field for a certificate or a federated credential.
+- **One tenant per workspace.** You get one Azure connection per workspace, covering every subscription the service principal can read in one tenant. A second tenant, such as a separate dev tenant, needs its own workspace with its own Rules and chats.
+- **Always production rules.** Azure is a single-connection service, so its **Environment** stays **Not set** and production [approval rules](/guide/approvals/rules) always apply to it. To treat Azure writes differently, write a [Rule that names this connection](/guide/approvals/rules#what-a-rule-contains).
+
 ## Setup
 
 <Tabs>
@@ -26,13 +32,17 @@ Connect Azure so CloudThinker can inventory virtual machines, AKS clusters, data
         ```
       </Step>
       <Step title="Create the service principal with Reader">
+        <Warning>
+        If an app named `cloudthinker` already exists, `create-for-rbac` reuses it and resets its credentials, which breaks a live connection that uses it. Check first with `az ad sp list --display-name cloudthinker`. If it returns a result, pick a unique name, or add a secret to the existing app with `az ad sp credential reset --id <appId> --append`.
+        </Warning>
+
         ```bash
         az ad sp create-for-rbac --name cloudthinker \
           --role Reader \
           --scopes /subscriptions/<subscription-id>
         ```
 
-        Copy the output now. Azure shows the `password` only once. The secret expires after one year by default. Add `--years 2` (or another value) to change that, and set a reminder to [rotate it](/guide/connections/overview#rotate-a-credential).
+        Copy the output now. Azure shows the `password` only once. The secret expires after one year by default. Add `--years 2` (or another value) to change that, and set a reminder to [rotate it](#rotate-the-client-secret).
 
         ```json
         {
@@ -50,10 +60,37 @@ Connect Azure so CloudThinker can inventory virtual machines, AKS clusters, data
           --scope /subscriptions/<subscription-id>
         ```
       </Step>
-      <Step title="Add the connection in CloudThinker">
-        In the sidebar, click **More → Workspace settings → Connections**, select **Microsoft Azure**, and click **Connect**. The dialog has four fields and no alias. Enter `appId` as **APP_ID**, `password` as **CLIENT_SECRET**, and `tenant` as **TENANT_ID**. Pick a region from the **AZURE_DEFAULT_REGION** list, then click **Connect**.
+      <Step title="Optional: cover more subscriptions">
+        To give the service principal both roles on every subscription you can see, loop over them. This is the recommended way, because you get an explicit list:
 
-        **Success state:** the connection shows **Connecting** and **Verifying**, then a **Connected** status.
+        ```bash
+        for SUB in $(az account list --query "[].id" -o tsv); do
+          for ROLE in Reader "Cost Management Reader"; do
+            az role assignment create --assignee <appId> --role "$ROLE" --scope /subscriptions/$SUB
+          done
+        done
+        ```
+
+        A management group assignment is the trade-off: it covers new subscriptions automatically, but also ones you may not want CloudThinker to read. Use it only when that's what you want:
+
+        ```bash
+        for ROLE in Reader "Cost Management Reader"; do
+          az role assignment create --assignee <appId> --role "$ROLE" \
+            --scope /providers/Microsoft.Management/managementGroups/<management-group-id>
+        done
+        ```
+      </Step>
+      <Step title="Add the connection in CloudThinker">
+        In the sidebar, click **More → Workspace settings → Connections**, select **Microsoft Azure**, and click **Connect**. The dialog has four fields and no **Alias** or **Description**, because Azure allows one connection per workspace. Fill them in like this, then click **Connect**:
+
+        | CLI output | Portal value | Dialog field |
+        |---|---|---|
+        | `appId` | Application (client) ID | **APP_ID** |
+        | `password` | Client secret **Value** | **CLIENT_SECRET** |
+        | `tenant` | Directory (tenant) ID | **TENANT_ID** |
+        | n/a | Your main region | **AZURE_DEFAULT_REGION** (pick from the list) |
+
+        **Success state:** the connection shows **Connecting** and **Verifying**, then a **Connected** status. Discovery now runs once in the background and spends credits. Check the **Discovery** section on the detail panel before your first prompt. See [What happens after you connect](/guide/connections/overview#what-happens-after-you-connect).
       </Step>
     </Steps>
   </Tab>
@@ -66,15 +103,22 @@ Connect Azure so CloudThinker can inventory virtual machines, AKS clusters, data
         On the app's overview page, copy the **Application (client) ID** and the **Directory (tenant) ID**.
       </Step>
       <Step title="Create a client secret">
-        Go to **Certificates & secrets → New client secret**, set an expiration, and click **Add**. Copy the secret **Value** right away. Azure never shows it again.
+        Go to **Certificates & secrets → New client secret**, set an expiration (180 days or 365 days is a good balance), and click **Add**. Copy the **Value** column right away, not **Secret ID**. Azure never shows the value again. Set a reminder to [rotate it](#rotate-the-client-secret) before it expires.
       </Step>
       <Step title="Assign the roles">
         Go to **Subscriptions → your subscription → Access control (IAM) → Add → Add role assignment**. Pick **Reader** and click **Next**. On **Members**, choose **User, group, or service principal**, click **Select members**, search for `cloudthinker`, select it, and click **Review + assign**. Repeat for **Cost Management Reader**.
       </Step>
       <Step title="Add the connection in CloudThinker">
-        In the sidebar, click **More → Workspace settings → Connections**, select **Microsoft Azure**, and click **Connect**. Enter the client ID as **APP_ID**, the secret value as **CLIENT_SECRET**, and the directory ID as **TENANT_ID**. Pick a region from the **AZURE_DEFAULT_REGION** list, then click **Connect**.
+        In the sidebar, click **More → Workspace settings → Connections**, select **Microsoft Azure**, and click **Connect**. Fill in the fields like this, then click **Connect**:
 
-        **Success state:** the connection shows **Connecting** and **Verifying**, then a **Connected** status.
+        | Portal value | Dialog field |
+        |---|---|
+        | Application (client) ID | **APP_ID** |
+        | Client secret **Value** | **CLIENT_SECRET** |
+        | Directory (tenant) ID | **TENANT_ID** |
+        | Your main region | **AZURE_DEFAULT_REGION** (pick from the list) |
+
+        **Success state:** the connection shows **Connecting** and **Verifying**, then a **Connected** status. Discovery now runs once in the background and spends credits. Check the **Discovery** section on the detail panel before your first prompt. See [What happens after you connect](/guide/connections/overview#what-happens-after-you-connect).
       </Step>
     </Steps>
   </Tab>
@@ -82,42 +126,32 @@ Connect Azure so CloudThinker can inventory virtual machines, AKS clusters, data
 
 ### Microsoft Customer Agreement billing
 
-Pay-as-you-go subscriptions bought online usually sit on a Microsoft Customer Agreement (MCA). Cost Management rejects subscription-level queries for these with `Given subscription doesn't have valid WebDirect/AIRS offer type`, so [Optimize](/guide/cost-optimization/overview) reads spend at the billing profile instead.
+Only needed for Optimize on Microsoft Customer Agreement subscriptions. Pay-as-you-go subscriptions bought online usually sit on a Microsoft Customer Agreement (MCA). Cost Management rejects subscription-level queries for these with `Given subscription doesn't have valid WebDirect/AIRS offer type`, so [Optimize](/guide/cost-optimization/overview) reads spend at the billing profile instead.
 
-To allow that, go to **Cost Management + Billing → your billing account → Billing profiles → your profile → Access control (IAM) → Add** and assign **Billing profile reader** to the `cloudthinker` app. Subscription role assignments don't reach billing scopes.
+To check whether you're on an MCA, run this. An MCA shows `MicrosoftCustomerAgreement`:
+
+```bash
+az billing account list --query "[].{name:displayName, type:agreementType}" -o table
+```
+
+To allow billing-profile reads, go to **Cost Management + Billing → your billing account → Billing profiles → your profile → Access control (IAM) → Add** and assign **Billing profile reader** to the `cloudthinker` app. Subscription role assignments don't reach billing scopes. To confirm it worked, open Optimize and check that Azure spend loads.
 
 ## Connection details
-
-<Note>
-You get one Azure connection per workspace. It covers every subscription the service principal can read in one tenant. For a second tenant, use another workspace.
-</Note>
 
 | Field | What to enter | Example |
 |-------|---------------|---------|
 | **APP_ID** | Application (client) ID of the app registration | `00000000-0000-0000-0000-000000000000` |
 | **CLIENT_SECRET** | Secret value from **Certificates & secrets** | n/a |
 | **TENANT_ID** | Directory (tenant) ID of your Microsoft Entra ID | `00000000-0000-0000-0000-000000000000` |
-| **AZURE_DEFAULT_REGION** | Default region for Azure CLI calls, picked from a list of display names. Starts at **East US**. | `East US` |
+| **AZURE_DEFAULT_REGION** | Default region for Azure CLI calls, picked from a list of display names. Defaults to **East US**, which the Azure CLI calls `eastus`. | `East US` |
 
 There's no subscription field. CloudThinker works with every subscription the service principal can read. If it can read more than one, Optimize asks you to **Choose an Azure billing scope** the first time you open it.
-
-To add Reader on every subscription you can see, loop over them:
-
-```bash
-for SUB in $(az account list --query "[].id" -o tsv); do
-  az role assignment create --assignee <appId> --role Reader --scope /subscriptions/$SUB
-done
-```
-
-A management-group assignment covers new subscriptions automatically, but it also covers ones you may not want CloudThinker to read. Use the loop when you want an explicit list.
-
-After connecting, set **Environment** in **Edit Instance** so [approval rules](/guide/approvals/rules) can treat the connection correctly. **Not set** counts as production.
 
 ## Required permissions
 
 | Role | Scope | What it unlocks |
 |------|-------|-----------------|
-| **Reader** | Subscription | Resource inventory, role and policy reviews, health and performance checks |
+| **Reader** | Subscription | Resource inventory, role and policy reviews, health checks, and Azure Monitor metrics |
 | **Cost Management Reader** | Subscription | Spend, forecasts, and cost findings in Optimize |
 | **Billing profile reader** | MCA billing profile | Optimize on a Microsoft Customer Agreement subscription |
 | **Contributor** | Subscription or resource group | Optional. Lets CloudThinker change resources. See [Write access](#write-access). |
@@ -135,10 +169,12 @@ CloudThinker runs read-only Azure CLI commands without asking. Changes follow th
 | Area | What CloudThinker does |
 |------|------------------------|
 | **Cost** | Reads spend from Cost Management (pretax, with currency), finds unused resources and underused VMs |
-| **Identity and governance** | Reviews role assignments, RBAC, and Azure Policy |
+| **Identity and governance** | Reviews Azure RBAC role assignments and Azure Policy. Reader doesn't cover Microsoft Entra users, groups, or app registrations. |
 | **Compute and containers** | Inspects VMs, App Service, and AKS clusters |
 | **Data and storage** | Inspects SQL and other databases, storage accounts, and backups |
 | **Networking** | Reviews network boundaries, DNS zones, and connected Log Analytics workspaces |
+| **Monitoring** | Reads Azure Monitor metrics, such as VM CPU, to explain a spike or size a resource |
+| **Changes** | Runs Azure CLI writes only when **Allow writes** is on, the service principal's roles permit them, and your approval settings allow them |
 
 ### Verify the connection
 
@@ -166,6 +202,26 @@ List role assignments with Owner or Contributor on the production subscription
 | A write role granted | Off | Read-only. CloudThinker refuses every change before it reaches Azure. |
 | A write role granted | On | Agents can propose changes. Your [Rules and Approval mode](/guide/approvals/overview) decide each one. |
 
+To lock writes in CloudThinker as well, open **Microsoft Azure** in Connections and turn off the **Allow writes** switch on its detail panel.
+
+## Rotate the client secret
+
+Azure is a single-connection service, so it has no pencil icon or **Edit Instance** dialog while it's healthy.
+
+| When | How |
+|---|---|
+| Before the secret expires | Create a new secret, then click **Disconnect** on the **Microsoft Azure** detail panel and connect again with the new value. Delete the old secret afterwards. |
+| After it expires (the connection shows **Error**) | Create a new secret, then click **Replace credentials** on the detail panel and save the new value. |
+
+Rotating early costs more than replacing an expired secret, but don't let the secret expire to save that work: an expired secret means an outage until you replace it. Rotate early in a quiet period. Reconnecting starts a new connection:
+
+- Agents, automations, and Optimize can't use Azure between the disconnect and the reconnect.
+- Discovery runs again and spends credits.
+- **Allow writes** goes back to on. Turn it off again if you had it off.
+- Check that [Rules](/guide/approvals/rules) naming the Azure connection still list it.
+
+To create the new secret, run `az ad sp credential reset --id <appId> --append`, or use **Microsoft Entra ID → App registrations → your app → Certificates & secrets**. Without `--append`, the reset deletes the existing secrets, which breaks the connection right away.
+
 ## Troubleshooting
 
 <Accordion title="Sign-in blocked by security defaults">
@@ -173,15 +229,21 @@ List role assignments with Owner or Contributor on the production subscription
 </Accordion>
 
 <Accordion title="Authentication failed">
-**Cause:** a wrong APP_ID, CLIENT_SECRET, or TENANT_ID, an expired secret, or a conditional access policy.
+**Cause:** a wrong APP_ID, CLIENT_SECRET, or TENANT_ID, an expired secret, or a conditional access policy. The Microsoft Entra error code tells you which:
 
-**Fix:** check all three values and that the app registration lives in the tenant you entered. Confirm no conditional access policy blocks service principal sign-in.
+| Code | Meaning | Fix |
+|---|---|---|
+| `AADSTS7000215` | Invalid client secret | Paste the secret's **Value**, not its **Secret ID**, or create a new secret |
+| `AADSTS700016` | App not found in the tenant | Check **APP_ID**, and that the app is registered in the tenant you entered |
+| `AADSTS90002` | Tenant not found | Check **TENANT_ID** |
+
+**Fix:** if the values are right, confirm no conditional access policy blocks service principal sign-in.
 </Accordion>
 
 <Accordion title="Client secret expired">
 **Cause:** the secret reached its expiry date (one year by default from the CLI).
 
-**Fix:** run `az ad sp credential reset --id <appId> --append`, or create a new secret under **Microsoft Entra ID → App registrations → your app → Certificates & secrets**. Without `--append`, the reset deletes the existing secrets. Then click the pencil icon on the connection's row and use **Replace…** in **Edit Instance** to save the new value. See [Rotate a credential](/guide/connections/overview#rotate-a-credential).
+**Fix:** create a new secret, then click **Replace credentials** on the **Microsoft Azure** detail panel and save it. See [Rotate the client secret](#rotate-the-client-secret).
 </Accordion>
 
 <Accordion title="Optimize says Azure Cost Management is not readable">
@@ -199,15 +261,15 @@ List role assignments with Owner or Contributor on the production subscription
 <Accordion title="Resources or a subscription are missing">
 **Cause:** the service principal can't read that subscription.
 
-**Fix:** assign **Reader** on every subscription you expect to see.
+**Fix:** assign **Reader** on every subscription you expect to see. The optional loop step in the Azure CLI tab does it in one go. Role assignments can take up to about 10 minutes to apply, so wait before you ask again.
 </Accordion>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Expire and rotate secrets**: always set an expiration on the client secret and rotate it before it lapses.
-- **Scope the roles**: assign roles on the subscriptions CloudThinker needs, not at management group level by default.
+- **Expire and rotate secrets**: always set an expiration on the client secret and [rotate it](#rotate-the-client-secret) before it lapses.
+- **Scope the roles**: assign roles on the subscriptions CloudThinker needs. See the trade-off in the [cover more subscriptions](#setup) step.
 
 ## Related
 

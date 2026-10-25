@@ -1,6 +1,6 @@
 ---
 title: Firebase
-description: "Connect Firebase with a service-account key so CloudThinker can inventory apps, audit security rules, and check deploy state"
+description: "Connect Firebase with a service-account key so CloudThinker can inventory apps, audit security rules, and check deploy state."
 icon: "/images/icons/firebase.svg"
 ---
 
@@ -8,10 +8,7 @@ import ConnectionSecurity from '/snippets/connection-security.mdx';
 
 Connect Firebase so CloudThinker can list your projects and apps, read SDK configuration, audit Firestore, Storage, and Realtime Database security rules, and check deploy state. Firebase authenticates with a **Google Cloud service-account key** (a JSON file), and the service account's IAM roles decide what CloudThinker can reach.
 
-## Prerequisites
-
-- A Firebase project you want CloudThinker to inspect.
-- Permission in that project's Google Cloud to create service accounts and keys and to assign IAM roles.
+## Choose Firebase or Google Cloud
 
 | Connection | What it covers | Connect it when |
 |---|---|---|
@@ -20,47 +17,100 @@ Connect Firebase so CloudThinker can list your projects and apps, read SDK confi
 
 The two are separate. You can connect both to the same project, each with its own service account.
 
+## Prerequisites
+
+- A Firebase project you want CloudThinker to inspect.
+- Permission in that project's Google Cloud to create service accounts and keys and to assign IAM roles.
+- Service account key creation allowed. If your organization enforces `constraints/iam.disableServiceAccountKeyCreation` (the default on organizations created since May 2024), ask an organization policy admin for an exception on this project first.
+
 ## Setup
+
+Decide first how to cover several projects. Most teams use one connection per project.
+
+| Option | How it works | Best when |
+|---|---|---|
+| One connection per project | Each project gets its own service account, key, alias, and **Environment**. No switching. | You work across projects often, or want different approval rules per project |
+| One service account, many projects | One connection reaches every project the service account can see, but works on one active project at a time. Each switch asks for your approval. | You mostly work in one project and look at others now and then |
 
 <Warning>
 Don't use **Generate new private key** in Firebase **Project settings**. It creates a key for the default `firebase-adminsdk-…@<project-id>.iam.gserviceaccount.com` account, which has broad admin rights and which your own apps may depend on. Don't remove roles from that account either.
 </Warning>
 
+<Tabs>
+  <Tab title="Google Cloud console">
+    <Steps>
+      <Step title="Create a dedicated service account">
+        In the [Google Cloud console](https://console.cloud.google.com/), select the Firebase project and go to **IAM & Admin → Service Accounts**. Click **Create service account**, name it `cloudthinker-firebase`, and click **Create and continue**.
+      </Step>
+      <Step title="Grant a read-only Firebase role">
+        Add **Firebase Viewer** (`roles/firebase.viewer`) and click **Done**. Add a write role only if you want CloudThinker to create apps or deploy after your approval. See [Required permissions](#required-permissions).
+      </Step>
+      <Step title="Create a JSON key">
+        Open the service account, go to the **Keys** tab, and click **Add key → Create new key**. Choose **JSON** and click **Create**.
+
+        **Success state:** your browser downloads a `.json` key file.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="gcloud CLI">
+    Run these in [Cloud Shell](https://shell.cloud.google.com/) or any terminal signed in to Google Cloud.
+
+    ```bash
+    PROJECT_ID=your-firebase-project-id
+    SA=cloudthinker-firebase@$PROJECT_ID.iam.gserviceaccount.com
+
+    gcloud iam service-accounts create cloudthinker-firebase \
+      --project="$PROJECT_ID" --display-name="CloudThinker Firebase"
+
+    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+      --member="serviceAccount:$SA" --role="roles/firebase.viewer"
+
+    gcloud iam service-accounts keys create cloudthinker-firebase-key.json --iam-account="$SA"
+    ```
+
+    The last command writes the key to `cloudthinker-firebase-key.json`. In Cloud Shell, download it with `cloudshell download cloudthinker-firebase-key.json`, and once it's uploaded to CloudThinker, delete the Cloud Shell copy with `rm cloudthinker-firebase-key.json`. Bind a write role too only if you want CloudThinker to create apps or deploy after your approval. See [Required permissions](#required-permissions).
+  </Tab>
+</Tabs>
+
+Then connect it in CloudThinker:
+
 <Steps>
-  <Step title="Create a dedicated service account">
-    In the [Google Cloud console](https://console.cloud.google.com/), select the Firebase project and go to **IAM & Admin → Service Accounts**. Click **Create service account**, name it `cloudthinker-firebase`, and click **Create and continue**.
+  <Step title="Open the connect dialog">
+    In the sidebar, click **More → Workspace settings → Connections**, select **Firebase**, and click **Connect**.
   </Step>
-  <Step title="Grant a read-only Firebase role">
-    Add **Firebase Viewer** (`roles/firebase.viewer`) and click **Done**. Add **Firebase Admin** (`roles/firebase.admin`) only if you want CloudThinker to create apps or deploy after your approval.
+  <Step title="Name the connection">
+    Fill in **Alias** (for example `prod-firebase`) and **Description** (for example `Production Firebase project, mobile app`). Agents read the description to pick the right connection when you have several.
   </Step>
-  <Step title="Create a JSON key">
-    Open the service account, go to the **Keys** tab, and click **Add key → Create new key**. Choose **JSON** and click **Create**.
+  <Step title="Upload the key">
+    Drag the `.json` file onto the upload area, or click **choose a JSON file** to browse for it. Click **Connect**.
 
-    **Success state:** your browser downloads a `.json` key file.
+    **Success state:** the connection shows **Connected**, and the key's `project_id` is the active project. Discovery then runs once in the background and spends credits. It never waits for approval, so it skips project switches and deploy status checks. See [What happens after you connect](/guide/connections/overview#what-happens-after-you-connect).
   </Step>
-  <Step title="Add the connection in CloudThinker">
-    In the sidebar, click **More → Workspace settings → Connections**, select **Firebase**, and click **Connect**. Drag the `.json` file onto the upload area, or click the link in the upload area to browse for it. Click **Connect**.
-
-    **Success state:** the connection shows **Connecting** and **Verifying**, then a **Connected** status. CloudThinker reads `project_id` from the key and makes that the active project.
+  <Step title="Set the environment">
+    Open **Firebase** in Connections, click the pencil icon on the connection's row, and set **Environment** in **Edit Instance**, so [approval rules](/guide/approvals/rules) can treat it correctly. **Not set** counts as production.
   </Step>
 </Steps>
-
-After connecting, set **Environment** in **Edit Instance** so [approval rules](/guide/approvals/rules) can treat the connection correctly. **Not set** counts as production.
 
 ## Connection details
 
 | Field | What to enter | Example |
 |-------|---------------|---------|
+| **Alias** | Short name for this connection. Blank picks one for you. | `prod-firebase` |
+| **Description** | What the project is. Agents use it to choose between connections. | `Production Firebase project` |
 | **GOOGLE_SERVICE_ACCOUNT_KEY** | The service account's JSON key file, uploaded. Its `project_id` sets the active Firebase project. | `cloudthinker-firebase-key.json` |
 
-You don't need a separate project ID or a Firebase config file. One connection can reach every project the service account can see, but works on one active project at a time, and switching it needs your approval. You can also add a separate Firebase connection per project.
+You don't need a separate project ID or a Firebase config file. To cover several projects, see the options in [Setup](#setup).
 
 ## Required permissions
 
 | What you want | IAM role on the service account | Approval in CloudThinker |
 |---------------|---------------------------------|--------------------------|
 | Inventory projects and apps, read SDK config, audit security rules | Firebase Viewer (`roles/firebase.viewer`) | Not needed |
-| Switch the active project, create projects, apps, or Android SHA keys, initialize features, deploy, check deploy status | Firebase Admin (`roles/firebase.admin`) for creates, initialization, and deploys | Required for every call |
+| Switch the active project | Access to the target project, such as Firebase Viewer there | Required |
+| Check deploy status | Firebase Viewer (`roles/firebase.viewer`) | Required |
+| Create projects, apps, or Android SHA keys, initialize features, deploy | Firebase Admin (`roles/firebase.admin`), or a narrower role for one product, such as Firebase Hosting Admin (`roles/firebasehosting.admin`) or Firebase Rules Admin (`roles/firebaserules.admin`) | Required |
+
+Google requires more roles for some deploys. A Cloud Functions deploy, for example, also needs Cloud Functions Developer (`roles/cloudfunctions.developer`) and Service Account User (`roles/iam.serviceAccountUser`).
 
 <Tip>
 Firebase has no **Allow writes** switch. Every change goes through [Approvals](/guide/approvals/overview), and it only runs when the IAM role allows it too. Grant Firebase Viewer for audits.
@@ -105,15 +155,27 @@ Show the Firebase SDK config for my web app
 </Accordion>
 
 <Accordion title="CloudThinker says no active project is selected">
-**Cause:** the error reads `PRECONDITION_FAILED` and mentions the active project. CloudThinker sets the active project from the key's `project_id` when the connection starts. If it can't read one, no project is selected. The resource isn't missing.
+**Cause:** the error reads `PRECONDITION_FAILED` and mentions the active project. CloudThinker sets the active project from the key's `project_id` each time the connection starts. If the saved key can't be parsed, for example because it was edited before upload, no project is selected. The resource isn't missing.
 
-**Fix:** name the project in your prompt. Switching the active project asks for your approval.
+**Fix:** for this prompt, name the project. Switching the active project asks for your approval. To fix it for good, create a new JSON key and upload the downloaded file unchanged with **Replace…** in **Edit Instance**.
 </Accordion>
 
 <Accordion title="Permission denied on a project, rules, or deploy">
 **Cause:** the service account lacks the IAM role for that Firebase product, or the project isn't visible to it.
 
-**Fix:** grant the role in **Google Cloud console → IAM** and retry.
+**Fix:** in **Google Cloud console → IAM**, grant Firebase Viewer for reads and rules, or Firebase Admin (or the narrower role in [Required permissions](#required-permissions)) for creates and deploys. Then retry.
+</Accordion>
+
+<Accordion title="A project doesn't appear in the project list">
+**Cause:** the service account has no role in that project.
+
+**Fix:** in that project's **Google Cloud console → IAM**, grant the service account Firebase Viewer (`roles/firebase.viewer`), then ask again.
+</Accordion>
+
+<Accordion title="The test shows Timed out">
+**Cause:** the test didn't finish in time. Firebase endpoints are public, so it's rarely your network.
+
+**Fix:** connect again. If it keeps timing out, [contact us](https://cloudthinker.io/contact).
 </Accordion>
 
 <Accordion title="A create or deploy action didn't run">
@@ -126,8 +188,8 @@ Show the Firebase SDK config for my web app
 
 <ConnectionSecurity />
 
-- **Keep writes approval-gated**: create, initialize, and deploy actions should stay behind approval rather than lose the guardrail.
 - **Protect the key**: the JSON key is a full credential for the service account. Delete the local copy once it's uploaded, and never commit it or paste it into chat.
+- **Rotate the key at least every 90 days**: create a new key, upload it with **Replace…** in **Edit Instance**, then delete the old key. See [Rotate a credential](/guide/connections/overview#rotate-a-credential).
 
 ## Related
 

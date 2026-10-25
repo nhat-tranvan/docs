@@ -6,16 +6,22 @@ icon: "/images/icons/cassandra.svg"
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect Cassandra to let CloudThinker list keyspaces and tables, audit replication, TTL, and compaction settings, report node state as the driver sees it, and read rows by primary key. CloudThinker signs in with a Cassandra login role over the CQL native transport. New connections can request changes, and every change goes through your [approvals](/guide/approvals/overview). For a read-only connection, skip the change grants or turn off [Allow writes](#write-access).
+Connect Cassandra to let CloudThinker list keyspaces and tables, audit replication, TTL, and compaction settings, report node state as the driver sees it, and read rows by primary key. CloudThinker signs in with a Cassandra login role over the CQL native transport.
+
+<Note>
+**Allow writes** is on by default here. Changes come from a fixed set of single-row and single-setting operations, not arbitrary CQL, and every one goes through your [approvals](/guide/approvals/overview). Under the default Approval mode, AI can approve a change no Rule covers, so add an [Ask first Rule](#write-access) before you connect a production ring.
+</Note>
 
 ---
 
 ## Prerequisites
 
-- A Cassandra cluster reachable from CloudThinker on its CQL native transport port, `9042` by default.
+- A self-managed Apache Cassandra cluster reachable from CloudThinker on its CQL native transport port, `9042` by default. DataStax Astra isn't supported: it needs a secure connect bundle, and there's no field for one.
+- Authentication and authorization turned on: `authenticator: PasswordAuthenticator` and `authorizer: CassandraAuthorizer` in `cassandra.yaml`, applied with a rolling restart. A stock `cassandra.yaml` allows everyone, so `CREATE ROLE ... PASSWORD` and `GRANT` fail. See the [Apache Cassandra security docs](https://cassandra.apache.org/doc/latest/cassandra/managing/operating/security.html).
 - A superuser login to create a role, or a role someone created for you.
+- The workspace Admin role in CloudThinker to add the connection. See [How access works](/guide/connections/overview#how-access-works).
 - Two or three node addresses from the same datacenter. The driver finds the rest of the ring from them.
-- One Cassandra connection per workspace if you want changes. A second one turns writes off for both.
+- Plan for one Cassandra connection per workspace if agents will make changes (see the [Write access](#write-access) warning).
 
 <Info>
 This connection speaks CQL only. `nodetool` runs over JMX on a different port, so repair status, compaction backlog, and disk usage are out of reach.
@@ -47,10 +53,12 @@ This connection speaks CQL only. `nodetool` runs over JMX on a different port, s
     ```
   </Step>
   <Step title="Open network access">
-    The driver connects to every node it discovers, not only the contact points. Allow inbound `9042` from CloudThinker's egress IPs (ask your CloudThinker contact for the current list) to every node in the local datacenter, and check that each node's `broadcast_rpc_address` is reachable from CloudThinker.
+    The driver connects to every node it discovers, not only the contact points. Allow inbound `9042` from CloudThinker's egress IPs (see [Reaching private services](/guide/connections/overview#reaching-private-services)) to every node in the local datacenter, and check that each node's `broadcast_rpc_address` is reachable from CloudThinker.
+
+    There's no address translation. Nodes on private IPs behind NAT, or behind a single load balancer, aren't supported: the driver dials the private addresses the ring reports and fails. Set each node's `broadcast_rpc_address` to an address CloudThinker can reach.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Go to **Connections → Cassandra**, fill in the fields from [Connection details](#connection-details), and click **Connect**.
+    Go to **Connections → Cassandra**, fill in the fields from [Connection details](#connection-details), and click **Connect**. For a read-only connection, open **Connections → Cassandra** afterwards and turn off the **Allow writes** switch on the detail panel. It takes effect at once, with no reconnect. If you skipped step 3, Cassandra refuses every change in the meantime anyway. Turning off **Allow writes** also stops CloudThinker from proposing changes.
 
     CloudThinker connects with the driver and reads `system.local`.
 
@@ -69,7 +77,7 @@ This connection speaks CQL only. `nodetool` runs over JMX on a different port, s
 | **Role name** | Yes | The login role, for example `cloudthinker` | |
 | **Password** | Yes | The password set on that role | |
 | **Local datacenter** | No | Keeps reads in one datacenter on a multi-DC ring. Blank uses the datacenter of the node that answers | Blank |
-| **Use TLS** | Yes | Encrypts the session, including the role password | **Yes (default)** |
+| **Use TLS** | No | Encrypts the session, including the role password | **Yes (default)** |
 | **Verify the TLS certificate** | No | Set to **No** only for a self-signed or internal-CA certificate. Shown only when TLS is on | **Yes (default)** |
 
 There's no field for a custom CA or a client certificate, so mutual TLS isn't supported. For production, use a node certificate from a publicly trusted CA so verification can stay on.
@@ -102,8 +110,12 @@ Grant on named keyspaces, never `ON ALL KEYSPACES`. The grant decides what Cassa
 | **Inventory** | List keyspaces and tables with replication strategy and primary key shape |
 | **Schema audit** | Report replication factor, `default_time_to_live`, `gc_grace_seconds`, compaction, and secondary indexes |
 | **Ring health** | Report datacenters, racks, release versions, and schema agreement as the driver sees them |
-| **Row reads** | Read one partition by its key, capped at 100 rows. A scan across partitions runs only when you ask for one, with the same cap. It doesn't use `ALLOW FILTERING`, but the coordinator walks token ranges until the cap fills, so on a large or tombstone-heavy table it loads the cluster far more than the row count suggests |
+| **Row reads** | Read one partition by key, 100-row cap |
 | **Approved changes** | Change one row, one table setting, or one secondary index, from a fixed set of operations |
+
+<Warning>
+"Read rows in shop.events where user_id = 'u-42'" stays in one partition. A scan across partitions runs only when you ask for one, such as "scan shop.events", with the same 100-row cap. It doesn't use `ALLOW FILTERING`, but the coordinator walks token ranges until the 100-row cap fills. On a large or tombstone-heavy table, it loads the cluster far more than the row count suggests. Rules match only writes, so a Rule can't block a scan. To avoid one, ask for rows by partition key.
+</Warning>
 
 ### Verify the connection
 
@@ -127,7 +139,25 @@ Set the default TTL on shop.events to one day
 
 ## Write access
 
-New Cassandra connections have **Allow writes** on. To change it, open **Connections**, select Cassandra, and use the **Allow writes** switch on its detail panel. Turn it off and agents can only read. With it on, your [Rules](/guide/approvals/rules) and [Approval mode](/guide/approvals/approval-mode) decide each change.
+New Cassandra connections have **Allow writes** on. To change it, open **Connections → Cassandra** and use the **Allow writes** switch on its detail panel. You need the workspace Admin role. The change takes effect at once. Turn it off and agents can only read.
+
+Flipping the switch isn't recorded in **Admin Settings → Audit Logs**. For an auditable boundary, rely on the role's grants instead: without `MODIFY` and `ALTER`, Cassandra refuses every change whatever the switch says, and grant changes show up in Cassandra's own audit log if you turn it on (Cassandra 4.0 and later).
+
+With the switch on, your [Rules](/guide/approvals/rules) decide each change first, then your [Approval mode](/guide/approvals/approval-mode). New workspaces start on Auto mode with Rules plus AI, where unclear cases ask a person (shown as **Auto · Rules + AI · Ask me**). That means AI can approve a row delete with no person involved. For a production ring, add an **Ask first** Rule:
+
+<Steps>
+  <Step title="Ask for the Rule">
+    In a chat, type `/create-policy Ask first for every write on the Cassandra connection`.
+  </Step>
+  <Step title="Check the proposal">
+    Open **Approvals** in the sidebar, then **Rules → Needs review**, and open the Rule. Check that **Effect** is **Ask first**, the Rule carries the **Every operation** badge, and **Connections** names your Cassandra connection.
+  </Step>
+  <Step title="Accept it">
+    Select the Rule and click **Accept**.
+
+    **Success state:** a toast confirms the accepted Rule, and it moves to the **Active** tab.
+  </Step>
+</Steps>
 
 Changes are not arbitrary CQL. The connection carries a fixed set of operations:
 
@@ -146,6 +176,19 @@ What to know before you approve one:
 <Warning>
 Adding a second Cassandra connection to the same workspace turns writes off for both, because an approved change can't name which ring it targets. Keep one Cassandra connection per workspace while you need changes.
 </Warning>
+
+---
+
+## Rotate the password
+
+1. Set a new password on the role:
+   ```sql
+   ALTER ROLE cloudthinker WITH PASSWORD = 'new-secure-password';
+   ```
+   The old password stops working for new sessions, so finish step 2 right away.
+2. Open **Connections → Cassandra**, click the pencil icon on the instance's row, and in **Edit Instance** click **Replace…**. Enter the new **Password** and click **Save and test**.
+
+**Success state:** the test passes and the connection stays **Connected**. If the test fails, CloudThinker keeps the previous credentials and shows the error. Fix the value and save again.
 
 ---
 
@@ -171,6 +214,10 @@ Check whether the cluster expects TLS. For a self-signed or internal-CA certific
 
 <Accordion title="Local datacenter is not in this cluster">
 The name in **Local datacenter** doesn't match. The error lists the datacenters the cluster has. Copy one, or leave the field blank.
+</Accordion>
+
+<Accordion title="Connected, but queries time out or fail on some nodes">
+The contact points answered, but the driver can't reach the other nodes the ring reports. Open `9042` to every node in the local datacenter, and set each node's `broadcast_rpc_address` to an address CloudThinker can reach. See Setup step 4.
 </Accordion>
 
 <Accordion title="A change timed out">
@@ -200,5 +247,8 @@ A new secondary index answers queries only after its build finishes on every nod
   </Card>
   <Card title="ClickHouse Connection" icon="/images/icons/clickhouse.svg" href="/guide/connections/clickhouse">
     Connect a ClickHouse cluster for analytical queries
+  </Card>
+  <Card title="Connections overview" icon="plug" href="/guide/connections/overview">
+    How credentials and write controls work across connections
   </Card>
 </CardGroup>
