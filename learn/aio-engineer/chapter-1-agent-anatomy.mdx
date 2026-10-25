@@ -14,6 +14,8 @@ The [Leadership Edition](/learn/aio/chapter-4-architecture) names the outer pipe
 
 ```text
 loop (one step):
+  if budget exceeded or loop detected:       # step, token, time budgets; checked first
+      escalate with partial findings         # say what was checked and what wasn't
   context   = system_prompt + task + memory + retrieved_context + tool_results_so_far
   decision  = model.reason(context)          # hypothesis, plan, or tool selection
   if decision is tool_call:
@@ -21,7 +23,8 @@ loop (one step):
       append result to trajectory            # feeds the next step
   elif decision is conclusion:
       emit finding | plan | verification     # with evidence attached
-  guard: step budget, token budget, time budget, loop detector
+  elif decision is escalation:
+      hand to a human with evidence so far   # low confidence, or needs approval
 ```
 
 Three properties of this loop drive every design decision in the rest of the book:
@@ -34,7 +37,7 @@ Three properties of this loop drive every design decision in the rest of the boo
 
 ## 1.2 What a step really costs
 
-Think in unit economics from day one. A real investigation of a non-trivial incident runs tens of steps and hundreds of thousands of tokens once telemetry excerpts are in context. Independent benchmark harnesses cap agents at around a hundred turns per task for this reason, and publish token and cost curves next to accuracy.
+Think in unit economics from day one. A real investigation of a non-trivial incident runs many steps, and token use climbs fast once telemetry excerpts are in context. Independent benchmarks such as ITBench-AA publish turn, token, and cost curves next to accuracy for this reason ([Appendix D](/learn/aio-engineer/appendix-d-sources)). Use them to see the shape, then size your own cost from runs in your POC.
 
 Three consequences follow:
 
@@ -43,6 +46,14 @@ Three consequences follow:
 3. **Budgets are guardrails.** Production agents run with explicit step, token, time, and spend ceilings per task. They also need a **loop detector**: a check that notices the same tool being called with the same arguments to no new effect. An agent without budgets is a cost incident waiting for a quiet weekend.
 
 **When you evaluate a platform, ask:** what are the per-task budgets, what happens when one is hit, and where can you see tokens and steps per run?
+
+<Info>
+**IN PRACTICE: BUDGETS IN CLOUDTHINKER**
+
+Every CloudThinker run has a fixed cap on model calls, and each subagent gets its own cap. When a run reaches it, the run stops and says it reached its model-call budget before it could finish. Send a follow-up message to continue from where it stopped. The cap isn't a setting you change.
+
+Spend is capped per workspace with [Credit limits](/guide/billing/credit-limits): a monthly budget with **Throttle** or **Notify only** when it's reached. To see where credits went, open **Admin Settings → Usage** and switch between **By Feature**, **By User**, and **By Workspace** ([Usage and credits](/guide/billing/usage)). Usage is shown per feature, user, and workspace, not per run.
+</Info>
 
 ## 1.3 The determinism boundary
 
@@ -60,7 +71,7 @@ The pattern is **deterministic rails, generative core**. The model chooses; code
 <Info>
 **IN PRACTICE: READ-ONLY VERSUS CHANGE-MAKING COMMANDS**
 
-When CloudThinker uses one of your [runbooks](/guide/incident/runbooks) during a Resolve investigation, it treats read-only commands (like `kubectl get pods`) differently from commands that change something (like `kubectl rollout restart`). Read-only commands run without waiting. A change-making command stops at **Action requires approval** until a person decides, and every attempt lands on the **Execution history** tab with its policy decision, approval, and outcome. Which actions need a person is set by your [Approvals](/guide/approvals/overview) rules and mode. Ask the same question of any platform: where does reasoning end and execution begin, and who signs off on the crossing?
+When CloudThinker uses one of your [runbooks](/guide/incident/runbooks) during a Resolve investigation, it treats read-only commands (like `kubectl get pods`) differently from commands that change something (like `kubectl rollout restart`). Read-only commands run without waiting. A change-making command stops at **Action requires approval** until a person decides, and every attempt lands on the **Execution history** tab with its policy decision, approval, and outcome. For an uploaded runbook, an AI model reads the fenced code blocks at upload and records the commands that change something. If that step fails, a fixed list of look-only commands (such as `kubectl get` and `kubectl logs`) decides, and anything not on the list counts as change-making ([Runbooks](/guide/incident/runbooks)). Which actions need a person is set by your [Approvals](/guide/approvals/overview) rules and mode, after the built-in [Always blocked](/guide/approvals/overview#how-a-write-is-decided) list refuses calls that never run. Ask the same question of any platform: where does reasoning end and execution begin, and who signs off on the crossing?
 </Info>
 
 ## 1.4 Verification is what makes it an agent
@@ -71,6 +82,14 @@ Two rules for verification:
 
 - **Check independent signals.** A cleared alert is not proof. The restart that masked the fault can also clear the alert, a failure mode documented in public benchmarks ([Chapter 7](/learn/aio-engineer/chapter-7-evaluating-agents)). Verify against a signal the fix couldn't have silenced, such as an SLO probe or a before/after state diff.
 - **Give verification a deadline.** Set an explicit soak window. When it ends, the system either declares success with evidence or escalates with a rollback already staged.
+
+<Info>
+**IN PRACTICE: VERIFYING A RESOLVE FIX**
+
+Each Resolve investigation that reaches a disposition writes a recollection to [incident memory](/guide/incident/incident-memory). Its `Verify-with:` line names one scoped check, its target, and the expected result, for example "5xx rate on tg-checkout over 15 minutes; expected below 1%". That line is the soak window and the independent signal.
+
+When CloudThinker applied a fix and recorded that check, it proposes a follow-up as a card in the conversation. Click **Enable** to schedule it. The check marks the fix **Verified** or **Failed**. A failed fix stays on record as a counter-example, so later investigations don't repeat it. When the same symptom comes back, CloudThinker runs the old `Verify-with:` check first, and if it fails, investigates the current fault on its own terms.
+</Info>
 
 <Tip>
 **KEY TAKEAWAY**

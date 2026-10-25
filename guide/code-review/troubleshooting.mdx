@@ -21,7 +21,7 @@ And in CloudThinker:
 
 | What you see in CloudThinker | Go to |
 |---|---|
-| **Review** page says **Reconnect your Git provider** | [Provider auth errors](#provider-auth-errors) |
+| The **Review** page header, on any Review tab, says **Reconnect your Git provider** | [Provider auth errors](#provider-auth-errors) |
 | A repository shows **No access** or **Setup failed** in **Review → Settings → Repositories** | [Repository problems](#repository-problems) |
 
 ## No comment on a new PR
@@ -33,15 +33,25 @@ CloudThinker posts a progress comment within moments of a PR opening, then repla
     Draft PRs and MRs aren't reviewed. Mark the PR ready for review and CloudThinker picks it up. (AWS CodeCommit has no drafts, so this doesn't apply there.)
   </Step>
   <Step title="Check the repository is selected">
-    Open **Review → Settings → Repositories** and find the repository. It should show **On**. If it isn't listed, add it. If it shows **Setting up**, the first clone is still running.
+    Open **Review → Settings → Repositories** and find the repository. Its **Review** switch should be on. If it isn't listed, add it. If it shows **Cloning**, the first clone is still running.
   </Step>
   <Step title="Check the webhook (GitLab, Azure DevOps, AWS CodeCommit)">
     GitHub and Bitbucket register webhooks for you. The other three need one you add by hand, and a missing or wrong one is the most common cause of silence.
 
     Open the webhook's delivery history in your provider:
 
+    | Provider | Where to look |
+    |---|---|
+    | GitLab | The project's **Settings → Webhooks**, then **Edit** on the CloudThinker webhook and **Recent events** |
+    | Azure DevOps | **Project settings → Service hooks**, then the hook's **History** |
+    | AWS CodeCommit | Amazon EventBridge in the repository's region: check the rules named `CloudThinker-CodeCommit-*` exist |
+
+    What the history tells you:
+
     - **No deliveries:** the webhook is missing or lacks the trigger. Re-add it with the URL, secret token and triggers from [Configure webhooks](/guide/code-review/provider-auth#configure-webhooks).
-    - **Failed deliveries (4xx):** the secret token doesn't match. Copy it again from the setup wizard and update the webhook.
+    - **Failed with 403 "Repository is not enabled for Review":** turn on the repository's **Review** switch in **Review → Settings → Repositories**.
+    - **Other 4xx failures:** the URL or secret token doesn't match. Copy both again from the setup wizard and update the webhook.
+    - **5xx failures:** CloudThinker couldn't process the event. Redeliver it from the delivery history. If it keeps failing, contact support (see [Still stuck](#still-stuck)).
     - **Successful deliveries but still nothing:** go to the next step.
   </Step>
   <Step title="Start the review by hand">
@@ -62,7 +72,7 @@ When CloudThinker decides not to review a PR, it says so in a **CloudThinker Cod
 | The comment says | Cause | Fix |
 |---|---|---|
 | "This merge request was filtered based on your repository configuration." | A repository filter matched. An **Exclude** filter matched, or an **Include** filter didn't | Edit the repository's filters in **Review → Settings → Repositories**. See [filters](/guide/code-review/setup#filter-which-prs-get-reviewed) |
-| "Code review is disabled for this repository." | Review is off for this repository | A workspace Admin turns it on in **Review → Settings → Repositories** |
+| "Code review is disabled for this repository." | Review is off for this repository | A workspace Admin turns it on in **Review → Settings → Repositories**. See [roles](/guide/security/roles) |
 | "Code review skipped: the description turns reviews off." | The PR description contains `@cloudthinker:ignore` | Remove the marker from the description, then comment `@cloudthinker-ai review` |
 | "CloudThinker could not sync this repository, so the review did not run." | The repository clone failed | See [Repository problems](#repository-problems) |
 
@@ -82,9 +92,9 @@ Findings posted before a stop stay valid. You only lose the summary.
 | **Did Not Finish**: "CloudThinker could not open the source at this commit." | Comment `@cloudthinker-ai review` to run it again. If it fails again, check the branch still exists and the token can read it |
 | **Did Not Finish**: "&lt;provider&gt; was unavailable." | Your Git provider had an outage. Comment `@cloudthinker-ai review` once it's back |
 | **Did Not Finish**: "We will run it again automatically when our service is back" | Nothing. CloudThinker re-runs it for you |
-| **CloudThinker Code Review Did Not Start** | Retry from the link in the comment, or comment `@cloudthinker-ai review` |
+| **CloudThinker Code Review Did Not Start** | Comment `@cloudthinker-ai review`, or re-run it from **Review → Reviews** as described below |
 
-You can also restart from CloudThinker: open the PR in **Review → Reviews**, then click **Re-run review** in the **⋯** menu. Wait for the earlier run to end first.
+You can also restart from CloudThinker: open the PR in **Review → Reviews**, then click **Re-run review** in the **⋯** menu. While a run is still going, that menu shows **Stop review** in its place, so wait for it to end or stop it first.
 
 ## Re-review a PR
 
@@ -94,7 +104,7 @@ Pushing new commits to an open PR starts an incremental review on its own: only 
 @cloudthinker-ai review
 ```
 
-`@cloudthinker-ai review again`, `@cloudthinker-ai continue` and `@cloudthinker-ai continue review` do the same. The review restarts from the last reviewed commit.
+`@cloudthinker-ai review again`, `@cloudthinker-ai continue` and `@cloudthinker-ai continue review` do the same. All of them continue from the last reviewed commit. There's no command for a full review from the first commit. For a deeper pass over the latest commit, comment `@cloudthinker-ai review ultra` (see [Ultra review](/guide/code-review/mention-commands#run-an-ultra-review)). If Ultra is off for your installation, the bot replies **Ultra review is turned off for this installation.**
 
 <Warning>
   The command must be the whole comment. `@cloudthinker-ai review this file carefully` is read as a question, not a re-review, so you get an answer instead of a new review.
@@ -113,14 +123,16 @@ Pushing new commits to an open PR starts an incremental review on its own: only 
 
 ## Provider auth errors
 
-When the Git provider rejects CloudThinker's credentials, the **Review** page shows **Reconnect your Git provider** and an **Authentication Error** alert. Reviews stop until you fix it. Your repositories and settings are kept.
+When the Git provider rejects CloudThinker's credentials, the **Review** page header shows **Reconnect your Git provider**, with an **Authentication Error** alert. Reviews stop until you fix it. Your repositories and settings are kept.
 
 | The alert says | Button | What to do |
 |---|---|---|
 | "Your &lt;provider&gt; OAuth connection has expired. Reconnect to continue." (GitLab, Bitbucket) | **Reconnect with &lt;provider&gt;** | Click it and approve access again |
-| "Your &lt;provider&gt; access token is not valid or has expired. Update the token to continue." | **Update Token** | Create a new token with the same scopes, paste it, and save |
-| "Your AWS CodeCommit credentials are invalid or have expired. Update your credentials to continue." | **Update Credentials** | Paste a new role ARN or access key |
+| "Your &lt;provider&gt; access token is not valid or has expired. Update the token to continue." | **Update Token** | It opens a token dialog. Create a new token with the same scopes, paste it, and save |
+| "Your AWS CodeCommit credentials are invalid or have expired. Update your credentials to continue." | **Update Credentials** | Paste a new role ARN or access key. The setup script in [AWS CodeCommit](/guide/code-review/provider-auth#aws-codecommit) creates both with the permissions Review needs |
 | "Your git provider connection needs attention. Please reconnect from Settings." | None | Open **Review → Settings** and reconnect from the **Connection** section |
+
+GitHub has no token to update, because it uses the CloudThinker GitHub App. If GitHub reviews stop, the app was uninstalled or lost access to the repository: reinstall it, or add the repository in the app's settings on GitHub. Installing to an organization needs an organization Owner.
 
 **Success state:** the **Review** page loads normally. Comment `@cloudthinker-ai review` on any PR that opened while the connection was down.
 
@@ -128,7 +140,6 @@ The token scopes for each provider are in [Provider authentication](/guide/code-
 
 - **GitLab:** the token's role is below **Developer**, or it lacks the `api` scope. Guest and Reporter can't comment on MRs.
 - **Azure DevOps:** the personal access token (PAT) expired. PATs expire on the date set at creation, so note it and replace the token before then.
-- **GitHub:** the CloudThinker GitHub App was uninstalled or lost access to the repository. Reinstall it, or add the repository in the app's settings on GitHub. Installing to an organization needs an organization Owner.
 
 ## Repository problems
 
@@ -136,14 +147,34 @@ In **Review → Settings → Repositories**, a row under the repository name can
 
 | Status | Meaning | Fix |
 |---|---|---|
-| **Setting up** or **Cloning** | First clone is running. PRs opened now get reviewed once it finishes | Wait |
-| **Setup failed** | The clone didn't finish. Hover for the error | Click **Retry**. Needs edit permission for Review |
-| **Setup cancelled** | Someone cancelled the clone | Click **Retry** |
-| **No access** | The token can't read this repository | Click **Update token** and use a token that covers it |
+| **Cloning** | First clone is running. PRs opened now get reviewed once it finishes | Wait |
+| **Setup failed** | The clone didn't finish. Hover for the error | Click **Retry**. Needs the workspace Admin role |
+| **Setup cancelled** | Someone cancelled the clone | Click **Retry**. Needs the workspace Admin role |
+| **No access** | CloudThinker's credentials can't read this repository | Click **Update token** and use a token that covers it. On GitHub, add the repository in the CloudThinker GitHub App's settings on GitHub |
+
+When none of these apply, the row shows the default branch. The **Review** switch in the same row turns reviews on or off, and the **Learnings** column can show **Paused while Review is off** (see [Learnings](/guide/code-review/convention-rules#troubleshooting)).
+
+## Findings are wrong or noisy
+
+| What you want | Do this |
+|---|---|
+| Tell Review a finding is wrong | Thumbs-down the finding and describe the mistake in the **Inaccurate finding** note. Later reviews on that repository get your recent notes as context, so they don't raise the same finding again on unchanged code. See [vote on accuracy](/guide/code-review/review-workspace#work-the-findings) |
+| Stop a learned rule from firing | Retire the Learning. See [retire or restore a Learning](/guide/code-review/convention-rules#retire-or-restore-a-learning) |
+| Teach a standard Review keeps missing | Write it in a convention file such as `AGENTS.md`. See [add your own convention files](/guide/code-review/convention-rules#add-your-own-convention-files) |
+
+## Other Review features
+
+| Problem with | See |
+|---|---|
+| Learnings or convention files | [Learnings troubleshooting](/guide/code-review/convention-rules#troubleshooting) |
+| Failed CI runs and pipeline analysis | [Pipelines troubleshooting](/guide/code-review/pipelines#troubleshooting) |
+| Release reports | [Releases troubleshooting](/guide/code-review/releases#troubleshooting) |
+| Ticket links | [Extensions troubleshooting](/guide/code-review/extensions#troubleshooting) |
+| Insights and reports | [Insights troubleshooting](/guide/code-review/analytics#troubleshooting) |
 
 ## Still stuck
 
-Collect the PR link, the provider, the time you opened it and the text of any CloudThinker comment, then contact support through the in-app help. The [general troubleshooting](/guide/troubleshooting) page covers problems outside Review.
+Collect the workspace name, the repository, the PR link, the provider, the time you opened the PR and the text of any CloudThinker comment. Then email [support@cloudthinker.io](mailto:support@cloudthinker.io). The [general troubleshooting](/guide/troubleshooting) page covers problems outside Review.
 
 ## Next steps
 

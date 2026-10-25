@@ -1,7 +1,7 @@
 ---
 title: "Chapter 4 · Orchestration and Two-Engine Economics"
 description: "Design agent handoffs, shared incident state, and a two-engine cost model you can measure at your own signal volume."
-icon: sitemap
+icon: diagram-project
 ---
 
 *Multi-agent design is a set of engineering trade-offs about context, credentials, latency, and cost. This chapter gives you the mechanics behind the reference architecture and the three numbers that tell you whether 24/7 agent coverage pays for itself.*
@@ -20,7 +20,7 @@ The **orchestrator** is the agent that receives the work, splits it up, and owns
 
 Helpers extend the orchestrator. They never compete with it. That gives you one audit trail, one approval surface, and one place that can answer "what is the system doing right now?"
 
-The published evidence cuts both ways (sources in [Appendix D](/learn/aio-engineer/appendix-d-sources)). Anthropic reports large quality gains from an orchestrator-worker pattern with parallel helpers, at a materially higher token cost. Microsoft's Azure SRE Agent team went the other way, collapsing many micro-agents and more than a hundred tools into a few generalists with core tools.
+The published evidence cuts both ways (sources in [Appendix D](/learn/aio-engineer/appendix-d-sources)). Anthropic reports that a multi-agent system (a Claude Opus 4 lead with Claude Sonnet 4 helpers) outperformed a single Claude Opus 4 agent by 90.2% on its internal research eval, while multi-agent systems used about 15 times more tokens than chat. Microsoft's Azure SRE Agent team went the other way, collapsing many micro-agents and more than a hundred tools into a few generalists with core tools.
 
 Use both lessons:
 
@@ -42,8 +42,6 @@ With structured returns, the integration step has something concrete to reconcil
 
 Parallelism follows naturally. Independent subtasks can fan out at the same time to cut latency, but only when they can't write to the same thing. Two helpers changing one system at once is a race condition.
 
-> *Figure 2: A delegation contract carries an objective, scoped context, a budget, and a return schema. Handoffs are typed, integration is evidenced, and the audit trail survives.*
-
 <Info>
 **IN PRACTICE: SUBAGENTS IN CLOUDTHINKER**
 
@@ -51,7 +49,15 @@ CloudThinker uses one built-in assistant, also called CloudThinker, as the orche
 
 - During an incident investigation, CloudThinker hands focused checks (logs, metrics, traces, recent changes, dependencies) to subagents and merges their results into one verdict. See [Investigation and RCA](/guide/incident/root-cause-analysis).
 - By default, a subagent is refused any tool that changes your systems. Changes stay with the orchestrator, where [Approvals](/guide/approvals/overview) applies.
-- When a subagent fails, the parent gets a fixed failure code (such as a timeout or a refused start), a short redacted message, and one suggested next action, so it can recover instead of guessing.
+- When a subagent fails, the parent gets a fixed failure code, a short redacted message, and one suggested next action, so it can recover instead of guessing:
+
+| Code | Meaning | Suggested next action |
+|---|---|---|
+| `CHILD_START_REFUSED` | The subagent couldn't start with this input | Don't retry the same brief |
+| `CHILD_TIMED_OUT` | The subagent ran out of time | Retry once with a smaller task |
+| `CHILD_STORE_UNAVAILABLE` | A storage dependency failed | Retry the same brief once |
+| `CHILD_RUN_FAILED` | The run failed with a known error | Report it, or retry once when the error is retryable |
+| `CHILD_INTERNAL_ERROR` | An unexpected error | Don't retry; report it |
 </Info>
 
 ## 4.3 The two-engine economics, quantified
@@ -78,18 +84,30 @@ Three numbers are your unit economics. Put them on the Chapter 8 dashboard:
 | **Cost per investigation** | Resolver spend ÷ investigations | Whether budgets and context discipline are working |
 | **Cost per resolved incident** | Total spend (both engines) ÷ incidents resolved | Whether 24/7 coverage is viable at your scale |
 
-A worked example with made-up round numbers (not CloudThinker prices): 20,000 signals a day at a 0.5% promotion rate is 100 investigations a day. Halving the promotion rate to 0.25% halves resolver spend without touching the sensing bill. Raising signal volume tenfold at the same promotion rate barely moves the sensing bill but multiplies resolver spend tenfold. That's why promotion rate is the dial to watch.
+A worked example with made-up round numbers (not CloudThinker prices):
 
-A second lever on the same seam: routine, well-understood daily work doesn't need frontier reasoning. Small fine-tuned models can handle the high-volume cases, with frontier models kept for novel investigations. For regulated teams, this pairs with self-hosted deployment for full control of the model.
+| Input | Value |
+|---|---|
+| Signals a day | 20,000 |
+| Promotion rate | 0.5%, so 100 investigations a day |
+| Sensing cost | $200 a day, flat |
+| Cost per investigation | $2, so $200 a day of resolver spend |
+| Incidents resolved | 80 a day |
+| **Cost per resolved incident** | ($200 + $200) ÷ 80 = **$5** |
+
+Halve the promotion rate to 0.25% and resolver spend drops to $100, so cost per resolved incident falls toward $3.75 if the same real incidents still get through. Raise signal volume tenfold at the same promotion rate and the sensing bill barely moves, but resolver spend grows to $2,000 a day. That's why promotion rate is the dial to watch.
+
+A second lever on the same seam, as a general pattern: routine, well-understood daily work doesn't need frontier reasoning. Small fine-tuned models can handle the high-volume cases, with frontier models kept for novel investigations. Regulated teams often pair this with self-hosted deployment for full control of the model. In CloudThinker, the closest levers are model tiers (keep routine work on **Light**, see [Usage and credits](/guide/billing/usage)) and a self-hosted or air-gapped deployment, which is in early access through a design-partner program ([Deployment options](/guide/deployment/overview)).
 
 <Info>
 **IN PRACTICE: PULSE AND INVESTIGATIONS IN RESOLVE**
 
 [Resolve](/guide/incident/overview), CloudThinker's incident response module, ships this split.
 
-- **Sensing: [Pulse](/guide/pulse/overview).** Pulse takes every alert your tools send, drops noise with four suppression checks, groups related signals into clusters, classifies each cluster, and sends only actionable ones to triage. Pulse never opens an incident by itself.
+- **Sensing: [Pulse](/guide/pulse/overview).** Pulse takes every alert your tools send, drops noise with four checks in order (dedup, rate limit, snooze, and learned noise verdicts; see [noise suppression](/guide/pulse/clusters#noise-suppression)), groups related signals into clusters, classifies each cluster, and sends only actionable ones to triage. Pulse never opens an incident by itself.
 - **Resolving: [investigation](/guide/incident/root-cause-analysis).** Investigations run only on incidents. You control what wakes the resolver with **Auto-investigate** and **Only from a minimum severity** on each webhook under **Resolve → Integrations**, and the **On duty** switch under **Resolve → Investigation**. See [Resolve settings](/guide/incident/settings).
-- **Measuring.** [Pulse analytics](/guide/pulse/analytics) shows raw events in, **Noise suppressed**, and signals collapsing into clusters, which is your promotion picture.
+- **Measuring.** Open **Resolve → Insights** and the **Pulse analysis** tab ([Pulse analytics](/guide/pulse/analytics)). **Signals ingested** is your denominator. **Correlation yield** (signals whose cluster was linked to an incident or resolved, divided by all signals) is the closest built-in figure to promotion rate; it also counts clusters that resolved without an incident. **Noise suppressed** shows what sensing filtered out.
+- **Costing.** Credits aren't shown per investigation. **Admin Settings → Usage**, under **By Feature**, shows which capability used the credits over a time range; divide by the investigations in that range for an average cost per investigation ([Usage and credits](/guide/billing/usage)).
 - **Capping spend.** [Credit limits](/guide/billing/credit-limits) set a monthly budget per workspace, with **Throttle** or **Notify only** when it's reached.
 
 Whatever platform you evaluate, ask for its promotion rate and cost per resolved incident at a reference scale. If it can't answer, it hasn't run at scale.

@@ -10,6 +10,7 @@ When an open merge request or pull request (MR/PR) conflicts with its target bra
 
 - A repository connected in [Review setup](/guide/code-review/setup) on GitHub, GitLab, Bitbucket, or AWS CodeCommit. Azure DevOps isn't supported.
 - The workspace Admin role to change the setting (see [Roles](/guide/security/roles)).
+- A provider connection that can push new branches and open MR/PRs. The write scopes in [Provider authentication](/guide/code-review/provider-auth) cover this.
 
 ## Turn on auto-resolve
 
@@ -21,6 +22,8 @@ When an open merge request or pull request (MR/PR) conflicts with its target bra
     Turn on **Auto-resolve conflicts**.
 
     **Success state:** the switch stays on. The next time an open MR/PR conflicts with its target branch, CloudThinker posts a status comment on it.
+
+    Turning it on doesn't scan MR/PRs that already conflict. CloudThinker acts on one the next time it gets an event for it, such as a push to its source branch.
   </Step>
 </Steps>
 
@@ -32,11 +35,15 @@ A conflict usually appears after someone pushes to the target branch (or your so
 
 1. Posts a **CloudThinker Conflict Resolution In Progress** comment on your MR/PR.
 2. Creates a branch from your MR/PR's source branch, named with a `cloudthinker/` prefix, and **merges** the latest target branch into it. It never rebases, so your history stays as it is.
-3. Resolves each conflict, keeping your MR/PR's side when a file was renamed, deleted, added on both sides, or is binary.
+3. Resolves each text conflict with an agent edit, and keeps your MR/PR's side when a file was renamed, deleted, added on both sides, or is binary.
 4. Checks that the result contains the latest commits from both branches, then pushes it.
 5. Opens a follow-up MR/PR titled `fix: resolve merge conflicts for <your MR/PR>` that targets your source branch, and links it from the status comment and the **Resolution MR** (or **Resolution PR**) link on the Reviews list.
 
 CloudThinker never merges for you and never force-pushes your branch.
+
+<Warning>
+  For renamed, deleted, both-added and binary files, the target branch's version is dropped. Check those files in the follow-up diff, and test the agent's text resolutions before you merge.
+</Warning>
 
 ## Merge the follow-up
 
@@ -45,7 +52,7 @@ CloudThinker never merges for you and never force-pushes your branch.
     Click the link in the status comment, or **Resolution MR** next to the MR/PR on **Review → Reviews**.
   </Step>
   <Step title="Review the resolution">
-    Read the diff the way you'd read any change. CloudThinker doesn't run a code review on its own follow-up branches.
+    Read the diff the way you'd read any change. CloudThinker doesn't run a code review on its own follow-up branches, so wait for your CI to pass on the follow-up before you merge.
   </Step>
   <Step title="Merge it into your source branch">
     Merge it on your provider.
@@ -55,7 +62,7 @@ CloudThinker never merges for you and never force-pushes your branch.
 </Steps>
 
 <Note>
-  On GitLab, merge the follow-up **without squash**. Squashing drops the merge history GitLab needs to see the original conflict as resolved.
+  Merge the follow-up **without squash**, on any provider. Squashing drops the merge history your provider needs to see the original conflict as resolved.
 </Note>
 
 ## Status comments
@@ -64,11 +71,11 @@ CloudThinker keeps one status comment on your MR/PR and edits it in place:
 
 | Comment | Meaning | What to do |
 |---|---|---|
-| 🔄 **In Progress** | A run is creating or updating the follow-up MR/PR | Wait |
-| ✅ **Complete** | The follow-up is ready, and the comment links to it | Review and merge it |
-| ✅ **Already Resolved** | The conflict was fixed outside CloudThinker, for example by a rebase | Nothing |
-| ✅ **No Changes Needed** | Resolving produced no changes, so your MR/PR is usually already mergeable | Nothing |
-| ⚠️ **Failed** | The run was interrupted before it could publish a resolution | Nothing. CloudThinker retries on the next push to the target branch |
+| **CloudThinker Conflict Resolution In Progress** | A run is creating or updating the follow-up MR/PR | Wait |
+| **CloudThinker Conflict Resolution Complete** | The follow-up is ready, and the comment links to it | Review and merge it |
+| **CloudThinker Conflict Resolution: Already Resolved** | The conflict was fixed outside CloudThinker, for example by a rebase | Nothing |
+| **CloudThinker Conflict Resolution: No Changes Needed** | Resolving produced no changes, so your MR/PR is usually already mergeable | Nothing |
+| **CloudThinker Conflict Resolution Failed** | The run was interrupted before it could publish a resolution | CloudThinker retries on the next update to the target branch. If that branch is quiet, resolve the conflict on your provider |
 
 <Frame>
   <img src="/images/code-review/04-conflict-resolution-complete-comment.png" alt="CloudThinker Conflict Resolution Complete comment on a GitLab merge request, linking to the follow-up MR" />
@@ -89,12 +96,14 @@ Auto-resolve isn't a mention command. `@cloudthinker-ai autofix` fixes review fi
   </Accordion>
   <Accordion title="A conflicting MR/PR got no status comment">
     **Check:** auto-resolve is on and the MR/PR is open. CloudThinker only acts on MR/PRs it already tracks, so it must have received a webhook for that MR/PR.
+
+    **Fix:** push a commit to the MR/PR's source branch. That sends CloudThinker a new event, and it checks for conflicts before it reviews.
   </Accordion>
   <Accordion title="The comment says Failed">
-    **Cause:** the run stopped before it could push, for example on a sandbox or network error. **Fix:** nothing. The next push to the target branch retries, and the same comment switches back to **In Progress**.
+    **Cause:** the run stopped before it could push, for example on a sandbox or network error. **Fix:** the next update to the target branch retries, and the same comment switches back to **In Progress**. If you can't wait, resolve the conflict on your provider.
   </Accordion>
-  <Accordion title="My original MR still shows a conflict after merging the follow-up on GitLab">
-    **Cause:** the follow-up was squash-merged. **Fix:** resolve the remaining conflict on GitLab, and next time merge the follow-up without squash.
+  <Accordion title="My original MR/PR still shows a conflict after merging the follow-up">
+    **Cause:** the follow-up was squash-merged. **Fix:** resolve the remaining conflict on your provider, and next time merge the follow-up without squash.
   </Accordion>
 </AccordionGroup>
 

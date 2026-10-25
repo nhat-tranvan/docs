@@ -9,33 +9,40 @@ tag: "Beta"
 A Worker is a folder on a machine you run (a laptop, a server, or a CI runner) where CloudThinker can read files and run commands. You pick a Worker before a chat starts, and the agent works there instead of in CloudThinker Cloud, the hosted environment every chat uses by default.
 
 <Note>
-**Beta.** Workers ship with the [CloudThinker CLI](/guide/cli/overview), which is in early access. Command names and flags may change before general availability.
+**Beta.** Workers run on the [CloudThinker CLI](/guide/cli/overview), which is also in beta. Command names and flags may change before general availability. The CLI calls a Worker an **outpost**, so you'll see `--outpost` in commands.
 </Note>
 
 ## Why use a Worker
 
 - **Work where your code lives.** The agent edits files and runs your own tools in a private repository or on an internal host, with no inbound port opened. The Worker connects outward over HTTPS.
-- **Credentials stay in the cloud.** Commands that use a workspace connection, such as AWS or Kubernetes, still run in the CloudThinker managed sandbox. The credential never reaches your machine.
+- **Connection credentials stay in the cloud.** Commands that use a workspace connection, such as AWS or Kubernetes, still run in the CloudThinker managed sandbox. That credential never reaches your machine. The agent's shell can still use any credentials already on the machine, such as `~/.aws` or `~/.kube/config`, so run the Worker under an account without them if that matters.
 - **Your folder's rules apply.** The agent follows the instruction files and Skills you keep in the folder.
 - **Personal or shared.** Only you can use a personal Worker. A shared Worker is available to everyone in the workspace, including Automations.
 
 ## Prerequisites
 
-- The CloudThinker CLI installed on the machine, on Linux or macOS. See [CLI](/guide/cli/overview).
-- A folder you want the agent to work in, such as a repository checkout.
-- To create a shared Worker: workspace settings permission (workspace Admin). See [Roles](/guide/security/roles).
-- **Allow Workers** turned on in workspace settings. It is on unless an admin turned it off.
+- The CloudThinker CLI installed on the machine, on Linux or macOS. There is no native Windows build. See [CLI](/guide/cli/overview).
+- Outbound HTTPS (port 443) from the machine to `app.cloudthinker.io`, directly or through `HTTPS_PROXY`. If your proxy re-signs HTTPS, set `SSL_CERT_FILE` to your company CA bundle.
+- A folder you want the agent to work in, such as a repository checkout. For **New worktree**, it must be a git repository and the machine needs git 2.38 or newer.
+- To create a shared Worker: the workspace Admin role. See [Roles](/guide/security/roles).
+- **Allow Workers** turned on in [workspace settings](/guide/workspaces#open-workspace-settings) under **General**. It's on unless a workspace admin turned it off.
+
+The dashboard setup below doesn't need `cloudthinker login` on the machine. The setup command enrolls the Worker by itself. The terminal-only setup does need a login.
 
 ## Set up a Worker
 
 <Steps>
   <Step title="Open the Worker setup dialog">
-    In a new chat, open the **+** menu beside the prompt box, select **Run in**, then select **New worker**. Admins can also go to **Admin Settings → Sandboxes** and select **Create worker** in the **Workers** section.
+    In a new chat, open the **+** menu beside the prompt box, select **Run in**, then select **New worker**. Admins can also go to **Admin Settings → Sandboxes** (a Worker is another place a chat can run, next to CloudThinker Cloud) and select **Create worker** in the **Workers** section.
+
+    <Frame caption="Admin Settings, Sandboxes: Create worker adds a folder on your machine where agents can work">
+      <img src="/images/v2/workers-create.webp" alt="The Workers section of the Sandboxes page with the Create worker button" />
+    </Frame>
   </Step>
   <Step title="Name the Worker">
     Enter a **Worker name**, for example `payments-api`. Turn on **Share with workspace** if teammates and Automations should use it. Select **Create worker**.
 
-    **Success state:** the dialog shows a command and the note "The link expires in 10 minutes."
+    **Success state:** the dialog shows a setup command. It works once and expires in 10 minutes (the dialog calls it a link).
   </Step>
   <Step title="Run the command in your project folder">
     Copy the command, open a terminal in the folder you want to serve, and run it. It looks like this:
@@ -44,7 +51,9 @@ A Worker is a folder on a machine you run (a laptop, a server, or a CI runner) w
     cloudthinker --url https://app.cloudthinker.io worker start --register <reference> --workdir "$PWD"
     ```
 
-    The Worker stores its credential on this machine, then runs file, shell, cancel, and artifact upload checks. It keeps running in the foreground until you press Ctrl-C.
+    `<reference>` is a one-time enrollment code from the dialog. `--url` falls back to the address of your last `cloudthinker login`, else `https://app.cloudthinker.io`, so you can usually drop it.
+
+    The Worker saves its credential in a private file (mode `0600`) on this machine. It then checks that it can read files, run a shell command, cancel a command, and upload results. It keeps running in the foreground until you press Ctrl-C.
 
     **Success state:** the terminal prints `Waiting for work.` and the dialog shows **`<name>` is verified**. If the command expired, select **New command**.
   </Step>
@@ -53,7 +62,16 @@ A Worker is a folder on a machine you run (a laptop, a server, or a CI runner) w
   </Step>
 </Steps>
 
-You can do the same from a terminal. `cloudthinker worker outpost create payments-api --shared` registers a Worker (omit `--shared` for a personal one), and `cloudthinker worker start --outpost payments-api --workdir "$PWD"` serves the folder. The CLI calls a Worker an outpost.
+### Set up from the terminal only
+
+Sign in with `cloudthinker login` first and check the workspace with `cloudthinker whoami`. Then:
+
+```bash
+cloudthinker worker outpost create payments-api --shared   # omit --shared for a personal Worker
+cloudthinker worker start --outpost payments-api --workdir "$PWD"
+```
+
+**Success state:** the terminal prints `Waiting for work.`, and the Worker shows **Online** in the **Run in** menu.
 
 ## Choose where a chat runs
 
@@ -65,7 +83,7 @@ You can do the same from a terminal. `cloudthinker worker outpost create payment
       <img src="/images/workers/01-plus-menu-run-in-row.png" alt="The + menu with a Run in row showing CloudThinker Cloud" />
     </Frame>
 
-    **Success state:** a chip with the Worker's name appears in the toolbar. Its tooltip says what runs where.
+    **Success state:** a chip with the Worker's name appears in the toolbar. Its tooltip reads like "Files and shell commands run on payments-api. Connections run in the CloudThinker managed sandbox, and credentials stay there. You cannot change this after the first message."
 
     <Frame>
       <img src="/images/workers/02-worker-chip-tooltip.png" alt="The toolbar chip for a Worker, with a tooltip that explains what runs where" />
@@ -78,13 +96,20 @@ You can do the same from a terminal. `cloudthinker worker outpost create payment
     Run the test suite and fix the first failing test. Show me the diff before you commit.
     ```
 
-    **Success state:** the chip locks. The conversation stays on that Worker for its whole life, including forks. To run somewhere else, start a new conversation.
+    **Success state:** the chip locks. The conversation stays on that Worker for its whole life. To run somewhere else, start a new conversation.
   </Step>
 </Steps>
 
 The composer remembers your last choice for the workspace, so the next new chat starts on the same Worker.
 
-If the folder is a git repository, you can turn on **New worktree** and pick a base branch. The Worker then works on a `cloudthinker/<id>` branch in a separate worktree, so your main checkout stays untouched. This needs git 2.38 or newer on the machine.
+### Work in a separate worktree
+
+After you pick a Worker, the **Run in** menu stays open and shows **Configure local environment**. If the folder is a git repository, turn on **New worktree** and pick a base **Branch** before the first message.
+
+The Worker then creates a `cloudthinker/<id>` branch in its own worktree, stored in the Worker's state folder outside the folder you serve, so your main checkout stays unchanged. It uses the local branch if one exists, and otherwise fetches `origin/<base>` once.
+
+- **Cleanup:** the Worker removes a worktree after 14 days without use, but only when it has no uncommitted changes. It deletes the `cloudthinker/<id>` branch only when that branch is merged or pushed. List them with `cloudthinker worker worktrees ls`, or clean up now with `cloudthinker worker worktrees prune`. Dirty worktrees stay and show as `dirty`.
+- **When the toggle is greyed out:** its hint says why, for example "This folder is not a git repository." or "Update the worker to use worktrees." Run `cloudthinker update`, and `cloudthinker worker doctor` to check the git version.
 
 ## What a Worker can reach
 
@@ -92,19 +117,33 @@ If the folder is a git repository, you can turn on **New worktree** and pick a b
 |---|---|
 | Reads, writes, edits, or lists files with a file tool | Only inside `--workdir`. Paths outside it, including `..`, are rejected. |
 | Runs a shell command | The whole machine, as your OS account, using `/bin/bash`. `--workdir` is only the starting directory. |
-| Uses a workspace connection (AWS, Kubernetes, and more) | The CloudThinker managed sandbox, with the credential injected there. |
+| Uses a workspace connection (AWS, Kubernetes, and more) | The CloudThinker managed sandbox, with the credential injected there. Credentials already on the machine are a different matter: the shell can use them. |
 
 <Warning>
-Shell commands on a Worker are not sandboxed. They can read `~/.ssh`, write outside the folder, and reach your network. Run the Worker under an account whose access you accept, and use [Approvals](/guide/approvals/overview) to review shell actions on sensitive machines.
+Shell commands on a Worker are not sandboxed. They can read `~/.ssh`, write outside the folder, and reach your network. On a sensitive machine:
+
+- Run the Worker under a dedicated, non-admin account. Never run `worker start` as root.
+- Keep SSH keys and cloud credentials out of that account's home folder.
+- Use [Approvals](/guide/approvals/overview) to decide which writes need a person.
 </Warning>
 
-Shell commands get a reduced environment: `PATH`, `HOME`, `LANG`, `TERM`, `USER`, and `TMPDIR`. Pass one more variable by name with `--env NAME` (the value comes from the Worker's own environment; repeat for more), or pass everything with `--inherit-env`.
+Shell commands get a reduced environment: `PATH`, `HOME`, `LANG`, `TERM`, `USER`, and `TMPDIR`. To pass more, add flags to `worker start`, for example `cloudthinker worker start --outpost payments-api --workdir "$PWD" --env AWS_PROFILE`. The value comes from the Worker's own environment, and you repeat `--env` for each variable. `--inherit-env` passes everything. The Worker's own credential is always left out. `--background` doesn't accept these flags.
 
-Every shell command, background task start or stop, and file write is recorded in **Admin Settings → Audit Logs** under the **Command** filter. The record keeps a redacted preview of the command, never its output. Reads are not recorded.
+Every shell command, background task start or stop, and file write is recorded in **Admin Settings → Audit Logs** under the **Command** filter, for personal and shared Workers alike. Organization Owners and Admins can open it. The record keeps a redacted preview of the command (at most 1 KiB), never its output. Reads are not recorded.
+
+### What leaves the machine
+
+The Worker runs the tools, but the model runs in CloudThinker Cloud. These go there and become part of the conversation:
+
+- File contents the agent reads, up to 1.4 MB per file.
+- Command output.
+- Files the agent uploads as results, up to 64 files and 16 MiB per operation.
+
+Serve only folders whose contents you're fine sending to the model. See [Data protection](/guide/security/data-protection) for how conversations are stored.
 
 ### The CloudThinker managed sandbox switch
 
-The **CloudThinker managed sandbox** switch in the **Run in** menu decides whether the run can use your workspace connections. It doesn't move file or shell work off the Worker.
+The **CloudThinker managed sandbox** switch appears in the **Run in** menu after you pick a Worker. It's on by default, and anyone starting the chat can change it. It decides whether the run can use connection commands: commands that go through a workspace connection, such as `aws` or `kubectl`. Its description in the menu reads "Connections like AWS or Kubernetes run in the CloudThinker managed sandbox. Credentials stay there." It never moves file or shell work off the Worker.
 
 <Frame>
   <img src="/images/workers/03-workspace-connections-switch.png" alt="The Run in menu with the CloudThinker managed sandbox switch and its description" />
@@ -112,7 +151,7 @@ The **CloudThinker managed sandbox** switch in the **Run in** menu decides wheth
 
 | Switch | Connection commands | File tools and shell |
 |---|---|---|
-| **On** | Run in the CloudThinker managed sandbox | Run on the Worker |
+| **On** (default) | Run in the CloudThinker managed sandbox | Run on the Worker |
 | **Off** | Don't run. CloudThinker tells you the connection is unavailable. | Run on the Worker |
 
 The first message fixes the switch along with the Worker.
@@ -123,11 +162,13 @@ The first message fixes the switch along with the Worker.
 
 ## Folder rules and Skills
 
-On the first turn, the agent reads the instruction files at the root of the folder: `AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md`. It also lists the Skills in `.agents/skills/`. Each Skill is a folder with a `SKILL.md` whose frontmatter has a `description`, and the agent loads it when a task matches. Set `disable-model-invocation: true` to hide one. See [Skill format](/guide/skills/skill-format).
+When a conversation starts, the agent reads the instruction files at the root of the folder: `AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md`. It reads every one that exists, not just the first, in that order. When it works in a subfolder, it also picks up the same files from that subfolder and the folders above it. The root files are read once per conversation, so an edit applies from the next conversation.
+
+Skills come only from `.agents/skills/` (up to 64), not from other tools' folders such as `.claude/skills/`. Each Skill is a folder with a `SKILL.md` whose frontmatter has a `description`, and the agent loads it when a task matches. Set `disable-model-invocation: true` to hide one. See [Skill format](/guide/skills/skill-format).
 
 ## Keep a Worker running
 
-`worker start` stops when you close the terminal. To keep it up, add `--background` to the same command. That installs a per-user service (a systemd user unit on Linux, a LaunchAgent on macOS) and prints the status, logs, and stop commands.
+`worker start` stops when you close the terminal. To keep it up, add `--background` to the same command. That does `service install` and `service start` in one step, for the same Worker, folder, concurrency, and label: a systemd user unit on Linux, a LaunchAgent on macOS. On Linux it also turns on lingering so the Worker survives logout, or prints the `loginctl enable-linger <user>` command when it can't. It then prints the status, logs, and stop commands. On macOS the LaunchAgent runs only while you're logged in.
 
 | Command (prefix `cloudthinker worker`) | What it does |
 |---|---|
@@ -139,11 +180,13 @@ On the first turn, the agent reads the instruction files at the root of the fold
 | `doctor` | Check version, network, clock, credential, folder, and service. Prints one fix per problem. |
 | `outpost ls` / `outpost archive <name>` | List Workers, or retire one after its open work finishes. |
 
-Useful `worker start` flags: `--concurrency <1-32>` (default 4), `--label <name>` for the folder's display name, and `--health-addr 127.0.0.1:9464` for `/healthz` and Prometheus `/metrics` endpoints.
+**To upgrade the CLI on a running Worker:** run `cloudthinker worker service stop` (it lets current work finish), then `cloudthinker update`, then `cloudthinker worker service start`. In the foreground, press Ctrl-C, update, and run the same `worker start` command again.
+
+Useful `worker start` flags: `--concurrency <1-32>` (default 4) for the most runs the Worker handles at once, `--label <name>` for the folder's display name, and `--health-addr 127.0.0.1:9464` for `/healthz` and Prometheus `/metrics` endpoints.
 
 ## Run an Automation on a Worker
 
-In the [Automation](/guide/automation/automations) form, set **Run in** to a shared Worker. Automations can't use personal Workers, and only workspace admins can change where an Automation runs. A change to the managed sandbox switch applies from the next run.
+In the [Automation](/guide/automation/automations) form, set **Run in** to a shared Worker. Automations can't use personal Workers, and only workspace admins can change where an Automation runs. A change to the managed sandbox switch applies from the next run. If the Worker is offline when a run is due, the run never moves to CloudThinker Cloud. Keep shared Workers that serve Automations running as a service.
 
 ## Troubleshooting
 
@@ -152,7 +195,7 @@ In the [Automation](/guide/automation/automations) form, set **Run in** to a sha
     One of the startup checks failed. Stop the Worker, run `cloudthinker worker doctor` in the folder, apply the fix it prints, then select **New command** and run it again. If it says **Your CLI is out of date**, run `cloudthinker update` first.
   </Accordion>
   <Accordion title="The Worker shows Offline">
-    The process stopped or lost the network. Check that `worker start` or the service is still running with `cloudthinker worker status --outpost <name>`. The Worker reconnects on its own after sleep or a network change.
+    You see **Offline** on the Worker's row in **Admin Settings → Sandboxes** and in the **Run in** menu. The process stopped or lost the network. Check that `worker start` or the service is still running with `cloudthinker worker status --outpost <name>`. The Worker reconnects on its own after sleep or a network change.
   </Accordion>
   <Accordion title="A shell command can't find a variable or tool">
     Only `PATH`, `HOME`, `LANG`, `TERM`, `USER`, and `TMPDIR` are passed by default. Restart the Worker with `--env NAME` for each variable, or `--inherit-env`.
@@ -162,6 +205,9 @@ In the [Automation](/guide/automation/automations) form, set **Run in** to a sha
   </Accordion>
   <Accordion title="The credential expired or was revoked (exit code 3)">
     A credential stays valid for 30 days after its last use and rotates on its own while the Worker runs. If it expires, enroll again with a new command from **Admin Settings → Sandboxes**, or **Run in → New worker**.
+  </Accordion>
+  <Accordion title="Revoke a Worker, for example on a lost laptop">
+    In **Admin Settings → Sandboxes**, open the Worker's row. Select the revoke icon on one machine (**Revoke this machine**), or **Revoke all machines**. The credential stops working right away: running work stops, and each machine must enroll again. To retire the Worker for good, select **Remove worker**, or run `cloudthinker worker outpost archive <name>` once its open conversations finish.
   </Accordion>
   <Accordion title="A teammate gets EXECUTOR_TARGET_PRIVATE">
     They tried to use your personal Worker. Create a shared Worker instead.

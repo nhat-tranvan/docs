@@ -6,6 +6,10 @@ icon: book-open
 
 A **runbook** is a written procedure for fixing a known problem, such as "restart the checkout pods" or "fail over the database". When you connect your runbooks to Resolve, CloudThinker reads them during a root cause analysis (RCA) and proposes the matching fix instead of improvising one.
 
+<Note>
+**Runbooks** carries a **Legacy** label in the sidebar and page header. The page and its sources work as described here. There's no published removal date or named successor. If you plan to build a large runbook library on it, ask [support@cloudthinker.io](mailto:support@cloudthinker.io) about its roadmap first.
+</Note>
+
 ## How it works
 
 1. You add a **runbook source**: a Confluence space, a GitHub or GitLab repository, or Markdown files you upload.
@@ -13,11 +17,17 @@ A **runbook** is a written procedure for fixing a known problem, such as "restar
 3. If the procedure includes commands that change something, the run stops at **Action requires approval** until a person decides.
 4. Every attempt is recorded on the **Execution history** tab with its policy decision, approval, and outcome.
 
-Read-only commands (ones that only look, like `kubectl get pods`) never wait for approval. Commands that change infrastructure, like `kubectl rollout restart`, do.
+Read-only commands (ones that only look, like `kubectl get pods`) never wait for approval. Commands that change infrastructure, like `kubectl rollout restart`, wait unless an effect allows them. [Control command effects](#control-command-effects) says exactly when that can happen.
+
+Without the **Policies** section (most workspaces), there's no way to set an effect, so every change-making runbook command waits for a person.
+
+## Where commands run
+
+A runbook command runs like any other agent command: in the CloudThinker managed sandbox, through the [connection](/guide/connections/overview) for the target system, with that connection's credential and permissions. The credential sets the scope. A read-only credential can't write, whatever the runbook says, and a connection with **Allow writes** off refuses writes too. Every write also goes through [Approvals](/guide/approvals/overview#how-a-write-is-decided), including its list of calls that never run. See [Where agents run](/guide/security/overview#where-agents-run).
 
 ## Prerequisites
 
-- Access to Resolve in your workspace.
+- The workspace **Admin** role to add, edit, publish, or delete sources. Developers and Viewers can see sources and **Execution history**. See [Roles](/guide/security/roles).
 - For Confluence, GitHub, or GitLab: a working [Atlassian](/guide/connections/atlassian), [GitHub](/guide/connections/github), or [GitLab](/guide/connections/gitlab) connection. The source form can't be saved without one.
 - For uploads: your procedures as `.md` files, with commands in fenced code blocks.
 
@@ -48,7 +58,7 @@ Connected sources stay in their own system. CloudThinker reads them at RCA time,
 
 **Success state:** the source appears in the list with its type and scope, for example `GitHub · acme/runbooks · docs/runbooks`, and its toggle is on.
 
-Every change-making command that CloudThinker takes from a connected source requires approval before it runs. The form shows this as a notice, and there's no per-command setting for connected sources.
+Every change-making command that CloudThinker takes from a connected source requires approval before it runs. The form says so in a notice: per-command controls for connected sources are coming soon.
 
 ## Upload Markdown runbooks
 
@@ -64,7 +74,7 @@ Every change-making command that CloudThinker takes from a connected source requ
   </Step>
 </Steps>
 
-**Success state:** each file appears as its own source in the list. Click the book icon on its row to open a read-only preview, with a **Download** button for the original Markdown.
+**Success state:** each file appears as its own source in the list, published and searchable right away. Uploads are never created as drafts. Click the book icon on its row to open a read-only preview, with a **Download** button for the original Markdown.
 
 A runbook written like this gives CloudThinker clear, separable commands:
 
@@ -85,6 +95,31 @@ kubectl rollout restart deploy/checkout-api -n checkout
 
 From this file, CloudThinker skips the two read-only commands and records `kubectl rollout restart` as a change-making command that requires approval.
 
+At upload, an AI model reads the fenced code blocks and keeps only the commands that change something. A pipeline counts as change-making if any part of it writes. Each kept command must appear in a code block, so nothing is recorded from prose. If the model step fails, a fixed list of look-only commands (such as `kubectl get`, `kubectl logs`, `cat`, and `grep`) decides instead, and anything not on that list counts as change-making. With **Policies**, you can review the recorded commands in the upload's policy (see the next section). Without it, there's no screen listing them, and every command waits for approval anyway.
+
+To change an uploaded runbook, delete its source and upload the new version. There's no in-place edit for uploads.
+
+<Warning>
+The new upload gets a new policy, so every command starts again at **Require Approval**. Any **Allow** or **Deny** you set on the old upload is gone.
+</Warning>
+
+## Control command effects
+
+An **effect** decides what happens to a change-making command. Which effects you can get depends on the source type:
+
+| Source type | Effects | Default |
+|---|---|---|
+| Confluence, GitHub, GitLab | Always **Require Approval** | Require Approval |
+| Upload | **Allow**, **Require Approval**, or **Deny**, per command | Require Approval |
+
+| Effect | What happens |
+|---|---|
+| **Allow** | Runs without asking |
+| **Require Approval** | Waits at **Action requires approval** until a person decides |
+| **Deny** | Never runs |
+
+Each upload gets its own policy named `Manual Runbook: <runbook name>`, with one statement per extracted command. The **Policies** section on **Resolve → Settings** is off in most deployments. Where it's on, you can open that policy there and change a command's effect, for example to **Allow** for a safe restart you run often. Without it, every command keeps **Require Approval**. To ask whether it can be turned on for your deployment, email [support@cloudthinker.io](mailto:support@cloudthinker.io).
+
 ## Approve a runbook action
 
 When CloudThinker wants to run a change-making command during an incident, the incident's analysis shows **Action requires approval** with the runbook it came from.
@@ -94,11 +129,11 @@ When CloudThinker wants to run a change-making command during an incident, the i
     On the incident, click **Go to conversation**.
   </Step>
   <Step title="Decide">
-    Read the proposed command and approve or reject it there. Approving lets the run continue. Rejecting stops that action.
+    Read the proposed command on the approval card and click **Approve** or **Decline**. Approving lets the run continue. Declining stops that action. The card has no field for editing the command: to run something different, decline and say what you want in the conversation.
   </Step>
 </Steps>
 
-**Success state:** the banner disappears, and the execution shows **Approved** or **Rejected** on the **Execution history** tab.
+**Success state:** the banner disappears, and the execution shows **Approved** on the **Execution history** tab. A declined action shows as **Rejected** there.
 
 Who can approve follows your workspace's approval setup. See [Approvals](/guide/approvals/overview) and [approvers](/guide/approvals/approvers).
 
@@ -109,10 +144,17 @@ Open the **Execution history** tab on **Resolve → Runbooks**. Each row is one 
 | Column | Values | What it tells you |
 |---|---|---|
 | **Runbook** | The runbook title, linked to its source | Which procedure CloudThinker used |
-| **Policy** | Auto Execute, Requires Approval, Denied, Per Command | What the policy decided before anyone was asked |
+| **Policy** | Auto Execute, Requires Approval, Denied, Per Command | What policy decided before anyone was asked: **Auto Execute** allowed the action, **Requires Approval** sent it to a person, **Denied** blocked it. **Per Command** marks an uploaded runbook, where each command is checked against its own effect as it runs. |
 | **Approval** | Pending, Approved, Rejected | What a person decided, if one was asked |
-| **Status** | Not Started, Completed, Skipped, Failed | What happened when it ran |
+| **Status** | See the table below | What happened when it ran |
 | **Created** | Timestamp | When CloudThinker proposed it |
+
+| Status | Meaning |
+|---|---|
+| Empty | Nothing ran: the action waits for a person, was declined, or was denied by policy |
+| **Not Started** | Cleared to run, by policy or by an approval, but not finished yet |
+| **Completed** | The command ran and finished |
+| **Failed** | The command ran and returned an error. Read the result before you retry. |
 
 Check **Status** before you close an incident. **Approved** means a person said yes. Only **Completed** means the command ran.
 
@@ -127,12 +169,8 @@ Hover a source row to see its actions:
 | Toggle | Turns the source off without deleting it. CloudThinker doesn't search a disabled source. |
 | Edit | Changes the name or scope of a connected source. |
 | Preview (book icon) | Shows an uploaded runbook's content. |
-| Publish | Appears on a source marked **Draft**. CloudThinker doesn't search drafts until they're published. |
+| Publish | Appears only on a source marked **Draft**. New uploads are published at once, so you'll rarely see it. CloudThinker doesn't search a draft until an Admin publishes it. |
 | Delete | Removes the source after a confirmation. |
-
-<Note>
-In the sidebar, **Runbooks** carries a **Legacy** label. The page and its sources still work as described here.
-</Note>
 
 ## Troubleshooting
 
@@ -150,7 +188,7 @@ In the sidebar, **Runbooks** carries a **Legacy** label. The page and its source
     Commands must sit in fenced code blocks. Commands in plain paragraphs, or read-only commands only, produce nothing to approve.
   </Accordion>
   <Accordion title="The incident is stuck waiting">
-    A runbook action is pending. Open the incident, click **Go to conversation**, and approve or reject it.
+    A runbook action is pending. Open the incident, click **Go to conversation**, and click **Approve** or **Decline**.
   </Accordion>
 </AccordionGroup>
 

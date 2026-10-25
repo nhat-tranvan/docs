@@ -10,8 +10,9 @@ Connect your HashiCorp Vault cluster to let CloudThinker agents check seal statu
 
 ## Prerequisites
 
-- A Vault address CloudThinker can reach over the network, such as a public DNS name or an HCP Vault Dedicated endpoint. `localhost` and private addresses resolve inside CloudThinker's sandbox, not on your network.
+- A Vault address CloudThinker can reach over the network, such as a public DNS name or an HCP Vault Dedicated endpoint. `localhost` and private addresses resolve inside CloudThinker's sandbox, not on your network. For a Vault behind a firewall, see [Reaching private services](/guide/connections/overview#reaching-private-services).
 - Permission to write a policy and create a token or an AppRole.
+- The **Admin** role in the CloudThinker workspace, which you need to add connections. See [Roles](/guide/security/roles).
 - For Vault Enterprise or HCP Vault Dedicated: the namespace your secrets live in. HCP uses `admin` by default.
 
 <Info>
@@ -48,6 +49,10 @@ A workspace holds one Vault connection. What agents can reach is exactly what th
     EOF
     ```
 
+    `read` on `secret/data/*` lets the token read secret values. CloudThinker shows only key names unless you ask for a value, but that's CloudThinker's behavior, not a Vault limit. To have Vault enforce it, drop the `secret/data/*` block: agents can still list paths and read metadata, but can't list the keys inside a secret.
+
+    For a KV v1 mount, replace the two `secret/` blocks with one: `path "secret/*" { capabilities = ["read", "list"] }`.
+
     See [Required permissions](#required-permissions) to add policy audits or dynamic credentials.
   </Step>
   <Step title="Create the credential">
@@ -83,9 +88,13 @@ A workspace holds one Vault connection. What agents can reach is exactly what th
         Copy the `token` value from the output.
       </Tab>
     </Tabs>
+
+    <Warning>
+    Both examples expire after 30 days (`720h`): the AppRole secret ID or the token stops working and the connection fails. Set a reminder, then issue a new one and update the connection as described in [Security](#security).
+    </Warning>
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Open **Connections** in the sidebar and select **HashiCorp Vault**. Enter **VAULT_ADDR**, set **VAULT_NAMESPACE** if you use Enterprise or HCP, pick **AppRole** or **Token** in **VAULT_AUTH_METHOD**, and fill in the credential fields that appear. Click **Connect**.
+    Open **Connections** and select **HashiCorp Vault**. Enter **VAULT_ADDR**, set **VAULT_NAMESPACE** if you use Enterprise or HCP, pick **AppRole** or **Token** in **VAULT_AUTH_METHOD**, and fill in the credential fields that appear. Click **Connect**.
 
     **Success state:** the connection shows **Connecting** and **Verifying**, then **Connected**. For a token, CloudThinker runs `vault token lookup`. For AppRole, it logs in through `auth/approle/login` and checks that Vault returns a token.
   </Step>
@@ -111,10 +120,22 @@ Grant only the rows you need. Each row adds paths to the policy from setup.
 | List keys and read metadata on KV v2 secrets | `read` on `<mount>/data/*`, `read` and `list` on `<mount>/metadata/*` |
 | List secret engines and auth methods | `read` on `sys/mounts` and `sys/auth` |
 | Audit policies | `read` and `list` on `sys/policies/acl` and `sys/policies/acl/*` |
+| List AppRole roles | `list` on `auth/approle/role` |
 | List audit devices | `read` and `sudo` on `sys/audit` |
 | Issue dynamic credentials | `read` on `<engine>/creds/<role>`, such as `database/creds/readonly` |
 | Revoke or renew leases | `update` on `sys/leases/revoke` and `sys/leases/renew` |
-| Write or delete KV secrets | `create`, `update`, and `delete` on the matching `data/`, `delete/`, or `destroy/` paths |
+| Write or delete KV v2 secrets | See the example below |
+
+For KV v2 writes under `secret/myapp/`, add:
+
+```hcl
+path "secret/data/myapp/*" {
+  capabilities = ["create", "update", "delete"]
+}
+path "secret/destroy/myapp/*" {
+  capabilities = ["update"]
+}
+```
 
 The health check (`sys/health`) and `vault token lookup` on the caller's own token work under Vault's built-in `default` policy, so you don't need to add them.
 
@@ -133,7 +154,7 @@ Start read-only. Add the write rows only when you have a workflow that needs the
 | **Lease management** | Revoke or renew a credential lease | Yes |
 | **Secret and config changes** | Write, delete, or destroy KV versions, write policies, enable or disable mounts, auth methods, and audit devices | Yes |
 
-Agents report keys and metadata, not secret values, and never print your token or secret ID. Issuing a dynamic credential looks like a read in Vault, but it creates a lease, so CloudThinker treats it as a write. Writes go through [Approvals](/guide/approvals/overview) before they run.
+Agents report keys and metadata, not secret values, unless you ask for a value, and never print your token or secret ID. Issuing a dynamic credential looks like a read in Vault, but it creates a lease, so CloudThinker treats it as a write. Writes go through [Approvals](/guide/approvals/overview) before they run.
 
 ### Verify the connection
 
@@ -167,6 +188,8 @@ A credential field for the selected auth method is empty. Fill in **VAULT_TOKEN*
 
 <Accordion title="403 permission denied">
 Vault returns 403 both when the policy doesn't cover a path and when the path doesn't exist, so a 403 never proves a secret is missing. Ask the agent which policies the token has, then add `read` or `list` on the path. For KV v2, reading `secret/myapp` needs the policy on `secret/data/myapp`.
+
+If requests that used to work now all return 403, the token has probably expired. Issue a new one and update **VAULT_TOKEN**.
 </Accordion>
 
 <Accordion title="&quot;no handler for route&quot; on HCP or Enterprise">
@@ -174,7 +197,7 @@ Vault returns 403 both when the policy doesn't cover a path and when the path do
 </Accordion>
 
 <Accordion title="invalid secret_id">
-The AppRole secret ID passed its `secret_id_ttl`. Generate a new one, paste it into **VAULT_SECRET_ID**, and connect again:
+The AppRole secret ID passed its `secret_id_ttl`. Generate a new one and paste it into **VAULT_SECRET_ID** as described in [Security](#security):
 
 ```bash
 vault write -f auth/approle/role/cloudthinker/secret-id
@@ -189,6 +212,7 @@ The cluster is sealed, so no read or write can succeed. A Vault operator must un
 
 <ConnectionSecurity />
 
+- **Replace a credential**: open **Connections**, select **HashiCorp Vault**, click the pencil icon (**Edit**) on the connection, paste the new token or secret ID, and click **Save and test**. If the test fails, the connection keeps its previous credentials.
 - **Prefer AppRole in production**: each session gets a token that expires in the TTL you set, and you rotate the secret ID without touching the role.
 - **Keep secret values out of chat**: agents list keys by default. If you ask for a value, it appears in the conversation, so ask only when you need it.
 - **Revoke leases you no longer need**: ask the agent to revoke a dynamic credential once the task is done, instead of waiting for it to expire.

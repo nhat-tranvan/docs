@@ -10,7 +10,7 @@ Connect your Rancher server so CloudThinker can list the clusters, projects, and
 
 ## Prerequisites
 
-- A Rancher server that serves the Rancher Kubernetes API (Rancher 2.8 and later), reachable from the internet over **HTTPS**. Commands run in the CloudThinker cloud.
+- A Rancher server that serves the Rancher Kubernetes API (Rancher 2.8 and later), reachable from the internet over **HTTPS**. Commands run in the CloudThinker cloud. For an internal Rancher, see [Reaching private services](/guide/connections/overview#reaching-private-services) for the egress IP allowlist.
 - Permission in Rancher to create a user and assign cluster and project roles.
 - Optional: the **PEM certificate** of your private certificate authority, if Rancher's certificate is not publicly trusted.
 
@@ -22,12 +22,15 @@ A workspace holds **one** Rancher connection. To inspect workloads, pods, and Ku
 
 <Steps>
   <Step title="Create a dedicated Rancher user">
-    Add a user for CloudThinker instead of reusing a person's account. The token you create next inherits this user's access, so a dedicated user keeps the scope visible and easy to revoke. Give it the roles in [Required permissions](#required-permissions) on the clusters and projects you want inspected.
+    Add a user for CloudThinker instead of reusing a person's account. The token you create next inherits this user's access, so a dedicated user keeps the scope visible and easy to revoke.
+
+    1. Open **☰ → Users & Authentication → Users** and click **Create**.
+    2. In each cluster you want inspected, open **Cluster and Project Members**. Add the user on the **Cluster Membership** tab with the cluster role, and on the **Project Membership** tab with the project role, from [Required permissions](#required-permissions).
   </Step>
   <Step title="Create an API key">
     Sign in as that user, open the **user avatar → Account & API Keys** in the upper right, and click **Create API Key**.
 
-    - **Expiry**: pick a date that matches your rotation schedule. Rancher caps it at the server's `auth-token-max-ttl-minutes` setting and uses the cap without warning if you ask for longer. An expired key breaks the connection.
+    - **Expiry**: pick a date that matches your rotation schedule. Rancher caps it at the server's `auth-token-max-ttl-minutes` setting, which you can check in **☰ → Global Settings → Settings**, and uses the cap without warning if you ask for longer. When the key expires, the connection switches to **Error**. Create a new key and swap it in through [Rotate a credential](/guide/connections/overview#rotate-a-credential).
     - **Scope**: leave it as **No Scope**. A scoped key only works against one cluster's Kubernetes API, which this connection does not use.
 
     Copy the **Bearer Token**. Rancher shows it only once.
@@ -55,9 +58,11 @@ The token's user needs **read** access to clusters, nodes, projects, and cluster
 
 | Role | Where | What it gives |
 |------|-------|---------------|
-| **Cluster Member** | Each cluster to inspect | Views most cluster-level resources. Also lets the user create projects |
+| **Cluster Member** | Each cluster to inspect | Views most cluster-level resources. Also lets the user create projects. The connection never uses that, since it sends reads only, but a leaked token could. Use a custom role for strict least privilege |
 | **Read Only** | Each project to inspect | Views everything in the project, with no create, update, or delete |
-| **Custom role** | Instead of Cluster Member | Only the reads above, when Cluster Member is wider than you want |
+| **Custom role** | Instead of Cluster Member | Only the reads the connection makes. Create it in **☰ → Users & Authentication → Role Templates**, on the **Cluster** tab |
+
+A custom role needs one rule: API group `management.cattle.io`, resources `clusters`, `nodes`, `projects`, `clusterroletemplatebindings`, and `projectroletemplatebindings`, verbs `get` and `list`.
 
 <Tip>
 A Rancher API key has no read-only switch, so the token can see exactly what its user can see. Narrow access through the user's roles. Write permissions never help, because the connection has no way to send a change.
@@ -83,7 +88,7 @@ Ask an agent to change something in Rancher and it tells you the connection cann
 | **Who has access** | Show which users, groups, and service accounts hold a role on one cluster or project |
 | **Project scope** | Show which cluster a project belongs to |
 
-Each lookup returns one page of at most 50 rows. When Rancher does not report a total, agents say "returned 12" rather than "12 exist", so narrow the question to one cluster or project on large fleets. Agents read fresh data from Rancher each time you name it in a message.
+Each lookup returns one page of at most 50 rows. When Rancher does not report a total, agents say "returned 12" rather than "12 exist", so narrow the question to one cluster or project on large fleets. Whenever a message mentions Rancher, agents query it live instead of reusing a result from an earlier message.
 
 ### Verify the connection
 
@@ -112,7 +117,7 @@ The token signs in, but its user cannot read clusters. Give that user **Cluster 
 </Accordion>
 
 <Accordion title="The Rancher server did not expose the management.cattle.io RK-API">
-The URL points somewhere other than the Rancher server root, or the Rancher release is older than 2.8. Reconnect with the plain Rancher address and check your version.
+RK-API is Rancher's Kubernetes-style management API, served under `/apis/management.cattle.io/v3`. The URL points somewhere other than the Rancher server root, or the Rancher release is older than 2.8. Reconnect with the plain Rancher address and check your version.
 </Accordion>
 
 <Accordion title="Could not reach the Rancher server">
@@ -125,6 +130,10 @@ The address starts with `http://`, which would send the token in clear text. Ser
 
 <Accordion title="Invalid Rancher CA certificate bundle or connection configuration">
 The bundle is not plain PEM certificates, or the token has quotes, spaces, or line breaks around it. Paste only the CA certificate chain, never a private key, and re-copy the Bearer Token as one line.
+</Accordion>
+
+<Accordion title="Connection 'rancher' already exists. Only one instance is allowed.">
+This workspace already has a Rancher connection. Edit that connection, or disconnect it first.
 </Accordion>
 
 <Accordion title="An agent reports fewer clusters than Rancher shows">

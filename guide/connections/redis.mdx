@@ -6,11 +6,11 @@ icon: "/images/icons/redis.svg"
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect a Redis server, such as self-hosted Redis, Upstash, or Redis Cloud, to let CloudThinker agents inspect memory and eviction, find the largest keys and keys with no TTL, list clients, and read command latency. You give CloudThinker one connection URL (`REDIS_URL`), and agents can run exactly the commands that user's ACL allows.
+Connect a Redis server, such as self-hosted Redis, Upstash, or Redis Cloud, to let CloudThinker agents inspect memory and eviction, find the largest keys and keys with no TTL, list clients, and read command latency. You give CloudThinker one connection URL (`REDIS_URL`): agents can run the commands that user's ACL allows, and the connection's write tools pause for [Approvals](/guide/approvals/overview) first.
 
 ## Prerequisites
 
-- A Redis endpoint CloudThinker can reach over the network. Agents connect from CloudThinker's managed sandbox, so `localhost` and private addresses resolve there, not on your network.
+- A Redis endpoint CloudThinker can reach from the internet. Agents connect from CloudThinker Cloud, so `localhost` and private addresses resolve there, not on your network. There's no private-link option, so VPC-only services such as Amazon ElastiCache and MemoryDB can't connect. See [Reaching private services](/guide/connections/overview#reaching-private-services).
 - Redis 6 or later if you want a dedicated ACL user. Older versions only support a single shared password.
 - Admin access to run `ACL SETUSER`, or to create users in your managed provider's console.
 
@@ -23,7 +23,7 @@ Connect a Redis server, such as self-hosted Redis, Upstash, or Redis Cloud, to l
         Create a user that can read keys and run the diagnostic commands agents use, and nothing else:
 
         ```bash
-        redis-cli -a <admin-password> ACL SETUSER cloudthinker-readonly on \
+        redis-cli --askpass ACL SETUSER cloudthinker-readonly on \
           '><readonly-password>' '~*' \
           -@all +@read +info +ping +select '+client|list' -keys
         ```
@@ -36,10 +36,19 @@ Connect a Redis server, such as self-hosted Redis, Upstash, or Redis Cloud, to l
         | `+info +ping +select '+client\|list'` | Allows server stats, health checks, picking a database index, and listing clients |
         | `-keys` | Blocks `KEYS`, which can stall a large instance. Agents use `SCAN` instead |
 
+        `--askpass` prompts for the admin password, so it stays out of your shell history. Add `--user <admin-user>` if you don't sign in as `default`. Keep the quotes around `'+client|list'`: without them the shell reads `|` as a pipe.
+
         Save it so it survives a restart: run `ACL SAVE` if you use an `aclfile`, or `CONFIG REWRITE` if your users live in `redis.conf`.
       </Tab>
-      <Tab title="Upstash or Redis Cloud">
-        Create a user or role in your provider's access-control settings and give it the same rule as the self-hosted tab: `~* -@all +@read +info +ping +select +client|list -keys`.
+      <Tab title="Managed Redis">
+        Every provider takes the same ACL rule. Paste it without quotes into a console field, and keep the quotes around `'+client|list'` in a shell:
+
+        ```text
+        ~* -@all +@read +info +ping +select +client|list -keys
+        ```
+
+        - **Redis Cloud**: go to **Data Access Control**. Add a Redis ACL with the rule above, create a role that applies it to your database, then create a user with that role.
+        - **Azure Cache for Redis**: use the TLS port `6380` with `rediss://`, and allow CloudThinker's egress IPs in the cache's firewall rules.
 
         Then copy the TCP or Redis CLI connection URL for that user. Don't use a REST or SDK URL: CloudThinker speaks the Redis protocol.
       </Tab>
@@ -47,23 +56,25 @@ Connect a Redis server, such as self-hosted Redis, Upstash, or Redis Cloud, to l
   </Step>
   <Step title="Check the user is read-only">
     ```bash
-    redis-cli -u 'redis://cloudthinker-readonly:<readonly-password>@redis.example.com:6379' SET probe 1
-    redis-cli -u 'redis://cloudthinker-readonly:<readonly-password>@redis.example.com:6379' INFO memory
+    redis-cli -u 'rediss://cloudthinker-readonly@redis.example.com:6379' --askpass SET probe 1
+    redis-cli -u 'rediss://cloudthinker-readonly@redis.example.com:6379' --askpass INFO memory
     ```
+
+    Use `redis://` only if your server doesn't use TLS. A scheme that doesn't match the server fails with a connection error, not `NOPERM`.
 
     **Success state:** `SET` fails with `NOPERM`, and `INFO memory` prints memory stats.
   </Step>
   <Step title="Open network access">
-    Allow inbound connections on the Redis port from CloudThinker in your firewall or security group, and make sure `bind` in `redis.conf` isn't only `127.0.0.1`.
+    Allow inbound connections on the Redis port from CloudThinker's egress IPs in your firewall, security group, or provider allowlist. Ask your CloudThinker contact for the current IP list. The port is `6379` by default, `6380` for Azure TLS, and assigned per database on Redis Cloud. On self-hosted Redis, make sure `bind` in `redis.conf` isn't only `127.0.0.1`.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Open **Connections** in the sidebar, select **Redis**, and click **Connect**. Paste the URL into **REDIS_URL** and click **Connect**:
+    Open **Connections**, select **Redis**, and click **Connect** on its detail panel. In the dialog, optionally change the **Alias** and **Description**. Paste the URL into **REDIS_URL** and click **Connect**:
 
     ```text
     rediss://cloudthinker-readonly:<readonly-password>@redis.example.com:6379/0
     ```
 
-    **Success state:** the connection shows **Connecting** and **Verifying**, then **Connected**. CloudThinker then runs a one-time, read-only [discovery](/guide/connections/overview) of the server.
+    **Success state:** the connection shows **Connecting** and **Verifying**, then **Connected**. CloudThinker then runs [Discovery](/guide/connections/overview#what-happens-after-you-connect) once: a read-only look at the server whose results show in the **Discovery** section of the connection's detail panel.
   </Step>
 </Steps>
 
@@ -71,13 +82,15 @@ Connect a Redis server, such as self-hosted Redis, Upstash, or Redis Cloud, to l
 
 | Field | Required | Description | Example |
 |-------|----------|-------------|---------|
+| **Alias** | No | Short name for this server. Prefilled with the next free alias, such as `redis-1` | `prod-cache` |
+| **Description** | No | What this server is. Agents read it to choose between instances | `Production session cache` |
 | **REDIS_URL** | Yes | Full URL: scheme, user, password, host, port, and optional database index | `rediss://cloudthinker-readonly:<password>@redis.example.com:6379/0` |
 
 | URL part | Values |
 |----------|--------|
 | Scheme | `rediss://` for TLS (required by Upstash), `redis://` for plain TCP |
 | User | Your ACL user. On Upstash and on Redis with only a password, use `default` |
-| Port | `6379` by default. Redis Cloud assigns a port per database, so copy it from the console |
+| Port | `6379` by default, `6380` for Azure TLS. Redis Cloud assigns a port per database, so copy it from the console |
 | Database index | `/0` to `/15` at the end. Leave it off for `0` |
 
 URL-encode special characters in the password (`@` becomes `%40`).
@@ -90,10 +103,10 @@ URL-encode special characters in the password (`@` becomes `%40`).
 | Read memory, eviction, hit rate, replication, and command stats | `+info` |
 | See connected clients | `+client\|list` |
 | Use a database index other than `0` | `+select` |
-| Change keys | Write categories such as `+@write`. Not recommended |
+| Change keys | Write categories such as `+@write`. Not recommended. See [Write access](#write-access) |
 
 <Tip>
-Keep the user read-only. The Redis connection has write tools, such as set, delete, and expire. If the user can write, those calls go through [Approvals](/guide/approvals/overview) first, and a [rule](/guide/approvals/rules) can ask first or refuse them. A read-only ACL stops them at Redis no matter what.
+Keep the user read-only. A read-only ACL stops every write at Redis, whatever is approved.
 </Tip>
 
 ## Agent capabilities
@@ -103,7 +116,7 @@ Keep the user read-only. The Redis connection has write tools, such as set, dele
 | **Memory and eviction** | Read used memory, fragmentation ratio, `maxmemory` policy, evictions, and hit rate |
 | **Keyspace** | Count keys per database, sample keys with `SCAN`, and read type, size, and TTL |
 | **Expiration audit** | Compare keys with and without a TTL in each database, and check the `maxmemory` policy against them |
-| **Largest keys** | Rank sampled keys by size: string length, or element count for lists, hashes, sets, and sorted sets |
+| **Largest keys** | Rank sampled keys by size: string length, or element count for lists, hashes, sets, and sorted sets. The default sample is 100 keys from `SCAN`, so results are estimates, and the answer says when the scan didn't cover every key |
 | **Clients and latency** | List connected clients and read per-command call counts and latency from `INFO commandstats` |
 | **Replication** | Read role, connected replicas, and replication offset |
 | **Modules** | Read RediSearch indexes and RedisJSON documents, when the server has those modules loaded |
@@ -114,7 +127,7 @@ Keep the user read-only. The Redis connection has write tools, such as set, dele
 Summarize Redis memory usage, connected clients, eviction policy, and key counts per database
 ```
 
-Expect used memory and peak, the client count, the `maxmemory` policy, and a key count for each database index.
+Expect used memory and peak, the client count, the `maxmemory` policy, and a key count for each database index. A `NOPERM` error names the missing command. Add it with `ACL SETUSER cloudthinker-readonly`, then ask again.
 
 ### Example prompts
 
@@ -123,6 +136,16 @@ Which sampled keys are the largest, and what share of keys in each database has 
 Is Redis evicting keys? Show the eviction policy, evictions, and hit rate
 Which commands have the highest average latency according to commandstats?
 ```
+
+## Write access
+
+The Redis connection has write tools. If the ACL allows writes, each one pauses for [Approvals](/guide/approvals/overview) first, and a [rule](/guide/approvals/rules) can ask first or refuse them.
+
+| Class | Tools |
+|---|---|
+| Write | Set, expire, rename, publish, pop from lists, and add to hashes, lists, sets, sorted sets, streams, and JSON documents |
+| Destructive | Delete a key, or remove items from a hash, list, set, sorted set, stream, or JSON document |
+| Depends on the command | A raw Redis command: reads like `GET` run without asking, `DEL` or `FLUSHALL` count as destructive, anything else counts as a write |
 
 ## Troubleshooting
 

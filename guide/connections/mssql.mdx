@@ -12,7 +12,7 @@ Connect a SQL Server or Azure SQL database to let CloudThinker agents list your 
 
 - SQL Server 2016 or later, Azure SQL Database, or Azure SQL Managed Instance, reachable from CloudThinker on its SQL port (`1433` by default).
 - Permission to create a login or a contained database user and grant it access.
-- SQL Server authentication enabled on the server. A server set to Windows authentication only rejects the login.
+- SQL Server authentication enabled on the server. A server set to Windows authentication only rejects the login. This page covers SQL logins only. Windows authentication and managed identity can't work, because the connection runs in CloudThinker Cloud, outside your domain and your Azure tenant.
 
 <Info>
 Agents work with tables, not raw SQL. There's no SQL console, no stored procedure calls, and no schema changes through this connection. Objects in `sys` and `INFORMATION_SCHEMA` are always excluded.
@@ -53,7 +53,10 @@ Agents work with tables, not raw SQL. There's no SQL console, no stored procedur
     A table the user can't read doesn't appear to agents at all.
   </Step>
   <Step title="Open network access">
-    For Azure SQL, add CloudThinker to the server firewall rules. For SQL Server, allow inbound TCP `1433` from CloudThinker and confirm the TCP/IP protocol is enabled, since some installs ship with it off.
+    Ask your CloudThinker contact for the current egress IP list (see [Reaching private services](/guide/connections/overview#reaching-private-services)).
+
+    - **Azure SQL**: in the Azure portal, open the SQL server, go to **Networking**, and add a firewall rule for each CloudThinker IP.
+    - **SQL Server**: allow inbound TCP `1433` from those IPs and confirm the TCP/IP protocol is enabled, since some installs ship with it off.
   </Step>
   <Step title="Add the connection in CloudThinker">
     Open **Connections** in the sidebar and select **Microsoft SQL Server**. Paste your connection string into **Connection string**:
@@ -76,9 +79,10 @@ The single **Connection string** field takes an ADO.NET connection string.
 |---------|-------------|---------|
 | `Server` | Host and port, separated by a comma, not a colon | `sql.example.com,1433` |
 | `Initial Catalog` | Database name. Required for an Azure SQL contained user | `sales` |
-| `User ID` / `Password` | The user from step 1 | `cloudthinker` |
+| `User ID` / `Password` | The user from step 1. Wrap a password that contains `;` or `=` in single quotes, such as `Password='a;b=c'` | `cloudthinker` |
 | `Encrypt` | `True` | `True` |
 | `TrustServerCertificate` | Leave out, or `False`. Use `True` only for a self-signed or internal-CA certificate on a private network | `False` |
+| `ApplicationIntent` | Optional. `ReadOnly` routes the connection to a readable secondary in an Always On availability group, so agent reads stay off the primary. Writes fail there, so use it only on a read-only connection | `ReadOnly` |
 
 ## Required permissions
 
@@ -107,7 +111,7 @@ Skip `db_datareader`: it opens every table in the database. A schema or object g
 
 Each read covers one table, so there are no joins in a single call. Reads return 25 rows by default and at most 100 per page. Aggregations time out after 30 seconds, and a single response is capped at 4 MB.
 
-Every insert, update, and delete waits for your approval in the conversation, one call at a time. Approving one delete doesn't approve the next. Because updates and deletes target a primary key, a bad filter can't sweep a table.
+Every insert, update, and delete waits for your approval in the conversation, one call at a time. Approving one delete doesn't approve the next. Because updates and deletes target a primary key, a bad filter can't sweep a table. Your workspace [Approvals](/guide/approvals/overview) settings still apply: a Rule can refuse a change outright, and approvers decide who can say yes.
 
 ### Verify the connection
 
@@ -115,7 +119,7 @@ Every insert, update, and delete waits for your approval in the conversation, on
 List the SQL Server tables you can reach and their columns
 ```
 
-Expect each table named `<schema>_<table>`, such as `dbo_orders`, with its column list.
+Expect each table named `<schema>_<table>`, such as `dbo_orders`, with its column list. In prompts you can write the usual `dbo.orders`, and agents match it to `dbo_orders`.
 
 ### Example prompts
 
@@ -128,7 +132,7 @@ Set status to shipped on order 4821 in dbo.orders
 ## Troubleshooting
 
 <Accordion title="Login failed for user">
-The user is in the wrong place, the password is wrong, or the server accepts Windows authentication only. A login lives in `master`. A contained user lives in your database and needs `Initial Catalog` set. Retype the password rather than pasting it, since a stray space fails here.
+The user is in the wrong place, the password is wrong, or the server accepts Windows authentication only. A login lives in `master`. A contained user lives in your database and needs `Initial Catalog` set. Check the password for leading or trailing spaces, and wrap it in single quotes if it contains `;` or `=`.
 </Accordion>
 
 <Accordion title="The connection fails on a certificate error">

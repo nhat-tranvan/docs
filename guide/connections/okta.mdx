@@ -10,7 +10,7 @@ Connect Okta to let CloudThinker agents review users, groups, application assign
 
 ## Prerequisites
 
-- An Okta organization on an Okta-hosted domain: `okta.com`, `okta-emea.com`, `oktapreview.com`, or `trexcloud.com`. Custom domains are not accepted.
+- An Okta organization on an Okta-hosted domain such as `okta.com`, `okta-emea.com`, or `oktapreview.com`. Custom domains and Okta for Government domains (`okta-gov.com`, `okta.mil`) are not accepted.
 - A **dedicated Okta administrator** account to create the token, with the roles in [Required permissions](#required-permissions).
 
 <Info>
@@ -23,10 +23,12 @@ The token can do anything its creator can. A token created from a personal super
   <Step title="Create an API token">
     Sign in to the Okta Admin Console as the dedicated administrator. Go to **Security → API → Tokens**, click **Create token**, and name it `cloudthinker`.
 
+    In the same dialog, Okta lets you limit where calls from this token can originate. To lock the token to CloudThinker, pick a network zone that holds CloudThinker's egress IPs (ask your CloudThinker contact for the current list, see [Reaching private services](/guide/connections/overview#reaching-private-services)). You can also cap the token's share of your org's rate limit below 100% so agents can't starve your other integrations.
+
     Copy the value right away. Okta shows it once. Okta also expires a token that goes 30 days without a request, so a connection you never use will stop working.
   </Step>
   <Step title="Copy your Okta domain">
-    Copy your organization domain from the top right of the Admin Console. Keep only the hostname, such as `acme.okta.com`. Drop `https://`, any port, and any path.
+    In the Admin Console, click your name in the top right. The domain shows under your email, for example `acme.okta.com`. Keep only the hostname, such as `acme.okta.com`. Drop `https://`, any port, and any path.
 
     Use the plain organization domain, not the Admin Console address in your browser (`acme-admin.okta.com`).
   </Step>
@@ -56,8 +58,16 @@ An Okta API token has no scopes of its own. It inherits its creator's administra
 | Add or remove members of those groups | The same custom role with **Manage group membership** and **Edit users' group membership** |
 
 <Tip>
-Start with **Read-only Administrator** alone. Add the custom group role only when you want agents to manage on-call or access groups, and limit its membership permissions to the groups you intend.
+Start with **Read-only Administrator** alone. Add the custom group role only when you want agents to manage on-call or access groups.
 </Tip>
+
+### Set up the custom group role
+
+1. In the Admin Console, go to **Security → Administrators → Roles** and click **Create new role**. Select **Create groups**, **Manage group membership**, and **Edit users' group membership**, then save.
+2. Open the **Resource sets** tab and click **Create new resource set**. Add **All groups** and **All users**.
+3. Open the **Admins** tab, click **Add assignment**, pick the dedicated administrator, and bind it to the role and the resource set.
+
+Scope the resource set to all groups. CloudThinker creates the groups, so you can't list them ahead of time, and CloudThinker already refuses changes to any group it didn't create. The token itself could still change any group, so treat it like any admin credential.
 
 ## Agent capabilities
 
@@ -70,7 +80,11 @@ Start with **Read-only Administrator** alone. Add the custom group role only whe
 | **Group creation** | Create an Okta group owned by CloudThinker, after approval |
 | **Membership changes** | Add or remove one exact user in one CloudThinker-owned group, after approval |
 
-Okta's list APIs return pages, not totals. Agents report the rows they read and whether Okta holds more pages, so a count in an answer is a sample, never your organization's total. Okta keeps System Log events for 90 days, so older sign-ins aren't reachable.
+### Limits
+
+- **Counts are samples**: Okta's list APIs return pages, not totals. Agents report the rows they read and whether more pages exist, never your organization's total.
+- **90 days of sign-ins**: Okta keeps System Log events for 90 days, so older sign-ins aren't reachable.
+- **Okta rate limits apply**: a busy org can return HTTP 429. See [Troubleshooting](#troubleshooting).
 
 ### Verify the connection
 
@@ -88,22 +102,26 @@ Investigate failed Okta sign-ins in the last 24 hours and group them by outcome
 Create an Okta group named CloudThinker-OnCall and add jane.doe@acme.com
 ```
 
+The last prompt makes two changes, so expect two approval requests: one to create the group, one to add the member.
+
 ## Write access
 
 Agents can make exactly three kinds of change. Each one pauses for [Approvals](/guide/approvals/overview) and starts with a fresh read of your organization.
 
 | Change | Safety check |
 |--------|--------------|
-| Create a group | Creates an Okta group and records a signed CloudThinker ownership receipt bound to its group ID |
+| Create a group | Creates an Okta group and writes a signed CloudThinker ownership receipt, bound to its group ID, as the first line of the group's description |
 | Add one member | Needs the exact group ID, its current name, a valid ownership receipt, and an exact user login or ID |
 | Remove one member | Same checks, then confirms the resulting membership |
+
+You can see the receipt in the group's description in Okta. If someone edits that line or recreates the group, agents treat it as not CloudThinker-owned and refuse further changes. A rename is fine: the next request just needs the new name.
 
 Everything else is refused: renaming or deleting groups, changing groups CloudThinker didn't create, user lifecycle, factors, credentials, sessions, tokens, admin roles, application assignments, and policies. For those, agents give you the Admin Console steps to do it yourself.
 
 ## Troubleshooting
 
 <Accordion title="Okta rejected the API token">
-The token is wrong, revoked, or expired after 30 days without a request. Check **Security → API → Tokens** in Okta, create a new token if needed, and update the connection.
+The token is wrong, revoked, or expired after 30 days without a request. Okta also deactivates a token when the administrator who created it is deactivated or suspended. Check **Security → API → Tokens** in Okta and create a new token if needed. To swap it in, follow [Rotate a credential](/guide/connections/overview#rotate-a-credential): click the pencil icon on the Okta row, then **Replace…** in **Edit Instance**.
 </Accordion>
 
 <Accordion title="Okta domain must be a supported Okta hostname">
@@ -115,7 +133,7 @@ The token's administrator lacks read access. Give that administrator **Read-only
 </Accordion>
 
 <Accordion title="That domain answered, but it does not serve the Okta org settings">
-The domain is misspelled, or it's the `-admin` console address rather than your organization domain. Copy the organization domain again from the top right of the Admin Console.
+The domain is misspelled, or it's the `-admin` console address rather than your organization domain. Click your name in the top right of the Admin Console and copy the domain shown under your email.
 </Accordion>
 
 <Accordion title="An agent can't find a person by email">

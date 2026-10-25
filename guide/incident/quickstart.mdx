@@ -8,7 +8,7 @@ In about 10 minutes you create an alert endpoint, send it a test alert with `cur
 
 ## Prerequisites
 
-- A CloudThinker workspace where you can edit Resolve settings. If you can only view, the Integrations page won't let you add a signal.
+- The workspace **Admin** role. Developers and Viewers can see **Resolve → Integrations** but can't add a signal. See [Roles](/guide/security/roles).
 - A terminal with `curl`.
 - Optional, for a meaningful RCA: at least one cloud or observability [connection](/guide/connections/overview), so CloudThinker has something to investigate.
 
@@ -16,10 +16,14 @@ In about 10 minutes you create an alert endpoint, send it a test alert with `cur
 
 <Steps>
   <Step title="Open Resolve">
-    Click **Resolve** in the sidebar. On a workspace with no source yet, you see **Connect your first alert source**. Click **Skip for now**; you'll add the source from Integrations in the next step.
+    Click **Resolve** in the sidebar. On a workspace with no source yet, you see **Connect your first alert source**. Click **Skip for now**. The wizard behind **Connect a source** asks you to type field paths, while the **Custom source** on Integrations captures your test payload so you can click the fields instead.
   </Step>
   <Step title="Add a Custom source">
-    Go to **Resolve → Integrations**, select the **Custom source** card, and click **Add signal**.
+    Go to **Resolve → Integrations** and select **Custom source**. In its panel, under **Signals to Resolve**, click **Add signal**.
+
+    <Frame caption="Resolve Integrations: platforms that need setup are listed under Needs setup">
+      <img src="/images/v2/resolve-integrations.webp" alt="Resolve Integrations page listing alert platforms grouped by readiness, with a Needs setup group" />
+    </Frame>
   </Step>
   <Step title="Name it">
     Enter a **Source name**, for example `quickstart-test`, and click **Create endpoint**.
@@ -48,7 +52,9 @@ curl -X POST "<your-webhook-url>" \
   }'
 ```
 
-`severity` accepts `critical`, `high`, `medium`, `low`, or `info` as written. Any other value lands as `medium` unless you add a severity mapping later.
+**Success state:** `curl` returns a `2xx` status with a JSON body that includes `"success": true`. The dialog checks for the payload on its own and switches to **Payload received**. If it doesn't, click **Check again** next to the waiting message.
+
+`severity` accepts `critical`, `high`, `medium`, `low`, or `info`, in any letter case, so `Critical` works too. Any other value lands as `medium` unless you add a [severity mapping](/guide/incident/webhook-integrations/custom-source).
 
 <Steps>
   <Step title="Map the fields">
@@ -64,8 +70,10 @@ curl -X POST "<your-webhook-url>" \
 
     Click **Save mapping**.
   </Step>
-  <Step title="Send the same alert twice more">
-    Run the `curl` command two more times. Repeats of the same fault join one cluster instead of creating new work.
+  <Step title="Send the alert twice more, a minute apart">
+    Run the `curl` command again, wait at least one minute, and run it a third time. Repeats of the same fault join one cluster instead of creating new work.
+
+    Every send becomes a signal, including the first one. The payload has no `timestamp` field, so Pulse uses the time it received each send. An identical send in the same minute as an earlier one is dropped as a duplicate, which is why you wait. Expect two or three signals, depending on whether the first two sends landed in the same minute.
   </Step>
 </Steps>
 
@@ -77,26 +85,28 @@ Pulse is Resolve's detection layer. A **signal** is an alert that survived noise
   <Step title="Open Pulse">
     Go to **Resolve → Pulse**.
 
-    **Success state:** one cluster titled `Checkout API 5xx rate above 5%` with more than one signal, in the **Active** lane. A critical cluster nobody has claimed also shows in **Needs you**.
+    **Success state:** a cluster titled `Checkout API 5xx rate above 5%` with at least two signals, in the **Active** lane. If you see it in **Forming** with one signal, the repeats were too close together: wait a minute and send again.
+
+    Already in **Routed**? **On duty** is on in a new workspace, so triage picked the cluster up on its own. Skip to [Open the investigation](#open-the-investigation-and-root-cause).
   </Step>
   <Step title="Hand it to triage">
-    Click the cluster, then **Escalate** → **Send to triage**. CloudThinker reads the cluster and matches it to an open incident or opens a new one.
+    Click the cluster, then **Escalate** → **Send to triage**. CloudThinker reads the cluster and matches it to an open incident, opens a new one, or decides it needs no incident.
 
     **Success state:** the cluster moves to the **Routed** lane.
   </Step>
 </Steps>
 
 <Note>
-Triage judges the alert on evidence. A test alert about a service CloudThinker can't find in your connections may be judged as needing no action, and no incident opens. That's triage working. Use the next section to see a full investigation anyway.
+For a made-up alert, both triage outcomes are normal. A test alert about a service CloudThinker can't find in your connections may be judged as needing no action, so no incident opens and the cluster doesn't move to **Routed**. That isn't a mistake on your side: log the incident by hand in the next step. To make an incident more likely, replace `checkout-api` with a real service name from a connected account.
 </Note>
 
 ## Open the investigation and root cause
 
 <Steps>
   <Step title="Find the incident">
-    Go to **Resolve → Investigation**. If triage opened an incident, it's in the queue, under **AI is handling** while RCA runs.
+    Go to **Resolve → Investigation**. If triage opened an incident, it's in the queue, under **AI is handling** while RCA runs. The row reads **Investigating** until the result is ready.
 
-    No incident? Click **Log Incident**, describe the same problem, and save. A logged incident waits for you to start it.
+    No incident? Click **Log Incident**. Enter the alert title in **What's happening?**, set **Severity** to **Critical**, and save. A logged incident waits for you to start it. See [Log an incident](/guide/incident/manual-logging) for the other fields.
   </Step>
   <Step title="Start RCA if it hasn't started">
     Check the **On duty** switch in the page header. With **On duty**, RCA starts on its own for incidents from Pulse. With **Paused**, or for a logged incident, open it and click **Investigate**.
@@ -104,23 +114,40 @@ Triage judges the alert on evidence. A test alert about a service CloudThinker c
   <Step title="Read the result">
     Open the incident. CloudThinker shows its verdict, confidence, the evidence it read, a timeline, and remediation suggestions.
 
-    **Success state:** the incident leaves **AI is handling**. It lands in **Needs your decision** when CloudThinker found a cause or needs input from you.
+    **Success state:** the incident leaves **AI is handling** and lands in **Needs your decision**. With a connection that covers the alert, the row usually reads **Cause found**. With no connections, it reads **Investigation complete** or **Checks incomplete**, and the result says CloudThinker couldn't verify the cause.
   </Step>
 </Steps>
 
-With no connections, the RCA will say it couldn't verify the cause. That's the honest answer for a made-up alert. Connect the system the alert is about and the same flow produces a real root cause.
+A result without a verified cause is the honest answer for a made-up alert. Connect the system the alert is about and the same flow produces a real root cause.
+
+## Clean up
+
+The test source keeps accepting alerts until you remove it.
+
+1. Close the test incident so it doesn't stay in your queue. Open it from **Resolve → Investigation**, click the status badge in the incident header, pick **False Alarm**, and click **Change Status**.
+2. In **Resolve → Pulse**, open the test cluster and click **Resolve**. The button shows once no open incident holds the cluster. Left alone, the cluster closes after 12 hours with no new signal.
+3. Go to **Resolve → Integrations** → **Custom source**, open the `quickstart-test` row's **⋯** menu, and click **Delete**.
 
 ## Troubleshooting
 
 <AccordionGroup>
   <Accordion title="The dialog keeps waiting for the first payload">
-    Check that `curl` returned a `2xx` and that the `Authorization` header uses `Bearer` plus the token. Then click **Check again**. If it says no field could be read, the body wasn't a JSON object: send `{...}`, not an array or plain text.
+    Check the status `curl` returned, then click **Check again**.
+
+    | Status | Usual cause |
+    |---|---|
+    | `401` | The token is wrong or missing, or the URL was cut short. Check the `Authorization: Bearer` header and paste the full URL again. |
+    | `404` | The URL path is wrong. Copy the **Webhook URL** again. |
+    | `422` | The body isn't valid JSON. |
+    | `429` | Too many requests or failed sign-ins in a short time. Wait, then retry. |
+
+    If the dialog says no field could be read, the body wasn't a JSON object: send `{...}`, not an array or plain text.
   </Accordion>
   <Accordion title="I lost the token">
     It isn't shown again. On the **Custom source** card, open the source row's **⋯** menu and click **Regenerate credentials**. The old token stops working, so update anything that already sends to it.
   </Accordion>
   <Accordion title="Nothing shows up in Pulse">
-    Switch to the **All** lane and widen the time window. Check for a snooze on `checkout-api` in the cluster panel and click **Unsnooze**.
+    Switch to the **All** lane and widen the time window. Then check the funnel at the top of **Resolve → Pulse**: if the raw event count went up but no cluster appeared, suppression dropped the event, most often as a duplicate sent in the same minute. Change the `title` and send again.
   </Accordion>
   <Accordion title="Escalate is missing">
     Escalate only shows on a **Forming** or **Active** cluster that isn't routed yet. If the cluster is already in **Routed**, triage has it: open the incident from **Resolve → Investigation**.

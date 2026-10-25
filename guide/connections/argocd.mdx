@@ -13,10 +13,13 @@ Connect Argo CD to let CloudThinker agents list your applications, explain why o
 - An Argo CD server reachable from CloudThinker over HTTPS. A `localhost` or cluster-internal address won't work.
 - Admin access to Argo CD, so you can create a local account and generate a token for it.
 - The [Argo CD CLI](https://argo-cd.readthedocs.io/en/stable/cli_installation/) on your machine to generate the token.
+- Self-hosted only: `kubectl` access to the `argocd` namespace, to edit the `argocd-cm` and `argocd-rbac-cm` ConfigMaps.
+
+If your server is on a private network, see [Reaching private services](/guide/connections/overview#reaching-private-services).
 
 ## Setup
 
-Create a dedicated `cloudthinker` account instead of using `admin`. Its token then carries only the permissions you grant in [Required permissions](#required-permissions), and you can revoke it without touching anyone else.
+Create a dedicated `cloudthinker` account instead of using `admin`. Its token then carries only the RBAC permissions you grant it, and you can revoke it without touching anyone else.
 
 <Tabs>
   <Tab title="Self-hosted Argo CD">
@@ -34,24 +37,35 @@ Create a dedicated `cloudthinker` account instead of using `admin`. Its token th
 
         ```bash
         argocd login argocd.example.com --username admin
-        argocd account generate-token --account cloudthinker
+        argocd account generate-token --account cloudthinker --expires-in 90d
         ```
 
-        Copy the token. Add `--insecure` to both commands only if the server uses a self-signed certificate.
+        Copy the token. Add `--insecure` to both commands only if the server uses a self-signed certificate. Without `--expires-in`, the token never expires, so set a lifetime and generate a new one before it lapses.
 
         **Success state:** the second command prints a long token string.
+      </Step>
+      <Step title="Grant the account read access">
+        Run `kubectl -n argocd edit configmap argocd-rbac-cm` and add these lines to the existing `policy.csv`:
+
+        ```csv
+        p, role:cloudthinker, applications, get, */*, allow
+        p, role:cloudthinker, logs, get, */*, allow
+        g, cloudthinker, role:cloudthinker
+        ```
+
+        Edit the ConfigMap rather than applying a new one. `kubectl apply` with a fresh `argocd-rbac-cm` replaces your whole policy and can lock other users out. To let agents change things, add the lines in [Required permissions](#required-permissions).
       </Step>
       <Step title="Add the connection in CloudThinker">
         Open **Workspace Settings → Connections**, stay on the **Builtin Connections** tab, and select **ArgoCD**. Fill in:
 
         - **ARGOCD_BASE_URL**: your server address, such as `https://argocd.example.com`
         - **ARGOCD_API_TOKEN**: the token you copied
-        - **NODE_TLS_REJECT_UNAUTHORIZED**: **Verify TLS (default)**, or **Skip TLS verification** for a self-signed certificate
-        - **READ_ONLY**: **Read-only** to start (see [Agent capabilities](#agent-capabilities))
+        - **NODE_TLS_REJECT_UNAUTHORIZED** (TLS verification): **Verify TLS (default)**, or **Skip TLS verification** for a self-signed certificate
+        - **READ_ONLY**: change it to **Read-only**. The form defaults to **Full access**.
 
         Click **Connect**.
 
-        **Success state:** the **Connect ArgoCD** dialog closes without an error. Run the verify prompt below.
+        **Success state:** the dialog closes and the connection shows **Connected**. That status doesn't prove the token or RBAC works, so run the verify prompt below.
       </Step>
     </Steps>
   </Tab>
@@ -65,22 +79,31 @@ Create a dedicated `cloudthinker` account instead of using `admin`. Its token th
 
         ```bash
         argocd login <instance-id>.cd.akuity.cloud --grpc-web --username admin
-        argocd account generate-token --account cloudthinker --grpc-web
+        argocd account generate-token --account cloudthinker --grpc-web --expires-in 90d
         ```
 
         Copy the token.
+      </Step>
+      <Step title="Grant the account read access">
+        Add these lines to the instance's RBAC policy in the Akuity Portal:
+
+        ```csv
+        p, role:cloudthinker, applications, get, */*, allow
+        p, role:cloudthinker, logs, get, */*, allow
+        g, cloudthinker, role:cloudthinker
+        ```
       </Step>
       <Step title="Add the connection in CloudThinker">
         Open **Workspace Settings → Connections**, stay on the **Builtin Connections** tab, and select **ArgoCD**. Fill in:
 
         - **ARGOCD_BASE_URL**: `https://<instance-id>.cd.akuity.cloud`
         - **ARGOCD_API_TOKEN**: the token you copied
-        - **NODE_TLS_REJECT_UNAUTHORIZED**: **Verify TLS (default)**
-        - **READ_ONLY**: **Read-only** to start
+        - **NODE_TLS_REJECT_UNAUTHORIZED** (TLS verification): **Verify TLS (default)**
+        - **READ_ONLY**: change it to **Read-only**. The form defaults to **Full access**.
 
         Click **Connect**.
 
-        **Success state:** the **Connect ArgoCD** dialog closes without an error.
+        **Success state:** the dialog closes and the connection shows **Connected**. Run the verify prompt below to confirm the token and RBAC work.
       </Step>
     </Steps>
   </Tab>
@@ -92,24 +115,22 @@ Create a dedicated `cloudthinker` account instead of using `admin`. Its token th
 |-------|-------------|---------|
 | **ARGOCD_BASE_URL** | Argo CD server address, HTTPS | none |
 | **ARGOCD_API_TOKEN** | Token for the account CloudThinker uses | none |
-| **NODE_TLS_REJECT_UNAUTHORIZED** | **Verify TLS (default)** checks the server certificate. **Skip TLS verification** accepts self-signed certificates; use it only for local or dev servers | Verify TLS |
-| **READ_ONLY** | **Read-only** turns off the sync, create, update, delete, and resource action tools. **Full access (default)** keeps them on | Full access |
+| **NODE_TLS_REJECT_UNAUTHORIZED** | TLS verification. **Verify TLS (default)** checks the server certificate. **Skip TLS verification** accepts self-signed certificates; use it only for local or dev servers | Verify TLS |
+| **READ_ONLY** | **Read-only** turns off the sync, create, update, delete, and resource action tools. **Full access** keeps them on | Full access |
+
+<Warning>
+**READ_ONLY** defaults to **Full access**. Switch it to **Read-only** unless you want agents to propose syncs and changes. RBAC still blocks anything the account isn't granted.
+</Warning>
 
 ## Required permissions
 
-Grant the `cloudthinker` account a role in Argo CD RBAC. Add these lines to the existing `policy.csv` in the `argocd-rbac-cm` ConfigMap with `kubectl -n argocd edit configmap argocd-rbac-cm`. On Akuity, add them to the instance's RBAC policy.
+The read lines from setup cover every read: `applications, get` covers application status, resource trees, managed resources, and events, and `logs, get` lets agents read pod logs. Add a line for each change you want agents to propose:
 
-```csv
-p, role:cloudthinker, applications, get, */*, allow
-p, role:cloudthinker, logs, get, */*, allow
-g, cloudthinker, role:cloudthinker
-```
-
-`applications, get` covers application status, resource trees, managed resources, and events. `logs, get` lets agents read pod logs. To let agents sync after approval, also add `p, role:cloudthinker, applications, sync, */*, allow`.
-
-<Warning>
-Edit the ConfigMap rather than applying a new one. `kubectl apply` with a fresh `argocd-rbac-cm` replaces your whole policy and can lock other users out.
-</Warning>
+| Capability | Policy line |
+|------------|-------------|
+| Sync | `p, role:cloudthinker, applications, sync, */*, allow` |
+| Change applications | `p, role:cloudthinker, applications, create, */*, allow`<br />`p, role:cloudthinker, applications, update, */*, allow`<br />`p, role:cloudthinker, applications, delete, */*, allow` |
+| Resource actions | `p, role:cloudthinker, applications, action/*, */*, allow` |
 
 ## Agent capabilities
 
@@ -122,7 +143,7 @@ Edit the ConfigMap rather than applying a new one. `kubectl apply` with a fresh 
 | **Change applications** | Create, update, or delete an application | Yes, and off in Read-only |
 | **Resource actions** | Run an action such as a restart on a managed resource | Yes, and off in Read-only |
 
-Every change goes through [Approvals](/guide/approvals/overview), and a rejected request isn't retried. To let agents sync, set **READ_ONLY** to **Full access (default)** and add the `applications, sync` permission. Leave either one out and agents can only read.
+Every change goes through [Approvals](/guide/approvals/overview), and a rejected request isn't retried. To let agents sync, set **READ_ONLY** to **Full access** and add the `applications, sync` permission. Leave either one out and agents can only read.
 
 ### Verify the connection
 
@@ -140,7 +161,7 @@ Which resources in payments-api differ from Git, and what changed?
 Sync the payments-api app and tell me when it's Healthy
 ```
 
-Name the application. Agents use real names from the application list and won't guess one. The sync prompt needs **Full access (default)** and the `applications, sync` permission.
+Name the application. Agents use real names from the application list and won't guess one. The sync prompt needs **Full access** and the `applications, sync` permission.
 
 ## Troubleshooting
 
@@ -149,7 +170,7 @@ CloudThinker can't reach **ARGOCD_BASE_URL**, or the server's certificate was re
 </Accordion>
 
 <Accordion title="Requests return 401">
-The token is missing, expired, or was generated for a different account. Run `argocd account generate-token --account cloudthinker` again, edit the connection, and paste the new token.
+The token is missing, expired, or was generated for a different account. Run `argocd account generate-token --account cloudthinker --expires-in 90d` again, edit the connection, and paste the new token.
 </Accordion>
 
 <Accordion title="Permission denied (code 7)">
@@ -161,7 +182,7 @@ The role grants no access to those projects. The `*/*` pattern in the policy cov
 </Accordion>
 
 <Accordion title="Sync, create, update, or delete is unavailable">
-**READ_ONLY** is set to **Read-only**. Edit the connection and switch to **Full access (default)** if you want agents to propose those changes.
+**READ_ONLY** is set to **Read-only**. Edit the connection and switch to **Full access** if you want agents to propose those changes.
 </Accordion>
 
 <Accordion title="Generating a token fails">

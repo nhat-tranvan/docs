@@ -4,7 +4,7 @@ description: "Triage Pulse clusters: understand their lifecycle and suppression,
 icon: layer-group
 ---
 
-A cluster is a group of related signals that Pulse treats as one problem, so a flapping alarm that fires 18 times becomes one item with 18 members. This page covers how clusters open and close, what Pulse drops before clustering, and what each action does.
+A cluster is a group of related signals that Pulse treats as one problem, so a flapping alarm that fires 18 times becomes one item with 18 members. This page covers how clusters open and close, what Pulse drops before clustering, and what each action does. Every cluster action, including **Snooze**, needs the workspace **Admin** role. Developers and Viewers can read clusters but don't see the actions. See [Roles](/guide/security/roles).
 
 ## Cluster lifecycle
 
@@ -16,7 +16,10 @@ stateDiagram-v2
     Forming --> Active: second signal joins
     Forming --> Resolved: 12 hours quiet, or Resolve
     Active --> Resolved: 12 hours quiet, or Resolve
+    Resolved --> [*]
 ```
+
+A resolved cluster never reopens. The next matching signal starts a new cluster. The 12-hour rule reads only the cluster's own signals, so it closes routed clusters too.
 
 | Status | Meaning |
 |---|---|
@@ -36,12 +39,18 @@ Before a raw event becomes a signal, Pulse runs four checks in order. The first 
 
 | Check | Drops | Exceptions |
 |---|---|---|
-| Dedup | Exact repeats of an event within one hour. | None. |
-| Rate limit | Events past 100 per minute from one source. | Critical and high events always pass. |
+| Dedup | An exact repeat: same source, event type, resource, title and severity, with a timestamp in the same minute as an earlier event. Pulse remembers each event for one hour to catch repeats. | None. |
+| Rate limit | Events past 100 per minute from one source. The limit is fixed, not a setting. | Critical and high events always pass. |
 | Snooze | Events matching a snooze someone set. | None. |
 | Verdict | Repeats of a pattern CloudThinker learned is noise while investigating. The quiet window grows from 6 hours to 24 hours to 7 days. | Critical and high events always pass. |
 
-Surviving signals are then classified. A signal the classifier judges **Not actionable** is suppressed too and doesn't reach triage, except IAM, SSO and KMS key lifecycle events, which are never dropped this way.
+The timestamp is the event's own time: for a webhook, the payload's `timestamp` field (or the field you mapped), or the time Pulse received it when there's none. For example, a tool that retries an alert 20 minutes later with its original timestamp is dropped as a duplicate. Two sends with no timestamp, a minute apart, are not.
+
+Dedup counts each dropped repeat on the original signal. Rate limit, Snooze and Verdict keep the event as a suppressed signal instead of deleting it. Suppressed signals don't join clusters. To see how many there are, hover the funnel at the top of **Resolve → Pulse**, which counts every raw event that arrived, or open **Resolve → Insights → Pulse analysis** for **Noise suppressed** and **Top noisy sources**. See [Pulse Analytics](/guide/pulse/analytics).
+
+Learned Verdict patterns aren't listed anywhere you can edit. Three things end one early: a critical or high event with the same pattern, which passes and clears it; **Unsnooze** on a matching snoozed signal, which also clears it; or the quiet window running out, after 7 days at most.
+
+After a signal joins its cluster, CloudThinker classifies it. A signal judged **Not actionable** doesn't send its cluster to triage, except IAM, SSO and KMS key lifecycle events, which are never dropped this way.
 
 ## Triage a cluster
 
@@ -50,17 +59,17 @@ Surviving signals are then classified. A signal the classifier judges **Not acti
     In **Resolve → Pulse**, start with the **Needs you** lane, then **Active**. Click a cluster to open its detail panel. It shows the **AI summary**, the **Cluster members** list, each signal's raw payload, and the suppression and enrichment steps each signal went through.
   </Step>
   <Step title="Acknowledge or assign it">
-    Click **Acknowledge** to mark it seen. This silences alerts, but the cluster stays open; click again to undo. Use the assign control to pick a teammate.
+    Click **Acknowledge** to mark it seen. It takes the cluster out of **Needs you**, but the cluster stays open and new signals still join it. Click **Acknowledged** to undo. To give it an owner, click **Assign** and pick a teammate. Assigning doesn't notify the teammate, so tell them.
 
     **Success state:** the cluster leaves **Needs you**.
   </Step>
   <Step title="Hand it to an incident">
-    Click **Escalate**, then **Send to triage**. Triage matches the cluster to an open incident, a closed one that's back, or a new one, and opens its conversation. To pick the incident yourself, use **Attach to incident...**. Open incidents are listed first, and picking a closed one reopens it.
+    Click **Escalate**, then **Send to triage**. Triage matches the cluster to an open incident, a closed one that's back, or a new one. To pick the incident yourself, use **Attach to incident...**. Open incidents are listed first, and picking a closed one reopens it.
 
     **Success state:** the cluster moves to the **Routed** lane.
   </Step>
   <Step title="Close it when fixed">
-    Click **Resolve**, then confirm in **Resolve Cluster**. This can't be undone. A routed cluster hides **Escalate** and **Resolve**, because its incident owns it.
+    Click the cluster's **Resolve** button, then confirm in **Resolve Cluster**. This can't be undone: if the fault fires again, a new matching signal opens a new cluster. A routed cluster hides **Escalate** and **Resolve**, because its incident owns it.
   </Step>
 </Steps>
 
@@ -68,14 +77,14 @@ Surviving signals are then classified. A signal the classifier judges **Not acti
 
 | Action | Where | Result |
 |---|---|---|
-| **Acknowledge** | Cluster panel | Marks the cluster seen and silences its alerts. Stays open. |
-| Assign | Cluster panel | Gives the cluster an owner. |
+| **Acknowledge** | Cluster panel | Marks the cluster seen and takes it out of **Needs you**. Stays open. |
+| **Assign** | Cluster panel | Gives the cluster an owner. |
 | **Escalate** | Cluster panel | Sends the cluster to triage. Hidden while an open incident holds it. |
-| **Attach to incident...** | Cluster panel | Links the cluster to an incident you pick. Always available. |
+| **Attach to incident...** | Cluster panel | Links the cluster to an incident you pick. Always available. On a cluster that's already routed, it adds a second link: the cluster stays with its first incident too. |
 | **Resolve** | Cluster panel | Closes the cluster for good. Hidden while routed. |
-| **Snooze** | A signal in the panel | Mutes matching signals for **1 hour**, **4 hours**, **1 day** or **Forever**. Click **Unsnooze** to undo. |
+| **Snooze** | **Snooze** button at the bottom of a signal's panel, when you open a signal that isn't part of a cluster | Mutes matching signals for **1 hour**, **4 hours**, **1 day** or **Forever**. Click **Unsnooze** to undo. |
 
-A snooze on a signal that names a resource mutes similar alerts on that resource only. Otherwise it mutes every alert with the same source and event type, so check the hint in the menu before you pick a duration.
+A snooze on a signal that names a resource mutes similar alerts on that resource only. Otherwise it mutes every alert with the same source and event type, so check the hint in the menu before you pick a duration. A **Forever** snooze never expires: matching alerts stay muted until someone clicks **Unsnooze** on that signal.
 
 ## Troubleshooting
 
@@ -84,10 +93,17 @@ A snooze on a signal that names a resource mutes similar alerts on that resource
     The cluster is routed: an open incident holds it. Work it from the incident, or close the incident first.
   </Accordion>
   <Accordion title="Triage didn't start after Escalate">
-    A message says it couldn't start or is still queued. Open the cluster again and retry. A failed triage also puts critical and high clusters back in **Needs you**.
+    The cluster panel shows **Queued for triage** or **Triage could not run**. If it couldn't run, click **Retry** next to that message. A failed triage also puts critical and high clusters back in **Needs you**.
   </Accordion>
   <Accordion title="An important alert never showed up">
-    Check for a snooze on that source or resource and click **Unsnooze**. Low and medium alerts can also be dropped by the rate limit during a burst.
+    Check each cause in turn:
+
+    - **Snooze:** someone muted that source or resource. Open a matching signal and click **Unsnooze**.
+    - **Rate limit:** low and medium alerts past 100 a minute from one source are dropped during a burst.
+    - **Verdict:** CloudThinker learned the pattern is noise. Low and medium repeats stay quiet for up to 7 days; see [Noise suppression](#noise-suppression) to clear it.
+    - **Not actionable:** the alert arrived and clustered, but classification judged it not actionable, so it never went to triage. Look for its cluster in the **All** lane and click **Escalate**.
+
+    Hover the funnel at the top of **Resolve → Pulse** to see whether events are being suppressed.
   </Accordion>
 </AccordionGroup>
 

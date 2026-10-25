@@ -8,12 +8,28 @@ import ConnectionSecurity from '/snippets/connection-security.mdx';
 
 Connect Prometheus so CloudThinker can run PromQL queries, list metrics and labels, check scrape-target health, and read active alerts and alert rules. The connection is read-only and authenticates with no auth, a bearer token, or HTTP Basic auth.
 
+## Supported platforms
+
+The rule: the endpoint must answer `<your URL>/api/v1/query` at the root of its address, with no auth, a bearer token, or HTTP Basic auth.
+
+| Platform | Supported | Notes |
+|----------|-----------|-------|
+| **Self-hosted Prometheus** | Yes | |
+| **Thanos Querier** | Yes | |
+| **Grafana Mimir, Cortex, Grafana Cloud metrics** | No | The query API sits under a path prefix such as `/prometheus` or `/api/prom`. For Grafana Cloud, use the [Grafana connection](/guide/connections/grafana) instead |
+| **Amazon Managed Service for Prometheus** | No | Needs AWS SigV4 request signing |
+| **Google Cloud Managed Service for Prometheus** | No | Needs Google Cloud authentication |
+
 ## Prerequisites
 
-- A Prometheus HTTP API reachable from CloudThinker over the internet. CloudThinker connects from its cloud, not from inside your network.
-- The API served at the root of its address, so `<your URL>/api/v1/query` answers. Self-hosted Prometheus and a Thanos Querier work this way.
+- A Prometheus HTTP API reachable from the internet. Connections run from CloudThinker Cloud, not from inside your network.
+- A publicly trusted TLS certificate if the URL uses HTTPS. There's no field to add a private CA.
 - A bearer token or a username and password, if a proxy or gateway in front of Prometheus requires one.
 - Permission to add connections in your CloudThinker workspace.
+
+<Tip>
+Prometheus inside Kubernetes on a private address? Expose it through an ingress with TLS and an auth proxy that checks a bearer token or Basic auth, then allowlist CloudThinker's egress IPs (ask your CloudThinker contact for the current list). For other options, see [Reaching private services](/guide/connections/overview#reaching-private-services).
+</Tip>
 
 <Warning>
 The URL can't include a path. An endpoint that only answers under a prefix, such as `https://metrics.example.com/prometheus/api/v1`, fails the connection test. Expose the API at the root of a hostname instead.
@@ -28,8 +44,15 @@ The URL can't include a path. An endpoint that only answers under a prefix, such
     Check it from a terminal before you connect:
 
     ```bash
+    # No auth
     curl -s "https://prometheus.example.com/api/v1/query?query=count(up)"
+    # Bearer token
+    curl -s -H "Authorization: Bearer <token>" "https://prometheus.example.com/api/v1/query?query=count(up)"
+    # Basic auth
+    curl -s -u <user>:<password> "https://prometheus.example.com/api/v1/query?query=count(up)"
     ```
+
+    Run it from a machine outside your network, with the same credentials you'll give CloudThinker.
 
     **Success state:** the response starts with `{"status":"success","data":{"resultType":"vector"`.
   </Step>
@@ -39,28 +62,35 @@ The URL can't include a path. An endpoint that only answers under a prefix, such
     | **None** | The endpoint is open or limited by network rules | URL only |
     | **Bearer Token** | A proxy expects `Authorization: Bearer <token>` | **PROMETHEUS_TOKEN** |
     | **Basic Auth** | A proxy expects a username and password | **PROMETHEUS_USERNAME**, **PROMETHEUS_PASSWORD** |
+
+    <Warning>
+    Prometheus exposes its loaded config, internal hostnames, and target addresses to anyone who can reach it. Use **None** only behind a firewall rule that allows just CloudThinker's egress IPs (ask your CloudThinker contact for the current list). Never use **None** on an endpoint open to the whole internet.
+    </Warning>
   </Step>
   <Step title="Add the connection">
-    In CloudThinker, go to **Connections**, find **Prometheus**, and click **Connect**. Fill in:
+    Open **Workspace Settings → Connections**, stay on the **Builtin Connections** tab, and select **Prometheus**. Fill in:
     - **Alias** (optional): a short name such as `prod-metrics`. Lowercase letters, numbers, and hyphens.
     - **Description** (optional): what this Prometheus covers. Agents read it to pick the right instance when you connect more than one.
     - **PROMETHEUS_URL**: the base URL from step 1.
     - **PROMETHEUS_AUTH_TYPE**: **None**, **Bearer Token**, or **Basic Auth**, then the credential fields that appear.
+    - **LOG_LEVEL**: leave at **Info**.
 
-    Click **Connect**. CloudThinker runs `count(up)` against the endpoint, shows **Connecting** and **Verifying**, then a **Connected** status.
+    Click **Connect**. CloudThinker runs `count(up)` against the endpoint, shows **Connecting** and **Verifying**, then a **Connected** status. If verification fails, it shows **Failed** and an error message appears. Match the message to [Troubleshooting](#troubleshooting).
   </Step>
 </Steps>
 
 ## Connection details
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| **PROMETHEUS_URL** | Base URL of the Prometheus HTTP API, no path | `https://prometheus.example.com` |
-| **PROMETHEUS_AUTH_TYPE** | **None** (default), **Bearer Token**, or **Basic Auth** | `Bearer Token` |
-| **PROMETHEUS_TOKEN** | Token sent as `Authorization: Bearer`. Bearer Token mode only | `eyJhbGci...` |
-| **PROMETHEUS_USERNAME** | HTTP Basic username. Basic Auth mode only | `cloudthinker` |
-| **PROMETHEUS_PASSWORD** | HTTP Basic password. Basic Auth mode only | |
-| **LOG_LEVEL** | Connector log detail. Leave at **Info** unless support asks | `Info` |
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| **Alias** | No | Picked for you | Short name such as `prod-metrics`. Lowercase letters, numbers, and hyphens |
+| **Description** | No | `Prometheus` | What this endpoint covers. Agents read it to pick the right instance |
+| **PROMETHEUS_URL** | Yes | None | Base URL of the Prometheus HTTP API, no path, such as `https://prometheus.example.com` |
+| **PROMETHEUS_AUTH_TYPE** | Yes | **None** | **None**, **Bearer Token**, or **Basic Auth** |
+| **PROMETHEUS_TOKEN** | Bearer Token mode | None | Token sent as `Authorization: Bearer` |
+| **PROMETHEUS_USERNAME** | Basic Auth mode | None | HTTP Basic username |
+| **PROMETHEUS_PASSWORD** | Basic Auth mode | None | HTTP Basic password |
+| **LOG_LEVEL** | No | **Info** | Connector log detail. Leave at **Info** unless support asks |
 
 ## Required permissions
 

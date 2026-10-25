@@ -8,9 +8,9 @@ Pulse only sees what you send it. This page gets one alert source flowing into P
 
 ## Prerequisites
 
-- A CloudThinker workspace with permission to manage Resolve integrations.
-- Access to the tool that produces your alerts (for example CloudWatch, Datadog or Grafana), so you can add a webhook or fire a test alert.
-- For AWS polling: an [AWS connection](/guide/connections/aws) in the workspace.
+- The workspace **Admin** role. Developers and Viewers can see **Resolve → Integrations** but can't add a signal. See [Roles](/guide/security/roles).
+- Access to the tool that produces your alerts (for example CloudWatch, Datadog or Grafana), so you can add a webhook or fire a test alert. For a webhook, the tool must be able to reach the webhook URL over HTTPS.
+- For AWS polling: an [AWS connection](/guide/connections/aws) in the workspace. AWS GuardDuty, AWS Config and AWS IAM Access Analyzer must already be turned on in that AWS account, in at least one region. CloudThinker reads them; it doesn't turn them on.
 - For chat: Slack or Microsoft Teams connected to CloudThinker ([Slack](/guide/slack-integration), [Teams](/guide/teams-integration)).
 
 ## Pick a signal path
@@ -21,7 +21,7 @@ Each platform on **Resolve → Integrations** can feed Pulse in up to three ways
 |---|---|---|
 | Webhook | **Webhook** | Monitoring tools that can POST an alert (CloudWatch through SNS, Datadog, Grafana, PagerDuty and more), or any in-house system through **Custom source**. |
 | Polling | **Polling source** | AWS services CloudThinker reads for you: CloudTrail, AWS Health, AWS GuardDuty, AWS IAM Access Analyzer and AWS Config. |
-| Chat | **Chat channel** | Slack or Teams channels where people and bots already post incident chatter. |
+| Chat | **Chat channel** | Slack or Teams channels where people already talk about incidents. |
 
 ## Connect a source
 
@@ -37,18 +37,40 @@ Each platform on **Resolve → Integrations** can feed Pulse in up to three ways
 
     <Tabs>
       <Tab title="Webhook">
-        Copy the webhook URL into your monitoring tool. For a vendor platform, the field mapping and severity mapping are preset. For **Custom source**, name the source, send one real alert, then click the payload fields that hold the **Incident title** (required), **Severity**, **Service**, **Resource** and **Description**. Paths are dotted, like `event.data.title`, never `$.event.data.title`. Full walkthroughs: [CloudWatch](/guide/incident/webhook-integrations/cloudwatch) and [custom source](/guide/incident/webhook-integrations/custom-source).
+        1. For **Custom source**, enter a **Source name** and click **Create endpoint** first. Copy the webhook URL and its secret. The secret is shown only once. If you lose it, open the row's **⋯** menu and click **Regenerate credentials**; the old secret stops working.
+        2. Paste both into your monitoring tool. The secret authenticates each call in the way your tool supports:
+
+           | Method | Used by |
+           |---|---|
+           | Bearer token header | **Custom source** and tools that send an `Authorization: Bearer` header |
+           | HMAC signature | Tools that sign their webhooks, like PagerDuty |
+           | API key header | CloudWatch through EventBridge |
+
+           [Choose authentication](/guide/incident/webhook-integrations/overview#choose-authentication) covers each method. For CloudWatch through SNS, you don't confirm the subscription by hand: CloudThinker confirms it when SNS sends the request.
+        3. Send one alert from the tool.
+        4. For a vendor platform, you're done: the field mapping and severity mapping are preset. For **Custom source**, click the payload fields that hold the **Incident title** (required), **Severity**, **Service**, **Resource** and **Description**. Paths are dotted, like `event.data.title`, never `$.event.data.title`.
+
+        Full walkthroughs: [CloudWatch](/guide/incident/webhook-integrations/cloudwatch) and [custom source](/guide/incident/webhook-integrations/custom-source).
       </Tab>
       <Tab title="AWS polling">
         Each AWS service appears as a row with a switch. Turn on the services you want Pulse to read. If you have more than one AWS connection, each row names the connection it reads.
+
+        | Service | Polled about every |
+        |---|---|
+        | CloudTrail, AWS Health, AWS GuardDuty | 5 minutes |
+        | AWS IAM Access Analyzer, AWS Config | 30 minutes |
+
+        The AWS connection needs read access to each service you turn on. See the [AWS connection](/guide/connections/aws) for its permissions.
       </Tab>
       <Tab title="Chat channel">
-        In **Listen for incidents**, add the channels Resolve should watch for incident mentions and operational context.
+        In **Listen for incidents**, add the channels Resolve should watch. Each message a person posts there becomes a signal, and classification decides whether it's actionable. For example, `checkout-api is returning 502s since the 14:05 deploy` is likely actionable, while a lunch plan isn't.
+
+        In Slack, messages from bots are skipped, including alert bots. Send bot alerts through a webhook instead.
       </Tab>
     </Tabs>
   </Step>
   <Step title="Send a test alert">
-    Trigger a real or test alert in the source tool, then open **Resolve → Pulse** and set the lane to **All**.
+    Trigger a real or test alert in the source tool, then open **Resolve → Pulse** and set the lane to **All**. A polled AWS source shows only after its next poll (see the AWS polling tab). If you resend a test, change its title or wait a minute. Pulse drops an exact copy whose timestamp falls in the same minute as an earlier one. For a webhook, the timestamp is the payload's `timestamp` field (or the field you mapped), or the time Pulse received it when there's none. So if your tool resends the same event with its original timestamp, waiting doesn't help: change the title.
 
     **Success state:** the alert appears as a cluster, and the platform shows **Ready** on **Resolve → Integrations**.
   </Step>
@@ -64,22 +86,29 @@ Open a webhook from its platform's **Signals to Resolve** section to edit these.
 
 | Setting | Default | What it does |
 |---|---|---|
-| **Auto-investigate** | On | CloudThinker starts one root cause investigation when this webhook's alert leads to an incident. Off means it investigates only when you ask. |
-| **Only from a minimum severity** | Off | Lower-severity alerts still group into clusters, but don't start an investigation. Turning it on starts at **High and above**. |
-| **Send directly to CloudThinker** | Off | Skips Pulse filtering and grouping. While **On duty** is on, CloudThinker judges each event itself. Use it only for low-volume sources where every event matters. |
+| **Auto-investigate** | On | This webhook's clusters go to triage and investigation on their own. Off means its alerts still cluster in Pulse, but nothing starts until a person clicks **Escalate** or **Investigate**. |
+| **Only from a minimum severity** | Off | Lower-severity alerts still group into clusters, but don't start an investigation. Turning it on starts at **High and above**. You can pick **Critical only**, **High and above**, **Medium and above**, **Low and above**, or **Info and above**. |
+| **Send directly to CloudThinker** | Off | Skips Pulse filtering and grouping. Each event gets its own triage run, which decides whether it needs an incident or responders. While **On duty** is **Paused**, those runs wait until you switch back. Every run uses [credits](/guide/billing/usage), so use it only for low-volume sources where every event matters. |
 
-The workspace **On duty** switch on **Resolve → Investigation** still decides whether any investigation starts automatically. See [Settings](/guide/incident/settings).
+The workspace **On duty** switch in the **Resolve → Investigation** header combines with **Auto-investigate**:
+
+| | **On duty** | **Paused** |
+|---|---|---|
+| **Auto-investigate** on | Triage and RCA start on their own. | Triage waits until you switch back. |
+| **Auto-investigate** off | Nothing starts on its own. | Nothing starts on its own. |
+
+In every case, a person can still click **Escalate** on the cluster or **Investigate** on the incident. See [Resolve settings](/guide/incident/settings).
 
 ## Read the readiness badge
 
 | Badge | Meaning | Fix |
 |---|---|---|
-| **Ready** | At least one signal path works. | Nothing to do. |
-| **Partially ready** | Some paths work, others don't. | Open the platform and check each signal row. |
-| **Needs setup** | Connected, but no signal path is set up. | Add a signal. |
-| **Needs connection** | The platform needs an account connection first. | Connect it in the **Connection** section. |
-| **Needs attention** | Something is failing, such as an unhealthy connection. | Open the platform and follow the row's hint. |
 | **Not configured** | You haven't touched this platform. | Ignore it, or set it up. |
+| **Needs connection** | The platform needs an account connection first. | Connect it in the **Connection** section. |
+| **Needs setup** | The account is connected, but no signal path is set up yet, so no signal can arrive. | Add a signal. |
+| **Partially ready** | Part of the setup isn't working: a connection is disconnected or failing, or a signal row is switched off or failing. | Open the platform and check each connection and signal row. |
+| **Ready** | Every connection and signal row is set up and active. This doesn't prove an event arrived. | Confirm one signal in Pulse. |
+| **Needs attention** | No connection works because of an error, or an outcome such as posting to Slack is blocked. | Open the platform and follow the row's hint. |
 
 ## Troubleshooting
 
@@ -88,7 +117,7 @@ The workspace **On duty** switch on **Resolve → Investigation** still decides 
     **Cause:** the source never sent, or sent to the wrong URL. **Check:** the delivery log in your monitoring tool. **Fix:** paste the webhook URL again and fire a test alert.
   </Accordion>
   <Accordion title="The alert arrived but no cluster appeared">
-    **Cause:** suppression dropped it, often as a duplicate of an alert sent in the last hour. **Check:** the **All** lane and the platform's signal row. **Fix:** send a different alert, or see [noise suppression](/guide/pulse/clusters#noise-suppression).
+    **Cause:** suppression dropped it, often as a duplicate: same title, severity and resource, with a timestamp in the same minute as an earlier alert. **Check:** the funnel at the top of **Resolve → Pulse**. If the raw event count went up but no cluster appeared in the **All** lane, suppression dropped the event. **Fix:** send a different alert, or see [noise suppression](/guide/pulse/clusters#noise-suppression).
   </Accordion>
   <Accordion title="Custom source clusters have no useful title">
     **Cause:** the field mapping points at the wrong path. **Fix:** edit the webhook, send a fresh payload and pick the field again.

@@ -12,7 +12,8 @@ Connect Databricks to let CloudThinker agents explain why a job run failed, flag
 
 ## Prerequisites
 
-- A Databricks workspace, and a user there who is allowed to create personal access tokens.
+- A Databricks workspace with personal access tokens turned on. A workspace admin turns them on under **Settings → Advanced → Personal Access Tokens**, and grants **Can Use** on token permissions to the user or service principal the connection acts as.
+- The connection takes a token only. OAuth machine-to-machine sign-in (a client ID and secret) isn't supported.
 - Optional: a SQL warehouse, if you want agents to run SQL queries.
 
 ---
@@ -33,8 +34,11 @@ Connect Databricks to let CloudThinker agents explain why a job run failed, flag
   <Step title="Copy the SQL warehouse ID (optional)">
     Skip this step if you don't want agents running SQL. Otherwise, go to **SQL Warehouses**, open the warehouse, and select **Connection details**. The warehouse ID is the last segment of the **HTTP path**: in `/sql/1.0/warehouses/1a2b3c4d5e6f7g8h`, it's `1a2b3c4d5e6f7g8h`.
   </Step>
+  <Step title="Open network access">
+    Skip this step if your workspace has no IP access list. Otherwise, ask your CloudThinker contact for the current CloudThinker egress IP addresses, and have a workspace admin add them to the workspace's IP access list.
+  </Step>
   <Step title="Add the connection in CloudThinker">
-    Go to **Connections → Databricks**, fill in the fields below, and click **Connect**.
+    Go to **Connections → Databricks**, fill in the fields from [Connection details](#connection-details), and click **Connect**.
 
     **Success state:** Databricks shows a **Connected** status.
   </Step>
@@ -55,7 +59,7 @@ Databricks revokes a personal access token after 90 days without use, and every 
 
 | Field | Required | Description | Example |
 |-------|----------|-------------|---------|
-| **DATABRICKS_HOST** | Yes | Workspace URL, including `https://` | `https://dbc-a1b2345c-d6e7.cloud.databricks.com` |
+| **DATABRICKS_HOST** | Yes | Workspace URL, including `https://`. Azure looks like `https://adb-1234567890123456.7.azuredatabricks.net`, Google Cloud like `https://1234567890123456.7.gcp.databricks.com` | `https://dbc-a1b2345c-d6e7.cloud.databricks.com` |
 | **DATABRICKS_TOKEN** | Yes | Personal access token for the connection's user | Secret, not shown |
 | **DATABRICKS_WAREHOUSE_ID** | No | SQL warehouse ID. Needed only for SQL queries. Leave empty to turn SQL off. | `1a2b3c4d5e6f7g8h` |
 
@@ -65,7 +69,14 @@ You can add more than one Databricks connection, for example one per workspace. 
 
 ## Required permissions
 
-The token carries every permission of the user who created it. Use a dedicated, non-admin user and grant only what agents need.
+The token carries every permission of the user who created it. Use a dedicated, non-admin identity and grant only what agents need. A service principal is the cleanest choice, but its token can't be created from the Settings page. A workspace admin creates it with the Databricks CLI instead:
+
+```bash
+databricks token-management create-obo-token <service-principal-application-id> \
+  --lifetime-seconds 7776000 --comment cloudthinker
+```
+
+The service principal needs **Can Use** on token permissions first. Copy `token_value` from the output.
 
 | Agents can | Grant the token's user |
 |------------|------------------------|
@@ -74,10 +85,13 @@ The token carries every permission of the user who created it. Use a dedicated, 
 | Read notebooks and workspace files | **Can Read** on the folders or notebooks |
 | Explore catalogs and table metadata | `USE CATALOG`, `USE SCHEMA`, and `BROWSE` in Unity Catalog |
 | Run SQL queries | **Can Use** on the warehouse, plus `SELECT` on the tables |
-| Start, resize, or terminate clusters, run or cancel jobs, change notebooks or files | Manage-level permissions on those objects, plus a pass through [approvals](/guide/approvals/overview) |
+| Start, restart, or terminate a cluster | **Can Restart** on the cluster |
+| Resize a cluster, create or delete a job | **Can Manage** on the cluster or job |
+| Run or cancel a job | **Can Manage Run** on the job |
+| Import notebooks, write or delete files | **Can Edit** on the folder or notebook |
 
 <Tip>
-Don't create the token as a workspace admin. Start with the view-level grants above, leave **DATABRICKS_WAREHOUSE_ID** empty until you need SQL, and add manage-level grants only for the objects you want agents to change.
+Don't create the token as a workspace admin. Start with the view-level grants above, leave **DATABRICKS_WAREHOUSE_ID** empty until you need SQL, and add change grants only for the objects you want agents to change.
 </Tip>
 
 ---
@@ -94,7 +108,6 @@ Don't create the token as a workspace admin. Start with the view-level grants ab
 | **SQL queries** | Run read-only queries (`SELECT`, `SHOW`, `DESCRIBE`) through the configured warehouse |
 | **Changes** | Start, resize, or terminate a cluster, run or cancel a job, create or delete a job, import notebooks, write or delete files. Each one goes through approvals. |
 
-CloudThinker stays read-only while it investigates. A change runs only when you ask for it by name, and your [Approval mode](/guide/approvals/approval-mode) decides whether it waits for a person.
 
 ### Verify the connection
 
@@ -114,6 +127,14 @@ The third prompt needs **DATABRICKS_WAREHOUSE_ID**. Without it, CloudThinker can
 
 ---
 
+## Write access
+
+There's no **Allow writes** switch on Databricks. The token's user grants are the real boundary: with only the view-level grants from [Required permissions](#required-permissions), Databricks refuses every change.
+
+When the user holds change grants, each change goes through your [Rules](/guide/approvals/rules) first, then your [Approval mode](/guide/approvals/approval-mode). CloudThinker stays read-only while it investigates, and a change runs only when you ask for it. CloudThinker doesn't undo a change for you, so a deleted job or file stays deleted.
+
+---
+
 ## Troubleshooting
 
 <Accordion title="401 Unauthorized">
@@ -129,7 +150,7 @@ The token's user lacks permission on that object. Grant the matching permission 
 </Accordion>
 
 <Accordion title="No job runs come back, but jobs exist">
-Some workspaces return runs only when the request names a job. Ask about a specific job, for example "show recent runs of the nightly-etl job". An empty cluster or job list on a new workspace is also normal.
+Check that the token's user has **Can View** on the jobs. Then ask about one job by name, for example "show recent runs of the nightly-etl job". An empty cluster or job list on a new workspace is normal.
 </Accordion>
 
 <Accordion title="SQL queries fail while everything else works">

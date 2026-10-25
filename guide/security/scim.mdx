@@ -21,14 +21,16 @@ SCIM (System for Cross-domain Identity Management) lets your identity provider (
 | Change their name or email | Their CloudThinker profile updates |
 | Deactivate them (set inactive) | Their membership is suspended and they lose access to every workspace |
 | Reactivate them | Their membership comes back, with the auto-assigned workspaces |
-| Unassign or delete them | They're removed from the organization |
+| Delete them (SCIM `DELETE`) | They're removed from the organization |
 | Push a group | The group appears under **Group mappings**, where you pick workspaces for its members |
+
+Unassigning someone from the app usually counts as a deactivation, not a delete. Okta and Microsoft Entra ID both send `active=false` when you unassign a user, so the person is **suspended** in CloudThinker, not removed. They're removed only when your IdP sends a `DELETE`.
 
 While SCIM is on, your IdP is the source of truth for who's in the organization:
 
 - **Member invitations are turned off.** Inviting from CloudThinker returns "Member invitations are disabled because this organization uses SCIM provisioning."
 - **You can't remove a SCIM-provisioned member in CloudThinker.** The error reads "This member was provisioned via SCIM." Remove them in your IdP instead.
-- **Just-in-time provisioning is turned off.** SCIM and just-in-time (accounts created on first SSO sign-in) can't run together. Turning on SCIM switches just-in-time off for you.
+- **Just-in-time provisioning is turned off.** SCIM and just-in-time (accounts created on first SSO sign-in) can't run together. Turning on SCIM switches just-in-time off for you. Someone on your domain whom your IdP hasn't provisioned is refused at SSO sign-in with "No account found. Contact your administrator for access." until your IdP provisions them.
 
 You can still change a member's role or workspace access in CloudThinker. See [Organization](/guide/organization).
 
@@ -74,16 +76,72 @@ Owner can't be assigned this way. For what each role can do, see [Roles and perm
 
 ## Configure your identity provider
 
-Open the provisioning settings of your CloudThinker app in your IdP (Okta, Microsoft Entra ID, OneLogin and others use the same fields) and enter:
+Use the CloudThinker app you created for SSO.
 
-| IdP field | Value |
-|---|---|
-| SCIM connector base URL / Tenant URL | The **SCIM base URL** from CloudThinker |
-| Authentication | HTTP header, bearer token |
-| Bearer token / Secret token | The **Bearer token** from CloudThinker |
-| Unique identifier for users | `userName`, set to the user's email address |
+<Tabs>
+  <Tab title="Okta">
+    <Steps>
+      <Step title="Enable SCIM on the app">
+        Open the CloudThinker app. On the **General** tab, click **Edit** under **App Settings**, set **Provisioning** to **SCIM**, and save.
+      </Step>
+      <Step title="Enter the connection details">
+        On **Provisioning → Integration**, click **Edit**:
 
-Then turn on the operations you want: create users, update user attributes, deactivate users, and push groups. Run your IdP's **Test connection** if it has one.
+        | Okta field | Value |
+        |---|---|
+        | **SCIM connector base URL** | The **SCIM base URL** from CloudThinker |
+        | **Unique identifier field for users** | `userName` |
+        | **Supported provisioning actions** | **Push New Users**, **Push Profile Updates**, **Push Groups** |
+        | **Authentication Mode** | **HTTP Header** |
+        | **Authorization** | The **Bearer token** from CloudThinker |
+
+        Click **Test Connector Configuration**, then **Save**.
+      </Step>
+      <Step title="Turn on To App actions">
+        On **Provisioning → To App**, click **Edit** and enable **Create Users**, **Update User Attributes** and **Deactivate Users**. Save.
+      </Step>
+      <Step title="Push groups">
+        On the **Push Groups** tab, add the groups you want to map to workspaces.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Microsoft Entra ID">
+    <Steps>
+      <Step title="Set the admin credentials">
+        Open **Enterprise applications → CloudThinker → Provisioning**. Set **Provisioning Mode** to **Automatic**. Under **Admin Credentials**, enter the **SCIM base URL** as **Tenant URL** and the **Bearer token** as **Secret Token**. Click **Test Connection**, then **Save**.
+      </Step>
+      <Step title="Check the mappings">
+        Under **Mappings**, keep user and group provisioning enabled. Confirm the attribute mapped to `userName` holds the user's email on a verified domain.
+      </Step>
+      <Step title="Start provisioning">
+        Under **Settings**, set **Scope** to **Sync only assigned users and groups**. Set **Provisioning Status** to **On** and save. Entra runs a cycle about every 40 minutes.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Other SCIM 2.0 provider">
+    | IdP field | Value |
+    |---|---|
+    | SCIM base URL / Tenant URL | The **SCIM base URL** from CloudThinker |
+    | Authentication | HTTP header, bearer token |
+    | Bearer token / Secret token | The **Bearer token** from CloudThinker |
+    | Unique identifier for users | `userName`, set to the user's email address |
+
+    Turn on create users, update user attributes, deactivate users and push groups. Run your IdP's **Test connection** if it has one.
+  </Tab>
+</Tabs>
+
+CloudThinker reads these attributes:
+
+| Resource | Attribute | Required | Used for |
+|---|---|---|---|
+| User | `userName` | Yes | Email, when `emails` is empty |
+| User | `emails` | No | Email. The `primary` entry wins, otherwise the first. |
+| User | `name.givenName`, `name.familyName` | No | Display name |
+| User | `active` | No (default `true`) | Suspending and reactivating |
+| User | `externalId` | No | Matching the user in filters |
+| Group | `displayName` | Yes | The name under **Group mappings** |
+| Group | `members` | No | Who gets the group's workspaces |
+| Group | `externalId` | No | Matching the group |
 
 **Success state:** assign one test user to the app. Within your IdP's sync interval they appear in **Admin Settings → Organization → Members**, and **View sync logs** shows a `CREATE` entry with status `SUCCESS`.
 
@@ -115,6 +173,8 @@ Groups let one IdP change put a whole team into the right workspaces.
   </Step>
   <Step title="Choose the group role">
     Set **Auto-assigned organization role** for the group, or leave **Inherit from connection** to use the default role you set above.
+
+    CloudThinker sets a member's organization role once, when it creates them. Later syncs don't change it, so a role you change by hand in CloudThinker stays.
   </Step>
   <Step title="Save the row">
     Click **Save** in the **Actions** column.
@@ -135,12 +195,12 @@ After the first sync, check new members' roles in **Admin Settings → Organizat
 |---|---|---|---|
 | Deactivate (set inactive) | Suspended | Removed from all | Turned off |
 | Reactivate | Active again, if a seat is free | Auto-assigned workspaces only; re-add the rest | Stay off until someone turns them on |
-| Unassign or delete | Removed | Removed from all | Turned off |
+| Delete (SCIM `DELETE`) | Removed | Removed from all | Turned off |
 
-[Automations](/guide/automation/automations) never change owner on their own. An Admin can take ownership of one whose owner lost access, and it stays off until they turn it on.
+[Automations](/guide/automation/automations) never change owner on their own. A workspace Admin can select **Take ownership** on the automation's page, and it stays off until they turn it on. See [automation owners](/guide/automation/autonomous-agents).
 
 <Note>
-If your plan uses per-seat billing and every seat is taken, a newly provisioned or reactivated person is added as inactive and can't use CloudThinker yet. Add seats from **Admin Settings → Organization**, then check their status in **Members**.
+If your plan uses per-seat billing and every seat is taken, a newly provisioned or reactivated person is added as inactive and can't use CloudThinker yet. Active members and pending invitations use seats; suspended and inactive members don't. The Owner adds seats on **Admin Settings → Billing**; see [Add or remove seats](/guide/billing/subscription#add-or-remove-seats). Then check their status in **Admin Settings → Organization → Members**.
 </Note>
 
 ## Rotate or turn off the token
@@ -173,7 +233,7 @@ Click **View sync logs** in **Directory sync (SCIM)** to open **SCIM sync logs**
 | **Resource** | `User` or `Group`, with its ID |
 | **Status** | `SUCCESS`, `SKIPPED` or `FAILED` |
 
-CloudThinker also checks once a day for SCIM-provisioned people with no sync activity for 7 days, and adds a `SKIPPED` entry for each one so you can confirm they still belong.
+CloudThinker also checks once a day for SCIM-provisioned people with no sync activity for 7 days, and adds an `UPDATE` entry with status `SKIPPED` for each one. It's a reminder only: CloudThinker doesn't change their access. Check that the person is still assigned in your IdP, and unassign them there if they've left.
 
 ## Troubleshooting
 
@@ -185,13 +245,13 @@ CloudThinker also checks once a day for SCIM-provisioned people with no sync act
     CloudThinker doesn't pull groups; your IdP has to push them. Assign the groups to the CloudThinker app in your IdP, run a push, then look for `Group` entries in **View sync logs**.
   </Accordion>
   <Accordion title="A user wasn't provisioned">
-    Confirm the user is assigned to the CloudThinker app in your IdP, then look for a `FAILED` entry in the sync logs. Common causes: the token was rotated more than 24 hours ago or revoked, the person's existing account uses an unverified email domain, or the email belongs to a CloudThinker system account.
+    Confirm the user is assigned to the CloudThinker app in your IdP, then look for a `FAILED` entry in the sync logs. Common causes: the token was rotated more than 24 hours ago or revoked, the person's existing account uses an unverified email domain ("User email domain not verified for this organization"), or the email is reserved for an internal CloudThinker account ("This email belongs to a CloudThinker System user"). For the last one, use a different email or contact support.
   </Accordion>
   <Accordion title="Someone left but can still sign in">
     Unassign or deactivate them on the CloudThinker app itself. Removing them from a group only changes group membership. Some IdPs sync on a schedule (Microsoft Entra ID runs about every 40 minutes), so wait for the next cycle and check the sync logs.
   </Accordion>
   <Accordion title="All syncs fail with authentication errors">
-    The token in your IdP is no longer valid: another Owner rotated it more than 24 hours ago, or SCIM was turned off. Click **Rotate token** and paste the new value into your IdP. If SCIM was turned off, select **SCIM** again to get a new token.
+    The token in your IdP is no longer valid: the token was rotated more than 24 hours ago, or SCIM was turned off. Click **Rotate token** and paste the new value into your IdP. If SCIM was turned off, select **SCIM** again to get a new token.
   </Accordion>
   <Accordion title="Cannot enable JIT provisioning while SCIM is active">
     Just-in-time and SCIM can't run together. Choose **Just-in-time** in **Provisioning & directory sync** and confirm **Disable SCIM**, which revokes the token and stops directory sync.

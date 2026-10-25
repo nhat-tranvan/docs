@@ -13,7 +13,7 @@ Connect ClickHouse to let CloudThinker list databases and tables, check part cou
 ## Prerequisites
 
 - A ClickHouse server reachable from CloudThinker on its **HTTP interface**: `8443` with TLS, `8123` without. ClickHouse Cloud and self-hosted clusters both work. The native TCP port (`9000`) is not used.
-- An admin login on ClickHouse to create a dedicated user.
+- An admin login on ClickHouse to create a dedicated user. On ClickHouse Cloud, run the Setup SQL in the service's **SQL console** as the `default` user.
 
 ---
 
@@ -41,8 +41,9 @@ Connect ClickHouse to let CloudThinker list databases and tables, check part cou
     ```
   </Step>
   <Step title="Open network access">
-    - **ClickHouse Cloud**: add CloudThinker to the service's IP access list under the service **Settings → Security**.
-    - **Self-hosted**: allow inbound `8443` (or `8123`) from CloudThinker in your firewall or security group.
+    Ask your CloudThinker contact for the current list of CloudThinker egress IP addresses, then:
+    - **ClickHouse Cloud**: add them to the service's IP access list under the service **Settings → Security**.
+    - **Self-hosted**: allow inbound `8443` (or `8123`) from them in your firewall or security group.
   </Step>
   <Step title="Add the connection in CloudThinker">
     Go to **Connections → ClickHouse**, fill in the fields from [Connection details](#connection-details), leave **Write access** on **Read-only (default)**, and click **Connect**.
@@ -112,7 +113,7 @@ List the ClickHouse databases and the tables in each one
 ### Example prompts
 
 ```text
-Which ClickHouse tables grew the most in the last week?
+Which ClickHouse tables are the largest by compressed size, and how many parts does each have?
 Show the 10 slowest queries from system.query_log in the last 24 hours, with the user and table for each
 Suggest a better sorting key for our largest MergeTree table, based on the queries that hit it
 ```
@@ -125,17 +126,24 @@ Suggest a better sorting key for our largest MergeTree table, based on the queri
 |--------------|-------------------------|------------------------|
 | **Read-only (default)** | Hidden | `SELECT` only. ClickHouse refuses anything else with error `164` (`READONLY`) |
 | **Full access** | **Blocked (default)** | `INSERT`, `ALTER`, and `CREATE`. `DROP TABLE` and `TRUNCATE` are refused |
-| **Full access** | **Allowed** | Everything above, plus dropping tables and databases |
+| **Full access** | **Allowed** | Everything above, plus `DROP TABLE` and `TRUNCATE`. `DROP DATABASE` also runs if the user holds that grant, which Required permissions leaves out |
 
 Before you choose **Full access**:
 
 - **Blocked protects the table, not the rows.** `ALTER TABLE ... DELETE`, `DROP PARTITION`, and `DROP COLUMN` still run and still remove data. Treat **Full access** as "the agent can destroy data".
 - **Nothing rolls back.** ClickHouse has no transactions, so recovery means restoring from a backup.
 
-To change **Write access** on an existing connection, click **Disconnect**, then **Connect** again with the new value.
+To change **Write access** on an existing connection, click **Disconnect**, then **Connect** again with the new value. Disconnect can't be undone, so have the password ready: you fill in every field again.
+
+If you applied the `READONLY` profile from Setup step 2, lift it first or ClickHouse keeps refusing writes:
+
+```sql
+ALTER USER cloudthinker SETTINGS PROFILE default;
+DROP SETTINGS PROFILE cloudthinker_readonly;
+```
 
 <Warning>
-ClickHouse runs every query through one tool, so CloudThinker can't ask for approval on writes separately from reads. With **Full access**, a write runs without a per-query confirmation. Try it on a staging cluster before the one your dashboards read from.
+ClickHouse runs every query through one tool, so CloudThinker can't ask for approval on writes separately from reads. Approval Rules and Approval mode don't apply to ClickHouse writes: with **Full access**, a write runs without a per-query confirmation. Try it on a staging cluster before the one your dashboards read from.
 </Warning>
 
 ---
@@ -149,7 +157,7 @@ Check the user exists with `SHOW USERS;`, then retype the password instead of pa
 <Accordion title="ClickHouse is unreachable, or rejected the request path">
 - **Port** and **Use TLS** must agree: `8443` with TLS, `8123` without. `9000` is the native TCP port, not the HTTP interface.
 - **Host** must have no `https://` prefix and no `:port` suffix.
-- On ClickHouse Cloud, add CloudThinker to the service IP access list. Self-hosted, check the firewall and that `<listen_host>` covers the exposed interface.
+- On ClickHouse Cloud, add CloudThinker's egress IPs (ask your CloudThinker contact) to the service IP access list. Self-hosted, check the firewall and that `<listen_host>` covers the exposed interface.
 </Accordion>
 
 <Accordion title="ClickHouse did not answer in time">
@@ -185,7 +193,7 @@ The user needs `SHOW TABLES` and `SELECT` on the database, not only on single ta
   <Card title="PostgreSQL Connection" icon="/images/icons/postgresql.svg" href="/guide/connections/postgresql">
     Connect a PostgreSQL database the same way
   </Card>
-  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
-    Control which agent changes run on their own and which wait for you
+  <Card title="Connections overview" icon="plug" href="/guide/connections/overview">
+    How credentials and write controls work across connections
   </Card>
 </CardGroup>

@@ -12,7 +12,7 @@ CloudThinker runs the AWS CLI against your account to answer questions about com
 
 - An AWS account where you can create IAM roles (or IAM users, for the access-key method).
 - Access to [AWS CloudShell](https://console.aws.amazon.com/cloudshell/home) in that account. The setup script runs there, so you install nothing.
-- For cost questions and [Optimize](/guide/cost-optimization/overview): Cost Explorer turned on in the account. AWS can take up to 24 hours to activate it on a new account.
+- For cost questions and [Optimize](/guide/cost-optimization/overview): Cost Explorer turned on in the account (**Billing and Cost Management → Cost Explorer → Launch Cost Explorer**, in the management account for an organization). AWS can take up to 24 hours to activate it on a new account.
 
 ## Setup
 
@@ -56,7 +56,7 @@ Open the connect dialog first: in the sidebar, click **More → Workspace settin
       </Step>
     </Steps>
 
-    Prefer to create the role yourself, for example in Terraform or CloudFormation? Expand **Manual steps** in the dialog. It shows the trust policy with your External ID and the CloudThinker principal filled in. The shape is:
+    Prefer to create the role yourself, for example in Terraform or CloudFormation? Expand **Manual steps** in the dialog. It shows the trust policy with your External ID and the CloudThinker principal filled in. The principal is the same for every workspace. Only the External ID changes with each dialog. The shape is:
 
     ```json
     {
@@ -73,9 +73,34 @@ Open the connect dialog first: in the sidebar, click **More → Workspace settin
       ]
     }
     ```
+
+    The same role in Terraform, with both values passed in as variables:
+
+    ```hcl
+    variable "cloudthinker_principal" {}
+    variable "cloudthinker_external_id" {}
+
+    resource "aws_iam_role" "cloudthinker" {
+      name = "CloudThinkerAccessRole"
+      assume_role_policy = jsonencode({
+        Version = "2012-10-17"
+        Statement = [{
+          Effect    = "Allow"
+          Principal = { AWS = var.cloudthinker_principal }
+          Action    = "sts:AssumeRole"
+          Condition = { StringEquals = { "sts:ExternalId" = var.cloudthinker_external_id } }
+        }]
+      })
+    }
+
+    resource "aws_iam_role_policy_attachment" "read_only" {
+      role       = aws_iam_role.cloudthinker.name
+      policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+    }
+    ```
   </Tab>
   <Tab title="Access Keys">
-    Use this only when your organization doesn't allow cross-account roles. Access keys are long-lived, so you have to rotate them yourself.
+    Use this only when your organization doesn't allow cross-account roles. Access keys are long-lived, so you have to rotate them yourself, for example every 90 days. See [Rotate a credential](/guide/connections/overview#rotate-a-credential).
 
     <Steps>
       <Step title="Name the account">
@@ -96,6 +121,8 @@ Open the connect dialog first: in the sidebar, click **More → Workspace settin
 ### Connect more accounts
 
 Each AWS account is its own connection. Click **Connect** again on **Amazon Web Services**, give the account its own alias, and run the script from that dialog in the new account's CloudShell. Always copy the script from the dialog you're completing, so the trust policy carries the External ID that dialog shows.
+
+There's no organization-wide onboarding, so each account needs its own connection. For costs across an AWS Organization, connect the management account.
 
 ## Connection details
 
@@ -122,7 +149,7 @@ The setup scripts attach the AWS managed `ReadOnlyAccess` policy. It lets agents
 | Agents to make specific changes | Add only those actions to the role, then see [Write access](#write-access) |
 
 <Tip>
-`ReadOnlyAccess` can read data as well as configuration, such as S3 objects. If that's broader than you want, swap it for a custom read policy. A missing permission only limits the feature that needs it. It never disconnects the account.
+`ReadOnlyAccess` can read data as well as configuration, such as S3 objects. A narrower option is AWS managed `ViewOnlyAccess` plus `SecurityAudit`, with the `ce:Get*` reads added for Optimize. A missing permission only limits the feature that needs it. It never disconnects the account.
 </Tip>
 
 ## Agent capabilities
@@ -161,12 +188,22 @@ Find EC2 instances in us-east-1 with average CPU under 10% over the last two wee
 | Extra write actions granted | Off | Read-only. CloudThinker refuses every change before it reaches AWS. |
 | Extra write actions granted | On | Agents can propose changes. Your [Rules and Approval mode](/guide/approvals/overview) decide each one. |
 
+To lock writes in CloudThinker as well, open **Amazon Web Services** in Connections and turn off the **Allow writes** switch on its detail panel.
+
 ## Troubleshooting
 
 <Accordion title="The script says CloudThinkerAccessRole already exists">
 **Cause:** an earlier setup in this account created the role, likely with a different External ID.
 
-**Fix:** if no other CloudThinker connection uses that role, delete it (`aws iam delete-role --role-name CloudThinkerAccessRole`, after detaching its policies) and run the new script. Otherwise, use **Manual steps** to update the existing role's trust policy with the External ID shown in this dialog.
+**Fix:** if no other CloudThinker connection uses that role, detach its policy and delete it, then run the new script:
+
+```bash
+aws iam detach-role-policy --role-name CloudThinkerAccessRole \
+  --policy-arn arn:aws:iam::aws:policy/ReadOnlyAccess
+aws iam delete-role --role-name CloudThinkerAccessRole
+```
+
+Otherwise, use **Manual steps** to update the existing role's trust policy with the External ID shown in this dialog.
 </Accordion>
 
 <Accordion title="The test fails with AccessDenied on sts:AssumeRole">
@@ -195,7 +232,7 @@ Find EC2 instances in us-east-1 with average CPU under 10% over the last two wee
 <ConnectionSecurity />
 
 - **Prefer the role.** CloudThinker assumes the role through AWS STS and gets short-lived credentials, so there's no long-lived secret to leak. The External ID stops anyone else from using your role through CloudThinker.
-- **Audit with CloudTrail.** Every call agents make is an ordinary AWS API call. Filter CloudTrail by `CloudThinkerAccessRole` (or `CloudThinkerUser`) to see exactly what ran.
+- **Audit with CloudTrail.** Every call agents make is an ordinary AWS API call. To see exactly what ran, filter on `userIdentity.sessionContext.sessionIssuer.userName` = `CloudThinkerAccessRole` in CloudTrail Lake or Athena. For access keys, filter **Event history** by **User name** = `CloudThinkerUser`.
 
 ## Related
 

@@ -6,19 +6,19 @@ icon: "/images/icons/mysql.svg"
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect a MySQL database to let CloudThinker agents inspect schemas, indexes, table health, and slow queries by running SQL against it. You give CloudThinker one connection URL (`MYSQL_URL`) for a dedicated database user, and agents can do exactly what that user's grants allow.
+Connect a MySQL database to let CloudThinker agents inspect schemas, indexes, table health, and slow queries by running SQL against it. You give CloudThinker one connection URL (`MYSQL_URL`) for a dedicated database user: agents can do what that user's grants allow, and any write pauses for [Approvals](/guide/approvals/overview) first.
 
 ## Prerequisites
 
-- A MySQL endpoint CloudThinker can reach over the network, such as self-hosted MySQL, Amazon RDS for MySQL, or Cloud SQL for MySQL. Agents connect from CloudThinker's managed sandbox, so `localhost` and private addresses resolve there, not on your network.
+- A MySQL endpoint CloudThinker can reach from the internet, such as self-hosted MySQL, Amazon RDS for MySQL, or Cloud SQL for MySQL. Agents connect from CloudThinker Cloud, so `localhost` and private addresses resolve there, not on your network. See [Reaching private services](/guide/connections/overview#reaching-private-services).
 - An admin account that can run `CREATE USER` and `GRANT`.
-- Performance Schema turned on if you want slow-query analysis. It's on by default in MySQL 5.7 and later.
+- Performance Schema turned on if you want slow-query analysis. It's on by default in self-hosted MySQL 5.7 and later. On Amazon RDS it depends on the `performance_schema` parameter in your parameter group.
 
 ## Setup
 
 <Steps>
   <Step title="Create a dedicated user">
-    Connect as an admin and create a user for CloudThinker. Replace `%` with the address range CloudThinker connects from if you want to pin it down.
+    Connect as an admin and create a user for CloudThinker. `%` lets the user sign in from any host. To pin it to CloudThinker, create it once per egress IP instead, such as `'cloudthinker_readonly'@'203.0.113.10'`, and run the grants below for each. Ask your CloudThinker contact for the current IP list.
 
     ```sql
     CREATE USER 'cloudthinker_readonly'@'%' IDENTIFIED BY '<secure-password>';
@@ -40,19 +40,19 @@ Connect a MySQL database to let CloudThinker agents inspect schemas, indexes, ta
     SHOW VARIABLES LIKE 'performance_schema';
     ```
 
-    **Success state:** the value is `ON`. If it's `OFF`, set `performance_schema = ON` under `[mysqld]` in `my.cnf` and restart MySQL. On RDS or Cloud SQL, change it in the parameter group or database flags and reboot.
+    **Success state:** the value is `ON`. If it's `OFF`, set `performance_schema = ON` under `[mysqld]` in `my.cnf` and restart MySQL. On RDS or Cloud SQL, change it in the parameter group or database flags. The parameter is static, so it takes effect only after a reboot.
   </Step>
   <Step title="Open network access">
-    Allow inbound connections on the MySQL port (default `3306`) from CloudThinker in your firewall, security group, or authorized networks list. A database that only listens on a private network needs a reachable endpoint first.
+    Allow inbound connections on the MySQL port (default `3306`) from CloudThinker's egress IPs in your firewall, security group, or authorized networks list. A database that only listens on a private network needs a reachable endpoint first, since this connection has no private-link option.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Open **Connections** in the sidebar, select **MySQL**, and click **Connect**. Paste the URL into **MYSQL_URL** and click **Connect**:
+    Open **Connections**, select **MySQL**, and click **Connect** on its detail panel. In the dialog, optionally change the **Alias** and **Description** (agents read the description to pick the right database when you connect several). Paste the URL into **MYSQL_URL** and click **Connect**:
 
     ```text
     mysql://cloudthinker_readonly:<secure-password>@db.example.com:3306/your_database
     ```
 
-    **Success state:** the connection shows **Connecting** and **Verifying**, then **Connected**. CloudThinker then runs a one-time, read-only [discovery](/guide/connections/overview) of the database.
+    **Success state:** the connection shows **Connecting** and **Verifying**, then **Connected**. CloudThinker then runs [Discovery](/guide/connections/overview#what-happens-after-you-connect) once: a read-only look at the database whose results show in the **Discovery** section of the connection's detail panel. It runs for at most 30 minutes.
   </Step>
 </Steps>
 
@@ -60,13 +60,15 @@ Connect a MySQL database to let CloudThinker agents inspect schemas, indexes, ta
 
 | Field | Required | Description | Example |
 |-------|----------|-------------|---------|
+| **Alias** | No | Short name for this database. Prefilled with the next free alias, such as `mysql-1` | `prod-db` |
+| **Description** | No | What this database is. Agents read it to choose between instances | `Production orders database` |
 | **MYSQL_URL** | Yes | Full connection URL: user, password, host, port, and database | `mysql://cloudthinker_readonly:<password>@db.example.com:3306/shop` |
 
 If the password contains `@`, `:`, `/`, or `#`, URL-encode it (for example, `@` becomes `%40`), or the URL won't parse.
 
 ## Required permissions
 
-Grant only the rows you need.
+Grant only the privileges for the capabilities you want.
 
 | You want agents to | Grant |
 |--------------------|-------|
@@ -76,7 +78,7 @@ Grant only the rows you need.
 | Check replica status and lag | `REPLICATION CLIENT ON *.*` |
 
 <Tip>
-Keep the user read-only. Never grant `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, or `ALL PRIVILEGES` unless you have a workflow that needs writes. Even then, write statements go through [Approvals](/guide/approvals/overview), and a [rule](/guide/approvals/rules) can ask first or refuse them.
+Keep the user read-only. Never grant `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, or `ALL PRIVILEGES` unless you have a workflow that needs writes. See [Write access](#write-access).
 </Tip>
 
 ## Agent capabilities
@@ -104,6 +106,15 @@ Which 10 queries spend the most total time on MySQL, and which indexes would hel
 Find indexes that haven't been used since the last restart
 Is anything blocking right now? Show long-running sessions and what they're waiting on
 ```
+
+## Write access
+
+CloudThinker classifies each SQL statement an agent sends before it runs.
+
+- `SELECT`, `SHOW`, `DESCRIBE`, `EXPLAIN`, and read-only `WITH` statements run without asking.
+- Any other statement, such as `INSERT`, `UPDATE`, or `ALTER`, counts as a write and pauses for [Approvals](/guide/approvals/overview).
+- `DELETE`, `DROP`, and `TRUNCATE` count as destructive. A [rule](/guide/approvals/rules) can ask first or refuse them.
+- An approved statement still fails if the user's grants don't allow it. A read-only user is the hard stop.
 
 ## Troubleshooting
 

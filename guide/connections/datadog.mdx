@@ -41,25 +41,29 @@ Datadog has two separate setups. For automatic root cause analysis on Datadog al
     In Datadog, go to **Organization Settings → API Keys**, click **New Key**, name it `cloudthinker`, and copy the value.
   </Step>
   <Step title="Create a scoped application key">
-    Go to **Organization Settings → Application Keys** and click **New Key**. Name it `cloudthinker`, then under scopes select the read permissions in [Required permissions](#required-permissions). Save and copy the key right away.
+    **Recommended:** create the key on a Datadog service account with the **Datadog Read Only Role**, so it isn't tied to a person's permissions. Go to **Organization Settings → Service Accounts**, create `cloudthinker` with that role, and add an application key on it.
+
+    Otherwise, go to **Organization Settings → Application Keys** and click **New Key**.
+
+    Either way, name the key `cloudthinker` and select the scopes in [Required permissions](#required-permissions). Save and copy the key right away.
+
+    <Warning>
+    An application key with no scopes inherits every permission of its owner, including writes. Always pick scopes.
+    </Warning>
 
     **Success state:** the key's scope list shows only read permissions, with no `_write` entries.
   </Step>
   <Step title="Add the connection">
-    In CloudThinker, go to **Connections**, find **Datadog**, and click **Connect**. Fill in:
+    Open **Workspace Settings → Connections**, stay on the **Builtin Connections** tab, and select **Datadog**. Fill in:
     - **Alias** (optional): a short name such as `datadog-prod`. Lowercase letters, numbers, and hyphens.
     - **Description** (optional): which org or environment this is. Agents read it to pick the right instance.
     - **DD_API_KEY**: the API key.
     - **DD_APPLICATION_KEY**: the application key.
     - **DD_SITE**: your site from step 1.
 
-    Click **Connect**. CloudThinker shows **Connecting** and **Verifying**, then a **Connected** status.
+    Click **Connect**. CloudThinker shows **Connecting** and **Verifying**, then a **Connected** status. **Verifying** opens a session with the Datadog MCP server for your site and lists its tools. It doesn't run a data query, so a missing scope shows up later as a 403 on that kind of question. If verification fails, it shows **Failed** and an error message appears. Match the message to [Troubleshooting](#troubleshooting).
   </Step>
 </Steps>
-
-<Warning>
-An application key with no scopes inherits every permission of the user who created it. Always pick scopes, or create the key on a Datadog service account with a read-only role.
-</Warning>
 
 ## Connection details
 
@@ -75,19 +79,19 @@ You need both keys. CloudThinker sends them to the Datadog MCP server for your s
 
 The Datadog MCP server checks Datadog's own permissions on every call. Pick the rows for the data you want CloudThinker to see.
 
-| Permission (application key scope) | What it unlocks |
-|------------------------------------|-----------------|
-| `mcp_read` | Any use of the Datadog MCP server. Required |
-| **Monitors Read** | Monitor search and alert triage |
-| **Logs Read Data**, **Logs Read Index Data** | Log search |
-| **Timeseries** | Log analytics, host metrics, events |
-| **Metrics** | Metric search and queries |
-| **Hosts Read** | Host inventory |
-| **Incidents Read** | Datadog incidents |
-| **Dashboards Read**, **User Access Read** | Dashboard search |
-| **APM Read** | Spans and traces |
-| **Events** | Event search |
-| **Notebooks Read** | Notebook search |
+| Scope ID | Name in Datadog | What it unlocks |
+|----------|--------------------------|-----------------|
+| `mcp_read` | `mcp_read` | Any use of the Datadog MCP server. Required |
+| `monitors_read` | Monitors Read | Monitor search and alert triage |
+| `logs_read_data`, `logs_read_index_data` | Logs Read Data, Logs Read Index Data | Log search |
+| `timeseries_query` | Timeseries | Log analytics, host metrics, events |
+| `metrics_read` | Metrics | Metric search and queries |
+| `hosts_read` | Hosts Read | Host inventory |
+| `incident_read` | Incidents Read | Datadog incidents |
+| `dashboards_read`, `user_access_read` | Dashboards Read, User Access Read | Dashboard search |
+| `apm_read` | APM Read | Spans and traces |
+| `events_read` | Events | Event search |
+| `notebooks_read` | Notebooks Read | Notebook search |
 
 <Tip>
 Leave out `mcp_write` and every `_write` scope. CloudThinker's Datadog investigations only read.
@@ -97,7 +101,7 @@ Leave out `mcp_write` and every `_write` scope. CloudThinker's Datadog investiga
 
 | Capability | What CloudThinker does |
 |------------|------------------------|
-| **Discovery** | Summarizes monitors by state (OK, Alert, Warn, No Data), hosts, active incidents, dashboards, services, and which optional Datadog toolsets your plan exposes |
+| **Discovery** | Summarizes monitors by state (OK, Alert, Warn, No Data), hosts, active incidents, dashboards, and services |
 | **Monitors** | Finds monitors by state, name, or tag and explains what's alerting |
 | **Logs** | Searches and groups logs in Datadog query syntax, such as `service:web status:error`, starting at the last 15 minutes |
 | **Metrics** | Finds metrics and queries them with an aggregation, such as `avg:system.cpu.user{host:web-1}` |
@@ -134,7 +138,7 @@ Resolve has no Datadog preset, so you send monitor alerts to a [custom signal so
     Go to **Resolve → Integrations**, select **Custom source**, and click **Add signal**. Name it `Datadog`, click **Create endpoint**, and copy the **Webhook URL** and secret key. The secret is shown only once.
   </Step>
   <Step title="Add the webhook in Datadog">
-    In Datadog, open **Integrations → Webhooks** and add a webhook named `cloudthinker`. Paste the **Webhook URL**, and add a custom header `{"Authorization": "Bearer <your-secret-key>"}`. Use a payload like this:
+    In Datadog, open **Integrations → Webhooks** and add a webhook named `cloudthinker`. Paste the **Webhook URL** into **URL**, and put this in the **Custom Headers** box: `{"Authorization": "Bearer <your-secret-key>"}`. Use a payload like this:
 
     ```json
     {
@@ -145,29 +149,33 @@ Resolve has no Datadog preset, so you send monitor alerts to a [custom signal so
       "message": "$EVENT_MSG"
     }
     ```
+
+    The secret is stored in Datadog's webhook configuration, so anyone who can manage that integration can read it. Limit that access, and regenerate the secret in Resolve if it leaks.
   </Step>
   <Step title="Notify the webhook from your monitors">
-    Add `@webhook-cloudthinker` to the message of each monitor that should open incidents.
+    Add `@webhook-cloudthinker` to the message of each monitor that should open incidents. The custom source has no status field, so every notification, including a recovery, arrives as a new signal. To send only alerts, wrap the mention in Datadog's alert condition:
+
+    ```text
+    {{#is_alert}}@webhook-cloudthinker{{/is_alert}}
+    ```
   </Step>
   <Step title="Send one test event and map the fields">
     Click **Test Notifications** on a monitor. When CloudThinker shows **Payload received**, click **Map the fields**, pick `title` for **Incident title** and `priority` for **Severity**, and click **Save mapping**.
   </Step>
 </Steps>
 
-**Success state:** the next alert from that monitor shows up in [Pulse](/guide/pulse/overview) with your monitor's title, and agents investigate it through this connection.
+**Success state:** the next alert from that monitor shows up in [Pulse](/guide/pulse/overview), the alert feed in Resolve, with your monitor's title, and agents investigate it through this connection.
 
 ## Troubleshooting
 
-<Accordion title="401 Unauthorized">
-One of the keys is wrong, revoked, or from a different Datadog organization. Create fresh keys in the same organization and update the connection from its detail panel.
+<Accordion title="401 or 403 at Verifying or on every call">
+- **DD_SITE** doesn't match your organization. Datadog keys only work on their own site, so compare it with your Datadog URL using the table in step 1, then edit the connection.
+- One of the keys is wrong, revoked, or from a different Datadog organization. Create fresh keys in the same organization and update the connection from its detail panel.
+- **MCP Access** is off for your organization, or the application key lacks `mcp_read`.
 </Accordion>
 
 <Accordion title="403 Forbidden on some questions but not others">
-The application key is missing the scope for that data, for example **APM Read** for traces. Add the scope in **Organization Settings → Application Keys**. If every call fails with 403, check that **MCP Access** is on and the key has `mcp_read`.
-</Accordion>
-
-<Accordion title="Connected, but everything comes back empty">
-**DD_SITE** probably doesn't match your organization. Compare it with your Datadog URL using the table in step 1, then edit the connection.
+The application key is missing the scope for that data, for example `apm_read` for traces. Add the scope in **Organization Settings → Application Keys**.
 </Accordion>
 
 <Accordion title="A metric or service isn't found">

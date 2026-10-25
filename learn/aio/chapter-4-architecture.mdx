@@ -4,13 +4,13 @@ description: "Learn the multi-agent reference architecture for operations: one o
 icon: diagram-project
 ---
 
-*The reference architecture that production deployments are converging on: an orchestrator, a team of specialists, a closed operational loop, and a context layer that makes them smart.*
+The reference architecture production deployments are converging on: an orchestrator, a team of specialists, a closed operational loop, and a context layer.
 
 ## 4.1 Why multi-agent, not mono-agent
 
-A note on what this chapter is describing, and what it is not. The architecture below (a single orchestrator, domain specialists, a two-tier sensing-and-resolving loop, and a tokenization boundary) is the pattern production deployments are converging on. It is not one vendor's product design. The convergence is observable in independent practice: Anthropic's published multi-agent research system uses the same orchestrator-and-workers shape, and Microsoft's and AWS's shipped operations agents are built from coordinated specialists under a controlling layer with per-agent, least-privilege credentials. How one platform (CloudThinker, this book's publisher) implements the pattern is a separate question, covered in §10.3. This chapter describes the shape itself, which holds whatever platform you choose.
+This chapter describes the vendor-neutral pattern. Sections 4.2 to 4.4 show where each part lives in CloudThinker, and [Chapter 10.3](/learn/aio/chapter-10-road-ahead#103-hyperscaler-agents-or-one-platform-across-clouds) compares it with the hyperscalers' own agents.
 
-The field has decisively moved from single all-purpose agents to orchestrated teams of specialists. Gartner reported a 1,445% surge in multi-agent system inquiries between Q1 2024 and Q2 2025. The reasons are practical:
+Production systems use orchestrated teams of specialists instead of one all-purpose agent. The reasons are practical:
 
 1. **Depth beats breadth.** A Kubernetes specialist with curated K8s tools, prompts, and learned patterns outperforms a generalist on K8s problems, the same way human teams specialize.
 
@@ -20,44 +20,56 @@ The field has decisively moved from single all-purpose agents to orchestrated te
 
 4. **Auditable handoffs.** Inter-agent delegation produces an explicit trail of who decided what, which monolithic reasoning hides.
 
-Industry analysis consistently identifies orchestration (the layer that coordinates agents, manages context, routes tasks, and handles errors) as where enterprise value is created in 2026. Organizations with strong orchestration combine best-in-class models, swap components as the landscape evolves, and run complex pipelines reliably; those without it ship fragile demos.
+The design consequence: the orchestration layer (routing tasks, managing context, handling errors) needs as much engineering as the agents themselves.
 
-Two pieces of big-tech evidence sharpen the design: one for specialization, one against overdoing it. For: Anthropic's published account of its multi-agent research system uses exactly the orchestrator-worker pattern this chapter describes, with a lead agent decomposing tasks for parallel specialists, and reports large quality gains over a single-agent baseline, at materially higher token cost, which is why the two-tier economics in Section 4.3 matter. Against overdoing it: Microsoft's engineers building Azure SRE Agent have written candidly that they started with 100+ tools and 50+ narrowly specialized agents and ended with five core tools and more generalist agents. The takeaway: specialize by operational domain and credential boundary, but don't fragment into dozens of micro-agents. Every agent and tool you add costs context, tokens, and coordination.
+Two published accounts set the limits:
+
+- **For specialization.** Anthropic's [multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system) uses a lead agent that splits work across parallel workers. It reports large quality gains over a single agent, at much higher token cost. That cost is why the two-tier design in [4.3](#43-two-tier-sensing-and-resolving) matters.
+- **Against overdoing it.** Microsoft's Azure SRE Agent team [wrote](https://techcommunity.microsoft.com/blog/appsonazureblog/-/4481200) that they started with 100+ tools and 50+ narrow agents, and ended with five core tools and a handful of generalists. Specialize by domain and credential boundary, not into dozens of micro-agents. Every agent and tool you add costs context, tokens, and coordination.
 
 ## 4.2 The reference architecture
 
 A production agentic operations platform has five layers. Use them as a checklist when you evaluate any platform or design your own.
 
-1. **The orchestrator.** A coordinating agent that owns cross-cutting reasoning: it receives goals and incidents, decomposes them, routes work to specialists, integrates their findings, manages escalation to humans, and owns the conversation with the operations team. Everything flows through it; specialists extend it rather than compete with it.
+| Layer | Job | What to check when evaluating | In CloudThinker |
+| :---- | :---- | :---- | :---- |
+| **Orchestrator** | Receives goals and incidents, splits them into tasks, routes work to specialists, combines their findings, and escalates to people | Does one agent own the conversation and the escalation path? | The built-in [CloudThinker](/guide/agents/overview) assistant |
+| **Specialist agents** | Domain experts (cloud, security, database, Kubernetes) with curated tools and scoped credentials | Can you add your own specialists, and limit each one's connections? | Temporary subagents that CloudThinker spawns, plus [custom agents](/guide/agents/quickstart) you create |
+| **Operational loop** | Detect, analyze, resolve, validate. The validate stage is what separates agents from automation: the system checks its own work. | Does the platform confirm the outcome after acting, and roll back on failure? | [Pulse](/guide/pulse/overview) detects, [Resolve](/guide/incident/overview) investigates and fixes, [Approvals](/guide/approvals/overview) decides which writes run |
+| **Tools and integrations** | Cloud APIs, observability, CI/CD, ITSM, and chat, with least-privilege credentials per agent | Are credentials scoped per system, and can you plug in your own tools? | [Connections](/guide/connections/overview), including your own [MCP servers](/guide/connections/mcp) |
+| **Context and memory** | Topology, runbooks, past incidents, team conventions, environment metadata. This is where agents compound. | Does the system remember what it learned, and can you see and edit it? | [Memory](/guide/memory), [Runbooks](/guide/incident/runbooks), [Incident memory](/guide/incident/incident-memory), and [Knowledge](/guide/knowledge) |
 
-2. **Specialist agents.** Domain experts, typically cloud engineering, security, database, and Kubernetes, each with curated tools, domain knowledge, and scoped credentials. Organizations add custom specialists for their own surfaces: cost optimization, application performance, internal platforms.
+## 4.3 Two-tier sensing and resolving
 
-3. **The operational loop.** A disciplined pipeline every piece of work flows through: Detect → Analyze → Resolve → Validate (DARV). Detection ingests signals; analysis produces an evidenced root-cause hypothesis; resolution plans and executes the fix under policy; validation confirms the outcome and feeds learning. The validate stage is what separates agentic operations from automation: the system checks its own work.
+Naive agent designs run one model call per alert and fall over at production scale. Mature platforms separate two tiers: a cheap, always-on sensing tier that watches every signal, and an expensive reasoning tier that runs a full multi-step investigation only when the sensing tier finds something worth it. This is what makes 24/7 coverage affordable. When you evaluate a platform, ask how it decides what reaches the expensive tier, because that decision drives your model bill.
 
-4. **The tool and integration layer.** MCP servers and native integrations exposing cloud APIs, observability platforms, CI/CD, ITSM, and communication channels (Slack, Teams) with least-privilege credentials per agent.
+In CloudThinker, [Pulse](/guide/pulse/overview) is the sensing tier. It drops duplicates and noise, groups related alerts into clusters, and sends only clusters with an actionable signal to triage, where CloudThinker opens or matches an incident and investigates. You tune what escalates in three places:
 
-5. **The context and memory layer.** Topology graphs, runbook libraries, past-incident memory, organizational conventions, and environment metadata. This is where agents compound: every resolved incident makes the next one faster.
-
-> *Figure 4: The reference architecture: one orchestrator, specialist agents, the Detect→Analyze→Resolve→Validate loop, tools, and memory.*
-
-## 4.3 The deep-response pattern
-
-Naive agent designs run one model call per alert and fall over at production scale. Mature platforms separate two engines: a lightweight, always-on sensing engine (a "pulse") that continuously watches signals cheaply, and a heavyweight resolver engine that spins up full multi-step reasoning only when the pulse detects something worth investigating. This two-tier design is what makes 24/7 agentic coverage affordable. Frontier-model reasoning runs only when it's needed, while cheap perception runs constantly. When you evaluate a platform, ask how it decides what reaches the expensive tier, because that decision drives your model bill.
+- **Snoozes** in [noise suppression](/guide/pulse/clusters#noise-suppression) drop events you already know about.
+- The **On duty** switch in **Resolve → Investigation** decides whether CloudThinker investigates on its own or waits for someone to click **Investigate**. See [Resolve](/guide/incident/overview#choose-who-starts-investigations).
+- Which sources you connect in [Pulse setup](/guide/pulse/setup) decides what reaches Pulse at all.
 
 ## 4.4 Data protection inside the pipeline
 
-In regulated industries, telemetry is sensitive: logs and queries leak customer PII, credentials, and account data. The emerging best practice is a tokenization boundary: a PII-aware layer that detects and replaces sensitive values with reversible tokens before any data reaches a model, and de-tokenizes only inside the customer's trust boundary when an action requires the real value. Combined with self-hosted or BYOC (bring-your-own-cloud) deployment, this lets banks and financial institutions adopt agentic operations without telemetry ever leaving their perimeter. Chapter 6 covers data residency and control in depth: deployment models, sovereignty, and the vendor questions to ask.
+In regulated industries, telemetry is sensitive: logs and queries leak customer PII, credentials, and account data. The emerging best practice is a tokenization boundary: a PII-aware layer that replaces sensitive values with tokens before any data reaches a model. Combined with a private deployment, it lets banks and other regulated firms adopt agentic operations without raw telemetry leaving their perimeter. [Chapter 6](/learn/aio/chapter-6-trust-governance#63-data-residency-and-control) covers data residency and control in depth.
 
-<Info>
-**ARCHITECTURE CHECKLIST**
+### In CloudThinker
 
-- ✓ One orchestrator owning cross-cutting reasoning and human escalation
-- ✓ Specialists with least-privilege credentials per domain
-- ✓ An explicit Detect → Analyze → Resolve → Validate loop with verification built in
-- ✓ Two-tier sensing/resolving to control model cost
-- ✓ PII tokenization before model boundaries; BYOC/self-host options for regulated workloads
-- ✓ Persistent memory so the system compounds instead of starting cold
-</Info>
+- **Masking.** [Guardrails](/guide/security/custom-guardrails) replace sensitive values with placeholders before an agent reads them. Email, phone, credit card, IBAN, MAC address, API keys, and cloud credentials are on by default. IP addresses, public keys, and cloud account IDs are off by default. You can add your own ID patterns in **Admin Settings → Guardrails**.
+- **Deployment.** CloudThinker Cloud, Cloud plus [Workers](/guide/workers) on your own machines, and dedicated, self-hosted, or air-gapped deployments through an early-access program. See [Deployment options](/guide/deployment/overview).
+- **Model calls on your account.** [BYOK](/guide/byok) runs model calls on your own model provider account.
+
+## Architecture checklist
+
+Ask any vendor, or your own team:
+
+1. Does one orchestrator own cross-cutting reasoning and escalation to people?
+2. Does each specialist hold only the credentials its domain needs?
+3. Does every piece of work go through detect, analyze, resolve, validate, with the outcome checked after acting?
+4. Is there a cheap sensing tier in front of the expensive reasoning tier, and can you tune what escalates?
+5. Are personal identifiers and secrets masked before any model call?
+6. Is there a private or self-hosted deployment option for regulated workloads?
+7. Does the system keep memory between incidents, so it doesn't start cold each time?
 
 ## Next steps
 

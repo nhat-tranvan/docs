@@ -10,7 +10,7 @@ Most teams run more than one AWS account: one for production, one for staging, o
 
 - A CloudThinker workspace. The [quickstart](/quickstart) creates one.
 - Permission to create IAM roles in each AWS account, and access to [AWS CloudShell](https://console.aws.amazon.com/cloudshell/home) in each one.
-- For cost questions: Cost Explorer turned on in each account. AWS can take up to 24 hours to activate it on a new account.
+- For cost questions: Cost Explorer turned on in each account. AWS can take up to 24 hours to activate it on a new account. The role's `ReadOnlyAccess` policy already includes the `ce:Get*` reads Optimize uses. AWS bills Cost Explorer API requests separately (USD 0.01 per request at AWS list price).
 
 ## How multiple accounts work
 
@@ -29,7 +29,7 @@ Write descriptions that tell the accounts apart. "AWS account" three times gives
 
 ## Connect the accounts
 
-Repeat these steps once per account. The full reference, including the access-key method, is on the [AWS connection page](/guide/connections/aws).
+Repeat these steps once per account. There's no organization-wide or StackSets onboarding: each account needs its own connect dialog, because each dialog generates its own External ID. If you'd rather create the roles with Terraform or CloudFormation, expand **Manual steps** in each dialog for the trust policy. The full reference, including the access-key method, is on the [AWS connection page](/guide/connections/aws).
 
 <Steps>
   <Step title="Open the connect dialog">
@@ -41,6 +41,8 @@ Repeat these steps once per account. The full reference, including the access-ke
   <Step title="Run the setup script in that account">
     Click **Open CloudShell** and sign in to the AWS account you're connecting. Back in the dialog, click **Copy Script to Clipboard**, paste it into CloudShell, and press Enter. The script creates `CloudThinkerAccessRole` with the AWS managed `ReadOnlyAccess` policy and prints the role's ARN.
 
+    `ReadOnlyAccess` can read data as well as configuration, such as S3 objects. For a narrower role, see [Required permissions](/guide/connections/aws#required-permissions) for the `ViewOnlyAccess` plus `SecurityAudit` option and what it gives up.
+
     <Warning>
     Copy the script from the dialog you're completing, every time. Each dialog generates its own **AWS External ID**, and the script bakes it into the role's trust policy. A script copied from another account's dialog won't match.
     </Warning>
@@ -50,8 +52,8 @@ Repeat these steps once per account. The full reference, including the access-ke
 
     **Success state:** the account shows a **Connected** status.
   </Step>
-  <Step title="Set the environment">
-    Open the connection, click **Edit Instance**, and set **Environment** to **Production**, **Staging**, or **Development**. [Approval rules](/guide/approvals/rules) can then treat accounts differently. **Not set** counts as production.
+  <Step title="After connecting, set the environment">
+    The connect dialog doesn't ask for an environment, so set it now. On the **Amazon Web Services** detail panel, click the pencil icon on the account's row and set **Environment** to **Production**, **Staging**, or **Development** in **Edit Instance**. [Approval rules](/guide/approvals/rules) can then treat accounts differently. **Not set** counts as production.
   </Step>
 </Steps>
 
@@ -65,7 +67,7 @@ Before you compare anything, confirm every account answers. In a new conversatio
 List every AWS account you can reach through my connections. For each one, show the alias, the 12-digit account ID, and the regions you can see.
 ```
 
-**Expected result:** one row per connection with its real account ID. If an account is missing or shows an error, fix it now (see [Troubleshooting](#troubleshooting)) so later comparisons don't silently skip it.
+**Expected result:** one row per connection with its real account ID. Agents aren't limited to the **Default AWS region**: they can use any region the role can reach. A region blocked by a service control policy (SCP) returns `AccessDenied` there. If an account is missing or shows an error, fix it now (see [Troubleshooting](#troubleshooting)) so later comparisons don't silently skip it.
 
 ## Compare spend across accounts
 
@@ -74,7 +76,7 @@ You have two routes. Use Optimize when you want saved, repeatable numbers. Use a
 | You want | Use | Where |
 |---|---|---|
 | A savings report covering every account, with one section each | [Optimize reports](/guide/cost-optimization/reports) with **All accounts** scope | **Optimize → Reports** |
-| One account's spend by service, region, or account | [Cost Explorer](/guide/cost-optimization/analytics) | **Optimize → Cost Explorer**, pick the account next to the page title |
+| One account's spend by service or region | [Cost Explorer](/guide/cost-optimization/analytics) | **Optimize → Cost Explorer**, pick the account next to the page title |
 | A quick side-by-side answer in your own words | A chat prompt | Any conversation |
 
 ### Generate an all-accounts report
@@ -93,7 +95,9 @@ You have two routes. Use Optimize when you want saved, repeatable numbers. Use a
   </Step>
 </Steps>
 
-Reports use the cost data Optimize already stores, so they don't call AWS for fresh data. Missing data shows up as a gap, never as zero, and Optimize never adds different currencies together.
+Reports use the cost data Optimize already stores, so they don't call AWS for fresh data. Optimize pulls new billing data once a day. The **Updated** button in the Optimize page header shows when each account last refreshed. Missing data shows up as a gap, never as zero, and Optimize never adds different currencies together.
+
+To run the report on a cadence, select **Add schedule** under **Scheduled reports**. A schedule keeps the accounts it captured when you created it, so recreate it after you connect another account. See [Schedule a recurring report](/guide/cost-optimization/reports#schedule-a-recurring-report).
 
 ### Ask in chat
 
@@ -139,8 +143,23 @@ Every call an agent makes is an ordinary AWS API call. To see exactly what ran i
 
 The setup script's role is read-only, so AWS refuses every write in every account until you grant more. To let agents fix things in, say, development but never in production:
 
-1. Add only the write actions you need to `CloudThinkerAccessRole` in the development account. Leave the production role on `ReadOnlyAccess`.
-2. Check that **Allow writes** is on for the development connection, and turn it off on any connection that should stay read-only even if its role changes later.
+1. Add only the write actions you need to `CloudThinkerAccessRole` in the development account. Leave the production role on `ReadOnlyAccess`. For example, this inline policy lets agents stop and start only instances tagged `env=dev`:
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": ["ec2:StopInstances", "ec2:StartInstances"],
+         "Resource": "arn:aws:ec2:*:*:instance/*",
+         "Condition": { "StringEquals": { "aws:ResourceTag/env": "dev" } }
+       }
+     ]
+   }
+   ```
+
+2. Check the **Allow writes** switch on the **Amazon Web Services** detail panel in Connections. It's on by default for AWS. Turn it off on any connection that should stay read-only even if its role changes later.
 3. Make sure each connection's **Environment** is set, so [approval rules](/guide/approvals/rules) can ask for a person's sign-off on staging or production before anything runs.
 
 See [Write access](/guide/connections/aws#write-access) for how IAM permissions and **Allow writes** combine.
@@ -156,7 +175,15 @@ See [Write access](/guide/connections/aws#write-access) for how IAM permissions 
   <Accordion title="The second account fails with AccessDenied on sts:AssumeRole">
     **Cause:** the script or trust policy came from a different account's dialog, so the External ID doesn't match.
 
-    **Fix:** open a fresh connect dialog for that account and run the script it shows. If `CloudThinkerAccessRole` already exists there, the script stops; see the [AWS troubleshooting](/guide/connections/aws#troubleshooting) steps for replacing or updating the role.
+    **Fix:** open a fresh connect dialog for that account and run the script it shows. If `CloudThinkerAccessRole` already exists there, the script stops. If no other CloudThinker connection uses that role, delete it in CloudShell and run the new script:
+
+    ```bash
+    aws iam detach-role-policy --role-name CloudThinkerAccessRole \
+      --policy-arn arn:aws:iam::aws:policy/ReadOnlyAccess
+    aws iam delete-role --role-name CloudThinkerAccessRole
+    ```
+
+    Otherwise, expand **Manual steps** in the dialog and update the existing role's trust policy with the External ID it shows.
   </Accordion>
   <Accordion title="Cost questions return no data for one account">
     **Check:** Cost Explorer is on in that account and has had 24 hours to activate. Member accounts in AWS Organizations may be blocked from Cost Explorer by the management account.

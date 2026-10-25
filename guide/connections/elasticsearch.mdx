@@ -11,6 +11,7 @@ Connect an Elasticsearch cluster to let CloudThinker agents list indices, read f
 ## Prerequisites
 
 - An Elasticsearch cluster with an HTTPS endpoint CloudThinker can reach over the network, such as an Elastic Cloud deployment or a public DNS name. `localhost` and private addresses aren't reachable from CloudThinker Cloud.
+- If a firewall or Elastic Cloud traffic filter guards the cluster, allow CloudThinker's egress IPs. Ask your CloudThinker contact for the current list, or see [Reaching private services](/guide/connections/overview#reaching-private-services).
 - Permission to create an API key (Kibana **Stack Management → Security → API keys**, or the `_security/api_key` API) or a dedicated user.
 - The index patterns agents should read, such as `logs-*` or `filebeat-*`.
 
@@ -20,7 +21,7 @@ Connect an Elasticsearch cluster to let CloudThinker agents list indices, read f
   <Step title="Create a read-only API key">
     In Kibana, open **Dev Tools** and run the request below. Replace `logs-*` with your own index patterns.
 
-    ```json
+    ```http
     POST /_security/api_key
     {
       "name": "cloudthinker",
@@ -49,7 +50,7 @@ Connect an Elasticsearch cluster to let CloudThinker agents list indices, read f
   <Step title="Add the connection in CloudThinker">
     Open **Connections** in the sidebar and select **Elasticsearch**. Enter the endpoint in **ES_URL**, choose **API key** under **Authentication**, and paste the encoded key. Leave **TLS certificate** on **Verify** unless the cluster serves a self-signed certificate. Click **Connect**.
 
-    **Success state:** the connection shows **Connecting** and **Verifying**, then **Connected**.
+    **Success state:** the connection shows **Connecting** and **Verifying**, then **Connected**. If the test fails, the connection shows an error with the message the cluster returned. Match it against [Troubleshooting](#troubleshooting).
   </Step>
 </Steps>
 
@@ -75,7 +76,28 @@ Fill in one method only. If you enter both an API key and a username or password
 | Read field mappings | Index privilege `view_index_metadata` on your patterns |
 | Run DSL searches and ES\|QL queries | Index privilege `read` on your patterns |
 
-If you use **Username & password**, give the user a role with the same privileges.
+If you use **Username & password**, create a role with the same privileges and a user that holds it. Run each request separately in **Dev Tools**:
+
+```http
+POST /_security/role/cloudthinker_read
+{
+  "cluster": ["monitor"],
+  "indices": [
+    {
+      "names": ["logs-*"],
+      "privileges": ["read", "view_index_metadata", "monitor"]
+    }
+  ]
+}
+```
+
+```http
+POST /_security/user/cloudthinker
+{
+  "password": "<a long random password>",
+  "roles": ["cloudthinker_read"]
+}
+```
 
 <Tip>
 List the index patterns agents need instead of `*`. A key scoped to `logs-*` can't read a `customers` index, even if a search asks for it.
@@ -112,15 +134,15 @@ Why is the cluster yellow? List the unassigned shards and the indices they belon
 ## Troubleshooting
 
 <Accordion title="Connection fails with a timeout or connection refused">
-**ES_URL** points at an address CloudThinker can't reach. Use a public endpoint, include the scheme and port, and check that your firewall or Elastic Cloud traffic filters allow inbound requests.
+**ES_URL** points at an address CloudThinker can't reach. Use a public endpoint, include the scheme and port, and check that your firewall or Elastic Cloud traffic filters allow CloudThinker's egress IPs (see [Prerequisites](#prerequisites)).
 </Accordion>
 
 <Accordion title="401 Unauthorized">
-The API key is wrong, expired, or was invalidated, or the password changed. Create a new key and paste the `encoded` value, not the `id` or the `api_key` field alone.
+The API key is wrong, expired, or was invalidated, or the password changed. Create a new key and [replace the credential](/guide/connections/overview#rotate-a-credential) with its `encoded` value, not the `id` or the `api_key` field alone.
 </Accordion>
 
 <Accordion title="security_exception on one index">
-The key or user has no privileges on that index. Add its pattern to `names` in a new key, then update the connection.
+The key or user has no privileges on that index. Add its pattern to `names` in a new key, then [replace the credential](/guide/connections/overview#rotate-a-credential) on the connection.
 </Accordion>
 
 <Accordion title="Certificate errors on a self-hosted cluster">
@@ -135,7 +157,7 @@ The index pattern doesn't match, the field name differs from what the prompt ass
 
 <ConnectionSecurity />
 
-- **Set an expiration on the key**: an `expiration` such as `90d` limits how long a leaked key works. Create a new key before it expires and update the connection.
+- **Set an expiration on the key**: an `expiration` such as `90d` limits how long a leaked key works. Create a new key before it expires, then open the connection, click the pencil icon on its row, and in **Edit Instance** click **Replace…**. Paste the new key and click **Save and test**. If the test fails, CloudThinker keeps the old key, so agents don't lose access during the swap.
 - **Treat indexed content as sensitive**: logs can carry tokens or personal data that an application wrote. Scope the key to the indices you want agents to read.
 
 ## Related
@@ -144,7 +166,7 @@ The index pattern doesn't match, the field name differs from what the prompt ass
   <Card title="Root cause analysis" icon="magnifying-glass" href="/guide/incident/root-cause-analysis">
     See how agents use log searches to find what caused an incident.
   </Card>
-  <Card title="OpenSearch" icon="magnifying-glass-chart" href="/guide/connections/opensearch">
-    Connect an OpenSearch cluster with a read-only user.
+  <Card title="Connections overview" icon="plug" href="/guide/connections/overview">
+    Rotate credentials, reach private services, and see every connection.
   </Card>
 </CardGroup>

@@ -45,11 +45,12 @@ Connect Snowflake to let CloudThinker show which warehouses burn the most credit
     ```
   </Step>
   <Step title="Attach a network policy">
-    Snowflake refuses token sign-in until the user has a network policy. Narrow `ALLOWED_IP_LIST` to your allowed ranges for anything beyond a test account:
+    Snowflake refuses token sign-in until the user has a network policy. Ask your CloudThinker contact for the current CloudThinker egress IP addresses and put them in `ALLOWED_IP_LIST`:
     ```sql
-    CREATE NETWORK POLICY IF NOT EXISTS CT_POLICY ALLOWED_IP_LIST = ('0.0.0.0/0');
+    CREATE NETWORK POLICY IF NOT EXISTS CT_POLICY ALLOWED_IP_LIST = ('<cloudthinker-egress-ip-1>', '<cloudthinker-egress-ip-2>');
     ALTER USER SVC_CLOUDTHINKER SET NETWORK_POLICY = CT_POLICY;
     ```
+    On a throwaway test account only, `('0.0.0.0/0')` lets you try the connection before you have the list. Never leave it on a production account.
   </Step>
   <Step title="Create a programmatic access token">
     ```sql
@@ -57,7 +58,7 @@ Connect Snowflake to let CloudThinker show which warehouses burn the most credit
       ROLE_RESTRICTION = 'CT_READONLY'
       DAYS_TO_EXPIRY = 90;
     ```
-    Copy the token now. Snowflake shows it only once, and it stops working on the expiry day.
+    Copy the token now. Snowflake shows it only once, and it stops working on the expiry day. Set a calendar reminder a week before then to [rotate it](#rotate-the-token).
   </Step>
   <Step title="Add the connection in CloudThinker">
     Go to **Connections → Snowflake**, fill in the fields from [Connection details](#connection-details), and click **Connect**.
@@ -72,7 +73,7 @@ Connect Snowflake to let CloudThinker show which warehouses burn the most credit
 
 | Field | Required | Description | Default |
 |-------|----------|-------------|---------|
-| **Account identifier** | Yes | `MYORG-MYACCOUNT`, from **Snowsight → Account details**. Not the full URL | |
+| **Account identifier** | Yes | `MYORG-MYACCOUNT`, from **Snowsight → Account details**, or run `SELECT CURRENT_ORGANIZATION_NAME() \|\| '-' \|\| CURRENT_ACCOUNT_NAME();`. Not the full URL | |
 | **Programmatic access token** | Yes | The token from Setup step 4. Not an account password | |
 | **Role** | No | Role the connection uses. Must be inside the token's `ROLE_RESTRICTION` | User's default role |
 | **Warehouse** | No | Warehouse billed for the credits this connection uses | User's default warehouse |
@@ -130,30 +131,70 @@ Where are time travel and failsafe adding the most storage?
 
 ## Write access
 
-**Allow writes** is off on new Snowflake connections. Turn it on under the connection's **Settings → Allow writes**. Each write then goes through your [Rules](/guide/approvals/rules) and [Approval mode](/guide/approvals/approval-mode).
+**Allow writes** is off on new Snowflake connections. With it on, each write goes through your [Rules](/guide/approvals/rules) and [Approval mode](/guide/approvals/approval-mode).
 
 Write means exactly two actions, not arbitrary SQL:
 
 - Suspend or resume one named warehouse.
-- Keep measured findings in a `CT_FINDINGS` table, in a schema where the role has `CREATE TABLE`.
+- Keep measured findings in a `CT_FINDINGS` table. CloudThinker creates it in the one schema where the role has `CREATE TABLE`. If the role can write to several schemas, it asks you which one. You can also name it in your prompt, for example `MONITORING.ALERTS`.
 
 Resizing a warehouse, changing a resource monitor, or lowering `DATA_RETENTION_TIME_IN_DAYS` is still handed to you as a statement to run in Snowsight.
 
-**Allow writes** only lets CloudThinker ask. The role still needs the grants, so use a separate write-capable role and token:
+**Allow writes** only lets CloudThinker ask. The role still needs the grants, and with a read-only token Snowflake denies every write. To turn writes on:
 
-```sql
-CREATE ROLE IF NOT EXISTS CT_READWRITE;
--- Plus the five read grants from Required permissions, then:
-GRANT USAGE, OPERATE, MONITOR ON WAREHOUSE CT_AGENT_WH TO ROLE CT_READWRITE;
-GRANT USAGE ON DATABASE MONITORING                    TO ROLE CT_READWRITE;
-GRANT USAGE, CREATE TABLE ON SCHEMA MONITORING.ALERTS TO ROLE CT_READWRITE;
-```
+<Steps>
+  <Step title="Create a write role and token">
+    Replace `DEV_WH` with the warehouses the agent may suspend, and `MONITORING.ALERTS` with the schema for `CT_FINDINGS`. Grant `OPERATE` only on warehouses the agent may suspend, never a shared production warehouse:
+    ```sql
+    USE ROLE ACCOUNTADMIN;
 
-Grant `OPERATE` only on warehouses the agent may suspend, never a shared production warehouse. With a read-only token, Snowflake denies every write even when **Allow writes** is on.
+    CREATE ROLE IF NOT EXISTS CT_READWRITE;
+    GRANT DATABASE ROLE SNOWFLAKE.USAGE_VIEWER      TO ROLE CT_READWRITE;
+    GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER     TO ROLE CT_READWRITE;
+    GRANT DATABASE ROLE SNOWFLAKE.GOVERNANCE_VIEWER TO ROLE CT_READWRITE;
+    GRANT MONITOR USAGE ON ACCOUNT                  TO ROLE CT_READWRITE;
+    GRANT USAGE ON WAREHOUSE COMPUTE_WH             TO ROLE CT_READWRITE;
+
+    GRANT USAGE, OPERATE, MONITOR ON WAREHOUSE DEV_WH     TO ROLE CT_READWRITE;
+    GRANT USAGE ON DATABASE MONITORING                    TO ROLE CT_READWRITE;
+    GRANT USAGE, CREATE TABLE ON SCHEMA MONITORING.ALERTS TO ROLE CT_READWRITE;
+
+    GRANT ROLE CT_READWRITE TO USER SVC_CLOUDTHINKER;
+    ALTER USER SVC_CLOUDTHINKER ADD PROGRAMMATIC ACCESS TOKEN CT_TOKEN_RW
+      ROLE_RESTRICTION = 'CT_READWRITE'
+      DAYS_TO_EXPIRY = 90;
+    ```
+    Copy the new token.
+  </Step>
+  <Step title="Update the connection">
+    Open **Connections**, select Snowflake, click the pencil icon on the account's row, and in **Edit Instance** click **Replace…**. Paste the new token into **Programmatic access token**, set **Role** to `CT_READWRITE`, and click **Save and test**.
+  </Step>
+  <Step title="Turn on Allow writes">
+    On the same detail panel, turn on the **Allow writes** switch.
+  </Step>
+</Steps>
 
 <Warning>
 Two or more Snowflake connections in one workspace turn writes off for all of them, because an approved write can't name which account it targets. Also, a suspend can't be made conditional: a query can start between CloudThinker's busy check and the suspend and lose its compute.
 </Warning>
+
+---
+
+## Rotate the token
+
+<Steps>
+  <Step title="Create the new token">
+    Run Setup step 4 again with a new token name, such as `CT_TOKEN_2`. Keep the old token until the swap is done.
+  </Step>
+  <Step title="Replace it in CloudThinker">
+    Open **Connections**, select Snowflake, click the pencil icon on the account's row, and in **Edit Instance** click **Replace…**. Paste the new token and click **Save and test**.
+
+    **Success state:** the test passes and the connection stays **Connected**. If it fails, CloudThinker keeps the previous token.
+  </Step>
+  <Step title="Remove the old token">
+    Run `ALTER USER SVC_CLOUDTHINKER REMOVE PROGRAMMATIC ACCESS TOKEN CT_TOKEN;`.
+  </Step>
+</Steps>
 
 ---
 
@@ -164,7 +205,7 @@ The service user has no network policy. Run `ALTER USER SVC_CLOUDTHINKER SET NET
 </Accordion>
 
 <Accordion title="It worked yesterday and fails today (390318)">
-The token expired or was revoked. Create a new one (Setup step 4) and update the connection.
+The token expired or was revoked. Create a new one (Setup step 4) and [rotate it](#rotate-the-token) into the connection.
 </Accordion>
 
 <Accordion title="Object does not exist or not authorized (002003)">

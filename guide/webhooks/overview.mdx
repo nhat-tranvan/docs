@@ -7,7 +7,7 @@ icon: webhook
 A webhook is a URL that CloudThinker issues for you. Another system sends an HTTPS POST with a JSON body to that URL, and CloudThinker either runs an [Automation](/guide/automation/automations) or turns the request into an alert in [Resolve](/guide/incident/overview).
 
 <Note>
-Webhooks here are inbound only. CloudThinker doesn't POST events out to your endpoints. To send results outward, use [notifications](/guide/notifications).
+Webhooks here are inbound only. CloudThinker doesn't POST events out to your endpoints. To send results outward, use [notifications](/guide/notifications), [Slack](/guide/slack-integration) or [Microsoft Teams](/guide/teams-integration).
 </Note>
 
 ## Pick the kind of webhook
@@ -22,22 +22,29 @@ There are two kinds. They're created in different places and do different things
 ## Prerequisites
 
 - A system that can send HTTPS POST requests with a JSON body and a custom header.
-- For an Automation trigger: an Automation you can edit.
-- For a Resolve webhook: permission to manage Resolve integrations, plus admin access to the monitoring tool so you can add the webhook to it.
+- The **Admin** workspace role, for both kinds. Developers and Viewers can see webhooks but can't create them. See [Workspace users](/guide/workspace-users).
+- For an Automation trigger: an existing Automation.
+- For a Resolve webhook: admin access to the monitoring tool, so you can add the webhook to it.
 
 ## Create an Automation webhook trigger
 
 <Steps>
   <Step title="Open the Automation">
-    Open the Automation from the **Automations** page and add a trigger. Pick **Webhook**: an HTTP call arrives at a URL CloudThinker issues.
+    Open the Automation from the **Automations** page and find the **Triggers** section.
   </Step>
-  <Step title="Save the trigger">
-    Save. The **Webhook trigger added** dialog opens with the URL, a secret, and a ready-to-paste **Test command**.
+  <Step title="Add a Webhook trigger">
+    Choose **Webhook**. If the Automation already has a trigger, click **Add another trigger** first, then **Webhook**. CloudThinker creates the trigger at once and opens the **Webhook trigger added** dialog with the URL, a secret, and a ready-to-paste **Test command**.
   </Step>
   <Step title="Copy the secret">
     Copy the URL and the secret before you select **Done**. The secret is shown only once.
   </Step>
 </Steps>
+
+Every webhook URL, for both kinds, has this shape:
+
+```text
+https://<CloudThinker API host>/api/v1/webhooks/webhook/<token>/trigger
+```
 
 **Success state:** the trigger card shows the webhook, and each call you send appears in its delivery list.
 
@@ -63,7 +70,7 @@ The Automation's own on/off switch must be on, or the trigger won't start a run.
     Check **Field Mapping** and **Severity Mapping**. Both come pre-filled for the tool you picked. Click **Next**.
   </Step>
   <Step title="Advanced">
-    Pick an **Auth Method** and set **Auto-investigate**. Click **Create**.
+    Pick an **Auth Method** and set **Auto-investigate**. With Auto-investigate on, you can also turn on **Only from a minimum severity** (off by default; it starts at High when you turn it on), so lower alerts don't start an RCA. Click **Create**.
   </Step>
 </Steps>
 
@@ -78,11 +85,13 @@ An Automation webhook trigger always uses a Bearer token: the caller sends `Auth
 | Auth Method | The sender includes | Use when |
 |---|---|---|
 | **Bearer Token** | `Authorization: Bearer <secret>` | The tool lets you add a custom header. The default for most tools. |
-| **HMAC Signature** | A signature header computed from the body, such as `X-PagerDuty-Signature` | The tool signs its own webhooks, like PagerDuty. |
-| **API Key** | The key in a header you name | The tool only supports API key headers, like CloudWatch through EventBridge. |
+| **HMAC Signature** | A signature of the body in the **HMAC Signature Header** (default `X-Webhook-Signature`) | The tool signs its own webhooks, like PagerDuty. |
+| **API Key** | The key in the **API Key Header** (default `X-Api-Key`), after an optional **Key Prefix** | The tool only supports API key headers, like CloudWatch through EventBridge. |
 | **No Authentication** | Nothing | Only for a quick test. Anyone with the URL could send alerts. |
 
-If you sign requests yourself with HMAC, sign the raw body with HMAC-SHA256 and send the digest as `sha256=<hex>`:
+HMAC Signature and API Key apply to Resolve webhooks only. You set both header names in the **Advanced** step.
+
+**Resolve webhook, HMAC Signature.** If you sign requests yourself, sign the raw body with HMAC-SHA256 and send the digest as `sha256=<hex>` in the header you set (the default here):
 
 ```bash
 BODY='{"title": "High CPU on web-server-01", "alert_type": "critical"}'
@@ -94,11 +103,20 @@ curl -X POST "$WEBHOOK_URL" \
   -d "$BODY"
 ```
 
+**Resolve webhook, API Key.** Send the key in the header you set (the default here):
+
+```bash
+curl -X POST "$WEBHOOK_URL" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: $WEBHOOK_SECRET" \
+  -d '{"title": "High CPU on web-server-01"}'
+```
+
 ## What to send
 
-Send a JSON body of up to 1 MB. What CloudThinker does with it depends on the kind of webhook.
+Send a JSON object of up to 1 MB with `Content-Type: application/json`. CloudThinker doesn't read an idempotency key, so a sender's retry counts as a new call. What CloudThinker does with the body depends on the kind of webhook.
 
-**Automation trigger.** The whole body is appended after the Automation's instructions, so the agent sees it without any template setup. If you want a value inline in the instructions, `{{message}}` and `{{event.<key>}}` still work. The body is treated as data, never as instructions, so a caller can't change what the agent is told to do.
+**Automation trigger.** The whole body is appended after the Automation's instructions, so the agent sees it without any template setup. If you want a value inline in the instructions, use `{{message}}` or `{{event.<key>}}`. A placeholder with no matching key stays in the text as written. The body is treated as data, never as instructions, so a caller can't change what the agent is told to do.
 
 ```json
 {
@@ -121,20 +139,33 @@ curl -X POST "$WEBHOOK_URL" \
   -d '{"message": "hello"}'
 ```
 
-**Expected result:** CloudThinker answers `202 Accepted`. That only proves delivery, so check the result too:
+**Expected result:** CloudThinker answers `202 Accepted`. That only proves delivery, so check the result too.
 
 | Kind | Where to check | What you should see |
 |---|---|---|
 | Automation trigger | The trigger card's delivery list, and the **Runs** tab on the **Automations** page | A delivery marked **Accepted** then **Processed**, and a run labeled **Webhook** |
-| Resolve webhook | **Resolve → Pulse**, then **Resolve → Investigation** | A signal with the title you mapped. If its cluster is actionable, an incident. |
+| Resolve webhook | **Resolve → Pulse**, then **Resolve → Investigation** | A signal with the title you mapped. If Pulse groups it into a cluster that holds an actionable signal, an incident. See [How Pulse works](/guide/pulse/overview#how-it-works). |
 
 For a Resolve webhook, send one normal alert and one critical alert, so you know both severity mappings work.
 
+An Automation trigger's delivery list marks each call with a status:
+
+| Status | Meaning | What to do |
+|---|---|---|
+| **Accepted** | CloudThinker received the call and queued it. | Wait a moment. |
+| **Processed** | The call started a run, or was held for one. | Check the **Runs** tab. |
+| **Rate limited** | The call was over the webhook's hourly limit and started nothing. | Slow the sender or batch events. |
+| **Failed** | The call couldn't be processed. The error text says why. | Fix the cause and send again. |
+
 ## Rate limits and busy runs
 
-Each webhook has a rate limit. A request over the limit is still answered, but it doesn't start anything, and an Automation trigger lists it as **Rate limited** in its deliveries. If your sender bursts, batch events into one request or slow it down.
+Each webhook has an hourly limit: 60 calls per hour for an Automation trigger, and 1,000 per hour by default for a Resolve webhook. A call over the limit still gets `202 Accepted` but starts nothing, and an Automation trigger lists it as **Rate limited**. A sender that goes far past the limit (10 times over) gets `429`. After 10 failed authentications in 15 minutes, the webhook also answers `429` for a while. If your sender bursts, batch events into one request or slow it down.
 
-An Automation runs one run at a time. A call that arrives mid-run is held, the newest held call wins, and CloudThinker retries it every minute for up to 30 minutes. If a run is already going, expect the held call's run to show as **Pending** on the **Runs** tab.
+An Automation runs one run at a time. A call that arrives mid-run is held, and CloudThinker retries it every minute for up to 30 minutes. If a run is already going, expect the held call's run to show as **Pending** on the **Runs** tab.
+
+<Warning>
+Only one call is held per trigger. A newer call replaces the held one, so earlier held calls never run. If every event matters, batch them into one request.
+</Warning>
 
 <Warning>
 After 10 failed runs in a row, CloudThinker turns the Automation off and sends the **Automation turned off** notification. Webhook calls then stop starting runs until you fix the cause and turn it back on.
@@ -143,8 +174,8 @@ After 10 failed runs in a row, CloudThinker turns the Automation off and sends t
 ## Troubleshooting
 
 <AccordionGroup>
-  <Accordion title="401 or 403 on every request">
-    The auth header doesn't match. An Automation trigger only accepts `Authorization: Bearer <secret>`. For a Resolve webhook, compare the header name and secret in your tool with **Authentication Setup**. If the secret is lost, rotate it (Automation) or regenerate it (Resolve), then update every sender.
+  <Accordion title="401 on every request">
+    The auth header is missing or doesn't match. An Automation trigger only accepts `Authorization: Bearer <secret>`. For a Resolve webhook, compare the header name and secret in your tool with **Authentication Setup**. After 10 failures in 15 minutes the webhook answers `429` for a while, so fix the header before you retry. If the secret is lost, use **Rotate webhook secret** on the trigger card (Automation), or open **Resolve → Integrations**, select the tool, open the webhook's menu under **Signals to Resolve**, and choose **Regenerate credentials** (Resolve). Then update every sender with the new values.
   </Accordion>
   <Accordion title="HMAC signature mismatch">
     Sign the exact raw body bytes you send. Reformatting or re-serializing the JSON after signing changes the bytes and breaks the signature.
@@ -159,7 +190,7 @@ After 10 failed runs in a row, CloudThinker turns the Automation off and sends t
     Pulse may have suppressed the alert as noise, or the time window hides it. Widen the window on **Resolve → Pulse**. If the signal is there with an empty title or wrong severity, fix the path in **Field Mapping** or add the missing value to **Severity Mapping**.
   </Accordion>
   <Accordion title="An incident opened but no RCA started">
-    **Auto-investigate** is off, the alert is below the minimum severity, or **On duty** on **Resolve → Investigation** shows **Paused**. Check all three, or start the investigation by hand.
+    **Auto-investigate** is off, the alert is below **Only from a minimum severity** (set in the webhook's **Advanced** step), or **On duty** on **Resolve → Investigation** shows **Paused**. Check all three, or start the investigation by hand.
   </Accordion>
 </AccordionGroup>
 

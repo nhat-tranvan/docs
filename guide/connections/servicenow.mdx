@@ -12,6 +12,7 @@ Connect a ServiceNow instance to let CloudThinker agents review open incidents, 
 
 - A ServiceNow instance and its URL, in the form `https://<instance>.service-now.com`.
 - Permission to create users and assign roles in that instance, or an admin who can do it for you.
+- A service account that can sign in with a local ServiceNow password. If your instance sends people through SSO or requires MFA, the account must still be able to authenticate with its own password for API calls.
 - Permission to manage connections in your CloudThinker workspace.
 
 ## Setup
@@ -30,7 +31,7 @@ Connect a ServiceNow instance to let CloudThinker agents review open incidents, 
     On the user record, add the roles in [Required permissions](#required-permissions). Start with `itil` and `cmdb_read`.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Open **Workspace Settings → Connections**, stay on the **Builtin Connections** tab, and select **ServiceNow**. Fill in:
+    In the sidebar, click **More → Workspace settings → Connections**, stay on the **Builtin Connections** tab, and select **ServiceNow**. The form shows the field names exactly as below. Fill in:
 
     - **SERVICENOW_INSTANCE_URL**: your instance URL, such as `https://acme.service-now.com`
     - **SERVICENOW_USERNAME**: `cloudthinker`
@@ -38,7 +39,7 @@ Connect a ServiceNow instance to let CloudThinker agents review open incidents, 
 
     Click **Connect**.
 
-    **Success state:** ServiceNow shows a **Connected** status. Run the verify prompt below to confirm the account can read records.
+    **Success state:** Connect runs a connection test, and ServiceNow shows a **Connected** status. If the test fails, the connection shows an error with the reason instead. Run the verify prompt below to confirm the account itself can read records.
   </Step>
 </Steps>
 
@@ -66,7 +67,7 @@ ServiceNow decides what the account sees through roles and table access rules (A
 | `cmdb_read` | Read CMDB configuration items and their relationships |
 
 <Tip>
-For read-only use, ask your ServiceNow admin for a custom role with read access to the `incident`, `change_request`, `problem`, `sys_user`, `sys_user_group`, and `cmdb_ci` tables instead of `itil`. Agents can still investigate; any write fails at ServiceNow.
+For read-only use, ask your ServiceNow admin for a custom role with read access to the `incident`, `change_request`, `problem`, `sys_user`, `sys_user_group`, and `cmdb_ci` tables instead of `itil`. Agents can still investigate; any write fails at ServiceNow. Add read access to any other table you want agents to query or read the schema of, or those reads fail too.
 </Tip>
 
 ## Agent capabilities
@@ -84,7 +85,15 @@ For read-only use, ask your ServiceNow admin for a custom role with read access 
 
 Every write waits for a person or a rule in [Approvals](/guide/approvals/overview). Reads run without asking.
 
-ServiceNow also plugs into [Resolve](/guide/incident/integrations). Under **Resolve → Integrations → ServiceNow**, the **Create follow-up tickets** outcome files a ServiceNow record for the remaining work when an incident wraps up. Set its **Assignment group**, for example `Cloud Operations`. ServiceNow can also send incidents to Resolve as a [webhook signal](/guide/incident/webhook-integrations/overview).
+<Warning>
+**Any table** reads don't ask first, so agents can read every table the account can, including HR or user records. Keep sensitive tables out of the account's roles and ACLs.
+</Warning>
+
+Approving a change request also needs the account to be an approver on that change in ServiceNow. The `itil` role alone doesn't make it one.
+
+### Use it with Resolve
+
+ServiceNow plugs into [Resolve](/guide/incident/integrations). Under **Resolve → Integrations → ServiceNow**, the **Create follow-up tickets** outcome files a ServiceNow record for the remaining work when an incident wraps up. Set its **Assignment group**, for example `Cloud Operations`. ServiceNow can also send incidents to Resolve as a [webhook signal](/guide/incident/webhook-integrations/overview).
 
 ### Verify the connection
 
@@ -108,6 +117,8 @@ Name a service, CI, or time window. ServiceNow tables can hold millions of rows,
 
 <Accordion title="Connect fails or requests return 401">
 The username or password is wrong, the user is inactive, or the account is locked out. Sign in to ServiceNow as an admin, check the user record, reset the password if needed, and edit the connection.
+
+If the password is right, check whether SSO or MFA blocks password sign-in for this account. The account needs a local password that works for API calls.
 </Accordion>
 
 <Accordion title="Some tables return a permission error">
@@ -115,11 +126,17 @@ The account lacks a role or ACL for that table. CMDB reads need `cmdb_read`. Inc
 </Accordion>
 
 <Accordion title="Requests time out or return 503">
-The instance is in maintenance or asleep. Personal developer instances hibernate when idle: wake yours from the ServiceNow developer portal, then retry. Also check that your instance doesn't block CloudThinker with an IP access rule.
+The instance is in maintenance or asleep. Personal developer instances hibernate when idle: wake yours from the ServiceNow developer portal, then retry. Also check that your instance doesn't block CloudThinker with an IP access rule. To allow CloudThinker through, ask your CloudThinker contact for the current egress IP list. See [Reaching private services](/guide/connections/overview#reaching-private-services).
 </Accordion>
 
 <Accordion title="A record can't be found by its number">
-Agents look records up by `sys_id`, not by numbers like `INC0012345`. If a lookup fails, ask the agent to search for the number first. A wrong instance URL also shows up as "not found", so check it matches your browser address.
+Agents look records up by `sys_id`, not by numbers like `INC0012345`. If a lookup fails, ask for a search by number instead:
+
+```text
+Search ServiceNow incidents for number INC0012345 and show its state and assignment group
+```
+
+A wrong instance URL also shows up as "not found", so check it matches your browser address.
 </Accordion>
 
 <Accordion title="Requests return 429">

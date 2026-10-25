@@ -6,7 +6,7 @@ icon: magnifying-glass
 
 Root-cause analysis (RCA) is the step where CloudThinker works out why an incident happened. It reads the incident, the alerts behind it, and your connected systems, tests possible explanations, and hands you a written verdict, a diagram of how the failure unfolded, and a list of suggested fixes. You review it and decide what happens next.
 
-RCA is the Analyze stage of [Resolve](/guide/incident/overview). During analysis CloudThinker can hand focused checks to temporary subagents (short-lived helper agents) that read logs, metrics, traces, recent changes, and dependencies. Investigation reads your systems. Any action that would change something goes through a [runbook](/guide/incident/runbooks) and your [Approvals](/guide/approvals/overview) settings.
+RCA is the Analyze stage of [Resolve](/guide/incident/overview). It reads logs, metrics, traces, recent changes, and dependencies through the [connections](/guide/connections/overview) you've already set up, and it can only reach what those connections can. Investigation only reads. Any change goes through a [runbook](/guide/incident/runbooks) and your [Approvals](/guide/approvals/overview) settings. For what the model sees and how secrets are handled, see [Data protection](/guide/security/data-protection).
 
 ## Before you start
 
@@ -17,9 +17,10 @@ RCA is the Analyze stage of [Resolve](/guide/incident/overview). During analysis
 
 | Incident came from | When RCA starts |
 |---|---|
-| [Pulse](/guide/pulse/overview) (an alert source) | Automatically, when **On Duty** (automatic investigation) is on and the incident qualifies. See [Resolve settings](/guide/incident/settings). |
+| [Pulse](/guide/pulse/overview) (an alert source) | Automatically, when all three hold: the **On duty** switch in the **Resolve → Investigation** header is on, the webhook has **Auto-investigate** on, and the alert meets the webhook's minimum severity if one is set. See [Decide when RCA starts](/guide/incident/webhook-integrations/overview#decide-when-rca-starts). |
 | [Log Incident](/guide/incident/manual-logging) (a person) | Right away, as soon as you click **Log Incident**. |
-| Anything else waiting in **Not started** | When you click **Investigate**. |
+| A Pulse incident that didn't auto-start: **On duty** was **Paused**, the webhook had **Auto-investigate** off, or the alert was below the minimum severity. These wait in **Not started** with the reason **Ready to investigate**. | When you click **Investigate**. |
+| An incident moved back to **Investigating** with no session running. It waits in **Not started** with the reason **No investigation run**. | When you start a session again. See [Re-investigation](#re-investigation). |
 
 ## Run an investigation
 
@@ -36,7 +37,14 @@ RCA is the Analyze stage of [Resolve](/guide/incident/overview). During analysis
     Click **Watch live** to open the conversation where CloudThinker is working. You'll see each check it runs as it runs. The **Investigation timeline** on the incident also updates live.
   </Step>
   <Step title="Read the verdict">
-    When analysis finishes, the incident moves to **Needs your decision** with the reason **Cause found**, or another outcome from the table below. Read the verdict, then settle the suggestions (next sections).
+    When analysis finishes, the incident moves to **Needs your decision**. Its row in the queue shows the reason, such as **Cause found** for an incident with status **Identified**. [Investigation outcomes](#investigation-outcomes) lists every status and where it lands. Read the verdict, then settle the suggestions (next sections).
+
+    If the timeline stops adding steps and **Watch live** shows no activity, see [Investigation stuck](/guide/incident/troubleshooting#investigation-stuck).
+  </Step>
+  <Step title="Close the incident">
+    Click the status badge in the incident header, pick **Resolved** or **False Alarm** (an **On Hold** incident offers **Resolved** only), and confirm with **Change Status**. Only workspace Admins can change status. Other roles see the badge without a menu.
+
+    **Success state:** the incident moves to the **Resolved** or **Dismissed** group.
   </Step>
 </Steps>
 
@@ -60,12 +68,13 @@ The incident page puts the answer first and the supporting material below it.
 |---|---|
 | **Current assessment** | The written verdict, an evidence label (below), and how long it took to identify the root cause. Shows **Still investigating** while a session is running. |
 | **How it happened** | A causal graph from the first failure to the visible impact |
-| Severity suggestion | Appears when CloudThinker thinks the severity is wrong. Click **Change to** the suggested level, or **Keep** the current one. |
+| Severity suggestion (no heading) | Appears when CloudThinker thinks the severity is wrong. Click **Change to** the suggested level, or **Keep** the current one. |
 | **Remediation** | Suggested fixes, each with a priority |
 | **Full analysis** | The complete written analysis |
 | **Investigation timeline** | Every step, newest first, including each explanation tested and whether it was confirmed or ruled out |
 | **Affected services** | Services and dependencies involved |
 | **Duplicate webhooks** | Repeat deliveries of the same alert, when there were any |
+| **Was Resolve's diagnosis right?** | Thumbs up or down on the verdict. These answers feed the **Accuracy & trust** tab. See [Mark a diagnosis right or wrong](/guide/incident/insights#mark-a-diagnosis-right-or-wrong). |
 
 ### Evidence labels
 
@@ -73,9 +82,9 @@ The label next to **Current assessment** says how well the root cause is backed:
 
 | Label | Meaning | How to treat it |
 |---|---|---|
-| **Verified** | Confirmed against data from your systems | Safe to act on after a quick review |
+| **Verified** | Confirmed against data from your systems, shown in the **Investigation timeline** | Review the timeline steps it rests on, then act. Any change still runs through a runbook and your Approvals settings. |
 | **Inferred** | Reasoned from the evidence, not directly confirmed | Check the timeline before acting |
-| **Cause unproven** | The verdict rests on an assumption | Treat it as a lead. Add access or context and investigate again. |
+| **Cause unproven** | The verdict rests on an assumption | Treat it as a lead. Add access or context and [investigate again](#re-investigation). |
 
 ### Settle each remediation suggestion
 
@@ -90,20 +99,35 @@ The note is optional and stays on the suggestion for anyone reviewing the incide
 
 ## Investigation outcomes
 
-| Status | Meaning |
-|---|---|
-| **Identified** | A root cause was found |
-| **On Hold** | Paused, waiting for information, access, or a decision from a person. The incident sits in **Needs your decision** until someone supplies it. |
-| **Not Found** | The available evidence didn't support a root cause. These incidents drop out of the queue. |
-| **False Alarm** | The alert wasn't a real problem |
-| **Resolved** | Fixed and closed with a person involved |
-| **Auto-resolved** | Fixed and closed by the agent with nobody involved |
+Each status lands in one queue group, and the queue row shows the reason:
 
-**Acknowledged** is not an outcome: it means a responder owns the incident but analysis hasn't started.
+| Status | Meaning | Queue group | Reason shown |
+|---|---|---|---|
+| **Identified** | A root cause was found | **Needs your decision** | **Cause found** |
+| **On Hold** | Waiting for information, access, or a decision from a person | **Needs your decision** | **Paused** |
+| **Not Found** | The available evidence didn't support a root cause | None. The queue doesn't list it. | |
+| **False Alarm** | The alert wasn't a real problem | **Dismissed** | **False alarm** |
+| **Resolved** | Fixed and closed with a person involved | **Resolved** | **Validated** |
+| **Auto-resolved** | Fixed and closed by the agent with nobody involved | **Resolved** | **Auto-resolved** |
+
+An incident can also sit in **Needs your decision** without one of these statuses. The reason then reads **Investigation complete**, **Investigation stopped** (the session failed), **Investigation cancelled**, or **Checks incomplete** (the checks were inconclusive).
+
+**Acknowledged** is not an outcome: it means a responder owns the incident but analysis hasn't started. You see it on the status badge in the incident header, and the incident sits in **Not started**.
+
+<Note>
+A **Not Found** incident drops out of the queue, so handle it before you leave the page. Add the missing [connection](/guide/connections/overview), then click the status badge and choose **Investigating** to bring it back to the queue. Keep the incident's URL if you plan to come back later.
+</Note>
 
 ## Re-investigation
 
-An incident has one investigation record. When a new session runs, whether a person or the system started it, its steps are added to the same **Investigation timeline** under a session marker. If the conclusion changes, the timeline records a root-cause revision instead of creating a second report. Earlier sessions stay available under **More actions → Earlier sessions**. [Resolve settings](/guide/incident/settings) controls how readily new evidence triggers a new session.
+An incident has one investigation record. Each new session adds its steps to the same **Investigation timeline** under a session marker. If the conclusion changes, the timeline records a root-cause revision instead of creating a second report. Earlier sessions stay available under **More actions → Earlier sessions**.
+
+The **Investigate** button only appears before the first investigation. To investigate again:
+
+| Situation | Do this |
+|---|---|
+| The verdict is weak, or you have new access or context | Add the missing [connection](/guide/connections/overview) first. Then open **More actions → Open AI Conversation**, give CloudThinker the new context, and ask it to look again. This continues the same session. If CloudThinker reaches a new conclusion, the timeline shows a root-cause revision and **Current assessment** updates. No new timeline steps means the reply didn't change the incident. |
+| The session failed (**Analysis Failed**) | Click **Retry Analysis**. Admin only. |
 
 ## Correlated incidents
 
@@ -113,6 +137,8 @@ When several alerts share a likely cause, Resolve groups them under one parent i
 |---|---|
 | **View Parent Analysis** | Opens the parent incident that owns the investigation |
 | **Promote to Standalone** | Detaches the alert into its own incident. After you confirm, choose whether to start RCA on it now or leave it for later. Admin only. |
+
+Grouping starts in Pulse. To make related alerts group correctly, map **Service Path** on each webhook. See [Map the fields](/guide/incident/webhook-integrations/overview#map-the-fields) and [Clusters](/guide/pulse/clusters).
 
 ## Share or export the result
 
@@ -126,9 +152,9 @@ From the incident's **More actions** menu:
 
 | Problem | Fix |
 |---|---|
-| No **Investigate** button | The incident already has an investigation, a session is running, or it's part of a correlated group (use **View Parent Analysis**). It also needs the Admin role. |
-| Pulse incidents stay in **Not started** | **On Duty** is off, or the incident didn't qualify. Check [Resolve settings](/guide/incident/settings). |
-| Verdict is **Cause unproven** or **Not Found** | RCA couldn't read enough. Add the missing [connection](/guide/connections/overview), add context in the conversation, and investigate again. |
+| No **Investigate** button | The incident already has an investigation (see [Re-investigation](#re-investigation)), a session is running, or it's part of a correlated group (use **View Parent Analysis**). It also needs the Admin role. |
+| Pulse incidents stay in **Not started** | **On duty** shows **Paused**, the webhook has **Auto-investigate** off, or the alert is below its minimum severity. Check all three, or click **Investigate**. |
+| Verdict is **Cause unproven** or **Not Found** | RCA couldn't read enough. Add the missing [connection](/guide/connections/overview), then ask again in the conversation. See [Re-investigation](#re-investigation). |
 | Stuck in **On Hold** | Open the conversation with **Open AI Conversation** and answer what CloudThinker asked for. |
 
 ## Next steps
@@ -141,7 +167,7 @@ From the incident's **More actions** menu:
     Turn a verdict into a scoped, approved fix.
   </Card>
   <Card title="Control automatic RCA" icon="sliders" href="/guide/incident/settings">
-    Set On Duty and re-investigation behavior.
+    Set On duty and live progress updates.
   </Card>
   <Card title="Incident memory" icon="brain" href="/guide/incident/incident-memory">
     See how lessons carry into later investigations.

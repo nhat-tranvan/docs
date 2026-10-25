@@ -12,7 +12,7 @@ Connect New Relic so CloudThinker can run NRQL, check golden metrics and errors 
 
 - A New Relic account in the **US** or **EU** region.
 - The **New Relic MCP Server** turned on for your organization. An admin enables it in New Relic's administration settings, and nothing works until it's on.
-- A New Relic user in a group with **Organization Read Only**, **Organization Manager**, **Organization Product Admin**, or a custom role that can read the MCP server.
+- A New Relic user in a group with two kinds of role: an organization role that can read the MCP server, and an account role on each account agents should query. See [Required permissions](#required-permissions).
 - Permission to add connections in your CloudThinker workspace.
 
 <Warning>
@@ -28,13 +28,13 @@ New Relic's MCP server is in public preview, and New Relic doesn't allow it for 
     Copy the full key now. It starts with `NRAK-` and New Relic shows it only once.
   </Step>
   <Step title="Add the connection">
-    In CloudThinker, go to **Connections**, find **New Relic**, and click **Connect**. Fill in:
+    Open **Workspace Settings → Connections**, stay on the **Builtin Connections** tab, and select **New Relic**. Fill in:
     - **Alias** (optional): a short name such as `newrelic-prod`. Lowercase letters, numbers, and hyphens.
     - **Description** (optional): which account or environment this is. Agents read it to pick the right instance.
     - **NEWRELIC_API_KEY**: the `NRAK-` key.
     - **NEWRELIC_REGION**: **US (mcp.newrelic.com)** or **EU (mcp.eu.newrelic.com)**, matching where you sign in.
 
-    Click **Connect**. CloudThinker shows **Connecting** and **Verifying**, then a **Connected** status.
+    Click **Connect**. CloudThinker shows **Connecting** and **Verifying**, then a **Connected** status. **Verifying** opens a session with the New Relic MCP server for your region and lists its tools. It doesn't run a query, so a missing account role shows up later, on the first question. If verification fails, it shows **Failed** and an error message appears. Match the message to [Troubleshooting](#troubleshooting).
   </Step>
 </Steps>
 
@@ -53,16 +53,17 @@ If you sign in at `one.eu.newrelic.com`, your region is **EU**. Otherwise it's *
 
 ## Required permissions
 
-A User API key carries the permissions of the user who owns it. There are no per-key scopes, so least privilege comes from the user.
+A User API key carries the permissions of the user who owns it. There are no per-key scopes, so least privilege comes from the user. The user needs both levels:
 
-| User role | Fit |
-|-----------|-----|
-| **Organization Read Only** | Recommended. Enough for every read CloudThinker does |
-| **Organization Product Admin**, **Organization Manager** | Works, but grants more than CloudThinker needs |
-| Custom organization role | Works if it includes permission to read the MCP server |
+| Level | Role | Fit |
+|-------|------|-----|
+| Organization | **Organization Read Only** | Recommended. Lets the user reach the MCP server |
+| Organization | **Organization Product Admin**, **Organization Manager** | Works, but grants more than CloudThinker needs |
+| Organization | Custom organization role | Works if it includes permission to read the MCP server |
+| Account, on each account to query | **Read Only** | Recommended. Lets NRQL, APM, logs, and alerts reads see that account's data |
 
 <Tip>
-Create a dedicated New Relic user in a group with **Organization Read Only**, give it access to the accounts you want investigated, and create the key under that user.
+Create a dedicated New Relic user and a group for it. In New Relic **Access management**, grant the group **Organization Read Only** at the organization level, then **Read Only** on each account you want investigated. Create the key under that user. New Relic user types can affect billing, so check which type the user gets.
 </Tip>
 
 ## Agent capabilities
@@ -79,7 +80,7 @@ Create a dedicated New Relic user in a group with **Organization Read Only**, gi
 | **Synthetics** | Lists synthetic monitors and their recent results |
 | **Dashboards** | Lists and reads dashboards |
 
-New Relic keeps some AI tools, such as natural-language NRQL and deployment impact reports, for OAuth sign-in only. A User API key can't use them, so CloudThinker writes the NRQL itself.
+New Relic keeps some AI tools, such as natural-language NRQL and deployment impact reports, for OAuth sign-in only. That's a New Relic limit. A User API key can't use them, so CloudThinker writes the NRQL itself and reads change events directly (see **Changes** above).
 
 When the connection first reaches **Connected**, CloudThinker runs a read-only [discovery](/guide/connections/overview#what-happens-after-you-connect) and saves what it finds for later chats.
 
@@ -99,24 +100,40 @@ Which New Relic issues are open right now, and which alert condition opened each
 Were there deployments to the checkout service today, and did error rate change after them?
 ```
 
-To route New Relic alerts into Resolve so incidents open automatically, set up a [webhook integration](/guide/incident/webhook-integrations/overview).
+## Send New Relic alerts to Resolve
+
+Resolve has no New Relic preset, so you send workflow notifications to a [custom signal source](/guide/incident/webhook-integrations/custom-source).
+
+<Steps>
+  <Step title="Create the signal in CloudThinker">
+    Go to **Resolve → Integrations**, select **Custom source**, and click **Add signal**. Name it `New Relic`, click **Create endpoint**, and copy the **Webhook URL** and secret key. The secret is shown only once.
+  </Step>
+  <Step title="Add a webhook destination in New Relic">
+    In New Relic, add a **Webhook** destination. Paste the **Webhook URL** as the endpoint, and set a bearer token authorization with your secret key, so New Relic sends `Authorization: Bearer <your-secret-key>`.
+  </Step>
+  <Step title="Notify the destination from a workflow">
+    In a workflow that covers the alert policies you want, add a webhook notification to that destination. Keep New Relic's default payload template.
+  </Step>
+  <Step title="Send one test event and map the fields">
+    Send a test notification from the workflow. When CloudThinker shows **Payload received**, click **Map the fields**, pick the issue title field for **Incident title** and the priority field for **Severity**, and click **Save mapping**. New Relic's `CRITICAL`, `HIGH`, `MEDIUM`, and `LOW` priorities are understood as-is.
+  </Step>
+</Steps>
+
+**Success state:** the next issue from that workflow shows up in [Pulse](/guide/pulse/overview), the alert feed in Resolve, and agents investigate it through this connection.
 
 ## Troubleshooting
 
-<Accordion title="401 Unauthorized">
-The key is missing, deleted, or not a User key. Check that it starts with `NRAK-`, create a new User key if needed, and update the connection from its detail panel.
+<Accordion title="401 Unauthorized, at Verifying or on the first question">
+- The key is missing, deleted, or not a User key. Check that it starts with `NRAK-`, create a new User key if needed, and update the connection from its detail panel.
+- **NEWRELIC_REGION** doesn't match your account. If you sign in at `one.eu.newrelic.com`, pick **EU**.
 </Accordion>
 
-<Accordion title="Every call fails right after connecting">
+<Accordion title="Fails at Verifying or on every call, with a valid key">
 The New Relic MCP Server isn't turned on for your organization. Ask a New Relic admin to enable it, then retest the connection.
 </Accordion>
 
 <Accordion title="Permission errors or missing accounts">
-The key's user lacks a role that can read the MCP server, or can't see that account. Add the user to a group with **Organization Read Only** and access to the account.
-</Accordion>
-
-<Accordion title="Connected, but results are empty">
-**NEWRELIC_REGION** probably doesn't match your account. EU accounts must use **EU**. Edit the connection and pick the other region.
+The key's user lacks a role that can read the MCP server, or has no account role on that account. Grant the user's group **Organization Read Only** and **Read Only** on the account.
 </Accordion>
 
 <Accordion title="An entity or service isn't found">
@@ -133,8 +150,8 @@ CloudThinker resolves entities by name before querying them. Use the service nam
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Webhook Integrations" icon="plug" href="/guide/incident/webhook-integrations/overview">
-    Send New Relic alerts into Resolve
+  <Card title="Custom Signal Source" icon="plug" href="/guide/incident/webhook-integrations/custom-source">
+    Capture an event and map its fields
   </Card>
   <Card title="Datadog Connection" icon="/images/icons/datadog.svg" href="/guide/connections/datadog">
     Logs, metrics, monitors, and traces

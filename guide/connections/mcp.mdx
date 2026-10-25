@@ -8,17 +8,19 @@ import ConnectionSecurity from '/snippets/connection-security.mdx';
 
 Model Context Protocol (MCP) is an open standard for exposing tools to AI agents. If you run an MCP server, for example in front of an internal metrics API, a ticketing system, or a legacy service, you can add it as a custom [connection](/guide/connections/overview). Every tool the server exposes then becomes a tool agents can call in chat, automations, and investigations.
 
-CloudThinker reaches your server over the public internet and authenticates with the HTTP headers you set on the connection, usually an `Authorization` header with a token your server checks.
+CloudThinker reaches your server over the public internet and authenticates with static HTTP headers you set on the connection, usually an `Authorization` header with a token your server checks. The MCP form has no OAuth sign-in, so a server that only accepts OAuth can't be connected.
 
 ## What agents can do
 
 After you connect, CloudThinker loads the server's tool list. Each tool is available to agents as `prefix__tool_name`, where the prefix is the one you set on the connection. A server with prefix `weather` that exposes `get_forecast` gives agents a tool called `weather__get_forecast`.
 
-Agents can only call tools your server serves. To keep a tool away from agents, don't expose it from the server.
+Agents can only call tools your server serves. To keep a write tool away from agents, remove it from the server or add a **Deny** [Rule](/guide/approvals/rules) for it. Reads always run, so a read tool you don't want called must come off the server.
+
+MCP connections have no **Allow writes** switch. Rules and your Approval mode are the only controls on write tools in CloudThinker.
 
 ### How reads and writes are decided
 
-CloudThinker sorts each tool into a read or a write when it first discovers it:
+CloudThinker sorts each tool into a read or a write when it loads the tool list:
 
 | Check, in order | Result |
 |---|---|
@@ -29,6 +31,12 @@ CloudThinker sorts each tool into a read or a write when it first discovers it:
 
 Name words are split on `_` and `-`, so `list_tickets` and `get-status` are reads, while `listTickets` (one word) and `close_ticket` are writes.
 
+<Warning>
+Any read word anywhere in the name makes the tool a read, unless it declares `destructiveHint: true`. `get_and_delete_user` and `check_and_fix` count as reads and run without approval. Set `destructiveHint: true` on every tool that changes data.
+</Warning>
+
+CloudThinker reloads the tool list, and sorts every tool again, when you click **Edit** and save a change to the URL, headers, or transport. Changing only the name or description doesn't reload it.
+
 Reads run without asking. Writes go through your [Rules](/guide/approvals/rules) and [Approval mode](/guide/approvals/approval-mode), so a write tool on your server is never called without the checks you configured.
 
 <Tip>
@@ -37,7 +45,7 @@ Set `readOnlyHint` and `destructiveHint` on your server's tools. Hints are more 
 
 ## Before you start
 
-- An MCP server that speaks **Streamable HTTP** or **Server-Sent Events** (SSE), reachable from the internet.
+- An MCP server that speaks **Streamable HTTP** or **Server-Sent Events** (SSE), reachable from the internet. To limit who can reach it, allowlist CloudThinker's egress IPs (see [Reaching private services](/guide/connections/overview#reaching-private-services)).
 - The server's endpoint URL, for example `https://mcp.example.com/mcp`.
 - A credential for your server, if it requires one. Issue one only for CloudThinker (see [Permissions](#permissions)).
 - Permission to edit connections in your workspace.
@@ -46,7 +54,7 @@ Set `readOnlyHint` and `destructiveHint` on your server's tools. Hints are more 
 
 <Steps>
   <Step title="Open the MCP form">
-    Open **Connections**, select the **MCP Connections** tab, and click **+** (**New MCP connection**). The **Create MCP Connection** dialog opens.
+    In the sidebar, click **More → Workspace settings → Connections**, select the **MCP Connections** tab, and click **+** (**New MCP connection**). The **Create MCP Connection** dialog opens.
   </Step>
   <Step title="Fill in Basic Information">
     - **Connection Name**: a name your team will recognize, such as `Internal metrics`.
@@ -59,13 +67,13 @@ Set `readOnlyHint` and `destructiveHint` on your server's tools. Hints are more 
   </Step>
   <Step title="Fill in Connection Configuration">
     - **URL**: the server endpoint, such as `https://mcp.example.com/mcp`. See [Server URL rules](#server-url-rules).
-    - **Timeout (seconds)**: how long to wait for the server to respond. Default 30, allowed 0.1 to 300.
+    - **Timeout (seconds)**: how long to wait for the server to respond. Default 30, allowed 0.1 to 300. Keep 30 unless your tools run long queries, then raise it.
     - **SSE Read Timeout (seconds)**: how long to wait on the event stream. Default 300, allowed 1 to 600.
   </Step>
   <Step title="Create">
     Click **Create**. CloudThinker contacts the server and loads its tool list.
 
-    **Success state:** the connection shows as connected in the **MCP Connections** list, and its detail panel shows the transport and URL under **Server config**. If it fails, a **Connection error** alert explains why. See [Troubleshooting](#troubleshooting).
+    **Success state:** the connection shows **Connected** in the **MCP Connections** list, and its detail panel shows the transport and URL under **Server config**. If it fails, a **Connection error** alert explains why. See [Troubleshooting](#troubleshooting).
   </Step>
 </Steps>
 
@@ -81,6 +89,10 @@ Don't put credentials in the URL (`https://user:password@host/mcp`). The form re
 | `http://203.0.113.10:8000/mcp` | Accepted, with the warning "Not encrypted. Headers and tool results are sent as plain text." Your token travels unencrypted. |
 | `http://localhost:8000/mcp`, `http://10.0.0.5/mcp`, `http://192.168.1.20/mcp` | Rejected. CloudThinker can't reach loopback, private, or cloud metadata addresses. |
 | A host name that resolves to a private address | Rejected, even if it looks public. |
+
+<Warning>
+There's no workspace setting that blocks `http://` URLs. Use `https://` for any server that takes a token, and [add HTTPS](#add-https-with-a-reverse-proxy) if it only speaks HTTP.
+</Warning>
 
 ### Add HTTPS with a reverse proxy
 
@@ -144,7 +156,7 @@ Replace `#Internal metrics` with your connection's name.
 
 <AccordionGroup>
   <Accordion title="This connection did not respond in time. Try connecting again.">
-    The server didn't answer within **Timeout (seconds)**. Check that the server is running and that its firewall allows inbound traffic, then raise the timeout and try again.
+    The server didn't answer within **Timeout (seconds)**. Check that the server is running and that its firewall allows CloudThinker's egress IPs (see [Reaching private services](/guide/connections/overview#reaching-private-services)), then raise the timeout and try again.
   </Accordion>
   <Accordion title="This server does not use HTTPS on this port.">
     The URL starts with `https://`, but the server speaks plain HTTP on that port. Change the URL to `http://`, or [add HTTPS](#add-https-with-a-reverse-proxy).

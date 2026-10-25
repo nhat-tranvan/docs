@@ -6,7 +6,7 @@ icon: "/images/icons/cassandra.svg"
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect Cassandra to let CloudThinker list keyspaces and tables, audit replication, TTL, and compaction settings, report node state as the driver sees it, and read rows by primary key. CloudThinker signs in with a Cassandra login role over the CQL native transport, and every change goes through your [approvals](/guide/approvals/overview).
+Connect Cassandra to let CloudThinker list keyspaces and tables, audit replication, TTL, and compaction settings, report node state as the driver sees it, and read rows by primary key. CloudThinker signs in with a Cassandra login role over the CQL native transport. New connections can request changes, and every change goes through your [approvals](/guide/approvals/overview). For a read-only connection, skip the change grants or turn off [Allow writes](#write-access).
 
 ---
 
@@ -15,6 +15,7 @@ Connect Cassandra to let CloudThinker list keyspaces and tables, audit replicati
 - A Cassandra cluster reachable from CloudThinker on its CQL native transport port, `9042` by default.
 - A superuser login to create a role, or a role someone created for you.
 - Two or three node addresses from the same datacenter. The driver finds the rest of the ring from them.
+- One Cassandra connection per workspace if you want changes. A second one turns writes off for both.
 
 <Info>
 This connection speaks CQL only. `nodetool` runs over JMX on a different port, so repair status, compaction backlog, and disk usage are out of reach.
@@ -46,7 +47,7 @@ This connection speaks CQL only. `nodetool` runs over JMX on a different port, s
     ```
   </Step>
   <Step title="Open network access">
-    Allow inbound `9042` from CloudThinker to the contact points you'll enter.
+    The driver connects to every node it discovers, not only the contact points. Allow inbound `9042` from CloudThinker's egress IPs (ask your CloudThinker contact for the current list) to every node in the local datacenter, and check that each node's `broadcast_rpc_address` is reachable from CloudThinker.
   </Step>
   <Step title="Add the connection in CloudThinker">
     Go to **Connections → Cassandra**, fill in the fields from [Connection details](#connection-details), and click **Connect**.
@@ -70,6 +71,8 @@ This connection speaks CQL only. `nodetool` runs over JMX on a different port, s
 | **Local datacenter** | No | Keeps reads in one datacenter on a multi-DC ring. Blank uses the datacenter of the node that answers | Blank |
 | **Use TLS** | Yes | Encrypts the session, including the role password | **Yes (default)** |
 | **Verify the TLS certificate** | No | Set to **No** only for a self-signed or internal-CA certificate. Shown only when TLS is on | **Yes (default)** |
+
+There's no field for a custom CA or a client certificate, so mutual TLS isn't supported. For production, use a node certificate from a publicly trusted CA so verification can stay on.
 
 <Warning>
 A stock `cassandra.yaml` ships with client-to-node encryption off. Setting **Use TLS** to **No** to match it sends the role name and password in clear text to anything on the network path.
@@ -99,7 +102,7 @@ Grant on named keyspaces, never `ON ALL KEYSPACES`. The grant decides what Cassa
 | **Inventory** | List keyspaces and tables with replication strategy and primary key shape |
 | **Schema audit** | Report replication factor, `default_time_to_live`, `gc_grace_seconds`, compaction, and secondary indexes |
 | **Ring health** | Report datacenters, racks, release versions, and schema agreement as the driver sees them |
-| **Row reads** | Read one partition by its key, capped at 100 rows. A scan across partitions runs only when you ask for one |
+| **Row reads** | Read one partition by its key, capped at 100 rows. A scan across partitions runs only when you ask for one, with the same cap. It doesn't use `ALLOW FILTERING`, but the coordinator walks token ranges until the cap fills, so on a large or tombstone-heavy table it loads the cluster far more than the row count suggests |
 | **Approved changes** | Change one row, one table setting, or one secondary index, from a fixed set of operations |
 
 ### Verify the connection
@@ -113,18 +116,18 @@ List the Cassandra keyspaces and the tables in each one
 ### Example prompts
 
 ```text
-Audit replication factor, TTL, and gc_grace_seconds for every table in the events keyspace
-Show the row in ct_demo.sessions where session_id = 'abc-123'
-Set the default TTL on ct_demo.events to one day
+Audit replication factor, TTL, and gc_grace_seconds for every table in the shop keyspace
+Show the row in shop.sessions where session_id = 'abc-123'
+Set the default TTL on shop.events to one day
 ```
 
-The third prompt is a change. CloudThinker first reads the current TTL, tells you the new value and that it only applies to rows written afterwards, then waits for approval.
+`shop` is an example keyspace. Use your own. The third prompt is a change. CloudThinker first reads the current TTL, tells you the new value and that it only applies to rows written afterwards, then waits for approval.
 
 ---
 
 ## Write access
 
-New Cassandra connections have **Allow writes** on, under the connection's **Settings**. Turn it off and agents can only read. With it on, your [Rules](/guide/approvals/rules) and [Approval mode](/guide/approvals/approval-mode) decide each change.
+New Cassandra connections have **Allow writes** on. To change it, open **Connections**, select Cassandra, and use the **Allow writes** switch on its detail panel. Turn it off and agents can only read. With it on, your [Rules](/guide/approvals/rules) and [Approval mode](/guide/approvals/approval-mode) decide each change.
 
 Changes are not arbitrary CQL. The connection carries a fixed set of operations:
 
@@ -151,7 +154,7 @@ Adding a second Cassandra connection to the same workspace turns writes off for 
 <Accordion title="No contact point answered on the native transport port">
 - **Contact points** must have no port and no scheme. The port goes in its own field.
 - **Native transport port** must be the CQL port. `7199` is JMX and `7000` is internode.
-- Check the firewall between CloudThinker and the nodes.
+- Check the firewall between CloudThinker and the nodes. It must be open to every node in the local datacenter, not only the contact points.
 </Accordion>
 
 <Accordion title="Contact point is an IPv6 address">

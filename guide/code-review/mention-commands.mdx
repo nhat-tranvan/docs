@@ -8,7 +8,7 @@ Mention `@cloudthinker-ai` in a merge request or pull request (MR/PR) comment to
 
 ## Prerequisites
 
-- A repository connected in [Review setup](/guide/code-review/setup), with at least one MR/PR the bot has commented on.
+- An open MR/PR in a repository connected in [Review setup](/guide/code-review/setup).
 - Comment access on that MR/PR in your Git provider.
 
 ## Commands
@@ -20,7 +20,7 @@ Write the command as plain text on its own line in a comment.
 | `@cloudthinker-ai` or `@cloudthinker-ai help` | Posts the list of commands your provider supports |
 | `@cloudthinker-ai <question>` | Answers a question about this MR/PR |
 | `@cloudthinker-ai review` | Starts the first review, or reviews again from the last reviewed commit. `review again`, `continue`, and `continue review` do the same |
-| `@cloudthinker-ai review ultra` | Runs one deeper Ultra review of the latest commit, if your installation has Ultra review turned on |
+| `@cloudthinker-ai review ultra` | Runs one deeper Ultra review of the latest commit, if Ultra review is turned on for your CloudThinker instance |
 | `@cloudthinker-ai autofix` | Fixes the open findings and pushes the commits to this MR/PR's source branch |
 | `@cloudthinker-ai autofix stacked` | Fixes the open findings on a new branch and opens a separate MR/PR for them. `autofix stacked pr` also works |
 
@@ -71,7 +71,14 @@ If you're the MR/PR author or an assignee and you think a finding is wrong, repl
 This is intentional. The retry is capped by the caller in client.go, so it can't loop forever.
 ```
 
-CloudThinker re-checks the finding against your reply. If it agrees, it settles the finding, and later reviews of the repository take your reason into account. This works once the review has finished, on every provider except AWS CodeCommit. Other people can still ask about a finding by mentioning the bot, but their reply doesn't settle it.
+CloudThinker re-checks the finding against the current code and your reply, then settles it one of three ways:
+
+| Outcome | When | What happens |
+|---|---|---|
+| Withdrawn | The finding was wrong | It closes, and later reviews of the repository are told not to raise it again on unchanged code |
+| Acknowledged | The code is intentional | It closes for this MR/PR, with your reason posted in the thread |
+| Still open | The finding still applies | It stays open, and the bot replies with why |
+ Pushing back works once the review has finished, on every provider except AWS CodeCommit. Other people can still ask about a finding by mentioning the bot, but their reply doesn't settle it.
 
 ## Fix findings with autofix
 
@@ -89,7 +96,7 @@ Pick how you want the fixes delivered:
     ```
   </Step>
   <Step title="Wait for the fix run">
-    CloudThinker reads each open finding, changes the code, commits, and pushes. Only one autofix runs per MR/PR at a time; a second request while one runs doesn't start another.
+    CloudThinker reads each open finding, changes the code, commits, and pushes. Only one autofix runs per MR/PR at a time. A second request while one runs doesn't start another.
 
     **Success state:** new commits appear on your source branch, or a new MR/PR opens that targets it.
   </Step>
@@ -98,22 +105,23 @@ Pick how you want the fixes delivered:
 On GitHub and GitLab you can also type `@cloudthinker-ai autofix` as a reply inside one finding's thread. CloudThinker then fixes only that finding.
 
 <Warning>
-  `@cloudthinker-ai autofix` pushes to your source branch without a separate approval step. Use `autofix stacked` when you want to read the changes first.
+  `@cloudthinker-ai autofix` pushes to your source branch without a separate approval step. CloudThinker doesn't limit it to the MR/PR author: anyone who can comment can run it. On a widely shared repository, limit who can comment in your provider, and use `autofix stacked` when you want to read the changes first.
 </Warning>
 
 ## Skip a review
 
-Add this marker anywhere in the MR/PR description to stop CloudThinker reviewing that MR/PR:
+Put either of these in the MR/PR description to stop CloudThinker reviewing that MR/PR:
 
 ```text
 @cloudthinker:ignore
+@cloudthinker-ai review ignore
 ```
 
-The marker is case-sensitive and must match exactly. `@cloudthinker-ai review ignore` on its own line in the description does the same. To skip whole groups of MR/PRs, such as bot dependency bumps, use repository filters in [Review setup](/guide/code-review/setup) instead.
+`@cloudthinker:ignore` works anywhere in the description and is case-sensitive. `@cloudthinker-ai review ignore` must be alone on its own line, outside a code block. Use whichever you find easier to remember. To skip whole groups of MR/PRs, such as bot dependency bumps, use repository filters in [Review setup](/guide/code-review/setup) instead.
 
 ## Run an Ultra review
 
-Ultra is a deeper, slower review that uses more credits than a normal one. It's available only when Ultra review is turned on for your installation.
+Ultra is a deeper, slower review that uses more credits than a normal one. It's available only when Ultra review is turned on for your CloudThinker instance. It isn't a workspace setting, so there's no switch for it in **Review → Settings**.
 
 - **Once:** comment `@cloudthinker-ai review ultra`. Only the MR/PR author or an assignee can start it this way. The next push gets your normal review.
 - **On every push:** put `@cloudthinker-ai review ultra` on its own line in the MR/PR description. If the description also has the skip marker, the skip wins.
@@ -122,13 +130,19 @@ If Ultra is off, the bot replies **Ultra review is turned off for this installat
 
 ## Provider support
 
-| Provider | Help and questions | Replies in finding threads | `review` and `review ultra` | `autofix` | `autofix stacked` |
+| Provider | Questions | Thread replies | `review` | `autofix` | `autofix stacked` |
 |---|---|---|---|---|---|
 | GitHub | Yes | Yes | Yes | Yes | Yes |
 | GitLab | Yes | Yes | Yes | Yes | Yes |
-| Bitbucket Cloud | Yes | Author or assignee replies only | Yes | Top-level comment only | No |
-| Azure DevOps | Yes | Author or assignee replies only | Yes | Top-level comment only | No |
-| AWS CodeCommit | Top-level comments only | No | No | No | No |
+| Bitbucket Cloud | Yes | Partial (1) | Yes | Partial (2) | No |
+| Azure DevOps | Yes | Partial (1) | Yes | Partial (2) | No |
+| AWS CodeCommit | Partial (3) | No | No | No | No |
+
+1. Only replies from the MR/PR author or an assignee are read.
+2. Top-level comments only, not inside a finding's thread.
+3. Help and questions in top-level comments only.
+
+`review` covers `review ultra` too.
 
 A command your provider doesn't support is ignored without a reply.
 
@@ -136,13 +150,18 @@ A command your provider doesn't support is ignored without a reply.
 
 <AccordionGroup>
   <Accordion title="The bot didn't reply to my comment">
-    **Check:** the mention is plain text, not inside backticks, a code block, or a quote. **Check:** your provider supports the command in the table above. On Azure DevOps, **Check:** the **Pull request commented on** service hook exists with **Resource version** set to **2.0**, as described in [Provider authentication](/guide/code-review/provider-auth).
+    **Check:**
+
+    - The mention is plain text, not inside backticks, a code block, or a quote.
+    - Your provider supports the command in the [table above](#provider-support).
+    - On Azure DevOps, the **Pull request commented on** service hook exists with **Resource version** set to **2.0**, as described in [Provider authentication](/guide/code-review/provider-auth).
+    - Your provider's webhook delivery history shows the comment event was delivered and accepted.
   </Accordion>
   <Accordion title="My command was answered as a question">
     **Cause:** `review` and `review ultra` must be the whole line. **Fix:** post `@cloudthinker-ai review` with nothing after it.
   </Accordion>
   <Accordion title="Ultra review won't start from a comment">
-    **Cause:** only the MR/PR author or an assignee can start Ultra from a comment, or Ultra is turned off for your installation. **Fix:** ask the author to comment, or use **Run Ultra review** in the [Review workspace](/guide/code-review/review-workspace) if you have it.
+    **Cause:** only the MR/PR author or an assignee can start Ultra from a comment, or Ultra is turned off for your CloudThinker instance. **Fix:** ask the author to comment, or use **Run Ultra review** in the [Review workspace](/guide/code-review/review-workspace) if you have it.
   </Accordion>
   <Accordion title="My reply in a finding thread didn't settle the finding">
     **Cause:** only the MR/PR author or an assignee can settle a finding by replying, and only after the review has finished. **Fix:** ask the author to reply, or mark it resolved in the Review workspace.

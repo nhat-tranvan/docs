@@ -11,16 +11,16 @@ Connect a Confluent Cloud or self-hosted Apache Kafka cluster to let CloudThinke
 ## Prerequisites
 
 - **Confluent Cloud**: an environment with at least one Kafka cluster, and permission to create API keys, ideally for a service account.
-- **Self-hosted Kafka**: a broker whose bootstrap address CloudThinker can reach over the network, port `9092` by default.
+- **Self-hosted Kafka**: a broker whose bootstrap address CloudThinker can reach over the network, port `9092` by default. The file has no settings for SASL/SCRAM, mTLS, client certificates, or a custom CA, so the broker must accept CloudThinker's connection without them. Don't open such a broker to the internet: restrict it to CloudThinker's egress IPs (ask your CloudThinker contact, or see [Reaching private services](/guide/connections/overview#reaching-private-services)).
 - A text editor to write the JSON file.
 
 ## Choose your scopes
 
-On Confluent Cloud, each API key pair unlocks one scope. Start with the Kafka cluster scope and add others later by uploading an updated file.
+On Confluent Cloud, each API key pair unlocks one scope. Start with the Kafka cluster scope and add others later by [uploading an updated file](#change-the-file-later). On self-hosted Kafka, only `BOOTSTRAP_SERVERS` and an optional `SCHEMA_REGISTRY_ENDPOINT` apply, and every other scope is Confluent Cloud only.
 
 | Scope | What agents can do with it | Fields |
 |-------|----------------------------|--------|
-| **Kafka cluster** (required) | List topics, read topic configs, sample and produce messages, create or delete topics | `BOOTSTRAP_SERVERS`, `KAFKA_API_KEY`, `KAFKA_API_SECRET`, `KAFKA_REST_ENDPOINT`, `KAFKA_CLUSTER_ID`, `KAFKA_ENV_ID` |
+| **Kafka cluster** (required) | List topics, read topic configs, sample and produce messages, create or delete topics | `BOOTSTRAP_SERVERS` (both platforms). Confluent Cloud only: `KAFKA_API_KEY`, `KAFKA_API_SECRET`, `KAFKA_REST_ENDPOINT`, `KAFKA_CLUSTER_ID`, `KAFKA_ENV_ID` |
 | **Cloud resource management** | List environments and clusters, query metrics such as received bytes, list billing costs, manage connectors and topic tags | `CONFLUENT_CLOUD_API_KEY`, `CONFLUENT_CLOUD_API_SECRET` |
 | **Schema Registry** | List schema subjects and versions, delete a schema | `SCHEMA_REGISTRY_ENDPOINT`, `SCHEMA_REGISTRY_API_KEY`, `SCHEMA_REGISTRY_API_SECRET` |
 | **Flink** | Run and inspect Flink SQL statements, browse catalogs and tables, run statement health checks | `FLINK_API_KEY`, `FLINK_API_SECRET`, `FLINK_REST_ENDPOINT`, `FLINK_COMPUTE_POOL_ID`, `FLINK_ENV_ID`, `FLINK_ORG_ID`, optional `FLINK_ENV_NAME`, `FLINK_DATABASE_NAME` |
@@ -35,11 +35,20 @@ On Confluent Cloud, each API key pair unlocks one scope. Start with the Kafka cl
         In [Confluent Cloud](https://confluent.cloud/home), open **Environments** and select your environment. Its ID (`env-...`) is your `KAFKA_ENV_ID`. Open the cluster and copy its bootstrap server, REST endpoint, and cluster ID (`lkc-...`).
       </Step>
       <Step title="Create one API key pair per scope">
-        Go to **Settings → API keys** and click **Add API key**. Choose a **Service account** for production. Create a Kafka cluster key first, then one key for each optional scope you chose. Save each key and secret as you create it.
+        Go to **Settings → API keys** and click **Add API key**. Choose a **Service account** for production. Create a Kafka cluster key first, then one key for each optional scope you chose. Save each key and secret as you create it. Pick the resource that matches each scope:
+
+        | Scope | Choose in the wizard | Then select |
+        |-------|----------------------|-------------|
+        | Kafka cluster | **Kafka cluster** | The cluster from step 1 |
+        | Cloud resource management | **Cloud resource management** | Nothing more. It covers the organization |
+        | Schema Registry | **Schema Registry** | The environment from step 1 |
+        | Flink | **Flink region** | The environment, cloud, and region of your compute pool |
+        | Tableflow | **Tableflow** | Nothing more |
       </Step>
       <Step title="Collect optional scope fields">
         - **Schema Registry**: in the environment, open **Stream Governance → Schema Registry** and copy the endpoint.
-        - **Flink**: open **Flink → Compute pools**, select the pool, and copy its ID (`lfcp-...`). The REST endpoint follows your cloud provider and region. The organization ID is under **Settings → Organizations**.
+        - **Flink**: open **Flink → Compute pools**, select the pool, and copy its ID (`lfcp-...`). The REST endpoint follows the pattern `https://flink.<region>.<provider>.confluent.cloud`, such as `https://flink.us-east-1.aws.confluent.cloud`. `FLINK_ENV_ID` is the `env-...` ID of the environment that holds the pool, usually the same value as `KAFKA_ENV_ID`. The organization ID is under **Settings → Organizations**.
+        - **Optional Flink defaults**: `FLINK_ENV_NAME` is the environment's display name, used as the default catalog. `FLINK_DATABASE_NAME` is the Kafka cluster's display name, used as the default database. Set them so agents can name tables without the full `catalog.database.table` path.
       </Step>
       <Step title="Write the JSON file">
         Save a file such as `kafka.json`. Keep only the scopes you created keys for, and delete the other lines entirely:
@@ -90,7 +99,7 @@ On Confluent Cloud, each API key pair unlocks one scope. Start with the Kafka cl
         ```json
         {
           "BOOTSTRAP_SERVERS": "kafka-1.example.com:9092",
-          "SCHEMA_REGISTRY_ENDPOINT": "http://schema-registry.example.com:8081"
+          "SCHEMA_REGISTRY_ENDPOINT": "https://schema-registry.example.com:8081"
         }
         ```
       </Step>
@@ -101,13 +110,13 @@ On Confluent Cloud, each API key pair unlocks one scope. Start with the Kafka cl
       </Step>
     </Steps>
 
-    Metrics, billing, connectors, Flink, and Tableflow are Confluent Cloud APIs, so they aren't available against a self-hosted cluster.
+    On self-hosted Kafka, agents work through the broker itself: listing topics and sampling or producing messages, plus schemas when you set a Schema Registry endpoint. Metrics, billing, connectors, Flink, and Tableflow are Confluent Cloud APIs, so they aren't available.
   </Tab>
 </Tabs>
 
 ## Connection details
 
-The form has one upload field. CloudThinker reads only the keys listed in [Choose your scopes](#choose-your-scopes) from the file.
+The form has one upload field. The file must be one JSON object with string values, using only the keys listed in [Choose your scopes](#choose-your-scopes). A file with any other key, or a value that isn't a string, is rejected.
 
 | Field | Required | Description |
 |-------|----------|-------------|
@@ -119,7 +128,20 @@ The form has one upload field. CloudThinker reads only the keys listed in [Choos
 
 ## Required permissions
 
-**Confluent Cloud:** create keys for a service account, and give that account only what agents need. Restrict Kafka ACLs to the topics agents should read. For metrics, the Cloud API key's account needs at least the **MetricsViewer** role.
+**Confluent Cloud:** create keys for a service account, and give that account only what agents need.
+
+- **Kafka cluster**: restrict ACLs to the topics agents should read. Message sampling reads through a consumer group, so the account also needs `READ` on consumer groups:
+
+  ```bash
+  confluent kafka acl create --allow --service-account sa-xxxxx \
+    --operations read,describe,describe-configs --topic orders --cluster lkc-xxxxx
+  confluent kafka acl create --allow --service-account sa-xxxxx \
+    --operations read --consumer-group "*" --cluster lkc-xxxxx
+  ```
+
+- **Cloud resource management**: at least **MetricsViewer** for metrics.
+- **Schema Registry**: **DeveloperRead** on the subjects agents should list.
+- **Flink**: **FlinkDeveloper** in the environment that holds the compute pool.
 
 **Self-hosted Kafka:** the connection needs only the bootstrap address.
 
@@ -129,15 +151,22 @@ Start with the Kafka cluster scope and read-only ACLs. Leave write ACLs off the 
 
 ## Agent capabilities
 
-| Capability | What agents can do | Approval |
-|------------|--------------------|----------|
+| Capability | What agents can do | Goes through Approvals |
+|------------|--------------------|------------------------|
 | **Topic inventory** | List topics with partition counts, read topic configs, search topics by name or tag | No |
 | **Message sampling** | Read a bounded number of recent messages, decoding with Schema Registry when configured | No |
 | **Metrics and billing** | Query Confluent Cloud metrics such as received bytes, and list billing costs | No |
 | **Schemas and connectors** | List schema subjects and versions, list and read connectors | No |
-| **Flink SQL** | Run statements, browse catalogs and tables, read statement exceptions, run health checks | No |
-| **Produce and create** | Produce a message, create topics | Through [Approvals](/guide/approvals/overview) |
-| **Destructive changes** | Delete topics, schemas, connectors, or Flink statements; alter a topic config; create a connector; delete tags; change Tableflow | Yes |
+| **Flink SQL reads** | Browse catalogs and tables, read statements and their exceptions, run health checks | No |
+| **Flink SQL statements** | Run a Flink SQL statement | Yes |
+| **Produce and create** | Produce a message, create topics | Yes |
+| **Changes and deletions** | Delete topics, schemas, connectors, or Flink statements; alter a topic config; create a connector; delete tags; change Tableflow | Yes |
+
+Calls marked **Yes** follow your workspace [Approvals](/guide/approvals/overview) Rules and mode. In Auto mode, a Rule or the AI check can allow one without asking you, so add a Rule if you always want to be asked.
+
+<Warning>
+A Flink statement can do more than read. An `INSERT INTO` writes to a topic, and a continuous statement keeps running on your compute pool, using capacity you pay for, until someone deletes it. Read a statement before you approve it.
+</Warning>
 
 Partition counts can't be changed through a topic config. Use the Confluent Cloud UI, or delete and recreate the topic.
 
@@ -147,7 +176,7 @@ Partition counts can't be changed through a topic config. Use the Confluent Clou
 List my Kafka topics with partition counts and replication factor
 ```
 
-Expect every topic in the cluster with its partition count. On Confluent Cloud with the cloud scope, the agent can also name the environment and cluster.
+Expect every topic in the cluster with its partition count and replication factor. On Confluent Cloud with the cloud scope, the agent can also name the environment and cluster.
 
 ### Example prompts
 
@@ -156,6 +185,10 @@ Show the last 10 messages on the orders topic, decoded with Schema Registry
 Chart received bytes per 5 minutes for my Kafka cluster over the last 6 hours
 Why is my Flink statement order-enrichment failing?
 ```
+
+## Change the file later
+
+To add a scope or rotate a key, write a complete file with every scope you want to keep. Open the connection, click the pencil icon on its row, and in **Edit Instance** click **Replace…**. Upload the file and click **Save and test**. If the test fails, CloudThinker keeps the previous credentials. See [Rotate a credential](/guide/connections/overview#rotate-a-credential).
 
 ## Troubleshooting
 
@@ -168,11 +201,11 @@ A scope key is present with an empty value. Delete the whole key and value for a
 </Accordion>
 
 <Accordion title="401 Unauthorized">
-A key pair is wrong, expired, or used for the wrong scope. Each scope needs its own pair: a Kafka cluster key won't work for Schema Registry or Flink. Create a new pair for that scope and upload an updated file.
+A key pair is wrong, expired, or used for the wrong scope. Each scope needs its own pair: a Kafka cluster key won't work for Schema Registry or Flink. Create a new pair for that scope and [upload an updated file](#change-the-file-later).
 </Accordion>
 
 <Accordion title="Metrics or billing questions fail">
-The file has no `CONFLUENT_CLOUD_API_KEY` pair, or its account lacks **MetricsViewer**. Add the cloud scope and upload the file again. On a self-hosted cluster, these APIs aren't available.
+The file has no `CONFLUENT_CLOUD_API_KEY` pair, or its account lacks **MetricsViewer**. Add the cloud scope and [upload the file again](#change-the-file-later). On a self-hosted cluster, these APIs aren't available.
 </Accordion>
 
 <Accordion title="Schema Registry fails">
@@ -185,6 +218,8 @@ Check that `SCHEMA_REGISTRY_ENDPOINT` is reachable from CloudThinker. For self-h
 
 - **One key pair per scope**: give each scope its own key on a service account, so you can revoke Flink or Tableflow access without touching the Kafka cluster key.
 - **Restrict network access**: limit the bootstrap and REST endpoints to CloudThinker's traffic with firewall rules, especially for a self-hosted broker with no credentials.
+- **Delete the local file**: the JSON file holds every secret in plain text. Delete it after you upload it, or keep it only in a secrets manager.
+- **Treat messages as sensitive**: sampled messages can carry personal data or tokens your producers wrote. Grant topic `READ` only where agents should look.
 
 ## Related
 

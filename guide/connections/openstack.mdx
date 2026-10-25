@@ -10,22 +10,30 @@ Connect your OpenStack cloud to let CloudThinker agents inventory servers, volum
 
 ## Prerequisites
 
-- An OpenStack cloud whose Keystone v3 address CloudThinker can reach over the network. Use an `https` address.
+- An OpenStack cloud whose Keystone v3 address, and every catalog endpoint (Nova, Neutron, Cinder, Glance, Placement), is reachable from the internet. Commands run in the CloudThinker cloud. Use an `https` address. Behind a firewall, see [Reaching private services](/guide/connections/overview#reaching-private-services) for the egress IP allowlist.
 - A **dedicated Keystone user** with a role on the project you want inspected. See [Required permissions](#required-permissions).
 - The project name, the domain names of the user and the project, and the region.
 
 <Info>
-A workspace holds one OpenStack connection, and it covers one project in one region. The connection uses a user name and password. Federated sign-in and application credentials are not supported.
+A workspace holds one OpenStack connection, and it covers one project in one region. The connection uses a user name and password. Federated sign-in and application credentials are not supported, and the user must not have multi-factor rules enforced in Keystone, because the connection signs in with the password alone. Use a dedicated user with a long random password.
 </Info>
 
 ## Setup
 
 <Steps>
   <Step title="Find your sign-in values">
-    Download the **openrc** file for your project from the OpenStack dashboard, or ask your cloud administrator. It lists the auth URL, project name, user name, domain names, and region, using the same `OS_*` names as the CloudThinker form.
+    In the OpenStack dashboard (Horizon), open **Project → API Access** and click **Download OpenStack RC File** (Identity API v3). Or ask your cloud administrator. It lists the auth URL, project name, user name, domain names, and region, using the same `OS_*` names as the CloudThinker form. The RC file prompts for the password when you source it and doesn't store it. If you use `clouds.yaml`, the same values sit under `auth:`, and the region is `region_name`.
   </Step>
   <Step title="Create or choose a Keystone user">
-    Use a dedicated user for CloudThinker and give it the `reader` role on the project. You can widen the role later if you want agents to make changes.
+    Use a dedicated user for CloudThinker and give it the `reader` role on the project. As a cloud admin, replace `<domain>` and `<project>` with your values (`Default` is the domain on most clouds):
+
+    ```bash
+    openstack user create --domain <domain> --password-prompt cloudthinker
+    openstack role add --user cloudthinker --user-domain <domain> \
+      --project <project> --project-domain <domain> reader
+    ```
+
+    **Success state:** `openstack role assignment list --user cloudthinker --names` shows `reader` on your project. You can widen the role later if you want agents to make changes.
   </Step>
   <Step title="Add the connection in CloudThinker">
     Open **Connections** in the sidebar, select **OpenStack**, and fill in the fields from [Connection details](#connection-details). Leave the five endpoint override fields blank unless your service catalog is incomplete. Click **Connect**.
@@ -36,17 +44,17 @@ A workspace holds one OpenStack connection, and it covers one project in one reg
 
 ## Connection details
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| **OS_AUTH_URL** | Keystone v3 address. The path ends in `/v3` | `https://openstack.example.com:5000/v3` |
-| **OS_USERNAME** | Keystone user name | `cloudthinker` |
-| **OS_PASSWORD** | Password of that user | |
-| **OS_PROJECT_NAME** | Project every request is scoped to | `production` |
-| **OS_USER_DOMAIN_NAME** | Domain that holds the user. Defaults to `Default` | `Default` |
-| **OS_PROJECT_DOMAIN_NAME** | Domain that holds the project. Defaults to `Default` | `Default` |
-| **OS_REGION_NAME** | Region in your service catalog. Letters, digits, `_`, and `-`, up to 64 characters. Defaults to `RegionOne` | `RegionOne` |
-| **OS_INTERFACE** | **Public endpoint** (default), **Internal endpoint**, or **Admin endpoint** | **Public endpoint** |
-| **OS_VERIFY_SSL** | **Verify SSL certificate** (default) or **Skip SSL verification** | **Verify SSL certificate** |
+| Field | Required | Description | Example |
+|-------|----------|-------------|---------|
+| **OS_AUTH_URL** | Yes | Keystone v3 address. The path ends in `/v3` | `https://openstack.example.com:5000/v3` |
+| **OS_USERNAME** | Yes | Keystone user name | `cloudthinker` |
+| **OS_PASSWORD** | Yes | Password of that user | `********` |
+| **OS_PROJECT_NAME** | Yes | Project every request is scoped to | `production` |
+| **OS_USER_DOMAIN_NAME** | Yes, prefilled | Domain that holds the user. Defaults to `Default` | `Default` |
+| **OS_PROJECT_DOMAIN_NAME** | Yes, prefilled | Domain that holds the project. Defaults to `Default` | `Default` |
+| **OS_REGION_NAME** | Yes, prefilled | Region in your service catalog. Letters, digits, `_`, and `-`, up to 64 characters. Defaults to `RegionOne` | `RegionOne` |
+| **OS_INTERFACE** | Yes, prefilled | **Public endpoint** (default), **Internal endpoint**, or **Admin endpoint** | **Public endpoint** |
+| **OS_VERIFY_SSL** | Yes, prefilled | **Verify SSL certificate** (default) or **Skip SSL verification** | **Verify SSL certificate** |
 
 Five optional fields bypass the Keystone catalog for one service each: **OS_IMAGE_ENDPOINT_OVERRIDE** (Glance), **OS_COMPUTE_ENDPOINT_OVERRIDE** (Nova), **OS_NETWORK_ENDPOINT_OVERRIDE** (Neutron), **OS_VOLUMEV3_ENDPOINT_OVERRIDE** (Cinder), and **OS_PLACEMENT_ENDPOINT_OVERRIDE** (Placement). Each takes a full `http` or `https` URL.
 
@@ -61,8 +69,12 @@ Keystone ships three default roles: `admin`, `member`, and `reader`. OpenStack d
 | You want agents to | Role on the project |
 |--------------------|---------------------|
 | Inventory and audit the project | `reader` |
-| Stop, reboot, resize, or delete resources | `member`, or the narrowest role your cloud's policies accept |
+| Stop, reboot, resize, or delete resources | `member`, or the narrowest role your cloud's policies accept. `member` can delete only resources the project owns, not shared or public images or shared networks |
 | Answer questions across all projects | Usually `admin`. Without it, OpenStack returns `403 Forbidden` |
+
+<Warning>
+In most deployments the default `admin` role is effectively cloud-wide, even when you assign it on one project. Don't give it to this connection. Keep cross-project questions to a person with admin access.
+</Warning>
 
 <Tip>
 Start with `reader`. Default policies may hide some sensitive details from it, so check what your cloud returns before you rely on it for an audit.
@@ -72,10 +84,10 @@ Start with `reader`. Default policies may hide some sensitive details from it, s
 
 | Capability | What agents can do |
 |------------|--------------------|
-| **Inventory** | List servers, volumes, networks, subnets, images, flavors, projects, and the service catalog, and inspect one in detail |
-| **Idle and unused** | Find under-used servers worth right-sizing and unattached volumes |
+| **Inventory** | List servers, volumes, networks, subnets, images, flavors, projects, and the service catalog, and inspect one in detail. Listing every project usually needs `admin` |
+| **Idle and unused** | Flag right-sizing candidates from flavor size, power state, and launch time, and find volumes unattached for more than 30 days. CPU metrics are used only if your cloud runs Telemetry (Ceilometer or Gnocchi) |
 | **Quotas** | Show quota use for instances, cores, RAM, volumes, gigabytes, and networks, and flag anything above 80% |
-| **Capacity** | Review flavors and, where your role allows, hypervisors |
+| **Capacity** | Review flavors and, with `admin` under default policies, hypervisors |
 | **Network drift** | Flag security group rules open to `0.0.0.0/0` |
 | **Approved changes** | Stop, reboot, resize, or delete servers, and delete volumes, images, or networks |
 
@@ -119,8 +131,12 @@ An optional override field holds something other than a full URL. The message na
 **OS_AUTH_URL** is empty. Enter your Keystone v3 address and connect again.
 </Accordion>
 
+<Accordion title="Connection 'openstack' already exists. Only one instance is allowed.">
+This workspace already has an OpenStack connection. Edit that connection, or disconnect it first.
+</Accordion>
+
 <Accordion title="403 Forbidden on a question across projects">
-Cross-project questions usually need the `admin` role. Ask about your own project, or grant the user that role.
+Cross-project questions usually need the `admin` role. Ask about your own project instead. See the warning in [Required permissions](#required-permissions) before you grant `admin`.
 </Accordion>
 
 ## Security
@@ -129,6 +145,8 @@ Cross-project questions usually need the `admin` role. Ask about your own projec
 
 - **Use an https address**: CloudThinker accepts an `http` Keystone address, but your password then travels unencrypted.
 - **Keep certificate checks on**: reserve **Skip SSL verification** for lab clouds with self-signed certificates.
+- **Revoke at the source**: disable the Keystone user, or remove its role assignment on the project.
+- **Plan for password changes**: a new password breaks the connection until you enter it in CloudThinker. Follow [Rotate a credential](/guide/connections/overview#rotate-a-credential). If your Keystone enforces password expiry, exempt this user or rotate before it expires.
 
 ## Related
 

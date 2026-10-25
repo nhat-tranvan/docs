@@ -6,11 +6,12 @@ icon: "/images/icons/postgresql.svg"
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect a PostgreSQL database to let CloudThinker agents read schemas, rank slow queries, recommend indexes, and check vacuum, lock, and replication health. You give CloudThinker one connection URL for a dedicated read-only user, and CloudThinker runs the connection in restricted mode, so agents can read but never change data.
+Connect a PostgreSQL database to let CloudThinker agents read schemas, rank slow queries, recommend indexes, and check vacuum, lock, and replication health. You give CloudThinker one connection URL for a dedicated read-only user, and the connection runs in restricted mode: every query is read-only, so agents can't write even with your approval.
 
 ## Prerequisites
 
-- A PostgreSQL endpoint CloudThinker can reach over the network, such as self-hosted PostgreSQL, Amazon RDS or Aurora, Cloud SQL, or Azure Database for PostgreSQL. Agents connect from CloudThinker's managed sandbox, so `localhost` and private addresses resolve there, not on your network.
+- A PostgreSQL endpoint CloudThinker can reach from the internet, such as self-hosted PostgreSQL, Amazon RDS or Aurora, Cloud SQL, or Azure Database for PostgreSQL. Agents connect from CloudThinker Cloud, so `localhost` and private addresses resolve there, not on your network.
+- No private-link or VPN option exists for this connection yet. If the database is private, expose an endpoint restricted to CloudThinker's egress IPs. Exposing a read replica keeps the primary private, but its query statistics cover only the replica's own workload. See [Reaching private services](/guide/connections/overview#reaching-private-services).
 - An admin account that can run `CREATE ROLE` and `GRANT`.
 - The `pg_stat_statements` extension, if you want slow-query ranking and workload index advice. Everything else works without it.
 
@@ -31,32 +32,48 @@ Connect a PostgreSQL database to let CloudThinker agents read schemas, rank slow
     GRANT CONNECT ON DATABASE your_database TO cloudthinker_readonly;
     GRANT USAGE ON SCHEMA public TO cloudthinker_readonly;
     GRANT SELECT ON ALL TABLES IN SCHEMA public TO cloudthinker_readonly;
-    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO cloudthinker_readonly;
+    ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA public GRANT SELECT ON TABLES TO cloudthinker_readonly;
     GRANT pg_monitor TO cloudthinker_readonly;
     ```
+
+    Replace `app_owner` with the role that creates your application's tables, often the one your migrations run as. Default privileges only cover tables created by the role you name, so repeat the line for each role that creates tables.
 
     `pg_monitor` lets agents see every session, lock, and query statistic, not only their own.
   </Step>
   <Step title="Turn on pg_stat_statements">
-    Add `pg_stat_statements` to `shared_preload_libraries` and restart PostgreSQL. On RDS, Aurora, or Cloud SQL, set it in the parameter group or database flags and reboot. Then, as an admin in the target database:
+    Check first, since many managed services already preload it:
+
+    ```sql
+    SHOW shared_preload_libraries;
+    ```
+
+    If `pg_stat_statements` is missing, add it to `shared_preload_libraries` and restart PostgreSQL. On RDS, Aurora, or Cloud SQL, set it in the parameter group or database flags and reboot. Skip the restart if it's already listed. Then, as an admin in the target database:
 
     ```sql
     CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
     ```
 
-    **Success state:** `SELECT count(*) FROM pg_stat_statements;` returns a number instead of an error.
+    **Success state:** signed in as `cloudthinker_readonly`, `SELECT count(*) FROM pg_stat_statements;` returns a number instead of an error. That also proves the `pg_monitor` grant works.
   </Step>
   <Step title="Open network access">
-    Allow inbound connections on the PostgreSQL port (default `5432`) from CloudThinker in your firewall, security group, or authorized networks list. Check that `pg_hba.conf` accepts password logins for `cloudthinker_readonly` from outside the host.
+    Allow inbound connections on the PostgreSQL port (default `5432`) from CloudThinker's egress IPs in your firewall, security group, or authorized networks list. Ask your CloudThinker contact for the current IP list.
+
+    On self-hosted PostgreSQL, also let `cloudthinker_readonly` sign in from those addresses in `pg_hba.conf`, one line per IP:
+
+    ```text
+    hostssl your_database cloudthinker_readonly <cloudthinker-ip>/32 scram-sha-256
+    ```
+
+    Then reload the config with `SELECT pg_reload_conf();`. Managed services handle this for you.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Open **Connections** in the sidebar and select **PostgreSQL**. Optionally set an **Alias** and **Description** (agents read the description to pick the right database when you connect several). Paste the URL into **DATABASE_URI** and click **Connect**:
+    Open **Connections**, select **PostgreSQL**, and click **Connect** on its detail panel. In the dialog, optionally change the **Alias** and **Description** (agents read the description to pick the right database when you connect several). Paste the URL into **DATABASE_URI** and click **Connect**:
 
     ```text
     postgresql://cloudthinker_readonly:<secure-password>@db.example.com:5432/your_database?sslmode=require
     ```
 
-    **Success state:** the connection shows **Connecting** and **Verifying**, then **Connected**.
+    **Success state:** the connection shows **Connecting** and **Verifying**, then **Connected**. CloudThinker then runs [Discovery](/guide/connections/overview#what-happens-after-you-connect) once: a read-only look at the database whose results show in the **Discovery** section of the connection's detail panel.
   </Step>
 </Steps>
 
@@ -64,9 +81,11 @@ Connect a PostgreSQL database to let CloudThinker agents read schemas, rank slow
 
 | Field | Required | Description | Example |
 |-------|----------|-------------|---------|
-| **Alias** | No | Short name for this database. Blank picks a free alias | `prod-db` |
+| **Alias** | No | Short name for this database. Prefilled with the next free alias, such as `postgres-1` | `prod-db` |
 | **Description** | No | What this database is. Agents read it to choose between instances | `Production orders database` |
 | **DATABASE_URI** | Yes | Full connection URL: user, password, host, port, database, and SSL mode | `postgresql://cloudthinker_readonly:<password>@db.example.com:5432/shop?sslmode=require` |
+
+The form labels the URL field **DATABASE_URI**. Each connection covers the one database named in the URL. To analyze another database, add another PostgreSQL connection with a different **Alias**.
 
 If the password contains `@`, `:`, `/`, or `#`, URL-encode it (for example, `@` becomes `%40`), or the URL won't parse.
 
@@ -77,10 +96,10 @@ If the password contains `@`, `:`, `/`, or `#`, URL-encode it (for example, `@` 
 | Read schemas, tables, indexes, and run read-only queries | `CONNECT` on the database, `USAGE` on each schema, `SELECT` on its tables |
 | See all sessions, locks, and blocking queries | `pg_monitor` |
 | Rank slow queries and get workload index advice | `pg_stat_statements` extension plus `pg_monitor` |
-| Test an index without building it | The `hypopg` extension, installed by an admin |
+| Test an index without building it | The `hypopg` extension, installed by an admin. Managed services differ, so check your provider's supported-extensions list |
 
 <Tip>
-Keep the user read-only. Restricted mode already blocks writes from agents, but a `SELECT`-only role means a mistake in either layer still can't change data.
+Keep the user read-only. Restricted mode already blocks writes from agents (unlike [MySQL](/guide/connections/mysql), where writes go through Approvals), but a `SELECT`-only role means a mistake in either layer still can't change data.
 </Tip>
 
 ## Agent capabilities
@@ -126,7 +145,7 @@ The extension isn't loaded or created. Confirm `SHOW shared_preload_libraries;` 
 </Accordion>
 
 <Accordion title="Permission denied for a table or schema">
-The user lacks `USAGE` on the schema or `SELECT` on the table. Tables created after your grants need the `ALTER DEFAULT PRIVILEGES` line, run by the role that creates them.
+The user lacks `USAGE` on the schema or `SELECT` on the table. Tables created after your grants need the `ALTER DEFAULT PRIVILEGES FOR ROLE` line, naming the role that creates them.
 </Accordion>
 
 <Accordion title="HypoPG not installed">
@@ -137,7 +156,7 @@ Hypothetical index tests need the `hypopg` extension. Install it, or ask for ind
 
 <ConnectionSecurity />
 
-- **Encrypt in transit**: put `sslmode=require` or `sslmode=verify-full` in **DATABASE_URI** so credentials and results never cross the network in plain text.
+- **Encrypt in transit**: put `sslmode=require` in **DATABASE_URI** so credentials and results never cross the network in plain text. `verify-full` also needs your server's CA certificate on CloudThinker's side, and the connection has no field to supply one, so use `require`.
 - **Restricted mode on every query**: CloudThinker launches the PostgreSQL connection read-only, so agents can't write even if the role's grants would allow it.
 
 ## Related

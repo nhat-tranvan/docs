@@ -10,7 +10,7 @@ Connect Wazuh and CloudThinker agents can search alerts, check agent health, fil
 
 ## Prerequisites
 
-- A Wazuh server API and Wazuh indexer that CloudThinker can reach over HTTPS.
+- A Wazuh server API (port `55000`) and Wazuh indexer (port `9200`) that CloudThinker can reach over HTTPS from the internet. Firewall both ports to CloudThinker's egress IPs only (ask your CloudThinker contact for the current list). See [Reaching private services](/guide/connections/overview#reaching-private-services).
 - Admin access to the Wazuh dashboard, to create both users.
 - Edit permission on connections in your CloudThinker workspace.
 
@@ -18,19 +18,22 @@ Connect Wazuh and CloudThinker agents can search alerts, check agent health, fil
 
 <Steps>
   <Step title="Create a Wazuh server API user">
-    Create an API user for CloudThinker and give it the `readonly` role, which can read everything in Wazuh. Add the `logtest_all_*` policy if agents should test log lines against your rules.
+    In the Wazuh dashboard, go to **Server management → Security → Users** and click **Create user**. Enter a username such as `cloudthinker` and a password, and under **Roles** select `readonly`, which can read everything in Wazuh. Save the user.
 
-    To let agents make changes, create a role with only the policies you allow, such as `rules_all_*`, `decoders_all_*`, `agents_all_*`, `agents_commands_*`, and `cluster_all_*`. Avoid `administrator`: it can also manage Wazuh users and roles. See Wazuh's [RBAC configuration](https://documentation.wazuh.com/current/user-manual/api/rbac/configuration.html) for the steps.
+    If agents should test log lines against your rules, also give the user a role with the `logtest_all_*` policy.
+
+    To let agents make changes, give the user a role with only the policies you allow instead, such as `rules_all_*`, `decoders_all_*`, `agents_all_*`, `agents_commands_*`, and `cluster_all_*`. Avoid `administrator`: it can also manage Wazuh users and roles. See Wazuh's [RBAC configuration](https://documentation.wazuh.com/current/user-manual/api/rbac/configuration.html) for custom roles.
   </Step>
   <Step title="Create a Wazuh indexer user">
-    In the Wazuh dashboard, go to **Indexer management → Security → Internal users** and click **Create internal user**.
+    In the Wazuh dashboard, go to **Indexer management → Security → Internal users** and click **Create internal user**. Set **Username** to `cloudthinker` and a **Password**, then click **Create**.
 
     Then open **Roles**, click **Create role**, and set:
+    - **Name**: `cloudthinker_read`
     - **Cluster permissions**: `cluster_composite_ops_ro`
     - **Index**: `wazuh-*`
     - **Index permissions**: `read`
 
-    Open **Mapped users**, click **Manage mapping**, add the user, and click **Map**.
+    Click **Create**. On the `cloudthinker_read` role, open **Mapped users**, click **Manage mapping**, add `cloudthinker`, and click **Map**.
   </Step>
   <Step title="Open Wazuh in CloudThinker">
     In the sidebar, click **More → Workspace settings → Connections**. On the **Builtin Connections** tab, search for **Wazuh** and click **Connect**.
@@ -40,21 +43,24 @@ Connect Wazuh and CloudThinker agents can search alerts, check agent health, fil
 
     **Success state:** the connection shows a **Connected** status and the message `Wazuh <version> connected.`
   </Step>
+  <Step title="Decide on writes">
+    **Allow writes** is on by default. For read-only use, open **Wazuh** in **Connections** and turn off **Allow writes**. With the `readonly` role, write attempts fail in Wazuh even if the switch is on. Every change still goes through your [Approvals](/guide/approvals/overview) rules and mode.
+  </Step>
 </Steps>
 
 ## Connection details
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| **Manager URL** | Wazuh server API address, `https://` and no path | `https://manager.example.com:55000` |
-| **Manager username** | Wazuh server API user | `cloudthinker` |
-| **Manager password** | Password of that user | |
-| **Indexer URL** | Wazuh indexer address, `https://` and no path | `https://indexer.example.com:9200` |
-| **Indexer username** | Wazuh indexer user | `cloudthinker` |
-| **Indexer password** | Password of that user | |
-| **TLS certificate** | **Allow self-signed** (default) or **Verify** | **Verify** |
+| Field | Required | Description | Example |
+|-------|----------|-------------|---------|
+| **Manager URL** | Yes | Wazuh server API address, `https://` and no path | `https://manager.example.com:55000` |
+| **Manager username** | Yes | Wazuh server API user | `cloudthinker` |
+| **Manager password** | Yes | Password of that user | |
+| **Indexer URL** | Yes | Wazuh indexer address, `https://` and no path | `https://indexer.example.com:9200` |
+| **Indexer username** | Yes | Wazuh indexer user | `cloudthinker` |
+| **Indexer password** | Yes | Password of that user | |
+| **TLS certificate** | Yes | **Allow self-signed** (default) or **Verify** | **Verify** |
 
-Wazuh ships with self-signed certificates. Choose **Verify** only if both endpoints have certificates CloudThinker can trust.
+Wazuh ships with self-signed certificates. **Allow self-signed** encrypts traffic but skips certificate checks, so it can't detect a spoofed endpoint. You can't upload a custom CA. Choose **Verify** only if both endpoints have certificates from a publicly trusted CA.
 
 ## Required permissions
 
@@ -64,7 +70,7 @@ Wazuh ships with self-signed certificates. Choose **Verify** only if both endpoi
 | **Indexer user** | `read` on `wazuh-*` | Same as read only. Agents read alerts from the indexer and make changes through the manager |
 
 <Tip>
-Start with the `readonly` role. Writes are allowed by default: to keep the connection read-only, open it in **Connections** and turn off **Allow writes**. Every change still goes through your [Approvals](/guide/approvals/overview) rules and mode.
+Start with the `readonly` role, and add change policies only when you have a specific change you want agents to make.
 </Tip>
 
 ## Agent capabilities
@@ -78,14 +84,18 @@ Start with the `readonly` role. Writes are allowed by default: to keep the conne
 | **Agent changes** | Restart, group, or delete agents, and run active responses | Each change |
 
 <Warning>
-Deleting an agent removes it from Wazuh, and an active response such as `firewall-drop` adds an IP address to the agent's firewall deny list. Check the exact change before you approve it.
+Deleting an agent removes it from Wazuh, and an active response such as `firewall-drop` adds an IP address to the agent's firewall deny list. Applying rule or decoder changes restarts the manager, so expect a short gap in event processing. Check the exact change before you approve it, and approve restarts during a safe window.
 </Warning>
 
 ### Verify the connection
 
+Start a chat, type `#` and pick **Wazuh**, then ask:
+
 ```text
 Summarize my Wazuh: version, agents by status, and alerts from the last 24 hours
 ```
+
+**Expected result:** the Wazuh version, agent counts by status (such as active, disconnected, never connected), and alert counts by level.
 
 ### Example prompts
 
@@ -95,7 +105,7 @@ Test this log line against my Wazuh rules and tell me which rule matches: <paste
 Show file integrity changes and failed configuration checks for Wazuh agent 003
 ```
 
-Agent `000` is the Wazuh manager itself. If vulnerability detection is off in Wazuh, agents have no CVE data to report.
+Replace `003` with an agent ID from your Wazuh agents list. Agent `000` is the Wazuh manager itself. If [vulnerability detection](https://documentation.wazuh.com/current/user-manual/capabilities/vulnerability-detection/index.html) is off in Wazuh, agents have no CVE data to report.
 
 ## Troubleshooting
 
@@ -110,7 +120,7 @@ Check the indexer user's password in **Indexer management → Security → Inter
 </Accordion>
 
 <Accordion title="Manager account has no API access.">
-The server API user signed in, but its role can't read manager information. Give it the `readonly` role, or include `cluster_all_*` in your custom role, and connect again.
+The server API user signed in, but its role can't read manager information. Give it the `readonly` role, or add `cluster_read_*` to your custom role, and connect again. Keep `cluster_all_*` for a role that applies changes, since it can also restart the manager.
 </Accordion>
 
 <Accordion title="Indexer account cannot read wazuh-alerts-4.x-*.">

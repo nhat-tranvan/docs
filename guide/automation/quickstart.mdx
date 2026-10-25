@@ -8,8 +8,12 @@ In about 10 minutes you'll have an automation that checks yesterday's cloud spen
 
 ## Prerequisites
 
+- A Team plan or above. Automations and Slack delivery both need it. See [Pricing](/guide/billing/pricing).
 - The workspace Admin role. Only admins can create and edit automations.
-- A cloud connection with billing access, such as [AWS](/guide/connections/aws), [Google Cloud](/guide/connections/gcp), or [Azure](/guide/connections/azure)
+- A cloud connection that can read billing data, with at least 14 days of history:
+  - [AWS](/guide/connections/aws#required-permissions): Cost Explorer turned on, and `ce:GetCostAndUsage` (in `ReadOnlyAccess`)
+  - [Google Cloud](/guide/connections/gcp#required-permissions): a billing export to BigQuery, plus the BigQuery Data Viewer and BigQuery Job User roles
+  - [Azure](/guide/connections/azure#required-permissions): the Cost Management Reader role on the subscription
 - Slack connected to CloudThinker. See [Slack integration](/guide/slack-integration).
 
 ## Send agent alerts to Slack
@@ -20,12 +24,12 @@ The automation reports through an agent alert. Route those alerts to a channel f
   <Step title="Pick a Slack channel">
     Open **Notifications**. Under **Delivery channels**, select the Slack card (it reads **Pick a channel** until one is set) and choose the channel your team watches.
 
-    If the card says **Upgrade to enable**, Slack delivery needs a Team plan or above. See [Pricing](/guide/billing/pricing).
+    For a private channel, run `/invite @CloudThinker` in it first, or it won't show in the list.
   </Step>
   <Step title="Turn on agent alerts for Slack">
-    Under **What to notify me about**, open **Alerts** and turn on Slack for **Agent alerts**.
+    Under **What to notify me about**, open **Alerts** and turn on Slack for **Agent alerts**. Set its severity threshold to **High** or lower, because this automation raises high-severity alerts.
 
-    **Success state:** the Slack toggle on the **Agent alerts** row is on.
+    **Success state:** the Slack toggle on the **Agent alerts** row is on, with a threshold of **Low**, **Medium**, or **High**.
   </Step>
 </Steps>
 
@@ -36,13 +40,25 @@ The automation reports through an agent alert. Route those alerts to a channel f
     Open **Automations** in the sidebar and select **New automation**. Under **Or start from a template**, select **Daily cost anomaly alert**.
 
     The form opens with the name, the instructions, and a **Schedule** trigger for every day at 08:00 already filled in.
+
+    <Frame caption="New automation: describe the job in plain words, or start from a template">
+      <img src="/images/v2/automation-new.webp" alt="New automation page with a chat box and a grid of templates, including Daily cost anomaly alert" />
+    </Frame>
   </Step>
   <Step title="Tell it to alert">
-    In **What should the agent do?**, add the last sentence below so a spike becomes a Slack alert. Type `#` to pick your cloud connection if the workspace has more than one.
+    **What should the agent do?** already reads:
 
     ```text
-    Compare yesterday's spend per service against its trailing 14-day average. Report only the services more than 20% above it, with the most likely cause for each. If any service is above, raise a high-severity alert that names the service, the increase, and the cause.
+    Compare yesterday's spend per service against its trailing 14-day average. Report only the services more than 20% above it, with the most likely cause for each.
     ```
+
+    Append this sentence at the end, so a spike becomes a Slack alert:
+
+    ```text
+    If any service is above, raise a high-severity alert that names the service, the increase, and the cause.
+    ```
+
+    If the workspace has more than one cloud connection, type `#` to pick the one to check.
   </Step>
   <Step title="Check the schedule">
     On the **Schedule** card, confirm **Daily** at 08:00, or change the time. Times are in your local time zone.
@@ -59,11 +75,15 @@ The automation reports through an agent alert. Route those alerts to a channel f
 
 ## Test it now
 
-Don't wait for 08:00. Select **Run now** on the automation.
+Don't wait for 08:00. Select **Run now** at the top of the automation's page.
 
 **Success state:** a run appears in **Runs** as **Running**, then **Succeeded**. Open it to read the agent's comparison in the run's conversation. If any service was more than 20% above its average, an alert also posts in your Slack channel.
 
-A quiet day produces no Slack message, which is the point. To check the Slack path anyway, edit the instructions once to "Raise a low-severity test alert with yesterday's total spend", select **Run now**, and change them back.
+<Note>
+Cloud billing data for yesterday can still be incomplete early in the morning, so a test right after setup may report lower spend than the final bill. If the numbers look off, run it again later in the day.
+</Note>
+
+A quiet day produces no Slack message, which is the point. To check the Slack path without touching the real automation, open its **…** menu in the **Automations** list and select **Duplicate**. The form opens with a copy. Change its instructions to "Raise a high-severity test alert with yesterday's total spend", select **Create automation**, then **Run now**. Delete the copy once the alert arrives, so it doesn't run at 08:00.
 
 ## What happens if the agent tries a write
 
@@ -71,17 +91,17 @@ This automation only reads, so no write ever reaches approvals. If you later ext
 
 | Approval choice for this automation | A write no Rule covers |
 |--------------------------------------|------------------------|
-| **Auto · Rules + AI · Refuse** (default) | AI judgment can allow a safe, in-scope write. Anything else is refused and the run continues. |
+| **Auto · Rules + AI · Refuse** (default) | [AI judgment](/guide/approvals/approval-mode#the-two-modes) can allow a write that matches what you asked for and stays in scope. A destructive write, or one with an unclear effect, is refused, and the run continues. |
 | **Auto · Rules + AI · Ask me** | Same, but the rest waits. The run shows **Required Approval** until someone selects **Approve** or **Decline** in its conversation. |
 | **Manual** | Every write waits for a person, even one an Allow Rule covers |
 
-For a write the automation makes every day, accept an **Allow** [Rule](/guide/approvals/rules) scoped to **Automations** under **Runs from**. Then the run never depends on AI judgment or on someone being online.
+For a write the automation makes every day, add an **Allow** [Rule](/guide/approvals/rules) on **Approvals** > **Rules**, scoped to **Automations** under **Runs from**. To write one from scratch, type `/create-policy` in a chat and describe the write ([steps](/guide/approvals/rules#ask-for-one-rule-in-chat)). Then the run never depends on AI judgment or on someone being online.
 
 ## Troubleshooting
 
 <AccordionGroup>
   <Accordion title="The run succeeded but nothing posted in Slack">
-    Either no service crossed 20%, or alerts aren't routed. Read the run's conversation first. If it says it raised an alert, check that Slack is on for **Agent alerts** in **Notifications**, that the alert's severity meets the channel's threshold, and that the CloudThinker bot is in the channel.
+    Either no service crossed 20%, or alerts aren't routed. Read the run's conversation first. If it says it raised an alert, check that Slack is on for **Agent alerts** in **Notifications**, that its threshold is **High** or lower, and that the CloudThinker bot is in the channel.
   </Accordion>
   <Accordion title="The run failed or says it has no cost data">
     Open the run's conversation for the error. Most often the cloud connection lacks billing permissions. Check the required permissions on your connection's page, such as [AWS](/guide/connections/aws).

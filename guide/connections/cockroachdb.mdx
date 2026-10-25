@@ -10,7 +10,7 @@ Connect CockroachDB to let CloudThinker agents read schemas, run bounded queries
 
 ## Prerequisites
 
-- A CockroachDB cluster whose SQL endpoint CloudThinker can reach over the network. Agents connect from CloudThinker's managed sandbox, so `localhost` and private addresses resolve there, not on your network.
+- A CockroachDB cluster whose SQL endpoint CloudThinker can reach from the internet. Agents connect from CloudThinker Cloud, so `localhost` and private addresses resolve there, not on your network. See [Reaching private services](/guide/connections/overview#reaching-private-services).
 - An admin account that can create SQL users and grant privileges.
 - Password authentication with TLS. The connection rejects `sslmode=disable`, `allow`, and `prefer`.
 
@@ -18,7 +18,7 @@ Connect CockroachDB to let CloudThinker agents read schemas, run bounded queries
 
 <Steps>
   <Step title="Create two SQL users">
-    Connect to the target database as an admin and create one user for reads and one for approved writes:
+    Open a SQL session as an admin, either from the **SQL Shell** in the CockroachDB Cloud console or with `cockroach sql --url '<admin-connection-string>'`. Then create one user for reads and one for approved writes:
 
     ```sql
     CREATE USER cloudthinker_read WITH PASSWORD '<read-password>';
@@ -31,32 +31,60 @@ Connect CockroachDB to let CloudThinker agents read schemas, run bounded queries
     ```sql
     GRANT USAGE ON SCHEMA public TO cloudthinker_read, cloudthinker_write;
     GRANT SELECT ON ALL TABLES IN SCHEMA public TO cloudthinker_read;
-    GRANT INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO cloudthinker_write;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO cloudthinker_write;
     ```
 
-    Tables created later need the same grants, or default privileges set by the role that creates them.
+    The write user needs `SELECT` too: CockroachDB requires it for any `UPDATE` or `DELETE` that reads rows through a `WHERE` clause, and agents always send one.
+
+    Tables created later need the same grants. To cover them automatically, set default privileges for the role that creates your tables (`app_owner` here):
+
+    ```sql
+    ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA public GRANT SELECT ON TABLES TO cloudthinker_read;
+    ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO cloudthinker_write;
+    ```
+
+    You can't skip the write user, because the form requires it. If you want reads only, create the write user and give it no table privileges. Every approved write then fails at the database.
   </Step>
   <Step title="Let the read user see running statements (optional)">
-    Grant `VIEWACTIVITY` only if agents should see statements from other sessions. Schema and data reads work without it.
+    Grant `VIEWACTIVITY` only if agents should see statements from other sessions. Schema and data reads work without it. Statement text includes literal values, which can hold personal data, so leave it off if that matters to you.
 
     ```sql
     GRANT SYSTEM VIEWACTIVITY TO cloudthinker_read;
     ```
   </Step>
+  <Step title="Open network access">
+    CloudThinker must reach the SQL port (default `26257`). In CockroachDB Cloud, open your cluster's **Networking** page and add CloudThinker's egress IPs to the **IP Allowlist**. For a self-hosted cluster, allow them in your firewall or security group. Ask your CloudThinker contact for the current IP list.
+  </Step>
   <Step title="Build two connection strings">
-    In the CockroachDB Cloud console, open your cluster's **Connect** dialog and copy the general connection string. Make one copy per user, both pointing at the same cluster and database:
+    Make one string per user, both pointing at the same cluster and database. URL-encode special characters in each password.
 
-    ```text
-    postgresql://cloudthinker_read:<read-password>@your-cluster.cockroachlabs.cloud:26257/appdb?sslmode=verify-full
-    postgresql://cloudthinker_write:<write-password>@your-cluster.cockroachlabs.cloud:26257/appdb?sslmode=verify-full
-    ```
+    <Tabs>
+      <Tab title="CockroachDB Cloud">
+        Open your cluster's **Connect** dialog and copy the general connection string, then swap in each user:
 
-    URL-encode special characters in each password. Remove any `sslrootcert` path that points at a file on your own machine, since CloudThinker can't read it.
+        ```text
+        postgresql://cloudthinker_read:<read-password>@your-cluster.cockroachlabs.cloud:26257/appdb?sslmode=verify-full
+        postgresql://cloudthinker_write:<write-password>@your-cluster.cockroachlabs.cloud:26257/appdb?sslmode=verify-full
+        ```
+
+        Remove any `sslrootcert` path that points at a file on your own machine, since CloudThinker can't read it.
+      </Tab>
+      <Tab title="Self-hosted">
+        Point at a load balancer or any node's SQL address:
+
+        ```text
+        postgresql://cloudthinker_read:<read-password>@crdb.example.com:26257/appdb?sslmode=require
+        postgresql://cloudthinker_write:<write-password>@crdb.example.com:26257/appdb?sslmode=require
+        ```
+
+        The connection can't hold a CA certificate file. A cluster signed by your own CA fails `verify-full`, so use `require`, which still encrypts the connection.
+      </Tab>
+    </Tabs>
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Open **Connections** in the sidebar and select **CockroachDB**. Optionally set an **Alias** and **Description**. Paste the read URL into **Connection string** and the write URL into **Write connection string**, then click **Connect**.
+    Open **Connections**, select **CockroachDB**, and click **Connect** on its detail panel. In the dialog, optionally change the **Alias** and **Description**. Paste the read URL into **Connection string** and the write URL into **Write connection string**, then click **Connect**.
 
-    **Success state:** the connection shows **Connecting** and **Verifying**, then **Connected**.
+    **Success state:** the connection shows **Connecting** and **Verifying**, then **Connected**. CloudThinker then runs [Discovery](/guide/connections/overview#what-happens-after-you-connect) once, and its results show in the **Discovery** section of the connection's detail panel.
   </Step>
 </Steps>
 
@@ -64,12 +92,12 @@ Connect CockroachDB to let CloudThinker agents read schemas, run bounded queries
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| **Alias** | No | Short name for this cluster. Blank picks a free alias |
+| **Alias** | No | Short name for this cluster. Prefilled with the next free alias, such as `cockroachdb-1` |
 | **Description** | No | What this cluster is. Agents read it to choose between instances |
 | **Connection string** | Yes | Encrypted URL for the read user, limited to `SELECT` and optional `VIEWACTIVITY` |
-| **Write connection string** | Yes | Encrypted URL for a different user, limited to `INSERT`, `UPDATE`, and `DELETE` |
+| **Write connection string** | Yes | Encrypted URL for a different user, limited to `SELECT`, `INSERT`, `UPDATE`, and `DELETE` |
 
-The two strings must differ. If they're identical, CloudThinker won't run the connection.
+The two strings must differ. If they're identical, or the write string is empty, CloudThinker won't run the connection.
 
 ## Required permissions
 
@@ -78,7 +106,7 @@ The two strings must differ. If they're identical, CloudThinker won't run the co
 | List databases and tables, and read schemas | `USAGE` on the schema and `SELECT` on the tables, for the read user |
 | Run bounded queries and estimated plans | `SELECT` on the tables, for the read user |
 | See statements running in other sessions | `VIEWACTIVITY` system privilege, for the read user |
-| Insert, update, or delete rows after approval | `INSERT`, `UPDATE`, or `DELETE` on the tables, for the write user |
+| Insert, update, or delete rows after approval | `INSERT`, `UPDATE`, or `DELETE` on the tables, plus `SELECT` for filtered changes, for the write user |
 
 <Tip>
 Neither user needs `admin` or any schema-change privilege. Grant only the tables agents should work on, and leave out `INSERT`, `UPDATE`, or `DELETE` on the write user for any change you never want agents to make.
@@ -111,6 +139,7 @@ Expect database names, then the tables in the one you name. A `relation does not
 Show the schema and indexes for public.orders
 Explain the query plan for looking up an order by customer_id, without running it
 Which statements are running on the cluster right now, and who is running them?
+Set status = 'cancelled' for order 123 in public.orders
 ```
 
 ## Write access
@@ -138,7 +167,7 @@ The read user lacks `USAGE` on the schema or `SELECT` on the table. New tables n
 </Accordion>
 
 <Accordion title="A write is refused">
-Confirm the write URL differs from the read URL, the write user holds the privilege for that table, and you approved this specific change. Every update or delete needs a `WHERE` clause.
+Confirm the write URL differs from the read URL, the write user holds the privilege for that table (plus `SELECT` for an update or delete), and you approved this specific change. Every update or delete needs a `WHERE` clause.
 </Accordion>
 
 <Accordion title="LIMIT exceeds maximum">
@@ -149,8 +178,8 @@ A query asked for more than 1,000 rows. Ask for a smaller set, or a count or agg
 
 <ConnectionSecurity />
 
-- **Separate users for reads and writes**: keep `SELECT` on the read user and row-change privileges on the write user. Never grant both to one user.
-- **Verify the server certificate**: prefer `sslmode=verify-full` with a hostname that matches the cluster's certificate.
+- **Separate users for reads and writes**: keep the read user to `SELECT` only, and give row-change privileges to the write user alone. Never give the read user `INSERT`, `UPDATE`, or `DELETE`.
+- **Verify the server certificate**: prefer `sslmode=verify-full` when the cluster's certificate comes from a public CA and its hostname matches. Use `require` for a private CA.
 
 ## Related
 

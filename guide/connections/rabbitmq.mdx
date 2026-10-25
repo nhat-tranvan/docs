@@ -6,7 +6,7 @@ icon: "/images/icons/rabbitmq.svg"
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect a RabbitMQ broker so [CloudThinker](/guide/agents/overview) can tell you which queues are backing up, which have no consumers, what's sitting in your dead-letter queues, and whether any node is in alarm. The connection signs in with a broker **username and password** over the Management HTTP API, the same API the RabbitMQ management UI uses. You don't need an AMQP client or a code change.
+Connect a RabbitMQ broker so [CloudThinker](/guide/agents/overview) can tell you which queues are backing up, which have no consumers, what's sitting in your dead-letter queues, and whether any node is in alarm. The connection signs in with a broker **username and password** over the Management HTTP API, the same API the RabbitMQ management UI uses. You don't need a code change.
 
 ## Supported platforms
 
@@ -14,11 +14,12 @@ Connect a RabbitMQ broker so [CloudThinker](/guide/agents/overview) can tell you
 |----------|-----------|-------|
 | **Self-hosted RabbitMQ** | Yes | The `rabbitmq_management` plugin must be enabled |
 | **Managed RabbitMQ** (for example CloudAMQP) | Yes | The provider must expose the Management HTTP API to CloudThinker |
+| **Clusters** | Yes | Add one connection per cluster. Point **RABBITMQ_HOST** at a load balancer or any node: the management API reports cluster-wide state from any node |
 
 ## Prerequisites
 
 - The management plugin enabled on the broker.
-- The management port reachable from CloudThinker: `15672` for HTTP, usually `15671` for HTTPS. This is a different port from AMQP (`5672`).
+- The management port reachable from the internet: `15672` for HTTP, usually `15671` for HTTPS. This is a different port from AMQP (`5672`). Connections run from CloudThinker Cloud, so a broker on a private network needs one of the options in [Reaching private services](/guide/connections/overview#reaching-private-services).
 - Shell access to the broker (`rabbitmqctl`), or your provider's console, to create a user.
 
 ## Setup
@@ -32,12 +33,6 @@ Connect a RabbitMQ broker so [CloudThinker](/guide/agents/overview) can tell you
     ```
 
     Managed providers usually have it on already. Skip this step if your provider's console shows a management UI.
-
-    **Success state:** this returns JSON with `rabbitmq_version` and `cluster_name`:
-
-    ```bash
-    curl -u <user>:<password> http://<host>:15672/api/overview
-    ```
   </Step>
   <Step title="Create a read-only user for CloudThinker">
     Create a dedicated user, tag it `monitoring`, and give it read permission on each virtual host (vhost) agents should see. A vhost is RabbitMQ's namespace for queues and exchanges; `/` is the default one.
@@ -51,7 +46,15 @@ Connect a RabbitMQ broker so [CloudThinker](/guide/agents/overview) can tell you
     The three permission strings are configure, write, and read. Empty configure and write with `.*` read means the user can look at everything in the vhost and change nothing. Repeat `set_permissions` for each extra vhost.
   </Step>
   <Step title="Open the network path">
-    Allow inbound traffic from CloudThinker to `<host>:15672` (or your TLS management port) in your firewall or security group. On self-hosted brokers, make sure the management listener isn't bound only to `127.0.0.1`.
+    Allow inbound traffic from CloudThinker's egress IPs to `<host>:15672` (or your TLS management port) in your firewall or security group. Ask your CloudThinker contact for the current IP list. On self-hosted brokers, make sure the management listener isn't bound only to `127.0.0.1`.
+
+    **Success state:** run this from a machine outside the broker's network. It returns JSON with `rabbitmq_version` and `cluster_name`, which proves both the new user and the network path:
+
+    ```bash
+    curl -u cloudthinker:'<strong-password>' http://<host>:15672/api/overview
+    ```
+
+    With TLS on, use `https://<host>:15671` instead.
   </Step>
   <Step title="Add the connection in CloudThinker">
     Open **Workspace Settings → Connections**, stay on the **Builtin Connections** tab, and select **RabbitMQ**. Fill in:
@@ -64,21 +67,21 @@ Connect a RabbitMQ broker so [CloudThinker](/guide/agents/overview) can tell you
     - **RABBITMQ_ALLOW_MUTATIONS**: **Read-only** unless you need the write actions in [Write access](#write-access)
     - **LOG_LEVEL**: leave at **Info**
 
+    <Warning>
+    **RABBITMQ_ALLOW_MUTATIONS** defaults to **Allow writes**. If you only want monitoring, switch it to **Read-only** before you click **Connect**. A `monitoring`-tagged user can't make changes either, so the broker refuses writes anyway, but setting both keeps the intent clear.
+    </Warning>
+
     Click **Connect**.
 
-    **Success state:** the connection shows **Connecting** and **Verifying**, then **Connected**.
+    **Success state:** the connection shows **Connecting** and **Verifying**, then **Connected**. If verification fails, it shows **Failed** and an error message appears. Match the message to [Troubleshooting](#troubleshooting).
   </Step>
 </Steps>
-
-<Warning>
-**RABBITMQ_ALLOW_MUTATIONS** defaults to **Allow writes**. If you only want monitoring, switch it to **Read-only** before you click **Connect**. A `monitoring`-tagged user also can't make changes, so the broker refuses writes either way, but setting both keeps the intent clear.
-</Warning>
 
 ## Connection details
 
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
-| **RABBITMQ_USERNAME** | Yes | None | Broker user with the `monitoring` tag (or `administrator` for writes) |
+| **RABBITMQ_USERNAME** | Yes | None | Broker user with the `monitoring` tag (or `management` for writes) |
 | **RABBITMQ_PASSWORD** | Yes | None | That user's password |
 | **RABBITMQ_HOST** | Yes | None | Hostname or IP. No `http://`, no `https://`, no port |
 | **RABBITMQ_MANAGEMENT_PORT** | Yes | `15672` | Management HTTP API port. Use your TLS port (usually `15671`) with TLS on |
@@ -91,10 +94,11 @@ Connect a RabbitMQ broker so [CloudThinker](/guide/agents/overview) can tell you
 | Goal | User tag | vhost permissions |
 |------|----------|-------------------|
 | Monitoring and troubleshooting (recommended) | `monitoring` | Read (`"" "" ".*"`) on each vhost agents should see |
-| Monitoring plus write actions | `administrator` | Configure and read on the vhosts agents may change |
+| Monitoring plus purge and delete | `management` | Configure and read on the vhosts agents may change |
+| Bulk definition updates | `administrator` | Configure, write, and read. RabbitMQ only accepts definition imports from administrators, and that tag also grants user and policy management across the broker |
 
 <Tip>
-Start with `monitoring`. It covers every read capability below. Move to `administrator` only when you've decided agents should purge or delete things, and only on the vhosts that need it.
+Start with `monitoring`. It covers every read capability below. Move to `management` only when you've decided agents should purge or delete things, and only on the vhosts that need it. Use `administrator` only if you need bulk definition updates.
 </Tip>
 
 ## Agent capabilities
@@ -126,11 +130,11 @@ Is any RabbitMQ node in a memory or disk alarm, and do any certificates expire i
 
 ## Write access
 
-With **RABBITMQ_ALLOW_MUTATIONS** set to **Allow writes** and an `administrator` user, agents can:
+With **RABBITMQ_ALLOW_MUTATIONS** set to **Allow writes** and a user with the right tag (see [Required permissions](#required-permissions)), agents can:
 
 - Purge a queue (drop every message in it)
 - Delete a queue or an exchange
-- Apply bulk updates to broker definitions
+- Apply bulk updates to broker definitions (needs `administrator`)
 
 Each one goes through [Approvals](/guide/approvals/overview) on its own. Your rules and Approval mode decide whether it runs, waits for a person, or is refused. Reads never need approval.
 
@@ -168,7 +172,7 @@ The user lacks read permission on those vhosts. Grant it with `rabbitmqctl set_p
 </Accordion>
 
 <Accordion title="A purge or delete was refused">
-Either **RABBITMQ_ALLOW_MUTATIONS** is **Read-only**, or the broker user isn't `administrator` with configure permission on that vhost. Change whichever you meant to allow. The action still needs approval.
+Either **RABBITMQ_ALLOW_MUTATIONS** is **Read-only**, or the broker user is still tagged `monitoring` or lacks configure permission on that vhost. Change whichever you meant to allow. The action still needs approval.
 </Accordion>
 
 ## Security

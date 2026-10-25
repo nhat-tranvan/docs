@@ -15,14 +15,18 @@ Connect vCenter Server so CloudThinker can inventory your VMs, hosts, clusters, 
 - A CloudThinker workspace with no VMware vCenter connection yet.
 
 <Info>
-A workspace holds **one** VMware vCenter connection. Commands run in the CloudThinker cloud, so a vCenter on a private network that CloudThinker cannot reach fails the connection test.
+A workspace holds **one** VMware vCenter connection. Commands run in the CloudThinker cloud, so a vCenter on a private network that CloudThinker cannot reach fails the connection test. To expose vCenter only to CloudThinker, allowlist CloudThinker's egress IPs. See [Reaching private services](/guide/connections/overview#reaching-private-services).
 </Info>
 
 ## Setup
 
 <Steps>
   <Step title="Create a vCenter user">
-    In the vSphere Client, open **Administration → Single Sign On → Users and Groups**. Select the `vsphere.local` domain, open the **Users** tab, click **Add**, and create a user such as `cloudthinker` with a strong password. A new user starts with no privileges.
+    In the vSphere Client, open **Administration → Single Sign On → Users and Groups**. Select your SSO domain (`vsphere.local` on a default install), open the **Users** tab, click **Add**, and create a user such as `cloudthinker` with a strong password. A new user starts with no privileges.
+
+    <Warning>
+    Local SSO passwords expire after 90 days under vCenter's default policy, and the connection breaks when this one does. Change the policy in **Administration → Single Sign On → Configuration**, or plan a rotation and update the password in CloudThinker through [Rotate a credential](/guide/connections/overview#rotate-a-credential).
+    </Warning>
   </Step>
   <Step title="Give the user the Read-only role">
     Open **Administration → Access Control → Global Permissions** and click **Add**. Choose the domain, search for the user, select the **Read-only** role, and tick **Propagate to children**. Click **OK**.
@@ -30,25 +34,27 @@ A workspace holds **one** VMware vCenter connection. Commands run in the CloudTh
     **Success state:** the user appears in the global permissions list with the **Read-only** role.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Open **Connections** in the sidebar and select **VMware vCenter**. Fill in the fields from [Connection details](#connection-details): the host, `cloudthinker@vsphere.local` as the user name, the password, and the port. Leave **Verify SSL certificate** selected. Click **Connect**.
+    Open **Connections** in the sidebar and select **VMware vCenter**. Fill in the fields from [Connection details](#connection-details): the host, `cloudthinker@<sso-domain>` as the user name (for example `cloudthinker@vsphere.local`), the password, and the port. Leave **Verify SSL certificate** selected. Click **Connect**.
 
     **Success state:** the connection shows **Connecting** and **Verifying**, then a **Connected** status. CloudThinker signs in to vCenter and reads its version to prove the credentials work.
   </Step>
 </Steps>
 
 <Note>
-Without **Propagate to children**, the user sees only the root object and agents report an empty inventory. To share less, assign the role on just the datacenters, clusters, or folders you want agents to see instead of using a global permission.
+Without **Propagate to children**, the user sees only the root object and agents report an empty inventory. To share less, skip the global permission and assign the role per object: select a datacenter, cluster, or folder, open its **Permissions** tab, click **Add**, choose the user and the **Read-only** role, and tick **Propagate to children**.
 </Note>
 
 ## Connection details
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| **VMWARE_HOST** | vCenter hostname, IPv4 address, or IPv6 address in brackets. No `https://` and no path | `vcenter.example.com` |
-| **VMWARE_USERNAME** | vCenter user name, including the domain | `cloudthinker@vsphere.local` |
-| **VMWARE_PASSWORD** | Password of that user | |
-| **VMWARE_PORT** | Port vCenter listens on. Defaults to `443` | `443` |
-| **VMWARE_VERIFY_SSL** | **Verify SSL certificate** (default) or **Skip SSL verification** | **Verify SSL certificate** |
+The form shows these field names exactly as written here. All five are required. Port and SSL come prefilled.
+
+| Field | Required | Description | Example |
+|-------|----------|-------------|---------|
+| **VMWARE_HOST** | Yes | vCenter hostname, IPv4 address, or IPv6 address in brackets. No `https://` and no path | `vcenter.example.com` |
+| **VMWARE_USERNAME** | Yes | vCenter user name, as `user@<sso-domain>` | `cloudthinker@vsphere.local` |
+| **VMWARE_PASSWORD** | Yes | Password of that user | `********` |
+| **VMWARE_PORT** | Yes, prefilled | Port vCenter listens on. Defaults to `443` | `443` |
+| **VMWARE_VERIFY_SSL** | Yes, prefilled | **Verify SSL certificate** (default) or **Skip SSL verification** | **Verify SSL certificate** |
 
 There is no field for a custom certificate authority. If vCenter uses a self-signed certificate (common on default installs and labs), **Skip SSL verification** is the only way to connect. It also removes protection against a server impersonating your vCenter, so use it for lab systems and give production vCenter a certificate from a trusted authority.
 
@@ -62,7 +68,22 @@ Keep the CloudThinker user on **Read-only** until you want agents to make change
 
 ## Write access
 
-To let agents power, reconfigure, migrate, snapshot, or delete VMs, give the user a custom role that holds those privileges on the objects in scope. Each change still pauses for your approval in CloudThinker before it runs. See [Approvals](/guide/approvals/overview) for who approves and how rules apply.
+To let agents power, reconfigure, migrate, snapshot, or delete VMs, create a custom role in **Administration → Access Control → Roles** (click **New**), add only the privileges below for the changes you want, then assign it:
+
+1. Select the datacenter, cluster, folder, or VM in scope and open its **Permissions** tab.
+2. Click **Add**, choose the CloudThinker user and the custom role, and tick **Propagate to children**. Click **OK**.
+
+A permission set directly on an object overrides the inherited **Read-only** role there. Every custom role includes read access, so agents still see those objects.
+
+| Change | vSphere privileges |
+|--------|--------------------|
+| Power on, off, or reset | `VirtualMachine.Interact.PowerOn`, `VirtualMachine.Interact.PowerOff`, `VirtualMachine.Interact.Reset` |
+| Change CPU or memory | `VirtualMachine.Config.CPUCount`, `VirtualMachine.Config.Memory` |
+| Create or remove snapshots | `VirtualMachine.State.CreateSnapshot`, `VirtualMachine.State.RemoveSnapshot` |
+| Migrate | `Resource.HotMigrate`, `Resource.ColdMigrate`, `Resource.AssignVMToPool`, plus `Datastore.AllocateSpace` when storage moves. Assign the role on the destination host or cluster, resource pool, and datastore too |
+| Delete | `VirtualMachine.Inventory.Delete` |
+
+If a change fails with a permission error, vCenter names the missing privilege. Add that one and nothing broader. Each change still pauses for your approval in CloudThinker before it runs. See [Approvals](/guide/approvals/overview) for who approves and how rules apply.
 
 ## Agent capabilities
 
@@ -70,11 +91,11 @@ To let agents power, reconfigure, migrate, snapshot, or delete VMs, give the use
 |------------|----------------|
 | **Inventory** | List datacenters, clusters, hosts, VMs, datastores, and networks, and inspect one object in detail |
 | **Tags** | Read tag categories and the objects they are attached to |
-| **Right-sizing** | Find oversized and idle powered-on VMs from CPU usage history |
+| **Right-sizing** | Flag powered-on VMs with 8 or more vCPUs whose average CPU usage is under 15%. Agents request up to 14 days of 5-minute samples; how much history comes back depends on your vCenter statistics settings |
 | **Snapshots** | List snapshots by VM and flag old ones |
 | **Datastore capacity** | Show used and free space and flag datastores running low |
 | **Drift** | Compare host settings (NTP, syslog, SSH service, lockdown mode) and flag risky port group security options such as promiscuous mode |
-| **Changes** | Power, reconfigure, migrate, snapshot, or delete VMs. Each change **requires approval** |
+| **Changes** | Power, change CPU or memory, migrate, snapshot, or delete VMs. Each change **requires approval** |
 
 Answers cover only what the user's role can see.
 
@@ -97,7 +118,7 @@ Which datastores are above 85% full?
 ## Troubleshooting
 
 <Accordion title="Failed to connect to VMware vCenter">
-CloudThinker could not sign in. Check that the user name includes its domain (`cloudthinker@vsphere.local`), the password is current, and the host and port are reachable from the internet. A self-signed certificate also fails here unless **Skip SSL verification** is selected.
+CloudThinker could not sign in. Check that the user name includes its SSO domain (such as `cloudthinker@vsphere.local`), the password is current, and the host and port are reachable from the internet. A self-signed certificate also fails here unless **Skip SSL verification** is selected.
 </Accordion>
 
 <Accordion title="VMWARE_HOST must be a DNS hostname, IPv4, or bracketed IPv6">
@@ -126,6 +147,7 @@ The user's role does not cover that object. Check that the global permission has
 
 - **Use a dedicated user.** A separate vCenter user keeps CloudThinker's access visible in vCenter events and lets you revoke it without touching anyone's account.
 - **Keep certificate checks on.** Reserve **Skip SSL verification** for lab systems with self-signed certificates.
+- **Revoke at the source.** Remove the user's permission in vCenter, or disable the user in **Single Sign On → Users and Groups**.
 
 ## Related
 

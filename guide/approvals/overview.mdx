@@ -14,14 +14,14 @@ A **write** is any agent call that changes one of your connected systems. Every 
 
 | Step | What decides | Result |
 |------|--------------|--------|
-| 1. Always blocked | A built-in list of calls that never run | Refused. No person and no Rule can change this. |
-| 2. [Rules](/guide/approvals/rules) | The Rules you accepted. A Rule names one kind of write. | **Allow** runs it, **Ask first** waits for a person, **Deny** refuses it. |
+| 1. Always blocked | A built-in list of calls that never run, such as stopping CloudTrail logging, closing an AWS account, or deleting the `kube-system` namespace | Refused. No person and no Rule can change this. |
+| 2. [Rules](/guide/approvals/rules) | The Rules you accepted. A Rule names one kind of write. | **Allow** runs it, except in **Manual** mode, where it still asks a person. **Ask first** waits for a person. **Deny** refuses it. |
 | 3. [Approval mode](/guide/approvals/approval-mode) | **Manual** or **Auto** for this run | Manual asks a person. Auto can let AI judgment allow a safe write, then asks you or refuses the rest. |
 | 4. [Who approves](/guide/approvals/approvers) | Default approvers, or the group a Rule names | A person approves or declines. |
 
-When several Rules match one write, **Deny** beats **Ask first**, and **Ask first** beats **Allow**. In **Manual** mode every write asks a person, even one an Allow Rule covers.
+When several Rules match one write, **Deny** beats **Ask first**, and **Ask first** beats **Allow**.
 
-Approvals checks only calls that reach your connections. A file an agent changes inside its own sandbox isn't a write to your systems.
+Approvals checks every call that reaches outside the agent's sandbox: calls through your connections, cloud and cluster CLIs such as `aws` and `kubectl`, remote programs such as `ssh` and `psql`, Git pushes and pulls, and commands that send a stored [credential](/guide/credentials), such as `curl` with `$STRIPE_API_KEY`. A file an agent changes inside its own sandbox isn't checked.
 
 ## What you get out of the box
 
@@ -29,7 +29,7 @@ New workspaces start on **Auto · Rules + AI · Ask me**. In practice:
 
 - Reads run without asking.
 - A write that a Rule allows runs.
-- A write no Rule covers goes to AI judgment. If it's judged safe, it runs. Otherwise the agent pauses and asks a person.
+- A write no Rule covers goes to AI judgment. If it's judged safe, it runs. Otherwise the agent pauses and asks a person. For example, restarting a staging pod you just asked it to restart can run. Deleting an RDS snapshot is destructive, so it asks you.
 - Automations, which often run with no one watching, default to **Auto · Rules + AI · Refuse**, so they skip a write instead of waiting forever.
 
 <AutonomyModes />
@@ -42,10 +42,10 @@ Do this once when you start, then whenever **Needs you** shows a count.
 
 <Steps>
   <Step title="Open Approvals">
-    Go to **Workspace Settings → Approvals**. The Approvals page opens on the **Overview** tab.
+    Open **Approvals** in the sidebar. If it isn't there, click **More** and select **Approvals** to show it. The page opens on the **Overview** tab.
 
-    <Frame>
-      <img src="/images/approvals/overview.jpg" alt="Approvals Overview tab showing Rules waiting for review, the last 7 days of activity, and the three steps Rules, When no Rule matches, and Who approves" />
+    <Frame caption="Approvals Overview: Rules decide first, then the Approval mode, then who approves">
+      <img src="/images/v2/approvals-overview.webp" alt="Approvals Overview tab with the Rules, When no Rule matches, and Who approves cards in order" />
     </Frame>
   </Step>
   <Step title="Review proposed Rules">
@@ -53,7 +53,7 @@ Do this once when you start, then whenever **Needs you** shows a count.
 
     No proposals yet? On the **Rules** tab, click **Find rules**. CloudThinker reads your connections, Optimize findings, incidents, alerts, and approval history, then proposes Rules. Nothing changes until you accept.
 
-    **Success state:** **Needs you** reads "Nothing needs your review" and step 1 shows your active Rules.
+    **Success state:** **Needs you** reads "Nothing needs your review" and the **Rules** card shows your active Rules.
   </Step>
   <Step title="Check the workspace mode">
     Under **When no Rule matches**, the **Workspace mode** picker shows the current mode. Change it here, or click **Edit run types** to set a different mode for chats, automations, and other run types.
@@ -61,7 +61,7 @@ Do this once when you start, then whenever **Needs you** shows a count.
   <Step title="Check who approves">
     Under **Who approves**, click **Open Approvers**. When Default approvers is empty, every Developer or above can approve. Add people to narrow it.
 
-    **Success state:** step 3 shows the number of default approvers and whether the two-person rule is on.
+    **Success state:** the **Who approves** card shows the number of default approvers and whether the two-person rule is on.
   </Step>
 </Steps>
 
@@ -72,10 +72,10 @@ When a write must wait for a person, the agent pauses and the chat shows an appr
 | Button | What it does |
 |--------|--------------|
 | **Approve** | Runs this one call. |
-| **Approve for…** | Runs this call and lets similar calls run without asking for **1 hour**, **This incident**, or **30 days**. This creates a time-limited Rule called a Window. |
+| **Approve for…** | Runs this call and lets the same operation on the same connection run without asking, in this chat or incident only, for **1 hour**, **This incident**, or **30 days**. This creates a time-limited Rule called a [Window](/guide/approvals/rules#windows). |
 | **Approve and draft rule** | Runs this call now. A side chat drafts a Rule for you to accept, and this chat keeps running. |
 | **Decline** | Refuses the call. Tell the agent why, so it can try another route. |
-| **Break glass…** | Runs one refused call once. Only a workspace owner or admin sees it, and only when [break-glass](/guide/approvals/approvers#break-glass) is on. |
+| **Break glass…** | Runs one call a **Deny** Rule refused, once. Only a workspace owner or admin sees it, and only when [break-glass](/guide/approvals/approvers#break-glass) is on. |
 
 **Approve for…** appears only for a plain write on one connection in an Auto mode, and only for a workspace admin. A delete, an Ask first Rule, or a call in Manual mode never offers a Window.
 
@@ -99,7 +99,7 @@ If you can't approve, the card says "Waiting for an approver." The person who st
 | Developer | Yes | No | Yes, unless a group limits it |
 | Viewer | Yes | No | No |
 
-Org Owners and Admins are workspace Admins in every workspace. Controls you can't use stay visible and say "Ask a workspace admin".
+Org Owners and Admins are workspace Admins in every workspace. A workspace owner, named on some of these pages, has every Admin right here. Controls you can't use stay visible and say "Ask a workspace admin".
 
 ## Troubleshooting
 
@@ -114,7 +114,7 @@ Org Owners and Admins are workspace Admins in every workspace. Controls you can'
     The server checks who can approve on every click. A Rule may name an approver group you aren't in, or Default approvers may not include you. Click **Notify approvers** if you started the conversation, or **Decline**.
   </Accordion>
   <Accordion title="The Rules step says 'In preview: Rules record what they would decide'">
-    Rule enforcement isn't on for this workspace yet. Rules record the verdict they would give, but they don't allow or refuse writes yet.
+    Rule enforcement isn't on for this workspace yet. Rules record the verdict they would give, but the Approval mode alone still decides each write. CloudThinker turns enforcement on per workspace; there's no switch for it on this page. Contact CloudThinker support to ask for it.
   </Accordion>
   <Accordion title="Can I approve a call that Always blocked refused?">
     No. Always blocked calls never run, and break-glass can't override them either.

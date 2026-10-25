@@ -16,7 +16,7 @@ A Rule names one kind of write, such as `ec2:StopInstances` on your staging AWS 
 | Field | What it means |
 |-------|---------------|
 | **Effect** | **Allow** runs the write. **Ask first** waits for a person. **Deny** refuses it. |
-| **Operations** | The calls it covers, written `service:Name`. A `*` matches any part, so `ec2:Stop*` or `*:*`. |
+| **Operations** | The calls it covers. A `*` matches any part, so `ec2:Stop*` or `*:*`. AWS uses the IAM action name, such as `ec2:StopInstances`. Other connection types name operations their own way, so ask for those Rules with `/create-policy` and CloudThinker picks valid names from the connection's catalog. |
 | **Connection type** and **Connections** | The connections it covers. Leave **Connections** empty to cover every connection of that type. |
 | **Runs from** | The run types it covers: **Chat**, **Resolve**, **Optimize**, **Automations**, **Review**. Empty means all runs. |
 | **Window** | How long the Rule lasts. Empty means no expiry. |
@@ -24,9 +24,17 @@ A Rule names one kind of write, such as `ec2:StopInstances` on your staging AWS 
 | **Who approves this?** | **Ask first** only: Default approvers or one approver group, and whether it **Needs 2 different people** |
 | **Never allow break-glass** | **Deny** only: no one can override it, not even an owner |
 
-A Rule never matches a read, because reads always run. An **Allow** Rule never matches a call CloudThinker cannot identify, and an **Allow** on every operation must name its connections.
+A Rule never matches a read, sensitive reads included, because reads always run. An **Allow** Rule never matches a call CloudThinker cannot identify, such as a command that builds its arguments at run time, a program CloudThinker doesn't model, or an API path outside the connection's catalog. An **Allow** on every operation must name its connections.
 
-Each Rule shows an access badge so you can spot risky ones fast: **Write**, **Destructive**, **Session**, **Sensitive read**, or **Every operation**.
+Each Rule shows an access badge so you can spot risky ones fast:
+
+| Badge | The Rule covers |
+|-------|-----------------|
+| **Write** | Calls that change a resource |
+| **Destructive** | Deletes and other destructive calls, such as a Git force push |
+| **Session** | Calls that open a remote shell, such as `ssh` |
+| **Sensitive read** | Reads of secrets, such as a credentials file. These run anyway, so this part of the Rule never matches. |
+| **Every operation** | `*:*`, every call on its connections |
 
 ## Find Rules for your workspace
 
@@ -35,6 +43,10 @@ A check-up is a chat where CloudThinker reads your connections, Optimize finding
 <Steps>
   <Step title="Open the Rules tab">
     Open **Approvals** in the sidebar, then the **Rules** tab.
+
+    <Frame caption="The Rules tab: active Rules, Rules waiting for review, and Add from template or Find rules">
+      <img src="/images/v2/approvals-rules.webp" alt="Rules tab with Active, Needs review, and Dismissed tabs, and the Add from template and Find rules buttons" />
+    </Frame>
   </Step>
   <Step title="Pick what to look for">
     Click **Find rules**. Keep or clear each focus:
@@ -75,7 +87,7 @@ To turn a call you just approved into a Rule, click **Approve and draft rule** o
     Open a Rule to read it. **What would change** replays the last 7 or 30 days of calls against it and tells you how many would run without asking, ask first, or be refused, with example commands.
   </Step>
   <Step title="Select and accept">
-    Nothing is selected at first. Select up to 50 Rules, then click **Accept** or **Dismiss**. An **Allow** on every operation, a destructive **Allow**, or a flagged **Allow** asks you to confirm first.
+    Nothing is selected at first. Select up to 50 Rules, then click **Accept** or **Dismiss**. An **Allow** on every operation, a destructive **Allow**, or a flagged **Allow** (one imported from an old grant that covers a risky access class, such as session calls) asks you to confirm first.
 
     **Success state:** a toast says "Accepted N Rules" and offers **Undo**. A Rule that failed stays in the list with its reason.
   </Step>
@@ -93,15 +105,15 @@ Open a Rule on the **Rules** tab. As an admin, you see the edit form straight aw
 
 | Action | Result |
 |--------|--------|
-| **Save** on an active Rule | Replaces it at once. The old version moves to **Replaced**. |
+| **Save** on an active Rule | Replaces it at once. The old version is kept as **Replaced** and leaves the list. |
 | **Save** on a proposal | Keeps it under **Needs review**. Accept it to turn it on. |
 | **Change with AI** | Opens a chat that drafts the change as a new proposal |
-| **Disable** | Stops the Rule from matching any call |
-| **Restore** on a dismissed Rule | Brings it back with no expiry |
+| **Disable** | Stops the Rule from matching any call and moves it to **Dismissed** |
+| **Restore** on a dismissed Rule | Makes it active again at once, with no expiry |
 
 ## Windows
 
-A Window is a short-lived Rule made with one click: **Approve for…** on an approval card. It covers the exact operation and connection that was approved, only in that chat or incident, and it always ends after **1 hour**, at the end of **This incident**, or after **30 days**.
+A Window is a short-lived Rule made with one click: **Approve for…** on an approval card. It covers the exact operation and connection that was approved, only in that one chat or incident. It always ends: after **1 hour**, when the incident ends (**This incident**), or after **30 days**. A 30-day Window still never applies outside the chat where you approved it.
 
 Windows show on the **Rules** tab with the source **Window** and their end time. You cannot edit a Window. To end it early, click **Disable** in its row menu.
 
@@ -116,13 +128,14 @@ The **Active**, **Needs review**, and **Dismissed** tabs show their counts. Filt
 | **Runbook** | A runbook |
 | **Imported** | An old trust or runbook grant, or a policy file |
 | **Window** | **Approve for…** on an approval card |
+| **Template** | **Add from template** on the **Rules** tab |
 
 ## Export and import your policy
 
 Keep your policy as a file, for example in Git, and load it into another workspace. Both actions are in the **…** menu next to **Find rules**.
 
 - **Export active Rules** downloads `policy-<workspace>-<date>.yaml`. It holds your active Rules, approver groups, Approval modes, and the two-person setting. It never holds Windows, proposals, or secrets.
-- **Import policy** reads a YAML or JSON file of up to 1 MB. It shows what would change and lists each problem by line and field first. It applies the file only when you click, and keeps the file if the apply fails. An imported **Allow** Rule waits for review unless you turn on **Activate Allow Rules**.
+- **Import policy** reads a YAML or JSON file of up to 1 MB. It shows what would change and lists each problem by line and field first. It applies the file only when you click, and keeps the file if the apply fails. Import merges: Rules in the file are added or updated by `slug`, and Rules missing from the file stay as they are. Select **Remove Rules that are not in the file** to dismiss them instead. Imported **Ask first** and **Deny** Rules start active. An imported **Allow** Rule waits for review unless you turn on **Activate Allow Rules**.
 
 ```yaml
 version: 1
@@ -146,13 +159,24 @@ rules:
     approver_group: On-call SRE
 ```
 
-In the file, `effect` is `allow`, `require_approval` (Ask first), or `deny`, and `aliases` lists connection names.
+| Key | Values |
+|-----|--------|
+| `level`, and each value in `origin_levels` | `manual`, `auto_rules_ask` (Rules · Ask me), `auto_rules_refuse` (Rules · Refuse), `auto_ai_ask` (Rules + AI · Ask me), `auto_ai_refuse` (Rules + AI · Refuse) |
+| `origin_levels` keys, and a Rule's `applies_to` (**Runs from**) | `chat`, `resolve`, `keeper` (Optimize), `automation`, `review` |
+| `effect` | `allow`, `require_approval` (Ask first), `deny` |
+| `aliases` | Connection names (**Connections**) |
+| `description` | The Rule's **Note** |
+| `expires_at` | The Rule's end time (**Window** field) |
+| `approver_group`, `two_person` | **Who approves this?** and **Needs 2 different people** |
+| `break_glass_blocked` | **Never allow break-glass**, Deny only |
+| `settings.two_person_mode` | `off`, `destructive`, `all_writes` |
+| `approver_groups[].members` | Member email addresses |
 
 ## Troubleshooting
 
 <AccordionGroup>
   <Accordion title="Find rules is not shown">
-    The agent's policy tool is off for your workspace, so check-ups and **Change with AI** are hidden. You can still write and edit Rules in the form.
+    The agent's policy tool is off for your workspace, so check-ups and **Change with AI** are hidden. It's not a setting on this page; contact CloudThinker support to ask for it. You can still edit Rules in the form, add them from a template, or import a policy file.
   </Accordion>
   <Accordion title="Find rules asks you to connect something first">
     A check-up needs at least one cloud account or cluster. Add one in [Connections](/guide/connections/overview), then try again.
@@ -164,7 +188,7 @@ In the file, `effect` is `allow`, `require_approval` (Ask first), or `deny`, and
     Check the mode first: **Manual** asks before every write, even one an Allow Rule covers. Then check **Runs from** and **Connections**. A Rule only matches the run types and connections it names.
   </Accordion>
   <Accordion title="The Rules tab says Rules are in preview">
-    Rules do not decide yet in this workspace. Each call is checked against them and only the result is recorded, so you can review and accept proposals now. Until enforcement is on, the earlier approval behavior decides each write.
+    Rules do not decide yet in this workspace. Each call is checked against them and only the result is recorded, so you can review and accept proposals now. Until enforcement is on, the [Approval mode](/guide/approvals/approval-mode) alone decides each write. CloudThinker turns enforcement on per workspace; contact CloudThinker support to ask for it.
   </Accordion>
 </AccordionGroup>
 

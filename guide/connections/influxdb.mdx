@@ -24,6 +24,7 @@ You don't pick a version. The **Connected** message names what CloudThinker foun
 ## Prerequisites
 
 - An InfluxDB HTTP API that CloudThinker can reach over **HTTPS**. Plain `http` is accepted only on self-hosted CloudThinker deployments.
+- For a self-hosted instance behind a firewall, allow CloudThinker's egress IPs. Ask your CloudThinker contact for the list, or see [Reaching private services](/guide/connections/overview#reaching-private-services).
 - Permission to create an API token with read access to the buckets or databases agents should see.
 - On InfluxDB 2: the organization name, if the token reaches more than one.
 
@@ -50,7 +51,11 @@ You don't pick a version. The **Connected** message names what CloudThinker foun
   <Tab title="InfluxDB 3">
     <Steps>
       <Step title="Create a token">
-        On **InfluxDB 3 Enterprise**, create a resource token that can read only the databases you want. Prefer this when you can.
+        On **InfluxDB 3 Enterprise**, create a resource token that can read only the databases you want. Prefer this when you can. Separate several databases with commas, such as `db:telemetry,metrics:read`:
+
+        ```bash
+        influxdb3 create token --permission "db:telemetry:read" --name cloudthinker
+        ```
 
         On **InfluxDB 3 Core**, only admin tokens exist. Create one with the `influxdb3` CLI and read [Security](#security) first:
 
@@ -76,11 +81,11 @@ You don't pick a version. The **Connected** message names what CloudThinker foun
 
 ## Connection details
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| **Base URL** | Yes | Scheme, host, and port of the HTTP API. A reverse-proxy prefix such as `/influx` is allowed. No query string, fragment, or `user:pass@` |
-| **API token** | Yes | A token with read access to the buckets or databases agents should see |
-| **Organization** | No | InfluxDB 2 only, when the token reaches more than one organization |
+| Field | Required | Description | Example |
+|-------|----------|-------------|---------|
+| **Base URL** | Yes | Scheme, host, and port of the HTTP API. A reverse-proxy prefix such as `/influx` is allowed. No query string, fragment, or `user:pass@` | `https://influx.example.com:8086` |
+| **API token** | Yes | A token with read access to the buckets or databases agents should see | `<token>` |
+| **Organization** | No | InfluxDB 2 only, when the token reaches more than one organization | `my-org` |
 
 Self-hosted InfluxDB 2 usually listens on `8086`, InfluxDB 3 Core on `8181`.
 
@@ -90,7 +95,7 @@ Self-hosted InfluxDB 2 usually listens on `8086`, InfluxDB 3 Core on `8181`.
 |---------|---------|-----------------|
 | **InfluxDB 2** | Read on the buckets agents should see | A token with buckets selected under **Read** only |
 | **InfluxDB 3 Enterprise** | Read on the databases agents should see | A resource token scoped to those databases |
-| **InfluxDB 3 Core** | Not available | Core issues admin tokens only |
+| **InfluxDB 3 Core** | Not available | Core issues admin tokens only. With **Allow writes** off, agents still can't change retention or databases, and they refuse queries that write before anything is sent. The token itself stays admin-capable if it leaks |
 
 The token needs write access only if you turn on **Allow writes**, and then only to change retention or create and delete a bucket or database.
 
@@ -102,12 +107,12 @@ Create a token just for CloudThinker so you can see and revoke its access on its
 
 | Capability | What agents can do |
 |------------|--------------------|
-| **Container inventory** | List buckets or databases with the retention set on each |
+| **Inventory** | List buckets or databases with the retention set on each |
 | **Retention review** | Name every bucket or database that keeps data forever |
-| **One named container** | Confirm a single bucket or database by name, even on large instances |
+| **One named bucket or database** | Confirm a single bucket or database by name, even on large instances |
 | **Bounded queries** | Answer from the data in Flux (InfluxDB 2) or SQL (InfluxDB 3) |
 
-Results have fixed bounds. The inventory reads up to 25 containers, and a query returns up to 50 rows by default within a 60-second budget. Agents say when a result was cut short. A retention the token can't read is reported as **unreadable**, never counted as forever.
+Results have bounds. The inventory reads up to 25 buckets or databases by default. A query returns 50 rows by default, and you can ask for more in your prompt, up to 200. Queries time out after 60 seconds by default, and never run longer than 300. Agents say when a result was cut short. A retention the token can't read is reported as **unreadable**, never counted as forever.
 
 Queries stay reads. Agents refuse Flux that writes points or opens outbound connections, and SQL that inserts, updates, or deletes. Nothing is sent to your instance when a query is refused.
 
@@ -129,7 +134,14 @@ Suggest a retention for our highest-volume bucket and tell me what would expire
 
 ## Write access
 
-Writes ship off. To let agents change retention or create and delete a bucket or database, open the InfluxDB connection and turn on **Allow writes**. Each change then goes through [Approvals](/guide/approvals/overview), and the agent names the exact container and change first.
+Writes ship off. To let agents change retention or create and delete a bucket or database, open **Connections**, select **InfluxDB**, and turn on the **Allow writes** switch in the detail panel. It takes effect right away. Each change then goes through your [Approvals](/guide/approvals/overview) Rules and mode, and the agent names the exact bucket or database and the change first.
+
+The token needs matching permissions too:
+
+| Version | To change retention | To create or delete |
+|---------|--------------------|---------------------|
+| **InfluxDB 2** | Write on that bucket | Write on all buckets in the organization |
+| **InfluxDB 3** | An admin token | An admin token |
 
 | Action | Allowed |
 |--------|---------|
@@ -164,14 +176,14 @@ On InfluxDB 2, no bucket or query can be scoped until you pick one. Edit the con
 </Accordion>
 
 <Accordion title="An agent reports fewer buckets than the InfluxDB UI shows">
-Either the token can't see the rest, or the inventory stopped at 25. Check the token's read scope, then ask about the bucket by name.
+Either the token can't see the rest, or the inventory stopped at its default of 25. Check the token's read scope, then ask about the bucket by name.
 </Accordion>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **The token is the whole credential**: there's no second factor, so scope it to the containers agents need and treat any InfluxDB 3 Core token as an admin credential.
+- **The token is the whole credential**: there's no second factor, so scope it to the buckets or databases agents need and treat any InfluxDB 3 Core token as an admin credential.
 - **Redirects aren't followed**: if a proxy redirects the API call to another host, CloudThinker stops instead of sending your token there.
 
 ## Related

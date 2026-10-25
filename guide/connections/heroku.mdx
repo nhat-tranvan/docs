@@ -6,14 +6,15 @@ icon: "/images/icons/heroku.svg"
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect Heroku to let CloudThinker agents list your apps, read dyno formation and recent logs, review add-ons and their plans, and show which pipeline stage each app sits in. The connection is **read-only** and uses one Heroku **API token**, which can reach every app and team its user can.
+Connect Heroku to let CloudThinker agents list your apps, read dyno formation and recent logs, review add-ons and their plans, and show which pipeline stage each app sits in. CloudThinker only reads, but it uses one Heroku **API token**, and that token has full write access to every app and team its user can reach, so protect it.
 
 ---
 
 ## Prerequisites
 
 - A Heroku account that belongs to the apps, teams, and pipelines you want to investigate.
-- The Heroku CLI, signed in as that account.
+- Optional: the [Heroku CLI](https://devcenter.heroku.com/articles/heroku-cli), signed in as that account with `heroku login`. You can use the Heroku Dashboard instead.
+- A CloudThinker workspace where you can add connections.
 
 ---
 
@@ -21,22 +22,24 @@ Connect Heroku to let CloudThinker agents list your apps, read dyno formation an
 
 <Steps>
   <Step title="Create an API token">
-    Run this in the Heroku CLI, signed in as the account CloudThinker should use:
+    Sign in as the account CloudThinker should use, then pick one way:
 
-    ```bash
-    heroku authorizations:create -d cloudthinker
-    ```
+    - **CLI**: run this. `2592000` seconds is 30 days. Without `--expires-in`, the token never expires.
 
-    Copy the value shown as `Token`. It starts with `HRKU-`. Keep the default `global` scope; see [Required permissions](#required-permissions) for why.
+      ```bash
+      heroku authorizations:create -d cloudthinker --expires-in 2592000
+      ```
 
-    The token doesn't expire unless you add `--expires-in <seconds>`. To cancel it later, run `heroku authorizations:revoke <id>`.
+    - **Dashboard**: go to **Account settings → Applications → Authorizations** and click **Create authorization**. Enter `cloudthinker` as the description, set an expiry, and create it.
 
-    You can also create an authorization in the Heroku Dashboard under **Account settings → Applications**.
+    Copy the token. With the CLI, it's the value on the `Token:` line of the output. It starts with `HRKU-`. Keep the `global` scope; see [Required permissions](#required-permissions) for why.
+
+    To cancel it later, run `heroku authorizations` to find its id, then `heroku authorizations:revoke <id>`.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Go to **Connections → Heroku**, paste the token into **API token**, and click **Connect**.
+    In the sidebar, click **More → Workspace settings → Connections**. On the **Builtin Connections** tab, search for **Heroku**, paste the token into **API token**, and click **Connect**.
 
-    **Success state:** Heroku shows a **Connected** status.
+    **Success state:** the Heroku card shows **Connected**.
   </Step>
   <Step title="Run the verify prompt">
     Run the [verify prompt](#verify-the-connection) to confirm the token can read your account.
@@ -61,10 +64,14 @@ A Heroku token can't be limited to some apps. It can reach whatever its user can
 
 - **Use the `global` scope.** The narrower scopes (`read`, `write`, `read-protected`, `write-protected`) can't read the token's own account. Without that, Heroku can't work out which apps and pipelines the token owns, so those lists fail.
 - **Use a dedicated account.** Add it only to the teams and apps CloudThinker needs.
-- **If you sign in with SSO**, Heroku may not let that account create a long-lived token. Use a separate non-SSO user for the integration.
+- **If you sign in with SSO**, create the token from a separate non-SSO user for the integration.
+
+<Warning>
+A `global` token has full write access at Heroku. If it leaks, whoever holds it can change or delete every app its user can reach. Use a dedicated low-privilege account and a short expiry.
+</Warning>
 
 <Tip>
-CloudThinker exposes only 12 read tools for Heroku, so agents can't restart, scale, or change apps through this connection, whatever the token allows.
+This connection only reads. Agents can't restart, scale, or change apps, whatever the token allows.
 </Tip>
 
 ---
@@ -74,7 +81,7 @@ CloudThinker exposes only 12 read tools for Heroku, so agents can't restart, sca
 | Capability | Description |
 |------------|-------------|
 | **Apps** | List apps and read one app's stack, region, and maintenance state |
-| **Logs** | Read an app's recent application log lines, without router noise |
+| **Logs** | Read an app's latest application log lines, without router noise: 40 lines by default, up to 200 if you ask |
 | **Dynos** | Show the dyno formation: type, size, quantity, and state of each process |
 | **Add-ons** | List add-ons per app or across the account, and browse add-on services and plans |
 | **Teams and private spaces** | List the teams and private spaces the account can reach |
@@ -103,7 +110,7 @@ Name the app or pipeline in your prompt when the account has many apps. The answ
 ## Troubleshooting
 
 <Accordion title="401 Unauthorized">
-The token is wrong, expired, or revoked. Create a new one with `heroku authorizations:create` and update the connection.
+The token is wrong, expired, or revoked. Create a new one, then open the connection, click the edit icon on the instance, click **Replace…** in **Edit Instance**, paste the token, and click **Save and test**.
 </Accordion>
 
 <Accordion title="403 Forbidden on an app or team">
@@ -111,7 +118,7 @@ The token's account isn't a member of that app or team. Add the account in Herok
 </Accordion>
 
 <Accordion title="404 Couldn't find that user">
-The token can't read its own account, which is what a narrow scope looks like. Add-ons and teams still list, but apps and pipelines fail. Create a new authorization with the default `global` scope and update the connection.
+The token can't read its own account, which is what a narrow scope looks like. Add-ons and teams still list, but apps and pipelines fail. Create a new authorization with the default `global` scope and replace it on the connection. See [Rotate a credential](/guide/connections/overview#rotate-a-credential).
 </Accordion>
 
 <Accordion title="404 for a named app, add-on, or pipeline">
@@ -123,7 +130,7 @@ Heroku throttled the account. Wait a few minutes, then ask about one app at a ti
 </Accordion>
 
 <Accordion title="No private spaces are listed">
-Private spaces exist only on some Heroku plans. If your account has none, an empty list is the correct answer.
+Private spaces are a Heroku Enterprise feature. If your account has none, an empty list is the correct answer.
 </Accordion>
 
 ---
@@ -132,7 +139,7 @@ Private spaces exist only on some Heroku plans. If your account has none, an emp
 
 <ConnectionSecurity />
 
-- **Plan rotation**: pass `--expires-in` when you create the token, and run `heroku authorizations:revoke <id>` when you no longer need it.
+- **Plan rotation**: pass `--expires-in` when you create the token. When you no longer need it, find its id with `heroku authorizations` and run `heroku authorizations:revoke <id>`.
 - **Treat logs as sensitive**: an app can print secrets into its own logs. CloudThinker avoids quoting lines that look like tokens or passwords, but don't rely on that alone.
 
 ---
@@ -143,7 +150,7 @@ Private spaces exist only on some Heroku plans. If your account has none, an emp
   <Card title="PostgreSQL Connection" icon="/images/icons/postgresql.svg" href="/guide/connections/postgresql">
     Query a Heroku Postgres database with its own credentials
   </Card>
-  <Card title="Vercel Connection" icon="/images/icons/vercel.svg" href="/guide/connections/vercel">
-    Same kind of setup for Vercel projects and deployments
+  <Card title="Connections overview" icon="plug" href="/guide/connections/overview">
+    See every platform you can connect and how to rotate a credential
   </Card>
 </CardGroup>

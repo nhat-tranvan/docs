@@ -8,7 +8,7 @@ icon: toolbox
 
 ## 3.1 Fewer, better tools
 
-The most useful published lesson here comes from Microsoft's Azure SRE Agent team (sources in [Appendix D](/learn/aio-engineer/appendix-d-sources)). They started with more than a hundred tools spread across many narrowly specialized agents, and shipped with a handful of core tools and more generalist agents.
+The most useful published lesson here comes from Microsoft's Azure SRE Agent team (sources in [Appendix D](/learn/aio-engineer/appendix-d-sources)). They started with more than a hundred tools spread across more than fifty narrowly specialized agents, and ended with five core tools (mostly wide CLIs such as `az` and `kubectl`) and a handful of generalist agents.
 
 Every tool you add is context the model must carry, a choice it can get wrong, and an interface you must version and test. Five design rules hold up:
 
@@ -43,12 +43,14 @@ A platform's skill catalog (how rich, how tested, how clear about risk) is a bet
 
 A CloudThinker [skill](/guide/skills/overview) is a `SKILL.md` file: YAML frontmatter with a `name` and a `description`, then Markdown instructions. Agents choose skills by name and description, so the description is the prompt, exactly as rule 2 says. A `.zip` package can carry `scripts/`, `schemas/`, and `references/` folders next to the file, which keeps procedures in Git and out of the model's improvisation. See [Skill format](/guide/skills/skill-format).
 
-Risk is enforced at the call, not trusted to the skill's label. Every write an agent makes, from any skill, passes the **Always blocked** list, then your [Rules](/guide/approvals/rules), then the [Approval mode](/guide/approvals/approval-mode). Rules carry access badges (**Write**, **Destructive**, **Session**, **Sensitive read**, **Every operation**) so risky ones stand out. When you evaluate any platform, ask where the risk decision happens and whether a mislabeled skill could bypass it.
+Skills aren't versioned in CloudThinker. Uploading a skill with an existing name offers **Replace**, which deletes the old skill and uploads the new one; it takes effect for every agent in the workspace, and **Available in** resets to **Chat** only. To roll back, re-upload the earlier `.zip`, so keep your skill packages in Git and treat that history as the changelog. See [Custom skills](/guide/skills/custom-skills).
+
+Risk is enforced at the call, not trusted to the skill's label. Every write an agent makes, from any skill, passes the [Always blocked](/guide/approvals/overview#how-a-write-is-decided) list (built-in calls that never run, such as stopping CloudTrail logging), then your [Rules](/guide/approvals/rules), then the [Approval mode](/guide/approvals/approval-mode). Each Rule shows an access badge so risky ones stand out: **Write** for calls that change a resource, **Destructive** for deletes and similar calls such as a Git force push, **Session** for calls that open a remote shell such as `ssh`, **Sensitive read** for reads of secrets, and **Every operation** for `*:*`. See [What a Rule contains](/guide/approvals/rules#what-a-rule-contains). When you evaluate any platform, ask where the risk decision happens and whether a mislabeled skill could bypass it.
 </Info>
 
 ## 3.3 MCP in production
 
-The **Model Context Protocol (MCP)** is an open standard for exposing tools and data to AI agents. It is why a platform can plug in an observability stack or a ticketing system without custom glue. If a platform speaks MCP, agents and tools from different vendors compose; if it doesn't, you are buying an ecosystem.
+The **Model Context Protocol (MCP)** is an open standard for exposing tools and data to AI agents. It is why a platform can plug in an observability stack or a ticketing system without custom glue. If a platform speaks MCP, agents and tools from different vendors compose. If it doesn't, every new tool needs vendor-built glue, and you can't bring your own.
 
 Production use is not plug-and-play. The checklist:
 
@@ -69,8 +71,13 @@ In CloudThinker, your own [MCP server](/guide/connections/mcp) is a connection l
 - Agents can call only the tools your server exposes, each named `prefix__tool_name` with the prefix you set, so you can see the source in approval requests and Rules.
 - Set MCP tool annotations on your server. Approvals treats a tool as a read only when it declares `readOnlyHint: true`, and as destructive when it declares `destructiveHint: true`. A tool with no hint is treated as a write, so an unlabeled tool fails safe.
 - Reads run without asking. Writes go through your Rules and Approval mode.
-- Authentication is the HTTP headers you set on the connection, so issue a token used only by CloudThinker.
 - URLs that point at loopback, private, or cloud metadata addresses are rejected, including host names that resolve to them.
+
+Where CloudThinker falls short of the checklist above, close the gap on your side:
+
+- **Auth is per connection, not per agent.** CloudThinker sends the static HTTP headers you set on the connection, so every agent that has the connection uses the same token. There's no OAuth and no credential broker. Issue a token used only by CloudThinker, scope it to the tools you expose, rotate it on a schedule, and attach the connection only to the [custom agents](/guide/agents/customize) that need it.
+- **No version pinning.** CloudThinker calls whatever your server serves. It reloads and re-sorts the tool list only when you save a change to the URL, headers, or transport. Pin and contract-test the server in your own deploy pipeline.
+- **Egress.** Connections run from CloudThinker Cloud and reach your server over the internet. You can allowlist CloudThinker's egress IPs on your firewall; see [Reaching private services](/guide/connections/overview#reaching-private-services). What your server reaches from there is yours to control.
 </Info>
 
 <Tip>

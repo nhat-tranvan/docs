@@ -12,11 +12,11 @@ CloudThinker runs the Google Cloud CLI against your projects to answer questions
 
 - A Google Cloud project where you can create service accounts and grant IAM roles.
 - Permission to create service account keys. If your organization enforces the `iam.disableServiceAccountKeyCreation` policy, ask an organization admin for an exception on this project first.
-- For cost questions and [Optimize](/guide/cost-optimization/overview): a Cloud Billing **Standard usage cost** export to BigQuery. The export dataset must be in the same project as the service account, because Optimize only reads billing tables in the connected project.
+- For cost questions and [Optimize](/guide/cost-optimization/overview): a Cloud Billing **Standard usage cost** export to BigQuery. The export dataset must be in the same project as the service account, because Optimize only reads billing tables in the connected project. A new export can take a few hours before its first rows appear, so Optimize may look empty on day one.
 
 ## Setup
 
-Create the service account in Google Cloud first, then upload its key to CloudThinker.
+Create the service account in Google Cloud first, then upload its key to CloudThinker. The connection takes a JSON key only. Workload Identity Federation and impersonation aren't supported.
 
 <Tabs>
   <Tab title="Google Cloud console">
@@ -42,15 +42,19 @@ Create the service account in Google Cloud first, then upload its key to CloudTh
     gcloud iam service-accounts create cloudthinker-readonly \
       --project="$PROJECT_ID" --display-name="CloudThinker read-only"
 
-    for ROLE in roles/viewer roles/bigquery.dataViewer roles/bigquery.jobUser; do
+    for ROLE in roles/viewer roles/bigquery.jobUser; do
       gcloud projects add-iam-policy-binding "$PROJECT_ID" \
         --member="serviceAccount:$SA" --role="$ROLE"
     done
 
+    # Billing export dataset only. Replace BILLING_DATASET with its name.
+    bq query --project_id="$PROJECT_ID" --use_legacy_sql=false \
+      "GRANT \`roles/bigquery.dataViewer\` ON SCHEMA \`$PROJECT_ID.BILLING_DATASET\` TO 'serviceAccount:$SA'"
+
     gcloud iam service-accounts keys create cloudthinker-key.json --iam-account="$SA"
     ```
 
-    The last command writes the key to `cloudthinker-key.json`. Drop the two BigQuery roles if you don't use Optimize.
+    The last command writes the key to `cloudthinker-key.json`. Skip the BigQuery grants if you don't use Optimize.
   </Tab>
 </Tabs>
 
@@ -64,7 +68,7 @@ Then connect it in CloudThinker:
     Fill in **Alias** (for example `prod-gcp`) and **Description** (for example `Production GCP project, GKE workloads`). Agents read the description to pick the right connection when you have several.
   </Step>
   <Step title="Upload the key and pick a region">
-    Drag the JSON key file into **GOOGLE_SERVICE_ACCOUNT_KEY**, or click to browse for it. Pick your main region in **GCP_DEFAULT_REGION**, for example `us-central1`. Click **Connect**.
+    Drag the JSON key file into **GOOGLE_SERVICE_ACCOUNT_KEY**, or click to browse for it. Pick your main region from the **GCP_DEFAULT_REGION** list. It starts at `us-central1`. Click **Connect**.
 
     **Success state:** the status moves through **Connecting** and **Verifying**, and the project shows a **Connected** status.
   </Step>
@@ -81,6 +85,13 @@ You have two options:
 
 Optimize reads billing only from the project the key belongs to (its `project_id`), whichever option you pick.
 
+If your billing export sits in a central billing project, create the service account there, grant **Viewer** on the folder or organization, and connect once:
+
+```bash
+gcloud resource-manager folders add-iam-policy-binding FOLDER_ID \
+  --member="serviceAccount:$SA" --role="roles/viewer"
+```
+
 ## Connection details
 
 | Field | Description | Example |
@@ -88,7 +99,7 @@ Optimize reads billing only from the project the key belongs to (its `project_id
 | **Alias** | Short name for this connection. Blank picks one for you. | `prod-gcp` |
 | **Description** | What the project is. Agents use it to choose between connections. | `Production GCP project` |
 | **GOOGLE_SERVICE_ACCOUNT_KEY** | The service account's JSON key file, uploaded | `cloudthinker-key.json` |
-| **GCP_DEFAULT_REGION** | Starting region for agent commands | `us-central1` |
+| **GCP_DEFAULT_REGION** | Starting region for agent commands, picked from a searchable list. Starts at `us-central1`. | `us-central1` |
 
 The key file is JSON with fields such as `type`, `project_id`, `private_key`, and `client_email`. Upload it unchanged.
 
@@ -123,7 +134,7 @@ After connecting, set **Environment** (**Production**, **Staging**, **Developmen
 Which Google Cloud projects can you reach through my GCP connection, and which services are enabled in each?
 ```
 
-The answer lists your real project IDs.
+The answer lists your real project IDs. With a folder or organization grant, every project under it should appear.
 
 ### Example prompts
 
@@ -142,6 +153,8 @@ Break down last month's Google Cloud spend by project and service
 | Read-only roles only | On or off | Read-only. Google Cloud rejects any change. |
 | Extra write roles granted | Off | Read-only. CloudThinker refuses every change before it reaches Google Cloud. |
 | Extra write roles granted | On | Agents can propose changes. Your [Rules and Approval mode](/guide/approvals/overview) decide each one. |
+
+To lock writes in CloudThinker as well, open **Google Cloud Platform** in Connections and turn off the **Allow writes** switch on its detail panel.
 
 ## Troubleshooting
 
@@ -170,9 +183,9 @@ Break down last month's Google Cloud spend by project and service
 </Accordion>
 
 <Accordion title="The connection shows Error">
-**Cause:** the key was deleted, disabled, or expired in Google Cloud.
+**Cause:** the key was deleted or disabled, or an organization policy (`constraints/iam.serviceAccountKeyExpiryHours`) expired it.
 
-**Fix:** create a new key, then open the connection and click **Replace credentials** to upload it. Scheduled work resumes once the status is **Connected**.
+**Fix:** create a new key, then open the connection and click **Replace credentials** to upload it. That opens **Edit Instance**, the same dialog as **Replace…**. Scheduled work resumes once the status is **Connected**.
 </Accordion>
 
 ## Security

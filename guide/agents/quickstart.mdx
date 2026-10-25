@@ -9,8 +9,8 @@ By the end of this page you have a custom agent, `@ec2-triage`, that investigate
 <Info>
 **What you'll need**
 
-- A CloudThinker workspace where you have the workspace **Admin** role (Developers can create agents, but only Admins can add skills and change approvals)
-- An [AWS connection](/guide/connections/aws) that shows **Connected**. Any other connection works too: swap the names in the examples.
+- The workspace **Admin** role for step 3 (adding a skill). Developers can do every other step, so a Developer can ask an Admin to add the skill and do the rest. Run the test in step 5 only after the skill appears in **Settings → Skills**; without it, the agent has no runbook to follow.
+- An [AWS connection](/guide/connections/aws) that shows **Connected**. Its role needs to describe instances and read CloudWatch metrics; the `ReadOnlyAccess` policy the setup script attaches covers both (see [required permissions](/guide/connections/aws#required-permissions)). Any other connection works too: swap the names in the examples.
 - A free custom agent slot on your plan (Free includes 1). See [Customize](/guide/agents/customize#custom-agents-at-a-glance).
 </Info>
 
@@ -27,6 +27,8 @@ A custom agent is a named agent you create in your workspace. It sits next to th
     | **Role** | `AWS Compute Specialist` |
     | **Goal** | `Find why an EC2 instance is slow and recommend the safest fix` |
 
+    **Role** and **Goal** go at the top of the agent's prompt, ahead of the **Instructions** you add next, so the agent reads them on every request. Keep them short and specific.
+
     <Frame>
       <img src="/images/agents/create-custom-agent-dialog-1.png" alt="Create Custom Agent dialog, Identity step, with Avatar, Name, @mention, Role, and Goal fields" style={{ maxWidth: '400px' }} />
     </Frame>
@@ -40,12 +42,12 @@ A custom agent is a named agent you create in your workspace. It sits next to th
     Never stop, reboot, or resize an instance without saying why first.
     ```
 
-    **Learning Mode: Offer** means the agent asks before it saves anything it learns as a new skill. Click **Next**.
+    **Learning Mode: Offer** means that when the agent repeats the same tool call several times in a conversation, it asks you in chat before it saves that workflow as a new skill. Reply yes to save it or no to skip. The form defaults to **Auto**, which saves without asking. A saved skill lands in **Settings → Skills**, available in **Chat**, and every agent in the workspace can use it (see [Customize](/guide/agents/customize#custom-agents-at-a-glance)). Click **Next**.
 
     **Success state:** the dialog moves to the **Connect** step.
   </Step>
   <Step title="Give it a connection">
-    On the **Connect** step, open the **Builtin** tab and click **Add** next to your AWS connection. Click **Create Agent**.
+    On the **Connect** step, open the **Builtin** tab and click **Add** next to your AWS connection. **Builtin** lists the connected connections from **Settings → Connections**; **MCP** lists the [MCP servers](/guide/connections/mcp) you've added. Click **Create Agent**.
 
     <Frame>
       <img src="/images/agents/create-custom-agent-dialog-3.png" alt="Create Custom Agent dialog, Connect step, with Builtin and MCP tabs and a list of connections to attach" style={{ maxWidth: '500px' }} />
@@ -54,6 +56,10 @@ A custom agent is a named agent you create in your workspace. It sits next to th
     An agent reaches only the connections you attach, so attach only what its job needs. You can add more later on the agent's **Connections** tab.
 
     **Success state:** `EC2 Triage` appears under **Custom** in **Settings → Agents**, showing 1 connection.
+
+    <Frame caption="Agents: each custom agent has a name, @mention, role, goal and model tier">
+      <img src="/images/v2/agents-custom.webp" alt="Settings, Agents page listing custom agents with name, @mention, role, goal, and model tier" />
+    </Frame>
   </Step>
   <Step title="Add your runbook as a skill">
     A skill is a set of instructions agents follow when the task matches. Open **Settings → Skills**, click **New Skill**, and pick **Write skill instructions**. Fill in:
@@ -70,50 +76,77 @@ A custom agent is a named agent you create in your workspace. It sits next to th
     1. Check CPUUtilization for the last hour. Above 90% for 15 minutes or more counts as sustained.
     2. If the instance is a burstable type (t2, t3, t4g), check CPUCreditBalance. A balance near zero means the instance is throttled.
     3. Check NetworkIn and DiskReadOps for a traffic spike that started at the same time.
-    4. Recommend one fix, in this order of preference: wait out a short spike, move a burstable instance to unlimited mode, then resize.
+    4. Recommend one fix, in this order of preference: wait out a short spike, move a burstable instance to unlimited mode, then resize. Recommend only; don't apply it. Unlimited mode and resizing both change cost.
     5. Never reboot an instance tagged env=prod without a person approving it.
     ```
 
     Click **Create**. New skills start enabled and available in **Chat**, which is where you test next.
+
+    Skills apply to every agent in the workspace, not only `@ec2-triage`, so CloudThinker also follows this runbook when a chat asks about high CPU. See [Customize](/guide/agents/customize#how-it-works).
 
     **Success state:** `ec2-high-cpu-runbook` appears in the skills list with its switch on and **Chat** checked under **Available in**.
   </Step>
   <Step title="Make it ask before any change">
     Approvals decide whether a write (any call that changes something) runs, waits for a person, or is refused. Reads always run. For this test, make every write wait for you.
 
-    Start a new chat, open the approval control in the chat prompt box (or type `/` and pick **Approval**), and select **Manual**.
+    Start a new chat. The approval control sits next to the model picker in the chat prompt box and shows the chat's current mode, **Manual** or **Auto**. A new chat starts on the workspace mode (new workspaces default to **Auto**). Open the control, or type `/` and pick **Approval**, and select **Manual**.
 
-    **Success state:** the approval control shows **Manual**. This applies to this chat only; your workspace mode doesn't change.
+    **Success state:** the approval control shows **Manual**. This applies to this chat only; your workspace mode doesn't change. Developers can do this step too.
+
+    New chats start on the workspace mode again, and Automations use their own mode (**Auto · Rules + AI · Refuse** by default). To make prod changes always wait for a person, add an **Ask first** [Rule](/guide/approvals/rules).
   </Step>
   <Step title="Test the agent">
-    In the same chat, mention the agent and pick an instance ID from your account:
+    In the same chat, mention the agent. Send one of these prompts.
+
+    If you have an instance ID, replace the example one:
 
     ```text
     @ec2-triage Instance i-0abc1234def567890 feels slow. Investigate it.
     ```
 
-    The agent describes the instance, reads its CloudWatch metrics, and answers with a metric table and one recommended fix, in the order your runbook sets.
+    If you don't:
+
+    ```text
+    @ec2-triage List my running EC2 instances, pick the one with the highest CPU, and investigate it.
+    ```
+
+    The agent describes the instance, reads its CloudWatch metrics, and answers with a metric table and one recommended fix, in the order your runbook sets. A good answer has this shape (your values will differ):
+
+    | Metric | Value | What it means |
+    |---|---|---|
+    | CPUUtilization | Above 90% for the last 40 minutes | Sustained high CPU |
+    | CPUCreditBalance | Near zero | The burstable instance is throttled |
+
+    Followed by one recommendation, such as moving the instance to unlimited mode, with the reason and no change applied.
 
     If the agent wants to change the instance, the chat shows an approval card with **Approve** and **Decline**. Click **Decline** if you only wanted the diagnosis.
 
-    **Success state:** the answer follows your runbook steps without you restating them, and nothing changed in AWS without your approval.
+    **Success state:** the agent's activity includes a **Load Skill** step (the summary reads "read 1 skill" or more), the answer follows your runbook steps without you restating them, and nothing changed in AWS without your approval.
   </Step>
 </Steps>
 
 ## You're done when…
 
-- `@ec2-triage` answers in chat and uses only the AWS connection you attached
-- Its answer follows the steps in `ec2-high-cpu-runbook`
+- `@ec2-triage` answers in chat, and its **Connections** tab in **Settings → Agents** lists only your AWS connection
+- Its activity shows a **Load Skill** step and its answer follows the steps in `ec2-high-cpu-runbook`
 - Any write it attempts shows an approval card before it runs
+
+If this was only a trial, delete the agent in **Settings → Agents** (it frees the slot right away; Free includes one) and the skill in **Settings → Skills**.
 
 ## Troubleshooting
 
 <AccordionGroup>
   <Accordion title="Create agent is greyed out">
-    Your workspace reached its custom agent limit, and the tooltip says **Custom agent limit reached**. Delete an unused agent in **Settings → Agents**, or see [plans](/guide/billing/pricing).
+    Your workspace reached its custom agent limit. Hover the button: the tooltip says **Custom agent limit reached.** with an **Upgrade plan** link. Delete an unused agent in **Settings → Agents**, or see [plans](/guide/billing/pricing).
   </Accordion>
   <Accordion title="The @mention is rejected">
     It must start with a lowercase letter and use only lowercase letters, numbers, dots, underscores, and hyphens, up to 63 characters. It also can't match a name already in use or reserved by CloudThinker.
+  </Accordion>
+  <Accordion title="The @mention doesn't autocomplete">
+    Check that `EC2 Triage` appears under **Custom** in **Settings → Agents**. If you created it in another tab, refresh the chat page, then type `@` again.
+  </Accordion>
+  <Accordion title="A change ran without an approval card">
+    Check that the chat's approval control shows **Manual**. In Manual mode every write asks a person, even one an Allow Rule covers, so a missing card usually means the chat was on **Auto**. Reads (describe, list, metrics) never show a card. See [Approvals](/guide/approvals/overview).
   </Accordion>
   <Accordion title="The agent says it can't reach AWS">
     Open the agent in **Settings → Agents**, go to the **Connections** tab, and check that your AWS connection is attached. Then check the connection itself shows **Connected** on the [Connections](/guide/connections/overview) page.

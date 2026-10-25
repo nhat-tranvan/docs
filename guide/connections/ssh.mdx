@@ -10,9 +10,10 @@ Connect a server over SSH so [CloudThinker](/guide/agents/overview) can run shel
 
 ## Prerequisites
 
-- A server that accepts inbound SSH from CloudThinker on its SSH port.
+- A server that accepts inbound SSH from CloudThinker on its SSH port. CloudThinker connects straight to **Host**: there's no jump host or bastion field. For a server behind a firewall or with no public address, see [Reaching private services](/guide/connections/overview#reaching-private-services) for the egress IP list and the Worker option.
 - A login user with shell access and public-key authentication enabled in `sshd`.
 - A key pair whose public key is in that user's `~/.ssh/authorized_keys`.
+- The **Admin** role in the CloudThinker workspace, which you need to add connections. See [Roles](/guide/security/roles).
 
 ## Setup
 
@@ -34,15 +35,15 @@ Connect a server over SSH so [CloudThinker](/guide/agents/overview) can run shel
     Or append the contents of `cloudthinker_key.pub` to the user's `~/.ssh/authorized_keys` by hand.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Go to **Connections → SSH**, click **Connect**, and fill in **Host**, **User**, **Port**, and **Private key**. Add **Passphrase** only if the key has one. Click **Connect**.
+    Open **Connections**, select **SSH**, click **Connect**, and fill in **Host**, **User**, **Port**, and **Private key**. Add **Passphrase** only if the key has one. Click **Connect**.
 
-    CloudThinker connects, records the server's host key, and runs a test. The test can take up to 30 seconds.
+    CloudThinker connects, records the server's host key, and runs a test. The test usually finishes within 30 seconds and times out after 45.
 
     **Success state:** the dialog shows **Connected** with "SSH connection verified and saved."
   </Step>
 </Steps>
 
-Each server is its own SSH connection. Repeat the last step for every server you want CloudThinker to reach.
+Each server is its own SSH connection. Repeat the last step for every server you want CloudThinker to reach. To point a prompt at one server, select its connection with `#` in the prompt box.
 
 ## Connection details
 
@@ -56,11 +57,17 @@ Each server is its own SSH connection. Repeat the last step for every server you
 
 ## Required permissions
 
-Commands run as the login user, with exactly that user's permissions. You don't need root unless you want CloudThinker to run privileged commands.
+Commands run as the login user, with exactly that user's permissions. That user's permissions are the real boundary on what CloudThinker can do on the server.
 
 <Tip>
-Create a non-root user for CloudThinker with read access to the logs and paths you care about. Most health checks and log reads need nothing more.
+Create a non-root user for CloudThinker with read access to the logs and paths you care about, and no write access to production paths. Most health checks and log reads need nothing more.
 </Tip>
+
+Commands run without a terminal, so a `sudo` password prompt can't be answered. If you want CloudThinker to run a privileged command, allow just that command without a password in `/etc/sudoers.d/`:
+
+```text
+cloudthinker ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx
+```
 
 ## Agent capabilities
 
@@ -69,13 +76,15 @@ Create a non-root user for CloudThinker with read access to the logs and paths y
 | **System inspection** | Checks disk, memory, CPU, uptime, processes, and service status | No |
 | **Log analysis** | Reads and searches application and system logs | No |
 | **Diagnostics** | Investigates failures, connectivity, and configuration on the host | No |
-| **Changes** | Runs a command that changes the server, such as restarting a service | Every command |
+| **Changes** | Runs a command that changes the server, such as restarting a service | Yes |
 
 ### Verify the connection
 
 ```text
 Show uptime, disk usage per filesystem, and the top 5 processes by memory on the server
 ```
+
+Expect the uptime, a table of filesystems with their usage, and five processes with their memory use.
 
 ### Example prompts
 
@@ -89,14 +98,20 @@ Is nginx running, and when did it last restart?
 
 Read commands run without asking. A command that changes the server goes through an approval-gated tool: CloudThinker shows the command and waits for your [approval](/guide/approvals/overview) before it runs.
 
+Shell commands are free-form, and CloudThinker decides which ones count as changes. Treat the gate as a second check, and rely on the login user's permissions to block what CloudThinker must never do.
+
 ## Host key verification
 
-On the first connect, CloudThinker records the server's host key. Every later connection checks that the key still matches.
+On the first connect, CloudThinker trusts and records the server's host key. Every later connection checks that the key still matches. CloudThinker doesn't display the fingerprint, so make sure the first connect reaches the right server.
 
 If the key changes, the connection stops and shows **Host key changed**. This is expected after a server rebuild or a host key rotation. To accept the new key, click the shield icon (**Trust new host key**) next to the server and confirm with **Trust**.
 
 <Warning>
-Don't trust a new host key you didn't expect. An unexpected change can mean someone is intercepting the connection. Check the fingerprint on the server first with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`.
+Don't trust a new host key you didn't expect. An unexpected change can mean someone is intercepting the connection. Check the fingerprints on the server first, from a console you trust:
+
+```bash
+for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$f"; done
+```
 </Warning>
 
 ## Troubleshooting
@@ -128,6 +143,7 @@ SSH worked, but the command failed on the server. Check the command, the path, a
 <ConnectionSecurity />
 
 - **Use a dedicated key.** A key used only by CloudThinker can be removed from `authorized_keys` without affecting anyone else.
+- **Rotate the key.** Generate a new key pair and add the new public key to `authorized_keys`. Open **Connections**, select **SSH**, click the pencil icon (**Edit**) next to the server, paste the new **Private key**, and click **Save**. Run the verify prompt, and once it works, remove the old public key from the server.
 - **Confirm before re-trusting.** Treat every host key change as suspicious until you've checked the fingerprint.
 
 ## Related

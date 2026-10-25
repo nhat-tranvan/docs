@@ -10,9 +10,10 @@ Connect a Keycloak realm to let CloudThinker agents review users, clients, roles
 
 ## Prerequisites
 
-- A Keycloak server CloudThinker can reach over the network. Use an `https` address.
+- A Keycloak server CloudThinker can reach over the network. For a server behind a firewall, see [Reaching private services](/guide/connections/overview#reaching-private-services). CloudThinker doesn't block `http`, but the client secret then travels unencrypted, so use `https`.
 - An administrator who can create a client in the target realm and assign it service account roles.
 - The realm name.
+- The **Admin** role in the CloudThinker workspace, which you need to add connections. See [Roles](/guide/security/roles).
 
 <Info>
 A workspace holds one Keycloak connection, and it targets one realm. Agents get a token from `<KEYCLOAK_URL>/realms/<KEYCLOAK_REALM>/protocol/openid-connect/token`, so the base URL must be the part before `/realms`.
@@ -31,7 +32,7 @@ Both tabs create the same thing: a confidential client named `cloudthinker-svc` 
         In the admin console, switch to your realm, open **Clients**, and select **Create client**. Set **Client ID** to `cloudthinker-svc` and select **Next**. Turn on **Client authentication**, check **Service accounts roles**, and leave the other flows off. Select **Next**, then **Save**.
       </Step>
       <Step title="Assign realm-management roles">
-        Open the client, go to **Service accounts roles**, and select **Assign role**. Filter by clients, search for `realm-management`, and pick the roles from [Required permissions](#required-permissions). The list can span more than one page.
+        Open the client, go to **Service accounts roles**, and select **Assign role**. Filter by clients, search for `realm-management`, and pick the roles. For read-only audits, pick `view-realm`, `view-users`, `query-users`, `view-clients`, `query-clients`, and `query-groups`. To allow changes, see [Required permissions](#required-permissions). The list can span more than one page.
       </Step>
       <Step title="Copy the client secret">
         On the same client, open **Credentials** and copy **Client Secret**.
@@ -46,8 +47,10 @@ Both tabs create the same thing: a confidential client named `cloudthinker-svc` 
         ```bash
         kcadm.sh config credentials \
           --server https://keycloak.example.com --realm master \
-          --user admin --password '<admin-password>'
+          --user admin
         ```
+
+        Leave out `--password` so `kcadm.sh` prompts for it and the password stays out of your shell history. Add `/auth` to `--server` if your server serves under it.
       </Step>
       <Step title="Create the client">
         ```bash
@@ -85,7 +88,7 @@ Then add the connection:
 
 <Steps>
   <Step title="Add the connection in CloudThinker">
-    Open **Connections** in the sidebar, select **Keycloak**, and fill in the fields from [Connection details](#connection-details). Click **Connect**.
+    Open **Connections**, select **Keycloak**, and fill in the fields from [Connection details](#connection-details). Click **Connect**.
 
     **Success state:** the connection shows **Connecting** and **Verifying**, then **Connected**. CloudThinker signs in as the service account and counts the realm's users, which proves both the secret and the `view-users` role.
   </Step>
@@ -133,9 +136,11 @@ For audits, assign only `view-*` and `query-*` roles. A missing role shows up as
 | **Auth flows** | List authentication flows and their executions | No |
 | **User changes** | Create, update, or delete users, reset passwords, send verification email, change roles and group membership | Yes |
 | **Client changes** | Create or delete clients and client roles, and rotate client secrets | Yes |
-| **Realm, group, and flow changes** | Create realms, create, rename, or delete groups and subgroups, create or delete flows, change an execution's requirement | Yes |
+| **Realm, group, and flow changes** | Create, rename, or delete groups and subgroups, create or delete flows, change an execution's requirement. Creating a realm also needs the `create-realm` role, which exists only in the `master` realm | Yes |
 
 Reads run without asking. Every change goes through [Approvals](/guide/approvals/overview) first. List reads return up to 100 entries by default, so for a large realm, ask about a group, a client, or a username rather than everyone.
+
+CloudThinker passes a new user password to Keycloak on standard input, so it stays out of command logs. It can still appear in the conversation if you type it there, so prefer letting users reset their own password through Keycloak.
 
 <Warning>
 Rotating a client secret takes effect the moment you approve it, and the old secret stops working. Tell the owner of that client before you approve.
@@ -144,10 +149,10 @@ Rotating a client secret takes effect the moment you approve it, and the old sec
 ### Verify the connection
 
 ```text
-List the clients in my Keycloak realm and say which ones have direct access grants enabled
+How many users are in my Keycloak realm?
 ```
 
-Expect a list of client IDs with each one's direct access grants setting.
+Expect a user count. This needs only `view-users`. To check client access too, ask which clients have direct access grants enabled, which needs `view-clients`.
 
 ### Example prompts
 
@@ -184,7 +189,7 @@ List reads stop at 100 by default. Ask for a specific username or group, or ask 
 <ConnectionSecurity />
 
 - **Use a dedicated client**: keep `cloudthinker-svc` for CloudThinker only, so you can revoke it without affecting other apps.
-- **Rotate the secret**: regenerate it under **Credentials** on your normal schedule, then update **KEYCLOAK_CLIENT_SECRET**.
+- **Rotate the secret**: the connection breaks the moment you regenerate it, so do both steps together. Regenerate it under **Credentials** in Keycloak, then open **Connections**, select **Keycloak**, click the pencil icon (**Edit**) on the connection, paste the new **KEYCLOAK_CLIENT_SECRET**, and click **Save and test**.
 - **Avoid `realm-admin` for audits**: read-only roles cover every question in the read rows above.
 
 ## Related
