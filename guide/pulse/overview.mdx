@@ -1,69 +1,76 @@
 ---
 title: "Pulse Overview"
-description: "See how Pulse suppresses raw provider events, correlates survivors into Signals, and routes actionable problems."
+description: "Learn how Pulse drops alert noise, groups related events into clusters, and hands only actionable problems to incident triage."
 icon: pulse
 ---
 
-Pulse is the Detect stage of [Resolve](/guide/incident/overview). It receives raw provider events, removes known noise, groups related survivors into Clusters, and classifies each Cluster into a Signal that can route into an Incident.
+Pulse is the detection layer of [Resolve](/guide/incident/overview), CloudThinker's incident response module. It takes every alert your tools send, drops the noise, groups what's left into clusters, and passes only the actionable ones on to triage, so one outage shows up as one item instead of hundreds of pages.
+
+## How it works
+
+A **raw event** is one notification from a source, such as a CloudWatch alarm or a Datadog monitor. A **signal** is a raw event that survived noise suppression and was classified. A **cluster** is a group of related signals that Pulse treats as one problem.
 
 ```mermaid
 flowchart LR
-    A["Raw provider event"] --> B["Suppression"]
+    A["Raw event"] --> B["Suppression"]
+    B -->|dropped| X["Counted, not shown as work"]
     B --> C["Cluster"]
-    C --> D["Signal classification"]
-    D --> E{"Actionable?"}
-    E -->|Yes| F["Incident"]
-    E -->|Not yet| G["Continue forming"]
+    C --> D["Classify"]
+    D -->|actionable| E["Triage"]
+    E --> F["Incident"]
 ```
 
-## What Pulse does
+1. **Ingest.** Events arrive from webhooks, polled AWS services (CloudTrail, AWS Health, AWS GuardDuty, AWS IAM Access Analyzer, AWS Config), and Slack or Microsoft Teams channels you choose.
+2. **Suppress.** Four checks run in order, and the first match drops the event. See [noise suppression](/guide/pulse/clusters#noise-suppression).
+3. **Cluster.** Pulse joins a signal to the open cluster for the same fault (same source, event type and resource) or to recent related signals from the same service.
+4. **Classify.** CloudThinker reads the cluster and records a category, a severity and whether it is actionable.
+5. **Triage.** An actionable cluster goes to triage. CloudThinker matches it to an open incident, reopens a closed incident when the same fault comes back, or opens a new one.
 
-| Step | Result |
-|---|---|
-| Ingest | Accept raw provider events from webhook, polling, and chat sources. |
-| Suppress | Apply the [eight suppression layers](/guide/pulse/clusters#noise-suppression): deduplication, rate limits, snoozes, prior verdicts, noise patterns, flapping checks, cascade suppression, and severity normalization. |
-| Correlate | Group related surviving events into a Cluster that represents one candidate Signal. |
-| Route | Classify the Cluster into a Signal and create an Incident when severity or the actionable assessment qualifies it. |
+Pulse only groups. It never opens an incident by itself: triage, or a person, decides which incident a cluster belongs to.
 
-Pulse creates the Incident before RCA begins. Turning **On Duty** (automatic investigation) off pauses automatic analysis; it does not stop detection or Incident creation.
+<Note>
+The **On duty** switch on **Resolve → Investigation** controls whether CloudThinker starts root cause analysis (RCA) on its own. When it's **Paused**, Pulse still detects and incidents are still filed as Open, but investigation waits until someone starts it. See [Settings](/guide/incident/settings).
+</Note>
 
-## Work from the queue
+## Work from the Pulse page
 
-Pulse organizes Clusters into these lanes:
+Open **Resolve → Pulse**. The header shows the live funnel from raw events to clusters and a time window selector (**Last 1 hour** to **Last 30 days**). A row of lanes picks which clusters you see:
 
-| Lane | Use it for |
-|---|---|
-| Needs you | Unacknowledged high or critical forming Clusters that have no owner. |
-| Active | Current Clusters that still need monitoring or work. This is the default lane. |
-| Forming | Clusters still collecting related raw events. |
-| Routed | Clusters with an open Incident. New matching Signals still join them. |
-| Resolved | Closed Clusters. |
-| All | Every visible Cluster across the lifecycle. |
+| Lane | What it shows | Use it to |
+|---|---|---|
+| **Needs you** | Critical or high clusters that are still forming, nobody has acknowledged or claimed, and no open incident holds. Also clusters whose triage failed and wait for a retry. | Start your shift here. |
+| **Active** (default) | Clusters that have received more than one signal. | See everything currently in play. |
+| **Forming** | Clusters with a single signal so far. | Spot new problems early. |
+| **Routed** | Clusters held by an open incident, whatever their status. | Check what an incident already owns. |
+| **Resolved** | Closed clusters. | Review what's done. |
+| **All** | Every cluster in the time window. | Search history. |
 
-Open a Cluster to inspect its Signals, source, severity, timing, and routing state. From the Cluster you can **Acknowledge**, **Assign**, **Escalate**, or **Resolve**.
+Narrow any lane with the severity, source and category filters, or with **Search signals...**. Click a cluster to open its detail panel, where you can **Acknowledge**, assign it, **Escalate**, **Attach to incident...** or **Resolve** it. [Clusters](/guide/pulse/clusters) explains each action.
 
-<Frame>
-  <img src="/images/pulse/01-pulse-main-feed.jpg" alt="Pulse workspace with correlated operational signals" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Pulse keeps related operational signals together so you can review the problem as one unit.</p>
+**Success state:** after you connect a source, the next alert from that source appears as a cluster in the **Forming** or **Active** lane.
 
-## Connect a source
+## When Pulse is empty or quiet
 
-Open **Resolve → Integrations** to connect a platform and configure how Resolve listens for Signals. A source is ready after at least one webhook, polling, or chat path succeeds.
+| What you see | What it means | What to do |
+|---|---|---|
+| **No signals yet** with a **Connect a source** button | Nothing has reached this workspace. | Follow [Connect Pulse sources](/guide/pulse/setup). |
+| **No signals yet** with a **Manage sources** button | A webhook exists, but no event has arrived. | Fire a test alert from the source tool. |
+| "No new signals in ... your source may be down." | Nothing has arrived for at least an hour. | Click **Check sources** and look for a platform marked **Needs attention**. |
+| **Nothing needs you** | No critical or high cluster waits on a person. | Switch to **Active**. Sources that emit mostly low or info alerts never fill **Needs you**. |
 
-## Related
+## Next steps
 
 <CardGroup cols={2}>
-  <Card title="Understand clusters" icon="layer-group" href="/guide/pulse/clusters">
-    Follow the Cluster lifecycle and review suppression behavior.
-  </Card>
   <Card title="Connect Pulse sources" icon="plug" href="/guide/pulse/setup">
-    Configure a platform to send or expose operational Signals.
+    Send your first alerts into Pulse and confirm they arrive.
+  </Card>
+  <Card title="Work with clusters" icon="layer-group" href="/guide/pulse/clusters">
+    Learn the cluster lifecycle, suppression and every cluster action.
   </Card>
   <Card title="Pulse Analytics" icon="chart-line" href="/guide/pulse/analytics">
-    Measure correlation yield, suppression, volume, and Cluster MTTR.
+    Measure how much noise Pulse removes and how fast clusters close.
   </Card>
-  <Card title="Manage integrations" icon="arrows-rotate" href="/guide/incident/integrations">
-    See each platform's connections, signal paths, and outcomes.
+  <Card title="Root cause analysis" icon="magnifying-glass" href="/guide/incident/root-cause-analysis">
+    See what happens after triage opens an incident.
   </Card>
 </CardGroup>

@@ -1,150 +1,142 @@
 ---
 title: SSH
-description: "Connect your own servers to CloudThinker over SSH so agents can run shell commands using key-based authentication and trusted host keys"
+description: "Connect your servers over SSH so CloudThinker can check disk, memory, processes, services, and logs with key-based login"
 icon: "/images/icons/ssh.svg"
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your servers over SSH to let [CloudThinker](/guide/agents/overview) run shell commands on your hosts: checking disk usage, tailing logs, inspecting services, and diagnosing issues directly on the box.
+Connect a server over SSH so [CloudThinker](/guide/agents/overview) can run shell commands on it: checking disk and memory, reading logs, and inspecting processes and services. You sign in with a private key, and CloudThinker pins the server's host key on first connect so it can detect an identity change.
 
 ## Prerequisites
 
-| Requirement | Detail |
-|-------------|--------|
-| **Reachable host** | The server must accept inbound SSH from CloudThinker on its SSH port |
-| **Login user** | An existing user account with shell access |
-| **Authorized key** | The public half of your key present in that user's `~/.ssh/authorized_keys` |
-| **Key-based auth enabled** | `sshd` must allow public-key authentication for the user |
+- A server that accepts inbound SSH from CloudThinker on its SSH port.
+- A login user with shell access and public-key authentication enabled in `sshd`.
+- A key pair whose public key is in that user's `~/.ssh/authorized_keys`.
 
 ## Setup
 
 <Steps>
-  <Step title="Prepare a key pair">
-    Use an existing key pair or generate a dedicated one for CloudThinker:
+  <Step title="Create a dedicated key pair">
+    Generate a key used only by CloudThinker, so you can revoke it without touching anything else:
 
     ```bash
     ssh-keygen -t ed25519 -C "cloudthinker" -f ./cloudthinker_key
     ```
 
-    This produces `cloudthinker_key` (private) and `cloudthinker_key.pub` (public). Both OpenSSH (`-----BEGIN OPENSSH PRIVATE KEY-----`) and PEM (`-----BEGIN RSA/EC PRIVATE KEY-----`) formats are accepted, including `ed25519`, `rsa`, and `ecdsa` keys.
+    This writes `cloudthinker_key` (private) and `cloudthinker_key.pub` (public). Existing RSA or ECDSA keys in OpenSSH or PEM format also work.
   </Step>
-  <Step title="Authorize the public key">
-    Add the public key to the login user's authorized keys on the server:
-
+  <Step title="Authorize the public key on the server">
     ```bash
-    ssh-copy-id -i ./cloudthinker_key.pub user@server.example.com
-    # or append cloudthinker_key.pub manually to ~/.ssh/authorized_keys
+    ssh-copy-id -i ./cloudthinker_key.pub ubuntu@server.example.com
     ```
+
+    Or append the contents of `cloudthinker_key.pub` to the user's `~/.ssh/authorized_keys` by hand.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Navigate to **Connections → SSH** and enter:
-    - **Host**: hostname or IP, e.g. `server.example.com` or `10.0.0.5`
-    - **User**: the login user, e.g. `ubuntu`
-    - **Port**: SSH port (optional, defaults to `22`)
-    - **Private key**: the full private key, including the `BEGIN`/`END` lines
-    - **Passphrase**: optional, only needed if the private key has one
+    Go to **Connections → SSH**, click **Connect**, and fill in **Host**, **User**, **Port**, and **Private key**. Add **Passphrase** only if the key has one. Click **Connect**.
 
-    CloudThinker tests the connection and shows a **Connected** status once it succeeds.
+    CloudThinker connects, records the server's host key, and runs a test. The test can take up to 30 seconds.
+
+    **Success state:** the dialog shows **Connected** with "SSH connection verified and saved."
   </Step>
 </Steps>
 
-### Host-key verification
-
-The first time you connect, CloudThinker records your server's host key. On every later connection it checks that the key still matches, so you are warned if the server's identity changes unexpectedly.
-
-If the key changes, the connection stops and CloudThinker shows you both the previously trusted fingerprint and the new one. This normally happens after a server rebuild or SSH key rotation. Once you have confirmed the change is expected, choose **Trust new host key** to continue.
-
-<Warning>
-If you did not expect the server's identity to change, do not trust the new key yet. An unexpected change can indicate the connection is being intercepted. Verify the new fingerprint against your server first.
-</Warning>
+Each server is its own SSH connection. Repeat the last step for every server you want CloudThinker to reach.
 
 ## Connection details
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| **Host** | Hostname or IP address of the target server | `server.example.com` |
-| **User** | Login user with shell access | `ubuntu` |
-| **Port** | SSH port | `22` |
-| **Private key** | Full private key including `BEGIN`/`END` headers | `-----BEGIN OPENSSH PRIVATE KEY-----...` |
-| **Passphrase** | Passphrase if the key is encrypted | — |
+| Field | Required | Description | Example |
+|-------|----------|-------------|---------|
+| **Host** | Yes | Hostname or IP address | `server.example.com` or `203.0.113.10` |
+| **User** | Yes | Login user with shell access | `ubuntu` |
+| **Port** | No | SSH port. Defaults to `22` | `22` |
+| **Private key** | Yes | The full key, including the `BEGIN` and `END` lines | `-----BEGIN OPENSSH PRIVATE KEY-----` |
+| **Passphrase** | No | Only for an encrypted key. Leave blank otherwise | Hidden |
 
 ## Required permissions
 
-CloudThinker runs commands with the permissions of the login user. No root access is required unless your agents need to run privileged commands.
+Commands run as the login user, with exactly that user's permissions. You don't need root unless you want CloudThinker to run privileged commands.
 
 <Tip>
-Scope the login user to only the commands and paths your agents need. Use `command=` and `from=` options in `authorized_keys` to restrict what the key can do and from where.
+Create a non-root user for CloudThinker with read access to the logs and paths you care about. Most health checks and log reads need nothing more.
 </Tip>
 
 ## Agent capabilities
 
-Once connected, CloudThinker runs shell commands on your server over SSH.
-
-| Capability | Description |
-|------------|-------------|
-| **System inspection** | Disk, memory, CPU, processes, and service status |
-| **Log analysis** | Read and search application and system logs |
-| **Diagnostics** | Investigate failures, connectivity, and configuration on the host |
-| **Operational checks** | Run read-only commands to report on the server's state |
+| Capability | What CloudThinker does | Approval |
+|------------|------------------------|----------|
+| **System inspection** | Checks disk, memory, CPU, uptime, processes, and service status | No |
+| **Log analysis** | Reads and searches application and system logs | No |
+| **Diagnostics** | Investigates failures, connectivity, and configuration on the host | No |
+| **Changes** | Runs a command that changes the server, such as restarting a service | Every command |
 
 ### Verify the connection
 
 ```text
-Show system uptime, disk usage, and top memory processes on the server
+Show uptime, disk usage per filesystem, and the top 5 processes by memory on the server
 ```
 
 ### Example prompts
 
 ```text
-Check disk usage on all filesystems and flag anything above 80%
-Tail /var/log/app/error.log and summarize the last 100 error lines
-Show which processes are using the most CPU and memory right now
+Flag any filesystem above 80% full and list the largest directories on it
+Summarize the last 100 lines of /var/log/app/error.log and group them by error type
+Is nginx running, and when did it last restart?
 ```
 
+## Write access
+
+Read commands run without asking. A command that changes the server goes through an approval-gated tool: CloudThinker shows the command and waits for your [approval](/guide/approvals/overview) before it runs.
+
+## Host key verification
+
+On the first connect, CloudThinker records the server's host key. Every later connection checks that the key still matches.
+
+If the key changes, the connection stops and shows **Host key changed**. This is expected after a server rebuild or a host key rotation. To accept the new key, click the shield icon (**Trust new host key**) next to the server and confirm with **Trust**.
+
 <Warning>
-Commands run with the permissions of the login user. Scope that user to what your agents actually need.
+Don't trust a new host key you didn't expect. An unexpected change can mean someone is intercepting the connection. Check the fingerprint on the server first with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`.
 </Warning>
 
 ## Troubleshooting
 
 <Accordion title="Authentication failed">
-- Confirm the public key is in the login user's `~/.ssh/authorized_keys`
-- Verify the **User** matches an account that key is authorized for
-- Ensure the private key was pasted in full, including the `BEGIN`/`END` lines
-- If the key is passphrase-protected, provide the **Passphrase**
+- Check that the public key is in the login user's `~/.ssh/authorized_keys`.
+- Check that **User** is the account the key is authorized for.
+- Paste the private key in full, including the `BEGIN` and `END` lines.
+- Enter the **Passphrase** if the key has one.
 </Accordion>
 
 <Accordion title="Could not reach the host">
-- Verify the **Host** and **Port** are correct
-- Confirm the server accepts SSH from CloudThinker (firewall, security group, or allowlist)
-- Check that the SSH daemon is running and listening on that port
+- Check **Host** and **Port**.
+- Allow inbound SSH from CloudThinker in your firewall, security group, or allowlist.
+- Confirm `sshd` is running and listening on that port.
+- A test that runs longer than 45 seconds times out with this same advice.
 </Accordion>
 
-<Accordion title="Host key has changed">
-- Expected after a server rebuild or SSH key rotation: review the new fingerprint and choose **Trust new host key**
-- If the change is unexpected, investigate before re-trusting
+<Accordion title="Host key changed">
+Expected after a rebuild or key rotation: verify the fingerprint on the server, then choose **Trust new host key**. If you didn't expect it, investigate before trusting.
 </Accordion>
 
-<Accordion title="Remote command failed">
-- The connection is healthy but the command returned a non-zero exit code
-- Check the command, the user's permissions, and paths on the remote host
+<Accordion title="The remote command exited with a non-zero code">
+SSH worked, but the command failed on the server. Check the command, the path, and whether the login user has permission to run it.
 </Accordion>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Dedicated key** — generate a key pair used only for CloudThinker so it can be revoked independently.
-- **Rotate and verify** — replace the key periodically and always confirm a host key change before re-trusting.
+- **Use a dedicated key.** A key used only by CloudThinker can be removed from `authorized_keys` without affecting anyone else.
+- **Confirm before re-trusting.** Treat every host key change as suspicious until you've checked the fingerprint.
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Agents" icon="cloud" href="/guide/agents/overview">
-    See what CloudThinker can do with this connection.
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Control how CloudThinker asks before it changes a server.
   </Card>
-  <Card title="Kubernetes Connection" icon="/images/icons/kubernetes.svg" href="/guide/connections/kubernetes">
-    Connect clusters for workload analysis and operations
+  <Card title="Kubernetes connection" icon="/images/icons/kubernetes.svg" href="/guide/connections/kubernetes">
+    Connect clusters to inspect workloads.
   </Card>
 </CardGroup>

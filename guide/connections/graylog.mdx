@@ -1,90 +1,89 @@
 ---
 title: Graylog
-description: "Connect Graylog to CloudThinker for read-only log search, cluster and stream inspection, and message count analysis"
+description: "Connect Graylog so agents can check cluster health, list streams and index sets, search messages, and count them by field"
 icon: "/images/icons/graylog.svg"
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your Graylog cluster to let [CloudThinker](/guide/agents/overview) check cluster health, list your streams and index sets, search recent messages, and count messages grouped by a field.
-
-Graylog authenticates with a **REST API access token** belonging to a Graylog user. The connection is **read-only**: CloudThinker gives agents no way to reach the Graylog endpoints that change things.
+Connect a Graylog cluster to let CloudThinker agents check cluster health, list your streams and index sets, search recent messages, and count messages grouped by a field such as source. The connection uses a REST API access token for a read-only Graylog user, and CloudThinker gives agents no way to change anything in Graylog.
 
 ## Prerequisites
 
-- A **Graylog cluster** reachable from CloudThinker over **HTTPS**.
-- A **least-privilege Graylog user** for CloudThinker with the **Reader** role.
-- **Read access shared on the streams and index sets** you want agents to read — the Reader role alone is not enough, see [Required permissions](#required-permissions).
-- A **REST API access token** for that user.
+- A Graylog cluster that CloudThinker can reach over **HTTPS**, with a certificate CloudThinker can verify.
+- A Graylog admin who can create users and share streams.
+- The streams you want agents to read. Agents see only what you share with the CloudThinker user.
 
 ## Setup
 
 <Steps>
-  <Step title="Create a read-only Graylog user">
-    In Graylog, go to **System → Users and Teams** and create a user for CloudThinker with the **Reader** role — Graylog's read-only baseline. A dedicated user, rather than a person's account, keeps the scope visible and revocable in one place.
+  <Step title="Create a read-only user">
+    In Graylog, go to **System → Users and Teams** and create a user for CloudThinker, such as `cloudthinker`, with the **Reader** role. A dedicated user keeps CloudThinker's access visible and easy to revoke.
   </Step>
-  <Step title="Share the streams and index sets with that user">
-    The Reader role by itself grants no access to your entities — Graylog controls those by sharing. Share each stream and index set CloudThinker should read with the new user at the **Viewer** access level.
+  <Step title="Give the user read access to streams and index sets">
+    The Reader role alone grants no access to your logs. Share each stream agents should read with the user at **Viewer** access, and make sure the user can read the index sets behind those streams.
 
-    Skip this and Graylog returns an empty list of streams instead of an error, which looks like a Graylog with no streams rather than a missing permission.
+    Skip this and the connection still tests as **Connected**, but agents find no streams. See [Required permissions](#required-permissions).
   </Step>
-  <Step title="Create a REST API access token">
-    Still in **System → Users and Teams**, find the user, open the **More** drop-down, and select **Edit tokens**. Enter a token name, set the **TTL** using ISO 8601 duration format, and click **Create Token**.
-
-    Copy the token immediately — Graylog does not show it again.
+  <Step title="Create an API access token">
+    Still in **System → Users and Teams**, find the user, open **More**, and select **Edit tokens**. Enter a token name, set the **TTL** as an ISO 8601 duration (for example `P90D` for 90 days), and click **Create Token**. Copy the token now. Graylog doesn't show it again.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Navigate to **Connections → Graylog** and enter:
-    - **Graylog base URL**: your Graylog web/API root, such as `https://graylog.example.com:9000`
-    - **API token**: the token you just created
-    - **TLS certificate**: leave on **Verify TLS certificate**
+    Open **Connections** in the sidebar, select **Graylog**, and fill in:
 
-    Click **Connect**. CloudThinker reads your cluster status to verify the token and shows a **Connected** status with the node count it found.
+    - **Graylog base URL**: your Graylog web/API root, such as `https://graylog.example.com:9000`. Don't add `/api`.
+    - **API token**: the token you copied.
+    - **TLS certificate**: leave it on **Verify TLS certificate**.
+
+    Click **Connect**. CloudThinker reads your cluster status to check the token.
+
+    **Success state:** the connection shows a **Connected** status with the message `Graylog read-only connection verified (3 node(s))`, counting the nodes it found.
   </Step>
 </Steps>
 
 <Warning>
-Graylog access tokens expire — the default TTL is **30 days**, after which the connection fails with a rejected-token error. Set a TTL that matches your rotation schedule and update the connection before the old token expires. An administrator can change the default under **System → Configurations → Users**.
+Graylog tokens expire at their TTL, and Graylog's default TTL is 30 days. When the token expires, the connection stops working. Pick a TTL that matches your rotation schedule and update the connection before the old token lapses.
 </Warning>
 
 ## Connection details
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| **Graylog base URL** | Graylog web/API base URL, with no `/api`, path, query, or credentials | `https://graylog.example.com:9000` |
-| **API token** | REST API access token for the read-only Graylog user | — |
-| **Verify TLS certificate** | Whether to verify the Graylog TLS certificate | `true` |
+| **Graylog base URL** | The web/API root, with no `/api`, path, query, or credentials | `https://graylog.example.com:9000` |
+| **API token** | REST API access token for the read-only user | From **Edit tokens** |
+| **TLS certificate** | **Verify TLS certificate** (default) or **Skip TLS verification** | **Verify TLS certificate** |
 
-Enter the web/API root only — CloudThinker adds `/api` itself and rejects a URL that carries anything else. The URL must use `https`, because the token is sent with every request; plain `http` is accepted only when Graylog runs on the same machine as CloudThinker.
+CloudThinker adds `/api` itself and rejects a URL that carries anything beyond the root. The token travels with every request, so two rules apply to any Graylog that isn't on the same machine as CloudThinker:
+
+- The URL must use `https`. Plain `http` is refused.
+- **Skip TLS verification** is refused. Install a certificate from a trusted issuer instead.
 
 ## Required permissions
 
-The token needs **read** access, and Graylog splits that across two layers:
+Graylog splits read access across two layers. You need both.
 
 | Layer | What to grant | Why |
 |-------|---------------|-----|
-| **Role** | The **Reader** role on the CloudThinker user | Graylog's read-only baseline; every user holds either Reader or Admin |
-| **Entity sharing** | Each **stream** and **index set** shared at **Viewer** | Graylog controls individual entities by sharing; with nothing shared, a Reader has no access to Graylog resources |
+| **Role** | **Reader** on the CloudThinker user | Graylog's read-only baseline; lets CloudThinker read cluster status |
+| **Streams and index sets** | Read access to each stream (shared at **Viewer**) and its index set | Decides which logs agents can see. With nothing shared, the user sees no logs |
 
-No Graylog permission beyond read is ever needed — CloudThinker exposes no Graylog write action, so granting write access only widens what a leaked token could do.
+No write permission is ever needed. CloudThinker has no Graylog write action, so extra access only widens what a leaked token could do.
 
-<Note>
-The Reader role on its own is the most common misconfiguration. Graylog returns an empty list of streams and a success code rather than a 403, so the connection tests as **Connected** while agents report that no streams exist. If discovery shows no streams on a cluster that has them, share the streams and index sets with the token's user.
-</Note>
+<Tip>
+If agents report no streams on a cluster that has them, the user is missing stream access. Graylog answers with an empty list instead of an error, so it looks like an empty cluster.
+</Tip>
 
 ## Agent capabilities
 
-Once connected, agents have read access to your Graylog cluster.
+| Capability | What agents can do |
+|------------|--------------------|
+| **Cluster health** | Report node count, Graylog versions, and cluster health |
+| **Streams and index sets** | List streams and index sets, and review routing, retention, and rotation |
+| **Log search** | Search messages with a Graylog query over a time window and return a sample |
+| **Counts** | Count messages grouped by one field to find the noisiest source, service, or error |
+| **Ingestion checks** | Spot disabled streams and sources that stopped sending |
 
-| Capability | Description |
-|------------|-------------|
-| **Cluster health** | Summarize node count, Graylog versions, and cluster health |
-| **Streams & index sets** | List streams and index sets, and review routing rules, retention, and index rotation |
-| **Log search** | Search messages with a query over a recent time window and return a sample of the matches |
-| **Counts & distribution** | Count messages grouped by one field to find the noisiest source, service, or error class |
-| **Ingestion checks** | Spot disabled streams and sources whose ingestion stopped |
-
-Searches and counts are bounded: the time window reaches back at most 30 days, and results return at most 100 rows or groups. Agents tell you which window and limit they used, and say when a result was cut short instead of presenting it as a total.
+Searches and counts default to the last 24 hours and reach back at most 30 days. Results return at most 100 rows or groups, and each request times out after 300 seconds at most. Agents tell you the window and limit they used, and say when a result was cut short.
 
 ### Verify the connection
 
@@ -92,54 +91,56 @@ Searches and counts are bounded: the time window reaches back at most 30 days, a
 Run Graylog discovery and summarize cluster health, node count, and the streams and index sets this token can read
 ```
 
+Expect the node count and health, then the streams and index sets you shared. An empty stream list usually means missing stream access, not an empty cluster.
+
 ### Example prompts
 
 ```text
-5xx errors from the api-gateway in Graylog over the last 6 hours
-Graylog message counts by source over the last 24 hours and anything that stopped sending
-A next step for the errors from the payments pods in Graylog over the last hour
+Search Graylog for 5xx errors from api-gateway in the last 6 hours and show a sample
+Count Graylog messages by source over the last 24 hours and flag any source that stopped sending
+Which Graylog streams are disabled, and what retention does each index set use?
 ```
 
 ## Troubleshooting
 
-<Accordion title="Graylog rejected the API token">
-The token expired, was revoked, or was copied incompletely. Graylog tokens expire at their TTL, 30 days by default. Create a new token under **System → Users and Teams → More → Edit tokens** and update the connection.
+<Accordion title="Graylog rejected the API token (401)">
+The token expired, was revoked, or was copied incompletely. Create a new one under **System → Users and Teams → More → Edit tokens** and update **API token**.
 </Accordion>
 
-<Accordion title="The token cannot read the cluster status">
-The token is valid but its Graylog user lacks the read role. Give the user the **Reader** role, then test the connection again.
+<Accordion title="The token can't read the cluster status (403)">
+The user is missing the **Reader** role. Add it, then test the connection again.
 </Accordion>
 
-<Accordion title="Discovery reports no streams on a cluster that has streams">
-The user has the Reader role but no streams shared with it, so Graylog returns an empty page instead of denying the request. Share each stream and index set with that user at **Viewer** access. An empty list here means the token cannot see those streams, not that Graylog has none.
+<Accordion title="Agents find no streams">
+The user has the Reader role but no shared streams, so Graylog returns an empty list. Share each stream with the user at **Viewer** access and make sure it can read the index sets.
 </Accordion>
 
-<Accordion title="The endpoint did not answer as Graylog, or is unreachable">
-The base URL points at the wrong root, already contains `/api`, or nothing answered at all. Reconnect with the web/API root only, such as `https://graylog.example.com:9000`, and check the host, port, and network path from CloudThinker.
+<Accordion title="Could not reach the Graylog API, or the endpoint is not Graylog">
+The base URL points at the wrong root or already contains `/api`, a proxy answered instead of Graylog, or nothing answered at all. Reconnect with the web/API root only, such as `https://graylog.example.com:9000`, and check that the host and port are reachable from CloudThinker.
 </Accordion>
 
-<Accordion title="Graylog URL must use HTTPS, or TLS verification was refused">
-A plain-`http` URL, or **Skip TLS verification**, is rejected for a remote Graylog because either would expose the token — in clear text, or to whichever server answers. Serve Graylog over HTTPS, install a trusted certificate, and keep **Verify TLS certificate** on.
+<Accordion title="HTTPS required, or TLS verification can't be disabled">
+CloudThinker refuses plain `http` and **Skip TLS verification** for a remote Graylog, because either would expose the token. Serve Graylog over HTTPS with a trusted certificate and keep **Verify TLS certificate** on.
 </Accordion>
 
-<Accordion title="Results look truncated, or Graylog rate-limited the request">
-The query hit the result limit, the search timed out, or Graylog (or a proxy in front of it) returned HTTP 429. A search that times out does not tell you how many messages matched — narrow the query, shorten the time window, or group by a more specific field, then ask again.
+<Accordion title="Results look cut short, or Graylog returned 429">
+The query hit the 100-row limit, timed out, or Graylog (or a proxy) rate-limited it. A timed-out search has an unknown match count. Narrow the query, shorten the window, or group by a more specific field.
 </Accordion>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Share only the streams you want read** — entity sharing, not the role, decides which logs agents can see.
-- **Watch the token TTL** — a token that expires silently breaks the connection; rotate it on schedule and update the connection with the new value.
+- **Share only the streams you want read**: stream access, not the role, decides which logs agents see.
+- **Track the token TTL**: an expired token breaks the connection without warning. Rotate it on schedule and update the connection.
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Coralogix Connection" icon="/images/icons/coralogix.svg" href="/guide/connections/coralogix">
-    Log search, metrics, traces, and incident triage
+  <Card title="Elasticsearch" icon="/images/icons/elasticsearch.svg" href="/guide/connections/elasticsearch">
+    Connect Elasticsearch indices and clusters.
   </Card>
-  <Card title="Elasticsearch Connection" icon="/images/icons/elasticsearch.svg" href="/guide/connections/elasticsearch">
-    Log analysis, index management, and search performance optimization
+  <Card title="Resolve overview" icon="bolt" href="/guide/incident/overview">
+    Use Graylog logs when CloudThinker investigates an incident.
   </Card>
 </CardGroup>

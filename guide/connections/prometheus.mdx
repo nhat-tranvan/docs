@@ -1,185 +1,153 @@
 ---
 title: Prometheus
-description: "Connect Prometheus, Thanos, VictoriaMetrics, or Grafana Cloud for read-only PromQL queries, metric discovery, target health, and alert inspection"
+description: "Connect a Prometheus-compatible endpoint so agents can run PromQL, find down scrape targets, and read firing alerts"
 icon: "/images/icons/prometheus.svg"
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your Prometheus-compatible monitoring backend to enable CloudThinker agents to run PromQL queries, discover metrics and labels, inspect scrape-target health, and correlate active alerts — all read-only.
-
-<Info>
-The connector works with any backend that speaks the standard Prometheus HTTP API: self-hosted **Prometheus**, **Thanos**, **VictoriaMetrics**, and **Grafana Cloud**. Authentication supports **None**, **Bearer Token**, and **Basic Auth**.
-</Info>
-
----
-
-## Supported platforms
-
-| Platform | Support | Typical auth |
-|----------|---------|--------------|
-| **Prometheus** | Self-hosted, all recent releases | None or Bearer |
-| **Thanos** | Querier behind an auth proxy | None, Bearer, or Basic |
-| **VictoriaMetrics** | Single-node and cluster | None or Basic |
-| **Grafana Cloud** | Prometheus / Mimir endpoint | Basic |
-
-<Note>
-Against managed, Mimir-backed endpoints (Grafana Cloud), the `/api/v1/targets`, `/rules`, and `/alerts` paths are not exposed and return 404. This is expected — the query API (instant queries, range queries, labels, and metadata) works normally.
-</Note>
-
----
+Connect Prometheus so CloudThinker can run PromQL queries, list metrics and labels, check scrape-target health, and read active alerts and alert rules. The connection is read-only and authenticates with no auth, a bearer token, or HTTP Basic auth.
 
 ## Prerequisites
 
-- A **Prometheus-compatible endpoint** reachable from CloudThinker over HTTPS — self-hosted Prometheus, Thanos, VictoriaMetrics, or Grafana Cloud.
-- Credentials if the endpoint requires authentication: a bearer token (Bearer Token mode) or a username and password (Basic Auth mode).
-- For **Grafana Cloud**, the numeric instance ID and an access-policy token with the **metrics:read** scope.
+- A Prometheus HTTP API reachable from CloudThinker over the internet. CloudThinker connects from its cloud, not from inside your network.
+- The API served at the root of its address, so `<your URL>/api/v1/query` answers. Self-hosted Prometheus and a Thanos Querier work this way.
+- A bearer token or a username and password, if a proxy or gateway in front of Prometheus requires one.
+- Permission to add connections in your CloudThinker workspace.
 
----
-
-## Choosing an auth mode
-
-Pick the mode that matches how your endpoint is exposed:
-
-| Mode | When to use | Fields |
-|------|-------------|--------|
-| **None** | Open or network-restricted endpoint (self-hosted Prometheus inside a private network) | URL only |
-| **Bearer Token** | Endpoint behind a proxy or gateway that expects `Authorization: Bearer <token>` | URL + token |
-| **Basic Auth** | Grafana Cloud, Thanos behind an auth proxy, or VictoriaMetrics with username/password | URL + username + password |
-
-<Tip>
-For **Grafana Cloud**, the username is your numeric instance ID and the password is an access-policy token with metrics read scope.
-</Tip>
-
----
+<Warning>
+The URL can't include a path. An endpoint that only answers under a prefix, such as `https://metrics.example.com/prometheus/api/v1`, fails the connection test. Expose the API at the root of a hostname instead.
+</Warning>
 
 ## Setup
 
 <Steps>
-  <Step title="Find your Prometheus URL">
-    Identify the base URL of your Prometheus HTTP API, e.g. `https://prometheus.your-domain.com` or your Grafana Cloud Prometheus query endpoint. CloudThinker appends the standard `/api/v1/...` paths.
-  </Step>
-  <Step title="Prepare credentials (if required)">
-    - **None** — nothing to prepare; the endpoint is reachable without auth.
-    - **Bearer Token** — obtain the bearer token your proxy or gateway expects.
-    - **Basic Auth** — obtain the username and password (for Grafana Cloud, the numeric instance ID and an access-policy token).
-  </Step>
-  <Step title="Add connection in CloudThinker">
-    Navigate to **Connections → Prometheus** and enter:
-    - **PROMETHEUS_URL**: your endpoint, e.g. `https://prometheus.your-domain.com`
-    - **PROMETHEUS_AUTH_TYPE**: select **None**, **Bearer Token**, or **Basic Auth**
+  <Step title="Find the base URL">
+    Use the address you'd put in front of `/api/v1`, with no path and no trailing slash, for example `https://prometheus.example.com` or `http://prometheus.example.com:9090`.
 
-    The credential fields appear based on your selection:
-    - **Bearer Token** → **PROMETHEUS_TOKEN**
-    - **Basic Auth** → **PROMETHEUS_USERNAME** and **PROMETHEUS_PASSWORD**
+    Check it from a terminal before you connect:
 
-    Click **Connect**. CloudThinker verifies the endpoint and shows a **Connected** status.
+    ```bash
+    curl -s "https://prometheus.example.com/api/v1/query?query=count(up)"
+    ```
+
+    **Success state:** the response starts with `{"status":"success","data":{"resultType":"vector"`.
+  </Step>
+  <Step title="Pick an auth mode">
+    | Mode | Use it when | Fields that appear |
+    |------|-------------|--------------------|
+    | **None** | The endpoint is open or limited by network rules | URL only |
+    | **Bearer Token** | A proxy expects `Authorization: Bearer <token>` | **PROMETHEUS_TOKEN** |
+    | **Basic Auth** | A proxy expects a username and password | **PROMETHEUS_USERNAME**, **PROMETHEUS_PASSWORD** |
+  </Step>
+  <Step title="Add the connection">
+    In CloudThinker, go to **Connections**, find **Prometheus**, and click **Connect**. Fill in:
+    - **Alias** (optional): a short name such as `prod-metrics`. Lowercase letters, numbers, and hyphens.
+    - **Description** (optional): what this Prometheus covers. Agents read it to pick the right instance when you connect more than one.
+    - **PROMETHEUS_URL**: the base URL from step 1.
+    - **PROMETHEUS_AUTH_TYPE**: **None**, **Bearer Token**, or **Basic Auth**, then the credential fields that appear.
+
+    Click **Connect**. CloudThinker runs `count(up)` against the endpoint, shows **Testing**, then a **Connected** status.
   </Step>
 </Steps>
-
----
 
 ## Connection details
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| **PROMETHEUS_URL** | Base URL of the Prometheus HTTP API | `https://prometheus.your-domain.com` |
-| **PROMETHEUS_AUTH_TYPE** | Authentication mode: `none`, `bearer`, or `basic` | `basic` |
-| **PROMETHEUS_TOKEN** | Bearer token (Bearer Token mode only) | `eyJhbGci...` |
-| **PROMETHEUS_USERNAME** | Username, or numeric instance ID for Grafana Cloud (Basic Auth only) | `1234567` |
-| **PROMETHEUS_PASSWORD** | Password or access-policy token (Basic Auth only) | `glc_xxxxx...` |
-
----
+| **PROMETHEUS_URL** | Base URL of the Prometheus HTTP API, no path | `https://prometheus.example.com` |
+| **PROMETHEUS_AUTH_TYPE** | **None** (default), **Bearer Token**, or **Basic Auth** | `Bearer Token` |
+| **PROMETHEUS_TOKEN** | Token sent as `Authorization: Bearer`. Bearer Token mode only | `eyJhbGci...` |
+| **PROMETHEUS_USERNAME** | HTTP Basic username. Basic Auth mode only | `cloudthinker` |
+| **PROMETHEUS_PASSWORD** | HTTP Basic password. Basic Auth mode only | |
+| **LOG_LEVEL** | Connector log detail. Leave at **Info** unless support asks | `Info` |
 
 ## Required permissions
 
-The Prometheus connector is **read-only** — agents query and inspect but never write to your monitoring backend.
+Prometheus has no built-in user permissions, so access is whatever your proxy or gateway allows. CloudThinker needs read (`GET`) access under `/api/v1/` for:
 
-- For **Grafana Cloud**, create an access-policy token with the **metrics:read** scope only.
-- For protected endpoints, ensure the credentials can reach the query, labels, targets, rules, and alerts API paths.
+| Area | Used for |
+|------|----------|
+| Query API | Instant and range PromQL queries, series lookups |
+| Metadata | Metric names, label names, type and help text |
+| Targets | Scrape-target health |
+| Alerts and rules | Active alerts and alert rule definitions |
+| Status config | Reading the loaded configuration, only when you ask |
 
 <Tip>
-On Grafana Cloud, scope the access-policy token to `metrics:read` only — no other scope is needed for CloudThinker.
+If your proxy supports it, give CloudThinker its own token limited to `GET` requests under `/api/v1/`. Nothing in the connection writes to Prometheus.
 </Tip>
-
----
 
 ## Agent capabilities
 
-The Prometheus connector is read-only — agents query and inspect, but never modify your monitoring backend.
+| Capability | What CloudThinker does |
+|------------|------------------------|
+| **Discovery** | Counts scrape targets (up and down), firing alerts, alert rules and their health, metrics, and labels such as `job`, `instance`, and `namespace` |
+| **Instant queries** | Evaluates a PromQL expression at one point in time |
+| **Range queries** | Evaluates PromQL over a window with a step. Starts at the last 15 minutes and widens if empty |
+| **Metric and label discovery** | Lists metric names, type and help text, and label names, so queries use real names |
+| **Target health** | Lists scrape targets and which ones are down |
+| **Alerts** | Lists firing and pending alerts and the configured alert rules |
+| **Configuration** | Reads the loaded config on request and redacts credential values in its answer |
 
-| Capability | What the agent can do |
-|------------|----------------------|
-| **Instant queries** | Run a PromQL expression for a single point in time |
-| **Range queries** | Run a PromQL expression over a time window with a step interval |
-| **Metric discovery** | List available metric names, optionally filtered by prefix |
-| **Label enumeration** | List label names and inspect the dimensions a metric is sliced by |
-| **Target health** | Inspect scrape targets and spot ones that are down or unhealthy |
-| **Alert inspection** | List active alerts and review configured alert rules |
-| **Health probe** | Run the universal `up` query to confirm the backend and its targets are reachable |
+When a connection first reaches **Connected**, CloudThinker runs a read-only [discovery](/guide/connections/overview#what-happens-after-you-connect) of the endpoint and saves what it learns for later chats.
 
 ### Verify the connection
 
 ```text
-Run the Prometheus health probe and confirm all scrape targets are reachable
+Run Prometheus discovery and tell me how many scrape targets are up and down, and how many alerts are firing
 ```
+
+A healthy answer gives target counts by state, a firing-alert count, and a few sample metric names from your endpoint.
 
 ### Example prompts
 
 ```text
-Query node_cpu utilization across the cluster for the last hour and anything sustained above 85%
-List scrape targets that are currently down and which jobs they belong to
-Show all active alerts and which to investigate first
+Which scrape targets are down right now, and which jobs do they belong to?
+Show 5xx rate by service from http_requests_total over the last hour and flag anything above 1%
+List firing alerts and the alert rule behind each one
 ```
 
-<Note>
-Prometheus exposes no tool for label **values** — label enumeration returns label **names** only. Name the metric and the labels you care about so the agent can build an accurate PromQL selector.
-</Note>
+Name the metric and the labels you care about. CloudThinker can list label names, so a prompt like "split by `namespace`" gets an accurate selector faster.
 
----
+To route Prometheus alerts into Resolve so incidents open automatically, set up a [webhook integration](/guide/incident/webhook-integrations/overview).
 
 ## Troubleshooting
 
-<Accordion title="Connection or query fails with 401 Unauthorized">
-- Confirm **PROMETHEUS_AUTH_TYPE** matches what the endpoint expects.
-- For **Bearer**, verify the token is current and has not been revoked.
-- For **Basic**, verify the username/password — on Grafana Cloud, the username is the numeric instance ID and the password is the access-policy token.
+<Accordion title="Prometheus rejected the credentials">
+The endpoint returned 401 or 403. Check that **PROMETHEUS_AUTH_TYPE** matches what your proxy expects, then re-enter the token or username and password. A token revoked at the proxy fails the same way.
 </Accordion>
 
-<Accordion title="Targets, rules, or alerts return 404">
-- Expected on managed, Mimir-backed endpoints (Grafana Cloud) — these paths are not exposed.
-- The query API (instant, range, labels, metadata) still works; use queries instead of target/rule inspection.
+<Accordion title="Prometheus has no query API at that URL">
+The endpoint returned 404. The URL most likely has a path, such as `/api/v1` or `/prometheus`. Enter only the scheme, host, and port. If your API only answers under a prefix, it isn't supported.
 </Accordion>
 
-<Accordion title="Connection fails to reach the endpoint">
-- Verify **PROMETHEUS_URL** is reachable from CloudThinker over HTTPS.
-- For self-hosted or network-restricted endpoints, confirm there's a network path from CloudThinker.
-- Drop any trailing `/api/v1` from the URL — enter only the base URL.
+<Accordion title="That URL answered, but not as a Prometheus query API">
+Something in front of Prometheus answered instead, usually a login page or an SSO proxy. Point the URL at the API itself, or use a bearer token or Basic auth that the proxy accepts without a browser login.
 </Accordion>
 
-<Accordion title="A query returns empty results">
-- Confirm the metric exists with a discovery query before slicing by labels.
-- Widen the time window — the series may not have samples in the requested range.
+<Accordion title="Prometheus is unreachable or didn't answer in time">
+CloudThinker couldn't open a connection. Check the hostname, port, and TLS certificate, and that the endpoint accepts traffic from the internet. A private address such as `10.0.0.5` can't be reached from CloudThinker.
 </Accordion>
 
----
+<Accordion title="A query returns no data">
+Ask CloudThinker to list metrics matching a name first, so it confirms the metric exists. Then widen the time window, since range queries start at 15 minutes.
+</Accordion>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Read-only by design** — the connector never writes to your monitoring backend; no write permissions are needed
-- **Least-privilege credentials** — on Grafana Cloud, scope the access-policy token to metrics read only
-
----
+- **No writes**: the connection only reads the Prometheus HTTP API, so a token limited to `GET` requests is enough.
+- **Config holds secrets**: `/api/v1/status/config` can include scrape credentials and internal hostnames. Block that path at your proxy if you don't want it readable.
 
 ## Related
 
 <CardGroup cols={2}>
   <Card title="Grafana Connection" icon="/images/icons/grafana.svg" href="/guide/connections/grafana">
-    Dashboards and unified observability
+    Dashboards and alert rules on top of your metrics
   </Card>
-  <Card title="Datadog Connection" icon="/images/icons/datadog.svg" href="/guide/connections/datadog">
-    Log search, metrics, and infrastructure monitoring
+  <Card title="Kubernetes Connection" icon="/images/icons/kubernetes.svg" href="/guide/connections/kubernetes">
+    Pair metrics with the workloads that produce them
   </Card>
 </CardGroup>

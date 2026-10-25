@@ -1,46 +1,51 @@
 ---
 title: Keycloak
-description: "Connect Keycloak to CloudThinker for identity and access management operations"
+description: "Connect a Keycloak realm so agents can audit users, clients, roles, groups, and auth flows, and make approved identity changes"
 icon: "/images/icons/keycloak.svg"
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your Keycloak realm to enable [CloudThinker](/guide/agents/overview) to inspect realms, audit clients, review users and roles, and analyze identity and access configuration.
-
-Keycloak authenticates with a **confidential service-account client** that holds `realm-management` roles on the target realm.
-
-## Supported platforms
-
-| Platform | Support |
-|----------|---------|
-| **Self-hosted Keycloak** | All versions |
-| **Phase Two** | Managed Keycloak service |
+Connect a Keycloak realm to let CloudThinker agents review users, clients, roles, groups, identity providers, and authentication flows, and make identity changes after you approve each one. The connection signs in as a **service account**: a confidential client in your realm that uses the client credentials grant, with `realm-management` roles that set what agents can see and change.
 
 ## Prerequisites
 
-- A **Keycloak realm** you want CloudThinker to inspect.
-- **Admin access** to create a confidential client and assign service-account roles — `kcadm.sh` (self-hosted) or the realm console (Phase Two).
-- The realm's **base URL** and **realm name**.
+- A Keycloak server CloudThinker can reach over the network. Use an `https` address.
+- An administrator who can create a client in the target realm and assign it service account roles.
+- The realm name.
 
 <Info>
-The connection scopes to the roles you grant the `cloudthinker-svc` service account. Assign the least-privileged `realm-management` roles that cover what CloudThinker needs.
+A workspace holds one Keycloak connection, and it targets one realm. Agents get a token from `<KEYCLOAK_URL>/realms/<KEYCLOAK_REALM>/protocol/openid-connect/token`, so the base URL must be the part before `/realms`.
 </Info>
 
 ## Setup
 
-Both paths create the same artifact: a `cloudthinker-svc` confidential client with `realm-management` roles on its service account. Self-hosted uses `kcadm.sh`; Phase Two uses the realm console.
+Both tabs create the same thing: a confidential client named `cloudthinker-svc` with service accounts enabled and `realm-management` roles on its service account.
 
 <Tabs>
-  <Tab title="Self-hosted Keycloak">
-
-    Provision the client with `kcadm.sh`, Keycloak's admin CLI. Run from any shell where it's available.
+  <Tab title="Admin console">
+    Works for self-hosted Keycloak and managed Keycloak such as Phase Two.
 
     <Steps>
-      <Step title="Authenticate">
+      <Step title="Create the client">
+        In the admin console, switch to your realm, open **Clients**, and select **Create client**. Set **Client ID** to `cloudthinker-svc` and select **Next**. Turn on **Client authentication**, check **Service accounts roles**, and leave the other flows off. Select **Next**, then **Save**.
+      </Step>
+      <Step title="Assign realm-management roles">
+        Open the client, go to **Service accounts roles**, and select **Assign role**. Filter by clients, search for `realm-management`, and pick the roles from [Required permissions](#required-permissions). The list can span more than one page.
+      </Step>
+      <Step title="Copy the client secret">
+        On the same client, open **Credentials** and copy **Client Secret**.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="kcadm.sh">
+    Use Keycloak's admin CLI from any machine that can reach your Keycloak server.
+
+    <Steps>
+      <Step title="Sign in">
         ```bash
         kcadm.sh config credentials \
-          --server http://localhost:8080 --realm master \
+          --server https://keycloak.example.com --realm master \
           --user admin --password '<admin-password>'
         ```
       </Step>
@@ -51,21 +56,19 @@ Both paths create the same artifact: a `cloudthinker-svc` confidential client wi
           -s publicClient=false \
           -s serviceAccountsEnabled=true \
           -s standardFlowEnabled=false \
-          -s directAccessGrantsEnabled=false \
-          -s 'redirectUris=[]'
+          -s directAccessGrantsEnabled=false
         ```
       </Step>
-      <Step title="Assign realm-management roles">
+      <Step title="Assign read-only realm-management roles">
         ```bash
         kcadm.sh add-roles -r <your-realm> \
           --uusername service-account-cloudthinker-svc \
           --cclientid realm-management \
-          --rolename realm-admin
+          --rolename view-realm --rolename view-users --rolename query-users \
+          --rolename view-clients --rolename query-clients --rolename query-groups
         ```
-
-        Use narrower roles (e.g. `view-realm`, `view-users`) if you want least-privilege.
       </Step>
-      <Step title="Get the client secret">
+      <Step title="Copy the client secret">
         ```bash
         CID=$(kcadm.sh get clients -r <your-realm> \
           -q clientId=cloudthinker-svc --fields id --format csv --noquotes | tail -n1)
@@ -74,151 +77,123 @@ Both paths create the same artifact: a `cloudthinker-svc` confidential client wi
           --fields value --format csv --noquotes | tail -n1
         ```
       </Step>
-      <Step title="Add the connection in CloudThinker">
-        Navigate to **Connections → Keycloak** and enter:
-
-        - **KEYCLOAK_URL**: `http://<host-ip>:8080`
-        - **KEYCLOAK_REALM**: your realm name
-        - **KEYCLOAK_CLIENT_ID**: `cloudthinker-svc`
-        - **KEYCLOAK_CLIENT_SECRET**: secret from the previous step
-
-        Click **Connect**. CloudThinker shows a **Connected** status once it succeeds.
-      </Step>
     </Steps>
-
-  </Tab>
-
-  <Tab title="Phase Two">
-
-    For managed Keycloak via [Phase Two](https://dash.phasetwo.io/realms).
-
-    <Steps>
-      <Step title="Open the realm console">
-        In the [Phase Two dashboard](https://dash.phasetwo.io/realms), open the console for the realm you want to connect.
-      </Step>
-      <Step title="Create a client">
-        Go to the **Clients** tab → **Create client** and configure:
-
-        - **Client ID**: `cloudthinker-svc`
-        - Click **Next**
-        - Enable **Client authentication** and **Authorization**
-        - Click **Next**, then **Save**
-      </Step>
-      <Step title="Assign realm-management roles">
-        Open the new client → **Service account roles** → **Assign roles**.
-
-        Search for `realm-management` and assign the roles you want CloudThinker to use. We recommend assigning all `realm-management` roles — check both pages to avoid missing any.
-      </Step>
-      <Step title="Get the client secret">
-        In the same client, open **Credentials** and copy the value under **Client Secret**.
-      </Step>
-      <Step title="Get the realm URL">
-        Back in [https://dash.phasetwo.io/realms](https://dash.phasetwo.io/realms), open the realm card and click **Details**. Copy the value under **Host** (e.g. `https://<region>.auth.ac/auth`).
-      </Step>
-      <Step title="Add the connection in CloudThinker">
-        Navigate to **Connections → Keycloak** and enter:
-
-        - **KEYCLOAK_URL**: Host URL from the realm details (e.g. `https://<region>.auth.ac/auth`)
-        - **KEYCLOAK_REALM**: your realm name
-        - **KEYCLOAK_CLIENT_ID**: `cloudthinker-svc`
-        - **KEYCLOAK_CLIENT_SECRET**: secret from the credentials step
-
-        Click **Connect**. CloudThinker shows a **Connected** status once it succeeds.
-      </Step>
-    </Steps>
-
   </Tab>
 </Tabs>
+
+Then add the connection:
+
+<Steps>
+  <Step title="Add the connection in CloudThinker">
+    Open **Connections** in the sidebar, select **Keycloak**, and fill in the fields from [Connection details](#connection-details). Click **Connect**.
+
+    **Success state:** the connection shows **Testing**, then **Connected**. CloudThinker signs in as the service account and counts the realm's users, which proves both the secret and the `view-users` role.
+  </Step>
+</Steps>
 
 ## Connection details
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| **KEYCLOAK_URL** | Keycloak base URL | `http://<host-ip>:8080` |
-| **KEYCLOAK_REALM** | Target realm name | `my-realm` |
-| **KEYCLOAK_CLIENT_ID** | Service-account client ID | `cloudthinker-svc` |
-| **KEYCLOAK_CLIENT_SECRET** | Client secret from the credentials step | — |
+| **KEYCLOAK_URL** | Keycloak base URL, without `/realms/...`. Include `/auth` if your server serves under it, as older Keycloak releases and Phase Two do | `https://keycloak.example.com` |
+| **KEYCLOAK_REALM** | Realm the client lives in and agents work on | `production` |
+| **KEYCLOAK_CLIENT_ID** | Client ID of the service account client | `cloudthinker-svc` |
+| **KEYCLOAK_CLIENT_SECRET** | Client secret from the **Credentials** tab | |
+
+For Phase Two, copy the base URL from the realm card in the Phase Two dashboard: select **Details** and copy **Host**.
 
 ## Required permissions
 
-The `cloudthinker-svc` service account needs `realm-management` roles on the target realm. Common roles:
+Assign `realm-management` client roles to the service account. Pick the narrowest set that covers your use.
 
-| Role | Purpose |
-|------|---------|
-| `view-realm` | Read realm settings |
-| `view-users` | List and inspect users |
-| `view-clients` | List and inspect clients |
-| `query-users`, `query-clients`, `query-groups` | Run lookup queries |
-| `manage-users`, `manage-clients`, `manage-realm` | Make changes (assign only if needed) |
+| You want agents to | Roles |
+|--------------------|-------|
+| Pass the connection test and audit users | `view-users`, `query-users` |
+| Review realm settings, identity providers, and auth flows | `view-realm` |
+| Review clients and client roles | `view-clients`, `query-clients` |
+| Review groups and members | `query-groups`, plus `view-users` |
+| Create, update, or delete users, groups, or memberships | `manage-users` |
+| Create or delete clients, client roles, or rotate secrets | `manage-clients` |
+| Change realm settings or auth flows | `manage-realm` |
+
+`realm-admin` includes every role above. It's the quickest choice and the broadest, so use it only if agents should manage the whole realm.
 
 <Tip>
-For read-only analysis, assign only the `view-*` and `query-*` roles. Add `manage-*` roles only when you need CloudThinker to make changes.
+For audits, assign only `view-*` and `query-*` roles. A missing role shows up as `403 Forbidden` on the matching question, not as a failed connection, unless it's `view-users`.
 </Tip>
 
 ## Agent capabilities
 
-Once connected, CloudThinker can:
+| Capability | What agents can do | Approval |
+|------------|--------------------|----------|
+| **Users** | List and count users, look one up by username, show direct and effective roles and group membership | No |
+| **Clients** | List clients and their roles, and inspect settings such as which flows are on | No |
+| **Roles and groups** | List realm roles, groups, and group members | No |
+| **Identity providers** | List identity providers and their mappers | No |
+| **Auth flows** | List authentication flows and their executions | No |
+| **User changes** | Create, update, or delete users, reset passwords, send verification email, change roles and group membership | Yes |
+| **Client changes** | Create or delete clients and client roles, and rotate client secrets | Yes |
+| **Realm, group, and flow changes** | Create realms, create, rename, or delete groups and subgroups, create or delete flows, change an execution's requirement | Yes |
 
-| Capability | Description |
-|------------|-------------|
-| **Realm inspection** | Review realm settings and configuration |
-| **Client audit** | List clients, review flows and authorization settings |
-| **User management** | View users, sessions, and credentials state |
-| **Role and group review** | Inspect roles, composites, and group hierarchies |
-| **Access analysis** | Identify over-privileged service accounts and stale clients |
+Reads run without asking. Every change goes through [Approvals](/guide/approvals/overview) first. List reads return up to 100 entries by default, so for a large realm, ask about a group, a client, or a username rather than everyone.
+
+<Warning>
+Rotating a client secret takes effect the moment you approve it, and the old secret stops working. Tell the owner of that client before you approve.
+</Warning>
 
 ### Verify the connection
 
 ```text
-List all clients in the realm to verify the Keycloak connection
+List the clients in my Keycloak realm and say which ones have direct access grants enabled
 ```
+
+Expect a list of client IDs with each one's direct access grants setting.
 
 ### Example prompts
 
 ```text
-List all clients in the realm and flag any with direct access grants enabled
-Show service accounts with realm-admin and review whether each is needed
-Audit users without 2FA enabled
+What are the effective realm roles of the user alice?
+Which service accounts hold realm-admin, and does each one need it?
+Show the steps of the browser authentication flow and which are required
 ```
 
 ## Troubleshooting
 
-<Accordion title="401 Unauthorized">
-- Verify the client secret was copied correctly
-- Confirm **Client authentication** is enabled on the client
-- Ensure the service account has `realm-management` roles assigned
+<Accordion title="Failed to connect to Keycloak">
+CloudThinker couldn't get a token or count users. Check in this order:
+- **KEYCLOAK_URL** is reachable from CloudThinker and stops before `/realms`. Add `/auth` if your server serves under it.
+- **KEYCLOAK_REALM** is the realm where you created the client. Names are case-sensitive.
+- **Client authentication** and **Service accounts roles** are on for the client, and the secret was copied in full.
+- The service account has `view-users`.
 </Accordion>
 
-<Accordion title="403 Forbidden on realm operations">
-- Service account is missing the required `realm-management` role for that operation
-- Self-hosted: re-run `add-roles` with the missing role
-- Phase Two: re-check both pages of the role assignment list
+<Accordion title="The client has no secret">
+The client is public. Turn on **Client authentication**, or set `publicClient=false` with `kcadm.sh`, then copy the secret from **Credentials**.
 </Accordion>
 
-<Accordion title="Cannot reach Keycloak URL">
-- Self-hosted: confirm the base URL matches your Keycloak hostname
-- Phase Two: copy the URL exactly from the realm **Details → Host** field
+<Accordion title="403 Forbidden on some questions">
+The token works, but the service account lacks the role for that endpoint. Read questions need a `view-*` or `query-*` role and changes need a `manage-*` role. Add the role from [Required permissions](#required-permissions). Roles apply on the next token, so retry the question.
 </Accordion>
 
-<Accordion title="Empty client secret">
-- The client must be confidential — `publicClient=false` (self-hosted) or **Client authentication** enabled (Phase Two)
-- Public clients have no secret
+<Accordion title="An agent shows only 100 users">
+List reads stop at 100 by default. Ask for a specific username or group, or ask the agent to page through more results.
 </Accordion>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Dedicated client** — use `cloudthinker-svc` as a dedicated service-account client, not a shared admin client.
-- **Secret rotation** — rotate the client secret periodically via the **Credentials** tab.
+- **Use a dedicated client**: keep `cloudthinker-svc` for CloudThinker only, so you can revoke it without affecting other apps.
+- **Rotate the secret**: regenerate it under **Credentials** on your normal schedule, then update **KEYCLOAK_CLIENT_SECRET**.
+- **Avoid `realm-admin` for audits**: read-only roles cover every question in the read rows above.
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Agents" icon="shield-halved" href="/guide/agents/overview">
-    See what CloudThinker can do with this connection.
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Decide which Keycloak changes run, wait for a person, or are refused.
   </Card>
-  <Card title="Connections Overview" icon="plug" href="/guide/connections/overview">
-    All available connections
+  <Card title="Connections" icon="plug" href="/guide/connections/overview">
+    See every service you can connect and how connection status works.
   </Card>
 </CardGroup>

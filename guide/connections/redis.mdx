@@ -1,270 +1,165 @@
 ---
 title: Redis
-description: "Connect Redis to CloudThinker for cache performance monitoring across self-hosted, Upstash, or Redis Cloud deployments"
+description: "Connect Redis so agents can inspect memory, key sizes, expiration, clients, and command latency with a read-only ACL user"
 icon: "/images/icons/redis.svg"
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your Redis databases to enable [CloudThinker](/guide/agents/overview) to inspect keyspace usage, analyze command patterns, and monitor database health.
-
-## Supported platforms
-
-| Platform | Support |
-|----------|---------|
-| **Self-hosted Redis** | 6.x, 7.x (vanilla and Redis Stack) |
-| **Upstash Redis** | All plan tiers |
-| **Redis Cloud** | All plan tiers |
+Connect a Redis server, such as self-hosted Redis, Upstash, or Redis Cloud, to let CloudThinker agents inspect memory and eviction, find the largest keys and keys with no TTL, list clients, and read command latency. You give CloudThinker one connection URL (`REDIS_URL`), and agents can run exactly the commands that user's ACL allows.
 
 ## Prerequisites
 
-- A Redis instance reachable from CloudThinker over the network.
-- Admin access to create an ACL user (self-hosted) or RBAC user (Upstash/Redis Cloud).
-- A `REDIS_URL` connection string with credentials.
+- A Redis endpoint CloudThinker can reach over the network. Agents connect from CloudThinker's managed sandbox, so `localhost` and private addresses resolve there, not on your network.
+- Redis 6 or later if you want a dedicated ACL user. Older versions only support a single shared password.
+- Admin access to run `ACL SETUSER`, or to create users in your managed provider's console.
 
 ## Setup
 
-Select your Redis platform for specific connection instructions.
-
-<Tabs>
-  <Tab title="Self-hosted Redis">
-    Two common deployment shapes are supported:
-
-    - **Vanilla Redis** — minimal image, no modules. Use when you only need core Redis commands.
-    - **Redis Stack** — bundles RediSearch, RedisJSON, RedisTimeSeries, and Bloom. Use when CloudThinker needs `FT.*`, `JSON.*`, `TS.*`, or `BF.*` commands. Vanilla soft-fails those.
-
-    <Steps>
-      <Step title="Start Redis">
-        **Vanilla Redis (no modules):**
-        ```bash
-        docker run -d --name redis-min \
-          -p 6379:6379 \
-          redis:7-alpine \
-          redis-server --requirepass <admin-password> --appendonly yes
-        ```
-
-        The admin password is set via the `--requirepass` server flag. `--appendonly yes` enables AOF for durability across restarts.
-
-        **Redis Stack (with modules and RedisInsight UI on port 8001):**
-        ```bash
-        docker run -d --name redis-stack \
-          -p 6379:6379 -p 8001:8001 \
-          -e REDIS_ARGS="--requirepass <admin-password>" \
-          redis/redis-stack:latest
-        ```
-
-        Verify the instance:
-        ```bash
-        redis-cli -a <admin-password> ping
-        # PONG
-        ```
-      </Step>
-      <Step title="Create a read-only ACL user">
-        Create a dedicated user for CloudThinker. Redis ACL usernames allow `[A-Za-z0-9_-]`; use `cloudthinker-readonly`.
+<Steps>
+  <Step title="Create a read-only user">
+    <Tabs>
+      <Tab title="Self-hosted Redis">
+        Create a user that can read keys and run the diagnostic commands agents use, and nothing else:
 
         ```bash
         redis-cli -a <admin-password> ACL SETUSER cloudthinker-readonly on \
-          '><readonly-password>' \
-          '~*' \
-          '+@read' '-@write' '-@dangerous' '-@admin'
+          '><readonly-password>' '~*' \
+          -@all +@read +info +ping +select '+client|list' -keys
         ```
 
-        - `on` — enable the user
-        - `><readonly-password>` — set the password (the `>` prefix is ACL syntax)
-        - `~*` — match all keys; narrow to `~app:*` for stricter scoping
-        - `+@read -@write -@dangerous -@admin` — reads only; blocks writes, `FLUSHALL`/`CONFIG`/`DEBUG`/`SHUTDOWN`, and replication
-        - Optional: append `-@slow` to block `KEYS`, `SMEMBERS`, `HGETALL` on large collections
-      </Step>
-      <Step title="Persist ACLs across restart">
-        Mount a `users.acl` file so ACLs survive container restarts:
+        | Part | Meaning |
+        |------|---------|
+        | `'><readonly-password>'` | Sets the password. The `>` is ACL syntax |
+        | `'~*'` | Allows all keys. Narrow it to a prefix, such as `'~app:*'` |
+        | `-@all +@read` | Starts from nothing, then allows read commands such as `GET`, `SCAN`, `TYPE`, and `TTL` |
+        | `+info +ping +select '+client\|list'` | Allows server stats, health checks, picking a database index, and listing clients |
+        | `-keys` | Blocks `KEYS`, which can stall a large instance. Agents use `SCAN` instead |
 
-        ```text
-User default on ><admin-password> ~* &* +
-User cloudthinker-readonly on ><readonly-password> ~* +---
-```
+        Save it so it survives a restart: run `ACL SAVE` if you use an `aclfile`, or `CONFIG REWRITE` if your users live in `redis.conf`.
+      </Tab>
+      <Tab title="Upstash or Redis Cloud">
+        Create a user or role in your provider's access-control settings and give it the same rule as the self-hosted tab: `~* -@all +@read +info +ping +select +client|list -keys`.
 
-Start Redis with the file mounted:
-```bash
--v $PWD/users.acl:/data/users.acl
-```
-And add `--aclfile /data/users.acl` to the server command.
-</Step>
-<Step title="Verify the read-only user">
-```bash
-Redis-cli -u redis://cloudthinker-readonly:<readonly-password>SET foo bar
-# (error) NOPERM ... has no permissions to run the 'set' command
+        Then copy the TCP or Redis CLI connection URL for that user. Don't use a REST or SDK URL: CloudThinker speaks the Redis protocol.
+      </Tab>
+    </Tabs>
+  </Step>
+  <Step title="Check the user is read-only">
+    ```bash
+    redis-cli -u 'redis://cloudthinker-readonly:<readonly-password>@redis.example.com:6379' SET probe 1
+    redis-cli -u 'redis://cloudthinker-readonly:<readonly-password>@redis.example.com:6379' INFO memory
+    ```
 
-Redis-cli -u redis://cloudthinker-readonly:<readonly-password>GET foo
-# works
-```
-</Step>
-<Step title="Configure network access">
-Ensure CloudThinker can reach your database:
-- Add CloudThinker IPs to your firewall or security group
-- Ensure Redis is bound to an accessible interface (avoid `bind 127.0.0.1` only)
-</Step>
-<Step title="Add the connection in CloudThinker">
-Navigate to **Connections → Redis** and enter your connection string as **REDIS_URL**:
+    **Success state:** `SET` fails with `NOPERM`, and `INFO memory` prints memory stats.
+  </Step>
+  <Step title="Open network access">
+    Allow inbound connections on the Redis port from CloudThinker in your firewall or security group, and make sure `bind` in `redis.conf` isn't only `127.0.0.1`.
+  </Step>
+  <Step title="Add the connection in CloudThinker">
+    Open **Connections** in the sidebar, select **Redis**, and click **Connect**. Paste the URL into **REDIS_URL** and click **Connect**:
 
-```
-Redis://cloudthinker-readonly:<readonly-password>
-```
+    ```text
+    rediss://cloudthinker-readonly:<readonly-password>@redis.example.com:6379/0
+    ```
 
-Use `rediss://` (note the second `s`) if your deployment terminates TLS. Click **Connect**. CloudThinker shows a **Connected** status once it succeeds.
-</Step>
+    **Success state:** the connection shows **Testing**, then **Connected**. CloudThinker then runs a one-time, read-only [discovery](/guide/connections/overview) of the server.
+  </Step>
 </Steps>
-</Tab>
-<Tab title="Upstash Redis">
-<Steps>
-<Step title="Create a database">
-Open the [Upstash Redis console](https://console.upstash.com/redis) and click **Create Database**. In the modal:
-- Enter a **Database Name**
-- Pick a **Primary Region** and **Cloud Provider**
-- Enable **Eviction** (recommended)
-- Click **Next**, choose your plan, and confirm
-</Step>
-<Step title="Copy the TCP connection URL">
-On the database page, scroll to the **Connection** section. The default tab is **REST** — switch to the **TCP** tab and copy the URL:
 
-```
-Rediss://<username>:<password>
-```
+## Connection details
 
-`<hash>` is unique to your database; `<port>` is typically `6379`. Upstash enforces TLS, so the scheme is `rediss://`.
-</Step>
-<Step title="Create a read-only user (optional)">
-Upstash supports RBAC under the **RBAC** tab on the database page. Activate RBAC, then create an account named `cloudthinker-readonly` with read-only permissions. The ACL model is the same as the self-hosted setup — grant `+and deny `-`-`-
+| Field | Required | Description | Example |
+|-------|----------|-------------|---------|
+| **REDIS_URL** | Yes | Full URL: scheme, user, password, host, port, and optional database index | `rediss://cloudthinker-readonly:<password>@redis.example.com:6379/0` |
 
-See the [Upstash RBAC documentation](https://upstash.com/docs/redis/overall/enterprisefor the exact UI flow.
-</Step>
-<Step title="Add the connection in CloudThinker">
-Navigate to **Connections → Redis** and paste the URL as **REDIS_URL**. Click **Connect**. CloudThinker shows a **Connected** status once it succeeds.
-</Step>
-</Steps>
-</Tab>
-<Tab title="Redis Cloud">
-<Steps>
-<Step title="Create a database">
-Open the [Redis Cloud databases page](https://cloud.redis.io/and click **New database**. Pick your plan, **Database Name**, **Database Version**, **Cloud Vendor**, and **Region**, then click **Create Database**.
+| URL part | Values |
+|----------|--------|
+| Scheme | `rediss://` for TLS (required by Upstash), `redis://` for plain TCP |
+| User | Your ACL user. On Upstash and on Redis with only a password, use `default` |
+| Port | `6379` by default. Redis Cloud assigns a port per database, so copy it from the console |
+| Database index | `/0` to `/15` at the end. Leave it off for `0` |
 
-Return to the databases page — your new database appears in the list.
-</Step>
-<Step title="Copy the connection URL">
-On the database tile, find the **Connection to database** card and click **Connect**. In the side panel:
-- Close the default **Redis SDK clients** dropdown
-- Select **Redis CLI**
-- Copy the URL
+URL-encode special characters in the password (`@` becomes `%40`).
 
-The URL follows this format:
-```
-Redis://<username>:<password>
-```
+## Required permissions
 
-Redis Cloud ports are typically in the `13xxx` range rather than `6379`.
-</Step>
-<Step title="Create a read-only role and user">
-Open the [Data Access Control roles page](https://cloud.redis.io/
-- Click **New role** and name it `cloudthinker-readonly`
-- Set **ACL Rules** to **Read-Only**
-- Pick the databases this role can access
-- Click **Save role**
-
-Then create or assign a user bound to this role and use that user's credentials in the connection URL.
-</Step>
-<Step title="Add the connection in CloudThinker">
-Navigate to **Connections → Redis** and paste the URL as **REDIS_URL**. Click **Connect**. CloudThinker shows a **Connected** status once it succeeds.
-</Step>
-</Steps>
-</Tab>
-</Tabs>
-
-Connection details
-
-| Field | Description | Example |
-|-------|-------------|---------|
-| **REDIS_URL** | Redis connection URI including credentials | `redis://cloudthinker-readonly:pass|
-| **TLS/SSL** | Use `rediss://` scheme to require TLS | `rediss://` for Upstash; optional elsewhere |
-| **Port** | Redis port | `6379` (self-hosted, Upstash); `13xxx` (Redis Cloud) |
-| **Database index** | Logical DB index | `0` |
-
-Required permissions
-
-Recommended ACL categories for the CloudThinker user:
-
-| Category | Setting | Why |
-|----------|---------|-----|
-| `+| Allow | Read keys, run `INFO`, `CLIENT LIST`, etc. |
-| `-| Deny | Block `SET`, `DEL`, and other mutating commands |
-| `-| Deny | Block `FLUSHALL`, `CONFIG`, `DEBUG`, `SHUTDOWN`, replication |
-| `-| Deny | Block administrative commands |
-| `-*(optional)* | Deny | Block `KEYS`, `SMEMBERS`, `HGETALL` on large collections |
+| You want agents to | Allow |
+|--------------------|-------|
+| Read keys, types, TTLs, sizes, and key counts | `+@read` and a key pattern such as `~*` |
+| Read memory, eviction, hit rate, replication, and command stats | `+info` |
+| See connected clients | `+client\|list` |
+| Use a database index other than `0` | `+select` |
+| Change keys | Write categories such as `+@write`. Not recommended |
 
 <Tip>
-Key scoping (`~*` for all keys, or `~app:*` for a prefix) narrows what the CloudThinker user can access. Start with `~*` and tighten as needed.
+Keep the user read-only. The Redis connection has write tools, such as set, delete, and expire. If the user can write, those calls go through [Approvals](/guide/approvals/overview) first, and a [rule](/guide/approvals/rules) can ask first or refuse them. A read-only ACL stops them at Redis no matter what.
 </Tip>
 
-Agent capabilities
+## Agent capabilities
 
-Once connected, CloudThinker can:
+| Capability | What agents can do |
+|------------|--------------------|
+| **Memory and eviction** | Read used memory, fragmentation ratio, `maxmemory` policy, evictions, and hit rate |
+| **Keyspace** | Count keys per database, sample keys with `SCAN`, and read type, size, and TTL |
+| **Expiration audit** | Compare keys with and without a TTL in each database, and check the `maxmemory` policy against them |
+| **Largest keys** | Rank sampled keys by size: string length, or element count for lists, hashes, sets, and sorted sets |
+| **Clients and latency** | List connected clients and read per-command call counts and latency from `INFO commandstats` |
+| **Replication** | Read role, connected replicas, and replication offset |
+| **Modules** | Read RediSearch indexes and RedisJSON documents, when the server has those modules loaded |
 
-| Capability | Description |
-|------------|-------------|
-| **Keyspace analysis** | Inspect key patterns, sizes, and TTL distributions |
-| **Command stats** | Review command latency and throughput via `INFO commandstats` |
-| **Performance metrics** | Monitor memory, connections, eviction, and replication lag |
-| **Module insights** | Inspect RediSearch indexes, RedisJSON documents, and TimeSeries (Redis Stack only) |
-
-Verify the connection
+### Verify the connection
 
 ```text
-Run Redis INFO and summarize memory usage, connected clients, and keyspace stats
+Summarize Redis memory usage, connected clients, eviction policy, and key counts per database
 ```
+
+Expect used memory and peak, the client count, the `maxmemory` policy, and a key count for each database index.
 
 ### Example prompts
 
 ```text
-Analyze hot keys and memory distribution on the production Redis instance
-Check memory fragmentation ratio and eviction stats
-Review replication lag on the Redis replica
+Which sampled keys are the largest, and what share of keys in each database has no TTL?
+Is Redis evicting keys? Show the eviction policy, evictions, and hit rate
+Which commands have the highest average latency according to commandstats?
 ```
 
 ## Troubleshooting
 
-<Accordion title="Authentication failed (NOAUTH / WRONGPASS)">
-- Verify the username and password in the connection URL
-- For self-hosted, confirm the user is enabled with `ACL WHOAMI` and `ACL LIST`
-- For Upstash and Redis Cloud, make sure you copied the TCP/Redis CLI URL, not the REST or SDK URL
+<Accordion title="NOAUTH or WRONGPASS">
+The user or password is wrong or missing. Check both in **REDIS_URL**, including URL-encoding. On Upstash, use `default` as the user and the database token as the password. On self-hosted Redis, run `ACL LIST` to confirm the user exists and is `on`.
 </Accordion>
 
-<Accordion title="NOPERM — no permissions to run the command">
-- The read-only user is working as intended for write commands
-- If reads are also blocked, re-check the ACL rules — `+@read` must be granted
+<Accordion title="Connection closed, or the connection never reaches Connected">
+Usually a malformed URL. Check the scheme (`rediss://` for a TLS endpoint, which Upstash requires), the host, the port, and that a password is present. A REST or SDK URL from your provider won't work: use the TCP or Redis CLI one.
 </Accordion>
 
-<Accordion title="Connection refused or timeout">
-- Verify host and port are reachable from CloudThinker
-- For self-hosted, ensure Redis is not bound only to `127.0.0.1`
-- Add CloudThinker IPs to your firewall or cloud provider allowlist
+<Accordion title="Connection refused or timed out">
+CloudThinker can't reach the server. Check your firewall, security group, or provider allowlist, and that `bind` in `redis.conf` isn't only `127.0.0.1`. A server on a private network needs a reachable endpoint first.
 </Accordion>
 
-<Accordion title="Module commands fail (FT.*, JSON.*, TS.*, BF.*)">
-- Vanilla Redis does not include modules. Run Redis Stack (`redis/redis-stack`) or a managed equivalent that bundles the required modules.
+<Accordion title="NOPERM on INFO, CLIENT LIST, or a read command">
+The ACL is missing a command. Add `+info`, `'+client|list'`, or the category the error names with `ACL SETUSER cloudthinker-readonly ...`, then ask again. `NOPERM` on a write command is expected for a read-only user.
+</Accordion>
+
+<Accordion title="Command is not available: FT.* or JSON.*">
+The server doesn't have the RediSearch or RedisJSON module loaded. Many hosted tiers don't ship them. Everything else keeps working.
 </Accordion>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Use rediss:// for TLS** — use the `rediss://` scheme whenever your deployment supports TLS to encrypt data in transit.
-- **Persist ACLs** — use `aclfile` for self-hosted deployments so the read-only user survives restarts.
+- **Use `rediss://`**: plain `redis://` sends the password and every value unencrypted. Use TLS whenever your server or provider supports it.
+- **Scope keys**: replace `~*` with the prefixes agents need, such as `~cache:*`, so session tokens or other sensitive keys stay out of reach.
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Agents" icon="database" href="/guide/agents/overview">
-    See what CloudThinker can do with this connection.
+  <Card title="MongoDB" icon="/images/icons/mongodb.svg" href="/guide/connections/mongodb">
+    Connect MongoDB or Atlas in read-only mode.
   </Card>
-  <Card title="MongoDB Connection" icon="/images/icons/mongodb.svg" href="/guide/connections/mongodb">
-    Setup instructions for MongoDB databases
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Decide which Redis writes run, wait for a person, or are refused.
   </Card>
 </CardGroup>

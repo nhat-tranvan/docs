@@ -1,278 +1,209 @@
 ---
-title: AWS
-description: "Connect AWS to CloudThinker for cost analysis, security auditing, and infrastructure management via IAM role or access keys"
+title: Amazon Web Services
+description: "Connect an AWS account with a read-only IAM role so agents can investigate compute, storage, identity, cost, and monitoring."
 icon: "/images/icons/aws.svg"
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your AWS accounts to enable CloudThinker agents to analyze costs, audit security, optimize resources, and manage infrastructure at scale.
-
-AWS authenticates with an **IAM role (AssumeRole)** or **IAM user access keys**; role-based authentication is strongly recommended because it uses short-lived credentials via AWS STS and avoids storing long-term secrets.
+CloudThinker runs the AWS CLI against your account to answer questions about compute, storage, identity, cost, and monitoring. You connect with an IAM role that CloudThinker assumes for short-lived credentials (recommended), or with an IAM user's access keys.
 
 ## Prerequisites
 
-- An AWS account with IAM administrator access.
-- Permission to create IAM roles or IAM users in the target account.
-- Access to [AWS CloudShell](https://console.aws.amazon.com/) or the [IAM console](https://console.aws.amazon.com/iam/) for setup.
-
-<Info>
-Role-based authentication (AssumeRole) is strongly preferred. Use access keys only when AssumeRole is not feasible in your environment.
-</Info>
+- An AWS account where you can create IAM roles (or IAM users, for the access-key method).
+- Access to [AWS CloudShell](https://console.aws.amazon.com/cloudshell/home) in that account. The setup script runs there, so you install nothing.
+- For cost questions and [Optimize](/guide/cost-optimization/overview): Cost Explorer turned on in the account. AWS can take up to 24 hours to activate it on a new account.
 
 ## Setup
 
+Open the connect dialog first: in the sidebar, click **More → Workspace settings → Connections**, select **Amazon Web Services**, and click **Connect**. Then follow the tab for the method you pick at the top of the dialog.
+
 <Tabs>
-  <Tab title="Role-Based (Recommended)">
-    ### IAM role with AssumeRole
-
-    This method creates an IAM role that CloudThinker assumes to access your resources. Benefits:
-    - No long-term credentials shared or stored
-    - Uses AWS STS for temporary, auto-rotated credentials
-    - External ID protects against confused deputy attacks
-    - Easy to audit and revoke access
-
-    #### Quick setup via CloudShell
+  <Tab title="Role-Based (recommended)">
+    The dialog generates an **External ID** (a secret that only your role's trust policy and CloudThinker know) and builds a setup script around it.
 
     <Steps>
-      <Step title="Open AWS CloudShell">
-        Log in to [AWS Console](https://console.aws.amazon.com/) and open **CloudShell** from the top nav.
+      <Step title="Name the account">
+        Fill in **Alias** (for example `production`) and **Description** (for example `Production AWS account, main workloads`). Agents read the description to pick the right account. **Default AWS region (optional)** is only a starting point: agents can use any region the role can reach.
       </Step>
-      <Step title="Run setup script">
-        In CloudThinker's connection dialog, click **Copy Script** and paste into CloudShell. The script:
-        - Validates `CloudThinkerAccessRole` doesn't exist
-        - Creates the IAM role with read-only permissions
-        - Attaches the trust policy with your External ID
+      <Step title="Open CloudShell">
+        Click **Open CloudShell** and sign in to the AWS account you want to connect.
       </Step>
-      <Step title="Copy Role ARN">
-        Copy the Role ARN from the output:
-        ```
+      <Step title="Run the setup script">
+        Click **Copy Script to Clipboard**, paste it into CloudShell, and press Enter. The script:
+
+        1. Stops if a role named `CloudThinkerAccessRole` already exists.
+        2. Creates `CloudThinkerAccessRole` with a trust policy that only CloudThinker can assume, and only with your External ID.
+        3. Attaches the AWS managed `ReadOnlyAccess` policy.
+        4. Prints the role's ARN.
+
+        The end of the output looks like this:
+
+        ```text
+        ==========================================
+          ✅ Setup Complete!
+        ==========================================
+
+        Copy this Role ARN and paste it in the connection form:
+
         arn:aws:iam::123456789012:role/CloudThinkerAccessRole
         ```
       </Step>
-      <Step title="Complete the connection">
-        Paste the Role ARN into CloudThinker, optionally select a default region, and click **Connect**. CloudThinker verifies the role and shows a **Connected** status.
+      <Step title="Paste the Role ARN and connect">
+        Paste the ARN into **AWS Role ARN**. Leave **AWS External ID** as it is: it's filled in for you and must match the script. Click **Connect**.
+
+        **Success state:** the status moves through **Connecting** and **Verifying**, and the account shows a **Connected** status.
       </Step>
     </Steps>
 
-    #### Expected output
+    Prefer to create the role yourself, for example in Terraform or CloudFormation? Expand **Manual steps** in the dialog. It shows the trust policy with your External ID and the CloudThinker principal filled in. The shape is:
 
-    ```
-    Starting CloudThinker IAM Role setup...
-    ✅ Role does not exist, proceeding...
-    ✅ Role created successfully
-    ✅ Policy attached successfully
-    ==========================================
-    ✅ Setup Complete!
-    ==========================================
-    Copy this Role ARN:
-    arn:aws:iam::123456789012:role/CloudThinkerAccessRole
-    ```
-
-    #### Manual role creation
-
-    If you prefer manual setup:
-
-    **Trust policy:**
     ```json
     {
       "Version": "2012-10-17",
       "Statement": [
         {
           "Effect": "Allow",
-          "Principal": {
-            "AWS": "arn:aws:iam::CLOUDTHINKER_ACCOUNT_ID:root"
-          },
+          "Principal": { "AWS": "<CloudThinker principal shown in the dialog>" },
           "Action": "sts:AssumeRole",
           "Condition": {
-            "StringEquals": {
-              "sts:ExternalId": "YOUR_EXTERNAL_ID"
-            }
+            "StringEquals": { "sts:ExternalId": "<your External ID>" }
           }
         }
       ]
     }
     ```
-
-    **Permission policy:**
-    ```json
-    {
-      "Version": "2012-10-17",
-      "Statement": [
-        {
-          "Effect": "Allow",
-          "Action": [
-            "ec2:Describe*",
-            "rds:Describe*",
-            "s3:GetBucket*",
-            "s3:List*",
-            "cloudwatch:GetMetric*",
-            "cloudwatch:List*",
-            "ce:GetCost*",
-            "ce:GetReservation*",
-            "iam:GetRole",
-            "iam:ListRoles"
-          ],
-          "Resource": "*"
-        }
-      ]
-    }
-    ```
-
   </Tab>
-
-  <Tab title="Access Keys (Alternative)">
-    ### IAM user with access keys
-
-    Use this method only when AssumeRole is not feasible in your environment.
-
-    <Warning>
-    AWS recommends IAM roles over long-term access keys. Rotate keys regularly if using this method.
-    </Warning>
+  <Tab title="Access Keys">
+    Use this only when your organization doesn't allow cross-account roles. Access keys are long-lived, so you have to rotate them yourself.
 
     <Steps>
-      <Step title="Create an IAM user">
-        Go to [IAM Console](https://console.aws.amazon.com/iam/) → **Users → Create user** and name it `cloudthinker-readonly`.
+      <Step title="Name the account">
+        Select **Access Keys** at the top of the dialog. Fill in **Alias**, **Description**, and optionally **Default AWS region (optional)**.
       </Step>
-      <Step title="Attach policies">
-        Choose **Attach policies directly** and add:
-        - `ReadOnlyAccess` (comprehensive), or
-        - Specific policies like `AmazonEC2ReadOnlyAccess`, `AmazonS3ReadOnlyAccess`
+      <Step title="Run the setup script in CloudShell">
+        Click **Open CloudShell**, then **Copy Script to Clipboard**, and run it in CloudShell. It creates an IAM user named `CloudThinkerUser`, attaches `ReadOnlyAccess`, creates an access key, and prints `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
       </Step>
-      <Step title="Create an access key">
-        Select the user → **Security credentials → Create access key**. Choose **Third-party service** as the use case.
-      </Step>
-      <Step title="Save credentials">
-        Copy and securely store the Access Key ID and Secret Access Key. Enter them in **Connections → AWS** and click **Connect**. CloudThinker shows a **Connected** status.
+      <Step title="Enter the keys and connect">
+        Paste both values into the **AWS_ACCESS_KEY_ID** and **AWS_SECRET_ACCESS_KEY** fields and click **Connect**. AWS shows the secret only once, so copy it before you close CloudShell.
+
+        **Success state:** the account shows a **Connected** status.
       </Step>
     </Steps>
-
   </Tab>
 </Tabs>
 
-### Multi-account setup
+### Connect more accounts
 
-For organizations with multiple AWS accounts:
-
-<Steps>
-  <Step title="Create the role in each account">
-    Deploy the IAM role using CloudFormation StackSets across all target accounts.
-  </Step>
-  <Step title="Use AWS Organizations">
-    Connect the management account for organization-wide visibility.
-  </Step>
-  <Step title="Add each account">
-    Add account connections individually in CloudThinker.
-  </Step>
-</Steps>
+Each AWS account is its own connection. Click **Connect** again on **Amazon Web Services**, give the account its own alias, and run the script from that dialog in the new account's CloudShell. Always copy the script from the dialog you're completing, so the trust policy carries the External ID that dialog shows.
 
 ## Connection details
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| **Role ARN** | ARN of the IAM role CloudThinker assumes (role-based method) | `arn:aws:iam::123456789012:role/CloudThinkerAccessRole` |
-| **External ID** | Secret ID in the trust policy, provided by CloudThinker | — |
-| **Default AWS region (optional)** | Starting region for this connection. Agents can use other regions allowed by your permissions and explicit scope restrictions. | `us-east-1` |
-| **Access Key ID** | IAM user key ID (access-keys method only) | — |
-| **Secret Access Key** | IAM user secret key (access-keys method only) | — |
+| Field | Method | Description | Example |
+|---|---|---|---|
+| **Alias** | Both | Short name for this account. Blank picks one for you. | `production` |
+| **Description** | Both | What the account is. Agents use it to choose between accounts. | `Production AWS account` |
+| **Default AWS region (optional)** | Both | Starting region. Agents can use other regions the credential allows. | `us-east-1` |
+| **AWS Role ARN** | Role-Based | ARN printed by the setup script | `arn:aws:iam::123456789012:role/CloudThinkerAccessRole` |
+| **AWS External ID** | Role-Based | Generated by CloudThinker. Read-only, must match the trust policy. | Filled in for you |
+| **AWS_ACCESS_KEY_ID** | Access Keys | The IAM user's access key ID | `AKIA...` |
+| **AWS_SECRET_ACCESS_KEY** | Access Keys | The IAM user's secret key | Shown once by AWS |
+
+After connecting, set **Environment** (**Production**, **Staging**, **Development**, or **Not set**) in **Edit Instance** so [approval rules](/guide/approvals/rules) can treat accounts differently. **Not set** counts as production.
 
 ## Required permissions
 
-### Minimum (read-only analysis)
+The setup scripts attach the AWS managed `ReadOnlyAccess` policy. It lets agents describe and list resources across services, read CloudWatch metrics, and read Cost Explorer. It can't create, change, or delete anything.
 
-```
-ec2:Describe*
-rds:Describe*
-s3:GetBucket*, s3:List*
-cloudwatch:GetMetric*, cloudwatch:List*
-ce:GetCost*, ce:GetReservation*
-iam:GetRole, iam:ListRoles
-```
-
-### Recommended (full analysis)
-
-```
-# All minimum permissions, plus:
-elasticloadbalancing:Describe*
-autoscaling:Describe*
-lambda:List*, lambda:GetFunction*
-ecs:Describe*, ecs:List*
-eks:Describe*, eks:List*
-securityhub:Get*, securityhub:List*
-guardduty:Get*, guardduty:List*
-config:Describe*, config:Get*
-cloudtrail:Describe*, cloudtrail:Get*
-```
+| You want | Grant |
+|---|---|
+| Inventory, health, and security questions | `ReadOnlyAccess` (what the script attaches) |
+| Optimize cost data | Cost Explorer reads. The cost refresh needs `ce:GetCostAndUsage`. Commitment coverage uses the reservation and Savings Plans `ce:Get*` reads. All are in `ReadOnlyAccess`. |
+| Agents to make specific changes | Add only those actions to the role, then see [Write access](#write-access) |
 
 <Tip>
-Start with minimum permissions and expand as needed. Enable Cost Explorer in the AWS Console before connecting — it can take up to 24 hours to activate on new accounts.
+`ReadOnlyAccess` can read data as well as configuration, such as S3 objects. If that's broader than you want, swap it for a custom read policy. A missing permission only limits the feature that needs it. It never disconnects the account.
 </Tip>
 
 ## Agent capabilities
 
-Once connected, CloudThinker can analyze and optimize your AWS resources.
-
 | Area | What CloudThinker does |
-|-------|------------------------------------------------------------------------------------------|
-| **Cost** | Cost analysis, EC2 right-sizing, Reserved Instance recommendations, resource optimization |
-| **Security** | Security Hub findings, IAM audits, compliance checks, vulnerability assessment |
-| **Databases** | RDS performance analysis, Aurora optimization, DynamoDB tuning |
-| **Containers** | EKS cluster management, Fargate optimization, container analysis |
+|---|---|
+| **Inventory** | Lists and describes compute, storage, networking, and managed services across regions |
+| **Identity** | Reviews IAM roles, users, and policies for risky or unused access |
+| **Cost** | Breaks down spend by service, account, and tag, and checks Reserved Instance and Savings Plans coverage. Feeds [Optimize](/guide/cost-optimization/overview). |
+| **Monitoring** | Reads CloudWatch metrics and alarms to explain a spike or an outage |
+| **Changes** | Runs AWS CLI writes only when **Allow writes** is on, the role permits them, and your approval settings allow them |
 
 ### Verify the connection
 
 ```text
-Run an AWS account check and list the connected account ID and active regions
+Which AWS account ID and regions can you reach through my AWS connection?
 ```
+
+The answer names your real 12-digit account ID.
 
 ### Example prompts
 
 ```text
-Right-sizing opportunities from EC2 costs over the last 30 days
-IAM roles with excessive permissions or missing MFA requirements
-EKS cluster health and any failing pods across all connected regions
+Break down last month's AWS spend by service and flag anything that grew more than 20% from the month before
+List IAM users and roles that haven't been used in 90 days
+Find EC2 instances in us-east-1 with average CPU under 10% over the last two weeks
 ```
+
+## Write access
+
+**Allow writes** on the connection's detail panel controls whether agents may change anything in AWS. It's on by default for AWS, but the role the script creates is read-only, so AWS itself refuses every write until you grant more.
+
+| IAM permissions | Allow writes | Result |
+|---|---|---|
+| `ReadOnlyAccess` only | On or off | Read-only. AWS rejects any change. |
+| Extra write actions granted | Off | Read-only. CloudThinker refuses every change before it reaches AWS. |
+| Extra write actions granted | On | Agents can propose changes. Your [Rules and Approval mode](/guide/approvals/overview) decide each one. |
 
 ## Troubleshooting
 
-<Accordion title="Access Denied errors">
-Verify the IAM role has the required permissions. Check that the trust policy includes CloudThinker's account ID, confirm the External ID matches exactly, and ensure the role ARN is correct.
+<Accordion title="The script says CloudThinkerAccessRole already exists">
+**Cause:** an earlier setup in this account created the role, likely with a different External ID.
+
+**Fix:** if no other CloudThinker connection uses that role, delete it (`aws iam delete-role --role-name CloudThinkerAccessRole`, after detaching its policies) and run the new script. Otherwise, use **Manual steps** to update the existing role's trust policy with the External ID shown in this dialog.
 </Accordion>
 
-<Accordion title="Connection shows Error and scheduled work stopped">
-Three consecutive credential failures in background runs — a broken trust policy, a deleted role, or a revoked access key — switch the connection to **Error**, and every schedule that depends on it pauses at once: [Optimize](/guide/cost-optimization/overview) cost refreshes, scheduled [automations](/guide/automation/automations), and [Pulse](/guide/pulse/overview) alert polling. Workspace admins are notified once per outage.
+<Accordion title="The test fails with AccessDenied on sts:AssumeRole">
+**Cause:** the trust policy doesn't match what CloudThinker presents.
 
-A permission gap on a single feature — missing Cost Explorer permissions, for example — never disables the whole connection; it only limits that feature.
+**Check:** the ARN you pasted is the one the script printed, and the trust policy's `sts:ExternalId` matches **AWS External ID** in the dialog exactly.
 
-**Fix:** repair the role or key in AWS, then re-test the connection in CloudThinker. When the status returns to **Connected**, schedules resume on their next cycle.
+**Fix:** re-run the setup from a fresh dialog, or correct the trust policy and click **Retry**.
 </Accordion>
 
-<Accordion title="Missing cost data">
-Enable Cost Explorer in the AWS Console (takes up to 24 hours to activate). Verify `ce:GetCost*` permissions are granted and check that billing preferences allow programmatic access.
+<Accordion title="The connection shows Error and scheduled work stopped">
+**Cause:** three background credential failures in a row (a deleted role, a broken trust policy, or a revoked key) switch the connection to **Error**. Optimize cost refreshes, scheduled automations, and Pulse polling pause for it, and workspace admins get one notification.
+
+**Fix:** repair the role or key in AWS, then click **Retry** on the connection, or **Replace credentials** to enter new keys. Scheduled work resumes on its next cycle once the status is **Connected**.
 </Accordion>
 
-<Accordion title="Missing metrics">
-Verify CloudWatch metrics are being collected. Check that the region selection includes all relevant regions and confirm services are running and generating data.
+<Accordion title="Cost questions return no data">
+**Check:** Cost Explorer is turned on in the AWS Billing console, and at least 24 hours have passed since you turned it on. For a member account in AWS Organizations, the management account may block member access to Cost Explorer.
+
+**Fix:** turn on Cost Explorer, or connect the management account to see costs for the whole organization.
 </Accordion>
 
-<Accordion title="Connection timeout">
-Check network connectivity to AWS APIs. Verify no VPC endpoints are blocking access and try connecting from a different region.
-</Accordion>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Use IAM roles** — prefer AssumeRole over long-term access keys; IAM roles use short-lived STS credentials that auto-rotate and require no secret storage.
-- **Enable CloudTrail** — audit all API calls made through the CloudThinker connection to maintain a complete activity log.
+- **Prefer the role.** CloudThinker assumes the role through AWS STS and gets short-lived credentials, so there's no long-lived secret to leak. The External ID stops anyone else from using your role through CloudThinker.
+- **Audit with CloudTrail.** Every call agents make is an ordinary AWS API call. Filter CloudTrail by `CloudThinkerAccessRole` (or `CloudThinkerUser`) to see exactly what ran.
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Agents" icon="cloud" href="/guide/agents/overview">
-    See what CloudThinker can do with this connection.
+  <Card title="Optimize quickstart" icon="chart-line" href="/guide/cost-optimization/quickstart">
+    Turn this connection into cost findings and savings recommendations.
   </Card>
-  <Card title="Bring Your Own Key (BYOK)" icon="key" href="/guide/byok">
-    Use your own AWS Bedrock credentials for unlimited LLM usage
+  <Card title="Connections" icon="plug" href="/guide/connections/overview">
+    Rotate credentials, set the environment, and read Discovery results.
   </Card>
 </CardGroup>

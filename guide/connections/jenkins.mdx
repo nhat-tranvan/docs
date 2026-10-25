@@ -1,152 +1,129 @@
 ---
 title: Jenkins
-description: "Connect Jenkins CI/CD server to CloudThinker for build pipeline monitoring, job analysis, and deployment tracking"
+description: "Connect your Jenkins server so agents can read jobs, builds, logs, and test results, and trigger builds after approval"
 icon: "/images/icons/jenkins.svg"
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your self-hosted Jenkins server to enable CloudThinker agents to monitor builds, analyze test results, review pipeline logs, and manage job operations. Jenkins authenticates with a **username and API token** over the Jenkins MCP Server Plugin.
-
----
+Connect Jenkins and CloudThinker agents can list jobs, read build logs and test results, explain why a build failed, and trigger a build after approval. CloudThinker talks to the **Jenkins MCP Server plugin** on your server and signs in with a **Jenkins username and API token**.
 
 ## Prerequisites
 
-- A **self-hosted Jenkins** instance running version 2.x or later (cloud-hosted Jenkins is not supported).
-- The **[Jenkins MCP Server Plugin](https://github.com/jenkinsci/mcp-server-plugin)** installed on your server; the default MCP port is `9090`.
-- Admin access to Jenkins to configure the root URL and create credentials.
-
-<Info>
-Cloud-hosted Jenkins services are not supported. This connection requires the Jenkins MCP Server Plugin.
-</Info>
-
----
+- A Jenkins server that CloudThinker can reach over the network, with admin access to install plugins.
+- The [MCP Server plugin](https://plugins.jenkins.io/mcp-server/) installed. It adds the endpoint CloudThinker calls, at `<your-jenkins-url>/mcp-server/mcp`.
+- A Jenkins user for CloudThinker, with the permissions in [Required permissions](#required-permissions).
+- Edit permission on connections in your CloudThinker workspace.
 
 ## Setup
 
 <Steps>
-  <Step title="Configure the root URL">
-    The MCP Server Plugin requires Jenkins to have a root URL configured to return correct job links. Run the following in the Jenkins Script Console:
-
-    ```bash
-    COOKIE_JAR=/tmp/jenkins_cookies
-    CRUMB=$(curl -s -c $COOKIE_JAR -u "admin:<password>" \
-      'http://<host-ip>:9090/crumbIssuer/api/json' | python3 -c "import json,sys; print(json.load(sys.stdin)['crumb'])")
-
-    curl -s -X POST "http://<host-ip>:9090/scriptText" \
-      -b $COOKIE_JAR -u "admin:<password>" -H "Jenkins-Crumb: $CRUMB" \
-      --data-urlencode "script=
-    import jenkins.model.JenkinsLocationConfiguration
-    def loc = JenkinsLocationConfiguration.get()
-    loc.setUrl('http://<host-ip>:9090/')
-    loc.save()
-    println('Root URL set to: ' + loc.getUrl())
-    "
-    ```
+  <Step title="Install the MCP Server plugin">
+    In Jenkins, go to **Manage Jenkins → Plugins → Available plugins**, search for **MCP Server**, install it, and restart Jenkins if asked.
   </Step>
-  <Step title="Verify the MCP endpoint">
-    Confirm the plugin is running before connecting:
+  <Step title="Set the Jenkins URL">
+    Go to **Manage Jenkins → System** and fill in **Jenkins URL** under **Jenkins Location** with the address people use to reach Jenkins, for example `https://jenkins.acme.com/`. Click **Save**.
 
-    ```bash
-    curl -s http://<host-ip>:9090/mcp-health/
-    ```
+    The plugin builds job and build links from this value. If it's empty or set to `localhost`, agents get broken links.
+  </Step>
+  <Step title="Create an API token">
+    Sign in to Jenkins as the CloudThinker user. Open your user menu, go to **Security**, and under **API Token** click **Add new Token**. Name it `cloudthinker`, click **Generate**, and copy the token. Jenkins shows it only once.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Navigate to **Connections → Jenkins** and enter:
-    - **URL**: `http://<host-ip>:9090`
-    - **Username**: `admin`
-    - **API Token**: your Jenkins admin password or API token
+    In the sidebar, click **More → Workspace settings → Connections**. On the **Builtin Connections** tab, search for **Jenkins**, click **Connect**, and fill in the fields from [Connection details](#connection-details). Click **Connect**.
 
-    Click **Connect**. CloudThinker verifies the credentials and shows a **Connected** status.
+    **Success state:** Jenkins shows **Connected** on the **Builtin Connections** tab.
   </Step>
 </Steps>
-
----
 
 ## Connection details
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| **URL** | Base URL of your Jenkins instance | `http://192.168.1.100:9090` |
-| **Username** | Jenkins username | `admin` |
-| **API Token** | Jenkins admin password or API token | — |
+| `JENKINS_URL` | Base URL of your Jenkins server, without `/mcp-server/mcp`. CloudThinker adds that path | `https://jenkins.acme.com` |
+| `JENKINS_USER` | The Jenkins username the token belongs to | `cloudthinker` |
+| `JENKINS_API_TOKEN` | The API token you generated for that user | `<your-api-token>` |
 
----
+If you leave out the scheme, CloudThinker uses `https://`. On a public address, CloudThinker always connects over HTTPS, even when you enter `http://`, so your server needs a valid TLS certificate there.
 
 ## Required permissions
 
-Grant the Jenkins user the following permissions:
+Grant the CloudThinker user these permissions in your Jenkins authorization strategy (for example **Matrix-based security** under **Manage Jenkins → Security**):
 
-- **Overall**: Read
-- **Job**: Read, Discover
-- **View**: Read
+| Permission | Needed for |
+|------------|------------|
+| **Overall / Read** | Signing in and listing jobs |
+| **Job / Read** | Reading builds, logs, test results, and changes |
+| **Job / Discover** | Seeing jobs in folders and views |
+| **View / Read** | Reading views |
+| **Job / Build** | Optional: triggering builds |
+
+The token acts with exactly this user's permissions. Leave out **Job / Build** for a read-only connection.
 
 <Tip>
-Create a dedicated Jenkins user for CloudThinker with only these permissions. Keep write operations (trigger builds, replay pipelines) approval-gated.
+Use a dedicated Jenkins user for CloudThinker instead of an admin account. If you use folder-level permissions, grant access only to the folders agents should see.
 </Tip>
-
----
 
 ## Agent capabilities
 
-Once connected, agents can monitor and investigate your Jenkins pipelines.
+Reads run without asking. Triggering a build is a write, so it passes through your [Rules and Approval mode](/guide/approvals/overview) first.
 
-| Capability | Description |
-|------------|-------------|
-| **Build monitoring** | List jobs and check build status |
-| **Log analysis** | Retrieve and search build logs |
-| **Test results** | View test outcomes |
-| **SCM integration** | View Git changes and commits |
-| **Job controls** | Trigger builds and replay pipelines — **requires approval** |
+| Capability | What agents can do |
+|------------|--------------------|
+| **Jobs** | List jobs and show the last build status of each |
+| **Build logs** | Read and search build logs to find the failing step |
+| **Test results** | Read test outcomes and point to the failing tests |
+| **Changes** | Show the commits and SCM changes that went into a build |
+| **Trigger builds** | Start a build, after approval |
 
 ### Verify the connection
 
 ```text
-List all Jenkins jobs and show the last build status for each
+List the Jenkins jobs you can reach and the result of the last build for each
 ```
+
+A working connection returns your real job names and results. An empty list usually means the user lacks **Job / Read** or **Job / Discover**.
 
 ### Example prompts
 
 ```text
-Search Jenkins build logs for errors in the last 10 builds and fixes
-Show test results for the main project's recent builds and failures
-Check the Jenkins build queue and identify any stuck jobs
+Why did the last build of payments-api fail? Show the failing step and the error from the log
+Which tests failed in the last 5 builds of the main pipeline, and are any of them flaky?
+Which commits went into the latest build of web-frontend?
 ```
-
----
 
 ## Troubleshooting
 
-<Accordion title="Connection timeout">
-Verify Jenkins is running and that port 9090 is reachable from CloudThinker. Use the host IP address (not `localhost`) in the URL field.
+<Accordion title="Connection times out">
+CloudThinker can't reach your Jenkins server. Check that the URL opens from outside your network and that your firewall allows inbound HTTPS to Jenkins. Don't use `localhost` or an address that only resolves inside your network.
 </Accordion>
 
-<Accordion title="Empty job list">
-The root URL has not been configured or the Script Console command failed. Re-run the Script Console command in Setup and reconnect.
+<Accordion title="Authentication fails">
+The username or token is wrong, or the token was revoked. Confirm that `JENKINS_USER` is the user who generated the token, generate a new token if needed, and update the connection.
 </Accordion>
 
-<Accordion title="Authentication failed">
-The username or API token is incorrect, or the user lacks the required permissions. Verify the credentials and that the Jenkins user has Overall Read, Job Read, and View Read access.
+<Accordion title="Jenkins answers, but the connection still fails">
+The MCP Server plugin isn't installed or enabled, or `JENKINS_URL` points at the wrong path. Install the plugin and enter only the base URL. If Jenkins runs under a path such as `/jenkins`, include it: `https://ci.acme.com/jenkins`.
 </Accordion>
 
----
+<Accordion title="The job list is empty or links are broken">
+The user lacks **Job / Read** or **Job / Discover**, or **Jenkins URL** is empty or set to `localhost`. Fix the permissions, set **Jenkins URL** under **Manage Jenkins → System**, and ask again.
+</Accordion>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Dedicated user** — create a dedicated Jenkins user for CloudThinker scoped to only the jobs and views it needs.
-- **Network isolation** — restrict Jenkins port 9090 to CloudThinker's IP range or use a VPN; avoid exposing the Jenkins UI to the public internet.
-
----
+- **Limit network exposure.** Allow inbound traffic to Jenkins only from the sources that need it, and keep the Jenkins UI behind your normal access controls.
+- **Keep builds approval-gated.** Grant **Job / Build** only if agents should start builds, and keep a Rule that requires approval for it.
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="MCP Connections" icon="/images/icons/mcp.svg" href="/guide/connections/mcp">
-    Connect custom tools via Model Context Protocol
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Decide which agent actions run on their own and which wait for you
   </Card>
-  <Card title="Kubernetes Connection" icon="/images/icons/kubernetes.svg" href="/guide/connections/kubernetes">
-    Connect Kubernetes clusters
+  <Card title="Connections Overview" icon="plug" href="/guide/connections/overview">
+    See every tool CloudThinker connects to and how connections work
   </Card>
 </CardGroup>

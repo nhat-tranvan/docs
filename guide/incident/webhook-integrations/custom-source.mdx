@@ -1,95 +1,128 @@
 ---
-title: "Custom Source"
-description: "Send events from any system that can POST JSON, then map its fields to a Pulse Signal by clicking the payload it really sent."
+title: "Add a Custom Signal Source"
+description: "Connect any system that can POST JSON to Resolve, capture one real event, and map its fields by clicking them."
 icon: plug
 ---
 
-Custom source connects a system that has no integration card in Resolve: an in-house uptime checker, a cron job, a script, or a vendor CloudThinker does not list yet. If it can send an HTTP POST with a JSON body, it can raise a Signal.
+A custom source connects a system that has no preset in Resolve: an in-house uptime checker, a cron job, a deploy script, or a vendor CloudThinker doesn't list yet. If it can send an HTTP POST with a JSON body, its events can open incidents and trigger a root cause analysis (RCA).
+
+## How it works
+
+You create an endpoint, send it one real event, then click the fields in that event to tell Resolve which one is the title, severity, and so on. Because you pick from a payload your system really sent, every mapping you save points at a field that exists.
+
+Each event becomes a **signal** in [Pulse](/guide/pulse/overview), where it's filtered, grouped with related signals, and routed into an incident when it's actionable.
 
 <Note>
-A Custom source is not the workspace webhook under **Settings → Integrations → Webhooks**. That one starts a conversation. A Custom source enters Pulse, so its events can be suppressed, clustered, and routed into an Incident.
+A custom source isn't the same as a conversation webhook. A custom source feeds Pulse and opens incidents. If you want an event to start a chat with CloudThinker instead, use [webhooks](/guide/webhooks/overview).
 </Note>
 
-## Add a Custom source
+## Prerequisites
 
-Open **Resolve → Integrations** and select the **Custom source** card. One card holds every custom source you create.
+- Permission to manage Resolve integrations.
+- A system that can send `POST` requests with a JSON object body and a custom `Authorization` header.
+- A way to fire one representative event on demand, such as a test button or a `curl` command.
+
+## Create the source
+
+Go to **Resolve → Integrations** and select **Custom source**. Click **Add signal**. One card holds every custom source you create.
 
 <Steps>
   <Step title="Name the source">
-    Type the name your team will recognize, for example `Acme uptime`. CloudThinker creates the endpoint and shows its URL.
+    Enter a **Source name** your team will recognize, for example `Acme uptime`, and click **Create endpoint**.
+  </Step>
+  <Step title="Copy the URL and secret">
+    The dialog shows the **Webhook URL** and the secret key. Copy both into your system now.
+
+    The secret is shown only once. If you lose it, you have to regenerate it and update every sender.
   </Step>
   <Step title="Send one real event">
-    Copy the URL into your system and let it fire once. The page waits for the first delivery, then shows the JSON it received.
+    Trigger the event from your system. The dialog waits and updates itself when the event arrives.
 
-    Send a representative event, not an empty test body. The fields you can map are the fields this event contained.
+    Send a representative event, not an empty test body. You can only map fields that this event contains.
   </Step>
   <Step title="Map the fields">
-    Every field in the captured JSON is listed with its value. Pick the one that carries the incident title, then the ones for severity, service, resource, and description. Save.
+    When the dialog says **Payload received**, click **Map the fields**. Every field in the captured JSON is listed with its value. Pick the one for **Incident title**, then any of **Severity**, **Service**, **Resource**, and **Description**. Click **Save mapping**.
   </Step>
 </Steps>
 
-The source is live after you save. The next event arrives in Pulse as a Signal with a real title.
+**Success state:** the dialog closes and the source appears under **Signals to Resolve** on the Custom source card. The next event arrives in Pulse with the title you mapped.
 
-## What the mapping accepts
+## Send events
 
-A mapped field is a dotted path into your JSON. `event.data.title` reads `title` inside `data` inside `event`. A list index is `[0]`, as in `alerts[0].labels.severity`.
-
-There is no `$.` prefix. Paths that begin with `$.` are JSONPath and CloudThinker does not read them.
-
-You do not type these paths. You click them in the captured payload, so a mapping you can save is a mapping that resolves.
-
-| Field | Required | What it does |
-|---|---|---|
-| Title | Yes | Names the Signal and the Incident. |
-| Severity | No | Feeds routing and the automatic RCA threshold. |
-| Service | No | Helps Pulse correlate related events and scope snoozes. |
-| Resource | No | Identifies the affected host, cluster, or component. |
-| Description | No | Gives operators and agents the symptom in the source's own words. |
-
-Only **Title** is required. Map the rest when your payload carries them.
-
-A path holds at most eight segments. If your payload nests the value deeper than that, send a flatter body.
-
-## Authenticate the endpoint
-
-A Custom source uses bearer authentication. Send the token in the `Authorization` header:
+Authenticate with a bearer token: put the secret key in the `Authorization` header. Here's a complete example:
 
 ```bash
-curl -X POST "<your-custom-source-url>" \
-  -H "Authorization: Bearer <your-token>" \
+curl -X POST "<your-webhook-url>" \
+  -H "Authorization: Bearer <your-secret-key>" \
   -H "Content-Type: application/json" \
-  -d '{"event": {"data": {"title": "Checkout latency high", "priority": "critical"}}}'
+  -d '{
+    "event": {
+      "data": {
+        "title": "Checkout latency above 2s",
+        "priority": "critical",
+        "service": "checkout-api",
+        "host": "web-03",
+        "summary": "p95 latency 2.4s for 5 minutes"
+      }
+    }
+  }'
 ```
 
-## Verify the complete path
+Mapped to this payload, the fields look like this:
 
-A `200` response proves delivery only. Open Pulse and confirm the Signal, its title, and its severity. If automatic RCA is enabled and the severity clears the threshold, confirm that the Incident enters **AI is handling**.
+| Field | Path you'd pick | Required | What it does |
+|---|---|---|---|
+| **Incident title** | `event.data.title` | Yes | Names the signal and the incident. |
+| **Severity** | `event.data.priority` | No | Feeds routing and the automatic RCA threshold. |
+| **Service** | `event.data.service` | No | Helps Pulse group related events. |
+| **Resource** | `event.data.host` | No | Identifies the affected host, cluster, or component. |
+| **Description** | `event.data.summary` | No | Gives responders and CloudThinker the symptom in your system's words. |
 
-<Note>
-An event that arrives before you save a mapping still becomes a Signal. CloudThinker falls back to a `title` key in the payload, and then to `Webhook signal`. Nothing is dropped, but the Signal is harder to read. Map first.
-</Note>
+## Rules for payloads and paths
+
+| Rule | What it means for you |
+|---|---|
+| Send a JSON object | A JSON array, a plain value, or `{}` can't be mapped. The dialog tells you when an event arrived but had no readable fields. |
+| Paths are dotted | `event.data.title` reads `title` inside `data` inside `event`. A list index is `[0]`, as in `alerts[0].labels.severity`. |
+| At most 8 segments | A path deeper than 8 levels is rejected. Send a flatter body if your value is nested deeper. |
+| JSONPath prefix is optional | A leading `$.` is accepted and removed, so `$.event.data.title` works too. |
+| Severity values | `critical`, `high`, `medium`, `low`, and `info` are understood as-is. Map other values (like `P1` or `sev2`) in **Severity Mapping**, or they're treated as Medium. |
+
+## Verify the whole path
+
+A successful HTTP response only proves delivery. Open **Resolve → Pulse** and confirm the signal, its title, and its severity. If **Auto-investigate** is on and the severity clears its minimum, the incident shows **AI is handling** on **Resolve → Investigation**.
 
 ## Change the mapping later
 
-Open the Custom source card, select the source under **Signals**, and edit its webhook. Incident settings, including automatic RCA and its minimum severity, live there too. A new source uses the same defaults as every other webhook in Resolve.
+Open **Resolve → Integrations → Custom source**, find the source under **Signals to Resolve**, and choose **Edit** from its menu. The edit view has every mapping field (including **Resource ID Path** and **Timestamp Path**), **Severity Mapping**, and **Auto-investigate** with its minimum severity.
 
-<Note>
-The payload shown in the picker is the last event CloudThinker stored. Stored bodies are removed after the retention period, so a source that has not fired recently has nothing to map. Fire it once more, then map.
-</Note>
+## Troubleshooting
 
-## Related
+<AccordionGroup>
+  <Accordion title="The dialog keeps waiting for the first payload">
+    Check that your system posts to the exact **Webhook URL** and sends `Authorization: Bearer <secret>`. Click **Check again** after you resend.
+  </Accordion>
+  <Accordion title="The event arrived but no fields can be mapped">
+    The body wasn't a JSON object with values in it. Send an object such as `{"title": "..."}`, not an array or an empty body, then click **Check again**.
+  </Accordion>
+  <Accordion title="Signals are titled 'Webhook signal'">
+    Events that arrive before you save a mapping still become signals. Resolve uses a top-level `title` key if there is one, and otherwise falls back to `Webhook signal`. Save a mapping to fix new events.
+  </Accordion>
+  <Accordion title="There's no payload to pick from when editing">
+    The picker shows the last stored event, and stored event bodies expire after 90 days. Fire the source once more, then map.
+  </Accordion>
+  <Accordion title="Everything arrives as Medium severity">
+    Your system sends severity values Resolve doesn't recognize. Add rows to **Severity Mapping**, for example `p1` → critical.
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
 
 <CardGroup cols={2}>
-  <Card title="Webhook Signals" icon="webhook" href="/guide/incident/webhook-integrations/overview">
-    Map events from a platform CloudThinker already supports.
+  <Card title="Understand Pulse" icon="wave-pulse" href="/guide/pulse/overview">
+    See how signals are filtered, grouped, and turned into incidents.
   </Card>
-  <Card title="Connect CloudWatch" icon="aws" href="/guide/incident/webhook-integrations/cloudwatch">
-    Send CloudWatch alarm events through EventBridge.
-  </Card>
-  <Card title="Understand Pulse" icon="pulse" href="/guide/pulse/overview">
-    Follow Signals through suppression, correlation, and routing.
-  </Card>
-  <Card title="Manage integrations" icon="arrows-rotate" href="/guide/incident/integrations">
-    Review each platform's connections, Signals, and outcomes.
+  <Card title="Use a preset instead" icon="webhook" href="/guide/incident/webhook-integrations/overview">
+    Connect Datadog, Grafana, PagerDuty, and more with pre-filled mappings.
   </Card>
 </CardGroup>

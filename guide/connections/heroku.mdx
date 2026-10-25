@@ -1,21 +1,21 @@
 ---
 title: Heroku
-description: "Connect Heroku to CloudThinker for app and dyno inventory, log triage, add-on and pipeline review, and approval-gated platform controls"
+description: "Connect Heroku so CloudThinker can review apps, dynos, logs, add-ons, and pipelines through a read-only connection"
 icon: "/images/icons/heroku.svg"
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your Heroku account to enable CloudThinker agents to inventory apps and dynos, read app logs, review add-ons and their plans, and inspect teams, private spaces, and pipeline stages — plus approval-gated changes like restarting dynos, scaling, and promoting a pipeline stage.
+Connect Heroku to let CloudThinker agents list your apps, read dyno formation and recent logs, review add-ons and their plans, and show which pipeline stage each app sits in. The connection is **read-only** and uses one Heroku **API token**, which can reach every app and team its user can.
 
-Heroku authenticates with an **API token**. The token carries the same access as the Heroku user who created it, so that user's team and app membership defines the agent's reach.
+---
 
 ## Prerequisites
 
-- A **Heroku account** with access to the apps, teams, and pipelines you want to investigate.
-- The Heroku CLI installed, to create the API token.
+- A Heroku account that belongs to the apps, teams, and pipelines you want to investigate.
+- The Heroku CLI, signed in as that account.
 
-There is no way to scope a Heroku token to a subset of apps. Least privilege comes from the account you create the token with, not from the token itself — see [Required permissions](#required-permissions).
+---
 
 ## Setup
 
@@ -27,126 +27,123 @@ There is no way to scope a Heroku token to a subset of apps. Least privilege com
     heroku authorizations:create -d cloudthinker
     ```
 
-    Copy the value printed as `Token` when the command prints it — it begins with `HRKU-`. The token is created with `global` scope and does not expire unless you set `--expires-in <seconds>`; use `heroku authorizations:revoke <id>` to invalidate it later.
+    Copy the value shown as `Token`. It starts with `HRKU-`. Keep the default `global` scope; see [Required permissions](#required-permissions) for why.
 
-    The Heroku Dashboard also exposes an account-level **API Key** under **Account Settings**, but Heroku revokes that key whenever your account password changes, so prefer the CLI authorization. If your account signs in through SSO, Heroku will not let it create a non-expiring token; Heroku's own guidance is to keep a separate non-SSO user for integration tokens.
+    The token doesn't expire unless you add `--expires-in <seconds>`. To cancel it later, run `heroku authorizations:revoke <id>`.
+
+    You can also create an authorization in the Heroku Dashboard under **Account settings → Applications**.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Navigate to **Connections → Heroku** and enter:
-    - **API token**: the token you just created
+    Go to **Connections → Heroku**, paste the token into **API token**, and click **Connect**.
 
-    Click **Connect**. CloudThinker verifies the token against Heroku and shows a **Connected** status.
+    **Success state:** Heroku shows a **Connected** status.
+  </Step>
+  <Step title="Run the verify prompt">
+    Run the [verify prompt](#verify-the-connection) to confirm the token can read your account.
+
+    **Success state:** CloudThinker returns your apps with their dyno formation.
   </Step>
 </Steps>
+
+---
 
 ## Connection details
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| **API token** | Heroku API token for the account whose apps, teams, and pipelines CloudThinker should reach | `HRKU-...` |
+| **API token** | Authorization token from `heroku authorizations:create`. It inherits the account's access to every app and team it can reach. | `HRKU-...` |
+
+---
 
 ## Required permissions
 
-Create the token from a Heroku account that belongs to only the teams CloudThinker should reach, then give that account the smallest app role that covers what you want the agent to do.
+A Heroku token can't be limited to some apps. It can reach whatever its user can, so least privilege comes from the account you create it with.
 
-| Heroku app role | What CloudThinker can do with it |
-|-----------------|----------------------------------|
-| **View** | App, dyno, add-on, team, private space, and pipeline inventory |
-| **Operate** | Everything above, plus reading app logs, restarting dynos, maintenance mode, scaling, and provisioning paid add-ons |
-| **Manage** | Not required by this connection |
+- **Use the `global` scope.** The narrower scopes (`read`, `write`, `read-protected`, `write-protected`) can't read the token's own account. Without that, Heroku can't work out which apps and pipelines the token owns, so those lists fail.
+- **Use a dedicated account.** Add it only to the teams and apps CloudThinker needs.
+- **If you sign in with SSO**, Heroku may not let that account create a long-lived token. Use a separate non-SSO user for the integration.
 
-<Note>
-Reading app logs requires **Operate**. A **View**-only account connects successfully and can list apps, but every log request fails.
-</Note>
+<Tip>
+CloudThinker exposes only 12 read tools for Heroku, so agents can't restart, scale, or change apps through this connection, whatever the token allows.
+</Tip>
 
-Use the `global` token scope. Heroku's narrower scopes — `read`, `write`, `read-protected`, and `write-protected` — all exclude account information, and Heroku cannot resolve the token's own account without it, so app and pipeline lookups fail. Create the token from a dedicated Heroku user rather than an account owner, keep that user out of teams the agent does not need, and rotate the token on your normal schedule.
+---
 
 ## Agent capabilities
 
-Once connected, agents have read access to your Heroku apps, dynos, add-ons, teams, and pipelines.
-
 | Capability | Description |
 |------------|-------------|
-| **Apps** | List apps and inspect a single app's region, stack, and current release state |
-| **Logs** | Read recent app logs for error and crash triage |
-| **Dynos** | List the dyno formation and the state of each running process |
-| **Add-ons** | Inventory the add-ons attached to an app and browse available add-on services and plans |
-| **Teams & Private Spaces** | List the teams and private spaces the account can reach |
-| **Pipelines** | List pipelines and inspect their stages and the apps in each |
-| **Changes** | Restart dynos, toggle maintenance mode, scale, create an add-on or pipeline, and promote a pipeline stage — **requires approval** |
+| **Apps** | List apps and read one app's stack, region, and maintenance state |
+| **Logs** | Read an app's recent application log lines, without router noise |
+| **Dynos** | Show the dyno formation: type, size, quantity, and state of each process |
+| **Add-ons** | List add-ons per app or across the account, and browse add-on services and plans |
+| **Teams and private spaces** | List the teams and private spaces the account can reach |
+| **Pipelines** | List pipelines and show the apps in each stage |
 
-Every Heroku operation that is not a read is approval-gated: CloudThinker states the effect and the exact inputs, then waits for your confirmation. Approving one change is not approval for the next one, or for the same change on a different app.
+Agents never read config vars, environment values, or database credentials. For queries against a Heroku Postgres database, add a separate [PostgreSQL connection](/guide/connections/postgresql).
 
 ### Verify the connection
 
 ```text
-Check the Heroku connection and list my apps with their dyno formation
+Check my Heroku connection and list my apps with their dyno formation
 ```
 
 ### Example prompts
 
 ```text
-My Heroku apps with their stack, region, and current dyno formation as a table
-A fix for my Heroku app that is throwing errors, based on its recent logs
-Which add-on plans we are paying for across my Heroku apps
+My checkout app on Heroku is throwing errors. Read its recent logs and dynos, and tell me what's wrong
+List the add-on plans attached to each of my Heroku apps as a table
+Which stage of the web pipeline is each app in, and is any app in maintenance mode?
 ```
 
-For accounts with many apps, name the app or the pipeline in your prompt so the agent returns focused results.
+Name the app or pipeline in your prompt when the account has many apps. The answer stays focused on it.
 
-## Write access
-
-Restarts and maintenance mode are reversible in one step: a restart replaces dynos with the same formation, and maintenance mode is a switch the paired action clears.
-
-<Warning>
-Scaling, add-on creation, and pipeline promotion are not free or not reversible in one step. Scaling and creating an add-on both change what Heroku bills you, and promoting a pipeline stage is a production release that no single call undoes. Read the inputs before you approve.
-</Warning>
-
-Database operations are outside this connection entirely. No agent tool reads Heroku Postgres credentials, runs SQL against your databases, or reads config vars. If you need query access to a Heroku Postgres database, add a [PostgreSQL connection](/guide/connections/postgresql) with its own credentials.
+---
 
 ## Troubleshooting
 
 <Accordion title="401 Unauthorized">
-The token is missing, expired, or revoked. Create a fresh authorization with `heroku authorizations:create` and reconnect. If you used the Dashboard API Key, check whether the account password changed — Heroku revokes that key when it does.
+The token is wrong, expired, or revoked. Create a new one with `heroku authorizations:create` and update the connection.
 </Accordion>
 
 <Accordion title="403 Forbidden on an app or team">
-The token's account is not a member of that app or team, or its app role is too low. Add the account to the team, or raise its app role to **Operate** for logs and dyno actions.
+The token's account isn't a member of that app or team. Add the account in Heroku, then ask again.
 </Accordion>
 
 <Accordion title="404 Couldn't find that user">
-The token cannot read its own account, so Heroku cannot resolve which apps and pipelines it owns. This is what a narrow token scope looks like. Create a new authorization with the default `global` scope and reconnect.
+The token can't read its own account, which is what a narrow scope looks like. Add-ons and teams still list, but apps and pipelines fail. Create a new authorization with the default `global` scope and update the connection.
 </Accordion>
 
-<Accordion title="404 for a named app or pipeline">
-The name is wrong, or the token's account cannot see that resource. Ask the agent to list apps or pipelines first and use a name from that list.
+<Accordion title="404 for a named app, add-on, or pipeline">
+The name is wrong, or it belongs to an account the token can't see. Ask CloudThinker to list your apps or pipelines, then use a name from that list.
 </Accordion>
 
 <Accordion title="429 Too Many Requests">
-Heroku allows 4,500 API requests per hour per account and refills the pool at roughly 75 per minute. Wait for the pool to refill, and scope requests to a single app so the agent makes fewer calls per run.
-</Accordion>
-
-<Accordion title="A change was requested but never ran">
-Writes need explicit approval in the same turn. Approve the action when prompted; a rejected call is final and the agent will not retry it.
+Heroku throttled the account. Wait a few minutes, then ask about one app at a time so each run makes fewer calls.
 </Accordion>
 
 <Accordion title="No private spaces are listed">
-Private Spaces are available only to verified Heroku Teams and to Heroku Enterprise. An account without them has none to list, so an empty result here is not a fault in the connection.
+Private spaces exist only on some Heroku plans. If your account has none, an empty list is the correct answer.
 </Accordion>
+
+---
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Use a dedicated account** — a Heroku token inherits everything its user can reach and cannot be narrowed to specific apps, so choose the account carefully, pass `--expires-in` to plan rotation, and revoke with `heroku authorizations:revoke <id>` when you are done.
-- **Treat logs as sensitive** — an app can print secrets into its own log output, so log triage can surface values you did not intend to share.
+- **Plan rotation**: pass `--expires-in` when you create the token, and run `heroku authorizations:revoke <id>` when you no longer need it.
+- **Treat logs as sensitive**: an app can print secrets into its own logs. CloudThinker avoids quoting lines that look like tokens or passwords, but don't rely on that alone.
+
+---
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Vercel Connection" icon="/images/icons/vercel.svg" href="/guide/connections/vercel">
-    Similar setup for Vercel projects and deployments
-  </Card>
   <Card title="PostgreSQL Connection" icon="/images/icons/postgresql.svg" href="/guide/connections/postgresql">
-    Query access to a Heroku Postgres database
+    Query a Heroku Postgres database with its own credentials
+  </Card>
+  <Card title="Vercel Connection" icon="/images/icons/vercel.svg" href="/guide/connections/vercel">
+    Same kind of setup for Vercel projects and deployments
   </Card>
 </CardGroup>

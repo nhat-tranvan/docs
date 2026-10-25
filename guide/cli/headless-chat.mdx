@@ -1,49 +1,80 @@
 ---
 title: Headless Chat
-description: "Send one prompt to CloudThinker from a script, wait for the answer on stdout, and collect long runs later or in CI"
+description: "Send a prompt to CloudThinker from a script or CI job, pipe the answer, and collect long runs later by run ID."
 icon: message-code
 ---
 
-`cloudthinker chat -p` submits a prompt to CloudThinker and waits for the answer. CloudThinker's answer is the only thing on stdout, so the command drops straight into a pipe.
+`cloudthinker chat -p` sends one prompt to CloudThinker in the cloud and prints the answer. Only the answer goes to stdout, so it drops straight into a pipe, a file, or a CI step, and the run keeps going on the server if your terminal disconnects.
+
+## Prerequisites
+
+- The CloudThinker CLI installed and logged in, or a `CLOUDTHINKER_TOKEN` for CI. See [CLI authentication](/guide/cli/authentication).
+- [Connections](/guide/connections/overview) for anything you want CloudThinker to inspect, such as an AWS account or a Kubernetes cluster.
 
 ## Send a prompt
 
+<Steps>
+  <Step title="Ask a question">
+    ```bash
+    cloudthinker chat -p "List EC2 instances in us-east-1 with average CPU under 5% this week"
+    ```
+
+    A spinner on stderr shows the run status while you wait.
+
+    **Success state:** the answer prints on stdout, then stderr shows `continue_with=<conversation_id> web_url=<link>`.
+  </Step>
+  <Step title="Pipe or save the answer">
+    stdout holds only the answer, so redirect it like any other command:
+
+    ```bash
+    cloudthinker chat -p "Summarize yesterday's incidents" > summary.md
+    cloudthinker chat -p "List unattached EBS volumes, one ID per line" | grep vol-
+    ```
+  </Step>
+  <Step title="Follow up in the same conversation">
+    Pass the `continue_with` ID, or the run ID, to `--continue`:
+
+    ```bash
+    cloudthinker chat -p "Draft a rollout plan for the api service"
+    cloudthinker chat -p "Remove the risky step" --continue 0f9e364e-9c34-406e-be7d-52a143fede85
+    ```
+
+    Open the `web_url` to see the same conversation in the browser. Only one turn runs in a conversation at a time, so wait for the previous run to finish first.
+  </Step>
+</Steps>
+
+## Send input from another command
+
+Piped stdin joins your prompt, so you can hand CloudThinker logs, diffs, or files:
+
 ```bash
-cloudthinker chat -p "Name the three biggest cost drivers in a typical AWS account, one line each."
+kubectl logs deploy/api --tail 200 | cloudthinker chat -p "Why does this crash?"
+cloudthinker chat -p - < prompt.md
 ```
 
+| Input | What CloudThinker receives |
+|---|---|
+| `-p "text"` with nothing piped | Your text |
+| `-p "text"` with piped stdin | Your text, then the piped data in `<stdin>` tags |
+| `-p -` | The whole prompt read from stdin |
 
-Progress, the run ID, and the continuation hint go to stderr. That split is what keeps the command pipeable:
+The prompt and piped data together can be up to 50,000 characters. If stdin is open but sends nothing, the CLI waits 3 seconds and sends the prompt alone. In scripts with nothing to pipe, add `< /dev/null` to skip the wait.
 
-```bash
-cloudthinker chat -p "Summarize yesterday's incidents" > summary.md
-cloudthinker chat -p "List unused EBS volumes" | grep vol-
-```
-
-## Continue a conversation
-
-Every terminal run prints `continue_with=<conversation_id>` on stderr. Pass that ID, or the run ID, to keep the thread:
-
-```bash
-cloudthinker chat -p "Draft the rollout plan"
-cloudthinker chat -p "Remove the risky step" --continue 0f9e364e-9c34-406e-be7d-52a143fede85
-```
-
-The same conversation is visible in the web app through the `web_url` printed beside the hint.
+To have a [custom agent](/guide/agents/customize) answer, pass its UUID or alias: `--agent <uuid-or-alias>`.
 
 ## Submit now, collect later
 
-A long investigation does not need to hold your terminal. `--no-wait` returns as soon as the run is queued:
+A long investigation doesn't need to hold your terminal. `--no-wait` returns as soon as the run is queued:
 
 ```bash
 cloudthinker chat -p "Which S3 buckets have no lifecycle policy?" --no-wait --json
 ```
 
 <Frame>
-  <img src="/images/cli/json-envelope.png" alt="The JSON envelope returned by chat --no-wait" />
+  <img src="/images/cli/json-envelope.png" alt="The JSON returned by chat --no-wait with run_id, conversation_id, status, and web_url" />
 </Frame>
 
-Collect the answer from any machine later:
+Collect the answer later, from any machine logged in to the same workspace:
 
 ```bash
 cloudthinker chat status 7d5fae84-be6f-45fa-802f-5041f0ff5d42 --wait
@@ -51,66 +82,105 @@ cloudthinker chat ls --limit 10
 cloudthinker chat ls --conversation 0f9e364e-9c34-406e-be7d-52a143fede85 --json
 ```
 
-A client-side timeout never cancels the run. `--timeout` bounds only how long the CLI waits; the run keeps going server-side and the CLI prints the `chat status` command that resumes it.
+Stopping the wait never cancels the run. `--timeout` (default 2400 seconds) and Ctrl-C only stop the CLI from waiting; the CLI prints the `chat status` command that picks the run back up. Follow the same run ID rather than sending the prompt again, so the work doesn't run twice.
 
-## Machine-readable output
+## Read JSON output
 
-`--json` writes one envelope to stdout instead of the plain answer.
+`--json` writes one JSON object to stdout instead of the plain answer.
 
 | Field | Meaning |
-| --- | --- |
-| `run_id` | The run to poll with `chat status` |
-| `conversation_id` | The thread to pass to `--continue` |
-| `status` | `pending`, `running`, `succeeded`, `failed`, or `approval required` |
-| `answer` | CloudThinker's final answer, or `null` while the run is unfinished |
-| `web_url` | The same conversation in the web app |
+|---|---|
+| `run_id` | The run to follow with `chat status` |
+| `conversation_id` | The conversation to pass to `--continue` |
+| `status` | One of the statuses below |
+| `answer` | CloudThinker's answer, or `null` while the run is unfinished |
+| `web_url` | The conversation in the browser |
+| `message` | Extra detail from the server, when there is any |
+| `failure_kind` | Why a failed run failed, when known |
 
-The immediate `--no-wait --json` response has no `answer` field. Fetch it later with `chat status`.
+With `--no-wait --json`, only `run_id`, `conversation_id`, `status`, and `web_url` come back, because no answer exists yet.
+
+| Status | Meaning |
+|---|---|
+| `pending` | Queued |
+| `running` | CloudThinker is working |
+| `succeeded` | Finished; `answer` is set |
+| `failed` | Finished without an answer |
+| `approval required` | Paused until someone approves an action in the browser |
+| `cancelled` | Stopped before it finished |
 
 ```bash
-cloudthinker chat -p "Check the error budget" --json | jq -r '.answer'
+cloudthinker chat -p "Check the error budget for checkout" --json | jq -r '.answer'
 ```
 
 ## Exit codes
 
-A pipeline can branch on the outcome without parsing text.
+Branch on the exit code instead of parsing text.
 
-| Code | Meaning |
-| --- | --- |
-| 0 | The run finished and the answer was printed |
-| 1 | The run failed, or the run ID is unknown |
-| 2 | Bad usage, or the request was rejected by a workspace policy |
-| 3 | Not logged in, or the credential expired |
-| 4 | The CLI stopped waiting. The run continues server-side |
-| 5 | The run paused for an approval in the browser |
+| Code | Meaning | What to do |
+|---|---|---|
+| 0 | The run finished and the answer printed | Use the answer |
+| 1 | The run failed, or the run ID is unknown | Read the error on stderr |
+| 2 | Bad usage, or the server rejected the request | Fix the command; don't resend it unchanged |
+| 3 | Not logged in, or the credential expired | Run `cloudthinker login`, or replace `CLOUDTHINKER_TOKEN` |
+| 4 | The CLI stopped waiting; the run continues | Run `chat status <run_id> --wait` |
+| 5 | The run paused for an approval in the browser | Open `web_url` and decide, or ask an [approver](/guide/approvals/approvers) |
+| 130 | You pressed Ctrl-C; the run continues | Run `chat status <run_id> --wait` |
 
-`chat ls` and `chat status` without `--wait` exit 0 after a successful fetch. `chat status --wait` returns the run's outcome code.
+`chat ls` and `chat status` without `--wait` exit 0 after a successful read, even if the run is still going. `chat status --wait` returns the run's own code.
 
 ## Use it in CI
 
-Give the job a token, keep stdout for the answer, and let the exit code decide the outcome:
+Give the job a token, keep stdout for the answer, and let the exit code decide:
 
 ```bash
 export CLOUDTHINKER_TOKEN="$CLOUDTHINKER_CI_TOKEN"
 
-if cloudthinker chat -p "Review last night's failed deployments" --timeout 900 > report.md; then
-  echo "report ready"
-else
-  case $? in
-    4) echo "still running, collect it in the next job" ;;
-    5) echo "waiting for an approval in the browser" ;;
-    *) exit 1 ;;
-  esac
-fi
+cloudthinker chat -p "Review last night's failed deployments and list the likely cause of each" \
+  --timeout 900 < /dev/null > report.md
+code=$?
+
+case $code in
+  0) echo "report ready" ;;
+  4) echo "still running, collect it in the next job" ;;
+  5) echo "waiting for an approval in the browser" ;;
+  *) exit 1 ;;
+esac
 ```
 
-## Related
+A headless run follows the workspace [Approval mode](/guide/approvals/approval-mode) like chat. If a prompt asks for a change that needs approval, the run pauses with exit code 5 instead of acting.
+
+## Headless chat or headless agent?
+
+| You want | Use |
+|---|---|
+| CloudThinker to investigate your cloud through workspace connections, and keep running if you disconnect | `cloudthinker chat -p` |
+| An answer about the files in this folder, on this machine | `cloudthinker agent -p`. See [Agent CLI](/guide/cli/agent#run-the-agent-without-the-screen) |
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="The command hangs for a few seconds before starting">
+    Stdin is open with no data, so the CLI waits 3 seconds for input. Add `< /dev/null` when nothing is piped.
+  </Accordion>
+  <Accordion title="The prompt is rejected as too long">
+    The prompt plus piped input is over 50,000 characters. Trim the input, for example with `--tail` on logs.
+  </Accordion>
+  <Accordion title="--continue fails because a stream is already active">
+    Another run is still working in that conversation. Wait for it with `chat status <run_id> --wait`, then continue.
+  </Accordion>
+  <Accordion title="The run exits with code 5">
+    CloudThinker wants to make a change your workspace requires a person to approve. Open the `web_url`, decide, then check the same run with `chat status <run_id> --wait`. Don't submit a new run to get around the approval.
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
 
 <CardGroup cols={2}>
-  <Card title="Authentication" icon="key" href="/guide/cli/authentication">
+  <Card title="CLI authentication" icon="key" href="/guide/cli/authentication">
     Give a pipeline a credential of its own
   </Card>
-  <Card title="Reference" icon="book" href="/guide/cli/reference">
+  <Card title="CLI reference" icon="book" href="/guide/cli/reference">
     Every command, flag, variable, and exit code
   </Card>
 </CardGroup>

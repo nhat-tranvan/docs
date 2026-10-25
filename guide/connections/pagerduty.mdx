@@ -1,157 +1,142 @@
 ---
 title: PagerDuty
-description: "Connect PagerDuty to CloudThinker for on-call management, incident alerting, and escalation policy integration"
+description: "Send PagerDuty incident events to Resolve with a signed webhook, so CloudThinker can open an incident and start a root cause analysis"
 icon: "/images/icons/pagerduty.svg"
 ---
 
-import ConnectionSecurity from '/snippets/connection-security.mdx';
+PagerDuty connects to CloudThinker through a webhook: PagerDuty sends each incident event to [Resolve](/guide/incident/overview), which can open an incident and start a root cause analysis (RCA). The webhook is signed with a secret that PagerDuty generates, so Resolve can prove each event came from your account.
 
-Connect your PagerDuty account to enable CloudThinker agents to manage incidents, view on-call schedules, monitor services, and handle escalation policies. PagerDuty authenticates with a **User API Token** scoped to the creating user's permissions.
-
----
-
-## Supported platforms
-
-| Platform | Support |
-|----------|---------|
-| **PagerDuty** | All plans (Free, Professional, Business, Digital Operations) |
-
----
+<Note>
+This is a one-way feed. There's no PagerDuty API connection today, so agents can't read on-call schedules, escalation policies, or services in PagerDuty, and can't acknowledge or resolve PagerDuty incidents.
+</Note>
 
 ## Prerequisites
 
-- A **PagerDuty account** on any plan.
-- A **User API Token** from **My Profile → User Settings → API Access**.
-
-<Info>
-Use a **User API Token**, not a General Access REST API Key. User tokens scope access to what the user can see, providing better security boundaries.
-</Info>
-
----
+- Permission to manage Resolve integrations in your CloudThinker workspace.
+- Permission in PagerDuty to add a webhook under **Integrations → Generic Webhooks (v3)**.
+- A PagerDuty service you can trigger a test incident on.
+- [Connections](/guide/connections/overview) to the systems behind your services, such as AWS or Datadog, if you want the RCA to query them.
 
 ## Setup
 
 <Steps>
-  <Step title="Open PagerDuty">
-    Sign in to your PagerDuty account at [app.pagerduty.com](https://app.pagerduty.com).
-  </Step>
-  <Step title="Generate a User API Key">
-    Click your **User Icon → My Profile**, then scroll to **User Settings → API Access** and click **Create API User Token**:
-    - **Description**: `cloudthinker`
-    - Click **Create Key**
+  <Step title="Create the webhook in CloudThinker">
+    Go to **Resolve → Integrations** and select **PagerDuty**. Under **Signals to Resolve**, click **Add signal**. The **Create Webhook** dialog opens with the PagerDuty preset.
 
-    Copy the key immediately — it will not be shown again.
+    On **Basic Info**, keep or change **Webhook Name** and click **Next**. On **Configure**, leave **Field Mapping** and **Severity Mapping** as they are and click **Next**.
   </Step>
-  <Step title="Add the connection in CloudThinker">
-    Navigate to **Connections → PagerDuty** and enter:
-    - **User API Key**: the token you just generated
+  <Step title="Keep the PagerDuty signature settings">
+    On **Advanced**, **Auth Method** is already **HMAC Signature** with **HMAC Signature Header** set to `X-PagerDuty-Signature`. Leave both. Leave **Provider signing secret** blank for now. Set **Auto-investigate** and click **Create**.
 
-    Click **Connect**. CloudThinker verifies the credentials and shows a **Connected** status.
+    Copy the **Webhook URL** from the dialog that opens. You don't need the secret it shows, because PagerDuty signs with its own.
+  </Step>
+  <Step title="Add the webhook in PagerDuty">
+    In PagerDuty, go to **Integrations → Generic Webhooks (v3)** and click **New Webhook**. Paste the CloudThinker **Webhook URL**, pick the account or service whose incidents you want to send, and select these events:
+
+    - `incident.triggered`
+    - `incident.acknowledged`
+    - `incident.resolved`
+
+    Save the webhook, then copy the signing secret PagerDuty shows.
+  </Step>
+  <Step title="Paste the PagerDuty secret into CloudThinker">
+    Back on **Resolve → Integrations → PagerDuty**, find your webhook under **Signals to Resolve**. Open its menu (**⋯**), click **Edit**, paste the secret into **Provider signing secret**, and click **Save**.
+
+    **Success state:** the webhook is listed under **Signals to Resolve**, and Resolve now verifies every PagerDuty event with your PagerDuty secret.
   </Step>
 </Steps>
 
 <Warning>
-Copy the API token immediately after creation. PagerDuty will not show it again, and you'll need to create a new token if lost.
+Until you paste the PagerDuty secret, every PagerDuty event fails the signature check and is rejected. If you regenerate the secret in PagerDuty later, paste the new one the same way.
 </Warning>
-
----
 
 ## Connection details
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| **PAGERDUTY_USER_API_KEY** | PagerDuty User API Token | `u+xxxxx...` |
+The PagerDuty preset maps these fields from PagerDuty's v3 webhook payload:
 
----
+| Field | Path | What it fills in |
+|-------|------|------------------|
+| **Title Path** | `event.data.title` | The incident title |
+| **Description Path** | `event.data.html_url` | A link back to the PagerDuty incident |
+| **Severity Path** | `event.data.priority.summary` | The severity, translated by **Severity Mapping** |
+| **Service Path** | `event.data.service.name` | The affected service, used by [Pulse](/guide/pulse/overview) to group related alerts |
+
+**Severity Mapping** translates PagerDuty priorities into CloudThinker's five levels:
+
+| PagerDuty value | CloudThinker severity |
+|-----------------|-----------------------|
+| `P1`, `critical` | critical |
+| `P2`, `error` | high |
+| `P3`, `warning` | medium |
+| `P4` | low |
+| `P5`, `info` | info |
+
+Matching ignores case, so `P1` and `p1` both map to critical. An incident with no priority set arrives as **medium**. If your PagerDuty account doesn't use priorities, change **Severity Path** or add the values you send to **Severity Mapping**.
 
 ## Required permissions
 
-### Minimum (read-only)
+CloudThinker needs nothing from PagerDuty except the signed events. There's no API key to store.
 
-A user with **Observer** or **Responder** role provides:
-- View incidents, services, and escalation policies
-- View on-call schedules
-- View teams and users
-
-### Recommended (full operations)
-
-A user with **Responder** or **Manager** role provides:
-- All read permissions
-- Acknowledge and resolve incidents
-- Create incidents and status updates
-- Manage on-call overrides
+| Setting | Use |
+|---------|-----|
+| **HMAC Signature** on `X-PagerDuty-Signature` | Recommended. Resolve checks each event against your PagerDuty secret, and treats a signed incident event as an incident PagerDuty has already declared. |
+| **No Authentication** | A quick test only. Anyone with the URL can send events, and they're treated as ordinary alerts. |
 
 <Tip>
-Follow least privilege: assign Observer role for read-only monitoring. Promote to Responder or Manager only when incident write actions are needed.
+Scope the PagerDuty webhook to the services you want investigated, not the whole account. Fewer, relevant events make each RCA faster to read.
 </Tip>
 
----
+## What CloudThinker does with the events
 
-## Agent capabilities
+| Step | What happens |
+|------|--------------|
+| **Receive** | Resolve accepts the event and returns `202 Accepted` to PagerDuty |
+| **Group** | Pulse drops noise and groups related signals, so repeat events for one incident stay together |
+| **Open** | An actionable group becomes an incident on **Resolve → Investigation** |
+| **Investigate** | With **Auto-investigate** on and **On duty** on, CloudThinker starts an RCA using your other connections |
 
-Once connected, agents can query and act on PagerDuty data.
-
-| Capability | Description |
-|------------|-------------|
-| **Incident triage** | List triggered and acknowledged incidents, identify patterns |
-| **On-call schedules** | View who is currently on-call and upcoming rotations |
-| **Service health** | Monitor service status and active incident counts |
-| **Escalation policies** | View escalation chains and notification rules |
-| **Incident actions** | Acknowledge, resolve, and add notes to incidents |
-| **Schedule management** | View schedules and identify coverage gaps |
+See [Webhook signals](/guide/incident/webhook-integrations/overview) for every **Auto-investigate** option, including a minimum severity.
 
 ### Verify the connection
 
-```text
-List all triggered PagerDuty incidents and report the current on-call schedule
-```
+Trigger a test incident on a non-production PagerDuty service, then check two places:
 
-### Example prompts
+1. **Resolve → Pulse** shows a signal with the PagerDuty incident title, the right severity, and the service.
+2. **Resolve → Investigation** shows the incident. With **Auto-investigate** and **On duty** both on, it shows **AI is handling**.
 
-```text
-List all triggered and acknowledged incidents and any patterns by service
-Who is currently on-call for the platform-engineering service?
-Show next week's on-call schedule and identify any coverage gaps
-```
-
----
+**Success state:** both appear within a minute or two. Resolve the test incident in PagerDuty when you're done.
 
 ## Troubleshooting
 
-<Accordion title="Authentication failed">
-The token is incorrect, expired, or revoked. Verify the User API Token, ensure you are using a **User Token** (not a REST API Key), and generate a new token if needed.
+<Accordion title="PagerDuty reports failed deliveries with 401 or 403">
+The signature check failed. **Check:** that you pasted the PagerDuty signing secret into **Provider signing secret**, not the CloudThinker secret, and that **HMAC Signature Header** is `X-PagerDuty-Signature`. **Fix:** copy the secret from the PagerDuty webhook again, edit the CloudThinker webhook, paste it, and click **Save**.
 </Accordion>
 
-<Accordion title="Permission denied">
-The user has insufficient role permissions or team-level access restrictions. For write operations, ensure the user has Responder or Manager role.
+<Accordion title="Every PagerDuty incident arrives as medium">
+The incident has no priority, or the value isn't in **Severity Mapping**. **Fix:** set priorities in PagerDuty, or edit the webhook and add a mapping row for the value PagerDuty sends.
 </Accordion>
 
-<Accordion title="Missing services or incidents">
-The user does not have access to the relevant teams. Verify team membership includes the services you want to monitor.
+<Accordion title="Signals arrive without a service">
+**Service Path** doesn't match the payload your PagerDuty account sends. **Fix:** check a recent event in **Resolve → Pulse** and point **Service Path** at the field that holds the service name, such as `event.data.service.summary`.
 </Accordion>
 
-<Accordion title="Token revoked">
-Navigate to **My Profile → User Settings** in PagerDuty, create a new API User Token, and update the token in CloudThinker connection settings.
+<Accordion title="The signal is in Pulse but no RCA started">
+**Auto-investigate** is off, the severity is below its minimum, or **On duty** shows **Paused**. **Fix:** check all three, or start the investigation by hand. See [Resolve settings](/guide/incident/settings).
 </Accordion>
-
----
 
 ## Security
 
-<ConnectionSecurity />
-
-- **User token** — use a User API Token scoped to a dedicated PagerDuty user rather than a General Access REST API Key.
-- **Team scoping** — limit the dedicated user's team membership to only the services CloudThinker needs to monitor.
-
----
+- **Signed events only.** Keep **HMAC Signature** on so Resolve rejects any event that isn't signed with your PagerDuty secret.
+- **Rotate both sides.** When you regenerate the signing secret in PagerDuty, paste the new value into **Provider signing secret** right away. Events fail until you do.
+- **Delete when done.** Delete the webhook in PagerDuty and in **Resolve → Integrations** when you stop using it. Deleting only the CloudThinker side leaves PagerDuty sending events that fail.
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="ServiceNow Connection" icon="/images/icons/servicenow.svg" href="/guide/connections/servicenow">
-    ITSM incident management
+  <Card title="Webhook signals" icon="webhook" href="/guide/incident/webhook-integrations/overview">
+    Field mapping, authentication, and Auto-investigate options
   </Card>
-  <Card title="Datadog Connection" icon="/images/icons/datadog.svg" href="/guide/connections/datadog">
-    Observability and monitoring
+  <Card title="Rootly Connection" icon="/images/icons/rootly.svg" href="/guide/connections/rootly">
+    Triage incidents and action items in Rootly
   </Card>
 </CardGroup>

@@ -1,109 +1,130 @@
 ---
 title: Handle CAPTCHA Logins
-description: "Configure CAPTCHA options for Pentest password logins and check authenticated coverage when a challenge blocks access."
+description: "Configure CAPTCHA options so a Pentest password login can sign in, then confirm the run really tested behind the login."
 icon: key
 ---
 
-Configure CAPTCHA when a [Pentest](/guide/security/pentest) test account must pass a challenge to sign in. Saving the account does not prove that protected pages are accessible.
+If your app's login page shows a CAPTCHA (reCAPTCHA, hCaptcha or Cloudflare Turnstile), a [Pentest](/guide/security/pentest) run can't sign in with a saved password until you tell CloudThinker how to get past it. Without that, the run only tests what an anonymous visitor can see. This page shows the three ways to handle it and how to check the login actually worked.
 
-## Prerequisites
+**Test identity** means a dedicated account in your app that the pentest signs in with. Use one made for testing, never a real user's account.
 
-- A registered Pentest app and permission to edit its test users.
-- A dedicated test account with **Password** authentication.
-- For test keys, access to the test application's CAPTCHA configuration.
-- For automated fallback, an installation where your administrator has enabled CAPTCHA fallback and configured the required solver.
+## Pick an approach
+
+| Approach | Use it when | What you need |
+| --- | --- | --- |
+| **Target test keys** | You test a staging or test environment you control | The CAPTCHA provider's test keys installed in both your login widget and your server-side verifier |
+| **Bypass header** | Your app already skips CAPTCHA when a specific header and secret are present | The header name, the secret, and an administrator to store it as a protected credential |
+| **Automated fallback** (with **Customer bypass** set to **None**) | You can't change the target | A solver configured for your installation; it may consume solver credits and can still fail |
+| **Session token** instead of a password | None of the above work, or the login needs MFA | A signed-in request copied as cURL from your browser |
+
+Target test keys are the most reliable option. Automated fallback is a best effort.
+
+## Before you start
+
+- A registered Pentest app and permission to edit its test identities. See [Run a Pentest](/guide/security/pentest).
+- A dedicated test account that signs in with a username and password.
+- For test keys or a bypass header: access to the target app's CAPTCHA configuration.
 
 ## Configure the login
 
 <Steps>
-  <Step title="Open the password identity">
-    Open the app's **Settings → Test users**, then **Add test user** or **Add authentication**. Choose **Password** and enter the account details.
+  <Step title="Open the password form">
+    Open your app in Cyber, go to **Settings**, and find **Test identities**. Click **Add authentication** (or **Add test user** during app setup) and choose **Password**.
 
-    Set **Login URL (optional)** to the application's password login page when needed. The login page must stay within your app's target and scope.
+    Enter the username and password. Set **Login URL (optional)** to the page with the login form if it isn't the app's start page. It must stay inside the app's target and scope.
 
     Expand **CAPTCHA options (optional)**.
   </Step>
-  <Step title="Choose the CAPTCHA options">
-    Set **Customer bypass** to **None** unless you have prepared a target-side exception. For a test environment with provider test keys, choose **Target test keys**.
+  <Step title="Set Customer bypass">
+    Choose one value in **Customer bypass**:
 
-    Select **CAPTCHA provider** and enter the public sitekey already installed on the target in **Installed test sitekey**. Keep the matching verifier secret on your application server.
-
-    Set **Automated fallback** to **Allow for this identity** or **Disable for this identity**. Allowing fallback does not turn on an installation where fallback is disabled.
+    - **None**: no target-side exception. The run relies on automated fallback if it's allowed.
+    - **Target test keys**: pick the **CAPTCHA provider** (reCAPTCHA v2, reCAPTCHA v3, hCaptcha or Cloudflare Turnstile) and paste the public sitekey from your login widget into **Installed test sitekey**. The matching test secret stays on your server. CloudThinker never needs it.
+    - **Bypass header**: enter **Header name** and **Bypass secret**. Your target must already accept this header. The password still has to sign in.
 
     <Frame>
-      <img src="/images/security/cyber/14-captcha-options.png" alt="Customer bypass and automated fallback options for a password identity." />
+      <img src="/images/security/cyber/15-captcha-test-keys.png" alt="CAPTCHA options with Target test keys selected, showing the provider and installed test sitekey fields." />
     </Frame>
-    <p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>CAPTCHA options for a password identity.</p>
   </Step>
-  <Step title="Save and check the run">
-    Click **Save login**, then start an on-demand pentest. Review the run's authentication result before treating protected routes as tested.
+  <Step title="Set Automated fallback">
+    Choose **Allow for this identity** or **Disable for this identity** in **Automated fallback**.
 
-    **Success state:** the run proves signed-in access to protected content and confirms that anonymous access is denied. A saved login or a completed CAPTCHA alone is insufficient.
+    Allow only lets this identity use fallback if your installation already has a solver configured. It can't turn fallback on for the installation.
 
-    If CAPTCHA remains unsolved, authenticated testing is blocked. Correct the login setup or attach a verified **Session token** before another run.
+    <Frame>
+      <img src="/images/security/cyber/14-captcha-options.png" alt="Customer bypass and Automated fallback options for a password identity." />
+    </Frame>
+  </Step>
+  <Step title="Save and run">
+    Click **Save login**. CloudThinker saves password identities without signing in, so saving doesn't prove the login works.
+
+    Click **Run pentest** and start a run.
+
+    **Success state:** the run's authentication result shows signed-in access to a protected page, and anonymous access to that page is denied. Only then treat protected routes as tested.
   </Step>
 </Steps>
 
-## Choose a target-side exception
+## Provider test keys
 
-| Customer bypass | What it requires |
-| --- | --- |
-| **None** | No target-side exception; enabled fallback may attempt the login challenge |
-| **Bypass header** | Your target already validates a dedicated header and secret to skip CAPTCHA; the password must still sign in. Header policies require protected credential configuration; ask your administrator to arrange it |
-| **Target test keys** | Matching test keys in the target's widget and server-side verification, plus the installed public sitekey in CloudThinker |
+Each provider publishes test keys that always pass. Install the sitekey in your login widget and the matching test secret in your server-side verification, then enter the sitekey in **Installed test sitekey**.
 
-The form displays **Header name** and **Bypass secret** for Bypass header. If saving this option is rejected, use the protected configuration path with your administrator or choose a verified session.
-
-### Provider test keys
-
-| Provider | Testing guidance |
-| --- | --- |
-| **reCAPTCHA v2** | Google's test key pair avoids the challenge and passes verification; see the [reCAPTCHA testing FAQ](https://developers.google.com/recaptcha/docs/faq#id-like-to-run-automated-tests-with-recaptcha.-what-should-i-do) |
-| **reCAPTCHA v3** | Use a separate testing key; scores may differ from real traffic. A testing key does not guarantee login acceptance; see the same [Google FAQ](https://developers.google.com/recaptcha/docs/faq) |
-| **hCaptcha** | Test sitekeys produce responses that require the matching test secret; see [hCaptcha test keys](https://docs.hcaptcha.com/#integration-testing-test-keys) |
-| **Cloudflare Turnstile** | Use dummy sitekeys with matching test secrets; production secrets reject dummy responses. See [Turnstile testing](https://developers.cloudflare.com/turnstile/troubleshooting/testing/) |
+| Provider | What to know | Reference |
+| --- | --- | --- |
+| **reCAPTCHA v2** | Google's test key pair skips the challenge and passes verification | [reCAPTCHA FAQ](https://developers.google.com/recaptcha/docs/faq#id-like-to-run-automated-tests-with-recaptcha.-what-should-i-do) |
+| **reCAPTCHA v3** | Use a separate key for testing. Scores can differ from real traffic, so your server may still reject the login | [reCAPTCHA FAQ](https://developers.google.com/recaptcha/docs/faq) |
+| **hCaptcha** | Test sitekeys only work with the matching test secret | [hCaptcha test keys](https://docs.hcaptcha.com/#integration-testing-test-keys) |
+| **Cloudflare Turnstile** | Dummy sitekeys need matching dummy secrets. Production secrets reject dummy responses | [Turnstile testing](https://developers.cloudflare.com/turnstile/troubleshooting/testing/) |
 
 <Warning>
-  Use provider test keys only in test environments. They can remove bot protection; do not replace your production protection for a pentest.
+  Test keys remove bot protection. Use them only in a test environment, never on production.
 </Warning>
 
-<Frame>
-  <img src="/images/security/cyber/15-captcha-test-keys.png" alt="Choose a CAPTCHA provider and supply the installed public test sitekey." />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Target test-key configuration; the verifier secret stays on your application server.</p>
+## How a login run handles CAPTCHA
 
-## Understand automated fallback
+1. The run opens the login page and enters the saved username and password.
+2. If you set a customer bypass, it applies that first.
+3. If a CAPTCHA still appears and fallback is allowed for both the installation and the identity, the run tries to solve it in the same browser session.
+4. The run checks that a protected page loads while signed in. If it can't prove that, authenticated testing is blocked for that run and the reason shows on the identity.
 
-CloudThinker tries a configured customer bypass first. When fallback is enabled, it can attempt supported reCAPTCHA v2, reCAPTCHA v3, hCaptcha, and Turnstile login flows in the same browser session.
-
-Image challenges and provider checks can still reject the attempt. Provider selection does not guarantee that every challenge will pass. Fallback can consume configured solver credits.
-
-These options apply to password login. For other sign-in flows, use an available method described in [Run a Pentest](/guide/security/pentest#attach-a-login).
+Fallback can fail on image challenges or provider checks, and choosing a provider doesn't guarantee a pass. If your login needs MFA or another step after the password, CAPTCHA options won't help. Use a **Session token** instead.
 
 ## Troubleshooting
 
+These are the messages CloudThinker shows when a password login is rejected.
+
 <AccordionGroup>
   <Accordion title="CAPTCHA blocked this login">
-    Check the target's test keys or bypass configuration and the installation's fallback availability. Use a verified session if the challenge cannot be completed.
+    The challenge wasn't solved. Check that your test keys or bypass header are installed on the target, or allow automated fallback if your installation has a solver. If none of that works, attach a **Session token**.
   </Accordion>
   <Accordion title="CAPTCHA fallback is unavailable">
-    Ask your administrator to check the installation setting and required solver configuration. **Allow for this identity** cannot override a disabled installation setting.
+    No solver is configured for your installation, or fallback is disabled there. **Allow for this identity** can't override that. Ask your administrator to check the solver account, or switch to **Target test keys** or **Bypass header**.
+  </Accordion>
+  <Accordion title="This CAPTCHA flow is not supported">
+    The challenge type is one the run can't handle. Use a target bypass or a **Session token**.
+  </Accordion>
+  <Accordion title="Login could not stay within its safety boundary">
+    The login redirected outside the app's target or scope. Check **Login URL (optional)** and the app's target setup.
   </Accordion>
   <Accordion title="The test sitekey does not work">
-    Confirm that the widget and server use matching test keys for the selected provider. Entering a sitekey in CloudThinker does not change your target's verifier.
+    Your widget and server must use matching test keys for the provider you selected. Entering a sitekey in CloudThinker doesn't change your server's verifier, and a test sitekey can't pass production verification.
   </Accordion>
   <Accordion title="Bypass header cannot be saved">
-    Header policies require protected credential configuration. Ask your administrator to arrange the dedicated bypass credential, or attach a verified session instead.
+    The header name must be a dedicated one. Standard headers such as `Authorization`, `Cookie`, `Host`, `Origin` and `Referer` are refused. Header bypass secrets also have to come from a protected workspace credential with a `CAPTCHA_BYPASS_` prefix, so ask your administrator to set it up (see [Credentials](/guide/credentials)), or attach a **Session token** instead.
+  </Accordion>
+  <Accordion title="This login requires MFA or another authentication step">
+    The password form isn't the last step. Attach a **Session token** copied from a signed-in browser.
   </Accordion>
 </AccordionGroup>
 
 ## Next steps
 
+Once a run proves signed-in access, review what it found behind the login.
+
 <CardGroup cols={2}>
-  <Card title="Run a pentest" icon="crosshairs" href="/guide/security/pentest">
-    Review scope, access, and intensity before testing
+  <Card title="Run a Pentest" icon="crosshairs" href="/guide/security/pentest">
+    Set scope, attach other login methods and pick intensity
   </Card>
-  <Card title="Triage security findings" icon="list-check" href="/guide/security/cyber-findings">
-    Read proof and coverage limitations before prioritizing fixes
+  <Card title="Triage Findings" icon="list-check" href="/guide/security/cyber-findings">
+    Read proof and coverage gaps before prioritizing fixes
   </Card>
 </CardGroup>

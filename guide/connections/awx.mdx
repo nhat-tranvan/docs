@@ -1,143 +1,135 @@
 ---
 title: AWX
-description: "Connect Ansible AWX to CloudThinker to launch job templates, monitor jobs, manage inventories, and orchestrate automation workflows"
+description: "Connect Ansible AWX so agents can find failed jobs, inspect inventories and projects, and launch job templates after approval"
 icon: "/images/icons/awx.svg"
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your Ansible AWX server to enable CloudThinker agents to launch job templates, monitor jobs, manage inventories and hosts, sync projects, and orchestrate automation workflows. AWX authenticates with a **user access token** scoped to read or write operations.
-
----
+Connect AWX to let CloudThinker agents find failed jobs and read their output, inspect inventories, hosts, and projects, and launch a job template once you approve. The connection signs in with one AWX **access token** and runs the `awx` command line tool against your server.
 
 ## Prerequisites
 
-- A **self-hosted AWX or Ansible Automation Platform** (Controller/Tower) instance reachable from CloudThinker over HTTPS.
-- An **AWX user** with access to the organizations and inventories CloudThinker should reach.
-
----
+- An AWX server, or an Ansible Automation Platform controller, reachable from CloudThinker over HTTPS.
+- An AWX user for CloudThinker with access to the organizations, inventories, and templates agents should reach.
 
 ## Setup
 
 <Steps>
-  <Step title="Sign in to AWX">
-    Sign in to your AWX web interface. Use a dedicated user scoped to only the organizations and inventories CloudThinker needs.
+  <Step title="Create a user for CloudThinker">
+    In AWX, create a user such as `cloudthinker` and give it roles only on the resources agents need (see [Required permissions](#required-permissions)). A dedicated user keeps the token's reach small and easy to revoke.
   </Step>
   <Step title="Create an access token">
-    Go to **Access → Users**, open your user, select the **Tokens** tab, and click **Add**:
-    - **Application**: leave empty
-    - **Scope**: **Write** for full operations, or **Read** for monitoring only
+    Sign in as that user. Go to **Access → Users**, open the user, select the **Tokens** tab, and click **Add**:
 
-    Copy the token — AWX shows it only once.
+    - **Application**: leave empty
+    - **Scope**: **Read** to monitor only, or **Write** if agents should launch and change things
+
+    Copy the token. AWX shows it only once.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Navigate to **Connections → AWX** and enter:
-    - **TOWER_HOST**: your AWX address, e.g. `https://awx.your-domain.com`
-    - **TOWER_OAUTH_TOKEN**: the token from the previous step
+    Open **Workspace Settings → Connections**, stay on the **Builtin Connections** tab, and select **AWX**. Fill in:
 
-    Click **Connect**. CloudThinker verifies the credentials and shows a **Connected** status.
+    - **TOWER_HOST**: your AWX address, such as `https://awx.example.com`
+    - **TOWER_OAUTH_TOKEN**: the token you copied
+
+    Click **Connect**. CloudThinker runs `awx me` with the token to confirm it can sign in.
+
+    **Success state:** the **Connect AWX** dialog closes without an error. Run the verify prompt below.
   </Step>
 </Steps>
-
----
 
 ## Connection details
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| **TOWER_HOST** | Base URL of your AWX instance | `https://awx.your-domain.com` |
-| **TOWER_OAUTH_TOKEN** | AWX user access token | — |
-
----
+| **TOWER_HOST** | Base URL of your AWX server, HTTPS | `https://awx.example.com` |
+| **TOWER_OAUTH_TOKEN** | Access token for the CloudThinker user | `<your-token>` |
 
 ## Required permissions
 
-What agents can do depends on the token scope.
+Two things decide what agents can do: the token's scope and the user's roles in AWX. The token can never do more than the user.
 
-- **Read** — list jobs, inspect inventories, check project status, review schedules, and view configuration.
-- **Write** — all read operations plus launching jobs, running ad-hoc commands, controlling running jobs, syncing projects, and managing hosts, groups, and schedules.
+| Goal | Token scope | AWX roles for the user |
+|------|-------------|------------------------|
+| Monitor jobs, inventories, and projects | **Read** | **Read** on the organizations or resources to watch |
+| Launch selected job templates | **Write** | **Execute** on those job templates or workflow templates |
+| Sync projects | **Write** | **Update** on those projects |
+| Change hosts and groups | **Write** | **Admin** on those inventories |
 
 <Tip>
-Use a Read-scoped token for monitoring only; add Write scope when agents need to launch or modify resources, and keep those actions approval-gated in CloudThinker.
+Start with a Read token. Switch to Write only for the templates you want agents to run, and grant **Execute** per template rather than a broad organization role.
 </Tip>
-
----
 
 ## Agent capabilities
 
-What agents can do depends on the token's scope.
+| Capability | What agents can do | Approval |
+|------------|--------------------|----------|
+| **Discovery** | Summarize the signed-in user, organizations, inventories, projects, job templates, workflow templates, and recent jobs | No |
+| **Jobs** | List jobs and workflow jobs by status, read job details, and read output of finished jobs | No |
+| **Inventories** | Inspect inventories, hosts, and groups | No |
+| **Projects** | Check project source control and sync status | No |
+| **Templates and credentials** | Read job templates, workflow templates, and credential metadata. Credential secrets are never returned | No |
+| **Launch** | Launch a job template or workflow template with extra variables, then follow it to completion | Yes |
+| **Control and sync** | Cancel a running job, or sync a project from source control | Yes |
+| **Change resources** | Create, modify, or delete hosts, groups, and other AWX resources | Yes |
 
-**Read — monitoring & inspection:**
-
-| Capability | Description |
-|------------|-------------|
-| **Monitor jobs** | List jobs and workflow runs, check status, and read output |
-| **Inspect inventories** | View inventories, hosts, and groups; spot unreachable or disabled hosts |
-| **Check project status** | Review sync status and source-control state |
-| **Review schedules** | List schedules and upcoming runs |
-| **Inspect configuration** | View job templates, workflow templates, inventory sources, and credential types |
-
-**Write — adds operations (requires approval):**
-
-| Capability | Description |
-|------------|-------------|
-| **Launch jobs** | Run job templates with extra variables and monitor to completion |
-| **Run ad-hoc commands** | Execute one-off commands against hosts without a template |
-| **Control running jobs** | Cancel in-flight jobs and relaunch failed ones |
-| **Sync projects & inventory** | Pull project updates from source control and refresh dynamic inventory |
-| **Manage hosts, groups & schedules** | Add, update, or remove them and toggle host enablement |
-| **Orchestrate workflows** | Launch workflow job templates and approve or deny approval nodes |
-
-Administrative resources (organizations, teams, users, and RBAC) are out of scope for agent operations.
+Every write goes through [Approvals](/guide/approvals/overview), and a rejected request isn't retried. With a Read token, AWX refuses writes even after approval.
 
 ### Verify the connection
 
 ```text
-List all AWX inventories and show any unreachable hosts
+Run AWX discovery and summarize my organizations, inventories, job templates, and the last few jobs with their status
 ```
+
+Expect the user CloudThinker signed in as, then the names and counts of each resource type, then recent jobs with a status such as **successful** or **failed**.
 
 ### Example prompts
 
 ```text
-List failed AWX jobs in the last 24 hours and their output
-Launch the deploy-production job template with version=2.1.0 and monitor it
-Check all AWX projects for sync failures and updates
+List AWX jobs that failed in the last 24 hours and show the error from each job's output
+Which AWX projects failed their last source control sync?
+Launch the deploy-web job template with extra vars version=2.1.0 and tell me when it finishes
 ```
 
----
+Use the real template, inventory, or project name. Agents look names up first and won't guess IDs.
 
 ## Troubleshooting
 
-<Accordion title="Connection or authentication failed">
-Verify the AWX URL is reachable from CloudThinker over HTTPS. Confirm the token has not expired or been revoked — create a new token if needed and reconnect.
+<Accordion title="Connect fails">
+CloudThinker couldn't run `awx me` against **TOWER_HOST**. Check that the address is HTTPS and reachable from the internet, and that the token hasn't expired or been revoked. Create a new token if needed, edit the connection, and paste it in.
 </Accordion>
 
-<Accordion title="Permission denied">
-The token's scope does not allow the requested action. Use a Write-scoped token for launch, sync, or management operations, and confirm the user has access to the target organization or inventory.
+<Accordion title="Requests return 401">
+The token is missing, expired, or revoked. Create a new token for the CloudThinker user and update **TOWER_OAUTH_TOKEN**.
 </Accordion>
 
-<Accordion title="Empty results">
-The token's user lacks visibility into the requested resources. Grant access to the relevant organizations and inventories in AWX, then retry.
+<Accordion title="Launch or sync is refused">
+The token has **Read** scope, or the user lacks **Execute** on the template or **Update** on the project. Create a Write token or grant the role in AWX, then ask again.
 </Accordion>
 
----
+<Accordion title="Lists come back empty">
+The user can't see those resources. Grant **Read** on the organizations or inventories agents should reach. No need to reconnect; roles apply on the next request.
+</Accordion>
+
+<Accordion title="Job output is empty">
+AWX returns output only after a job finishes. Ask again once the job's status is **successful** or **failed**.
+</Accordion>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Write scope only when needed** — use a Read-scoped token for monitoring; only enable Write scope when agents need to launch or modify resources.
-- **HTTPS only** — always use an HTTPS AWX URL; plaintext connections expose the access token.
-
----
+- **Read scope first**: use a Write token only when agents should launch or change things, and scope the user's roles to those templates.
+- **HTTPS only**: always use an HTTPS **TOWER_HOST**. Plain HTTP sends the token in clear text.
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="ArgoCD Connection" icon="/images/icons/argocd.svg" href="/guide/connections/argocd">
-    GitOps operations and application management
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Decide which AWX launches wait for a person.
   </Card>
-  <Card title="Jenkins Connection" icon="/images/icons/jenkins.svg" href="/guide/connections/jenkins">
-    CI/CD pipeline monitoring and job operations
+  <Card title="Automation" icon="clock" href="/guide/automation/automations">
+    Run AWX checks on a schedule, such as a daily failed-jobs report.
   </Card>
 </CardGroup>

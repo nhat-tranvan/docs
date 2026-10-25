@@ -1,22 +1,20 @@
 ---
 title: Fly.io
-description: "Connect Fly.io to CloudThinker for read-only app, machine, volume, and region inventory across an organization"
+description: "Connect a Fly.io organization so agents can list apps, check machine state and placement, and audit volumes with a read-only token."
 icon: "/images/icons/flyio.svg"
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your Fly.io organization to enable CloudThinker agents to inventory apps, check machine run state and placement, and audit volume provisioning during an incident or a capacity review.
-
-Fly.io authenticates with a **read-only organization token**. The connection is read-only end to end: CloudThinker exposes no Fly.io action that changes your infrastructure, and Fly itself refuses to mutate anything with this token.
+Connect a Fly.io organization so CloudThinker can list your apps, show which machines are started or stopped and where they run, and audit volume size and attachment during an incident or a capacity review. The connection uses a read-only organization token and can't change anything: CloudThinker's write tool is turned off for Fly.io, and Fly.io itself refuses changes made with this token.
 
 ## Prerequisites
 
-- A **Fly.io organization** containing the apps you want to inspect.
-- The **flyctl** CLI installed and signed in as a member of that organization.
-- A **read-only organization token** created from it.
+- A Fly.io organization that holds the apps you want to inspect.
+- The `flyctl` CLI installed and signed in as a member of that organization.
+- A CloudThinker workspace where you can add connections.
 
-A read-only token reads a single organization. If your apps span several organizations, create one token per organization and add one connection for each.
+A read-only token covers one organization. If your apps span several organizations, create one token and one connection per organization.
 
 ## Setup
 
@@ -28,70 +26,64 @@ A read-only token reads a single organization. If your apps span several organiz
     fly tokens create readonly --name cloudthinker --expiry 720h
     ```
 
-    `720h` is 30 days. Pass `--expiry` deliberately: Fly.io tokens are valid for **20 years** by default, and Fly's own guidance is to use a shorter lifetime when practical.
+    `720h` is 30 days. Always pass `--expiry`: Fly.io tokens last 20 years by default. If you belong to more than one organization, add `--org <slug>` to pick the right one.
 
-    If you belong to more than one organization, name the one you want with `--org <slug>`.
-
-    Copy the token when the command prints it. If you lose it, revoke that token and create a new one rather than trying to recover the value.
+    Copy the token the command prints. If you lose it, revoke it and create a new one.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Navigate to **Connections → Fly.io** and enter:
-    - **Access token**: the token you just created
+    Go to **Connections**, search for **Fly.io**, and paste the token into **Access token**.
 
-    Click **Connect**. CloudThinker verifies the token against Fly.io and shows a **Connected** status.
+    Click **Connect**. CloudThinker lists your organizations with the token to check it.
+
+    **Success state:** the Fly.io card shows a **Connected** status.
   </Step>
 </Steps>
 
 ## Connection details
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| **Access token** | Read-only Fly.io organization token for the organization CloudThinker should inspect | — |
+| Field | Environment key | What to enter |
+|-------|-----------------|---------------|
+| **Access token** | `FLY_ACCESS_TOKEN` | The read-only organization token from `fly tokens create readonly` |
 
-<Note>
-CloudThinker resolves the organization from the token, so there is no organization slug or region to configure.
-</Note>
+There's no organization slug or region to enter. CloudThinker reads the organization from the token.
 
 ## Required permissions
 
-The token type *is* the permission model. `fly tokens create readonly` produces a token limited to reading a single organization and its resources — it cannot deploy, scale, restart, or destroy anything, and no additional scoping is needed or available. Keep the read-only token type, set a short `--expiry`, and revoke the token when the work it was created for is finished.
+The token type is the permission model. `fly tokens create readonly` makes a token that can only read one organization and its resources. It can't deploy, scale, restart, or destroy anything, and Fly.io offers no finer scoping.
 
 <Warning>
-Do not substitute `fly tokens create org` or a personal auth token. Both grant write access to your organization. The connection does not need it, and a read-only token is the barrier that makes an accidental change impossible at the provider rather than merely disallowed in CloudThinker.
+Don't use `fly tokens create org` or a personal auth token instead. Both can change your organization, and this connection doesn't need that access.
 </Warning>
-
-## What this connection cannot reach
-
-This connection reads the Fly.io control plane and nothing else. It cannot:
-
-- **Change anything** — no deploys, scaling, machine start/stop/restart, volume changes, secrets, or app creation and destruction. When a fix needs a write, the agent reports the `fly` command for you to run yourself.
-- **Read logs or metrics** — there is no log tail and no application telemetry here.
-- **Read secrets or configuration** — app secrets and environment values are never fetched.
-- **Measure disk usage** — volume size is provisioned capacity, never used capacity. Nothing reads a filesystem.
-- **Report cost** — Fly bills provisioned volume capacity, but the rate is not readable through this connection, so agents report GB and never a dollar figure.
 
 ## Agent capabilities
 
-Once connected, agents have read access to your Fly.io organization, apps, machines, volumes, and regions.
+| Capability | What CloudThinker reads |
+|------------|-------------------------|
+| **Organizations** | The organizations the token can read, by slug and name |
+| **Apps** | Each app's status, owning organization, and deployment state |
+| **Machines** | Per app: machine ID, name, state, region, and last update, plus a count per state, how many aren't started, and how many regions are in use |
+| **Volumes** | Per app: volume ID, name, size, region, state, attachment, and encryption, plus unattached and total provisioned GB |
+| **Regions** | How many regions are available for placement, not counting deprecated ones |
 
-| Capability | Description |
-|------------|-------------|
-| **Organizations** | List the organizations the token can read, by slug and name |
-| **Apps** | List apps with their status, owning organization, and whether they are deployed |
-| **Machines** | Per app, list machine ID, name, state, region, and last update, with a count of each state, how many are not started, and how many regions are in use |
-| **Volumes** | Per app, list volume ID, name, size, region, state, attachment, and encryption, with unattached volume and GB totals and total provisioned GB |
-| **Regions** | Count the regions available for placement, excluding deprecated ones |
+Every capability is a read, so nothing on this connection asks for approval. Lists show 25 rows by default and say how many they hid. Ask for a wider view (up to 100) when you need it.
 
-There are no approval-gated actions on this connection, because there are no actions. Every capability above is a read.
+This connection can't reach:
+
+| Out of reach | What to do instead |
+|--------------|--------------------|
+| Deploys, scaling, machine start or stop, volume changes, secrets | CloudThinker gives you the exact `fly` command to run yourself |
+| Logs and application metrics | Connect your log or metrics tool, such as [Grafana](/guide/connections/grafana) or [Datadog](/guide/connections/datadog) |
+| Secrets and environment values | Not read, by design |
+| Disk usage and cost | Volume size is provisioned capacity, not used space. CloudThinker reports GB, never a dollar figure. |
 
 ### How to read the results
 
-App `status` and machine `state` are Fly.io control-plane records, not application health checks. Four consequences are worth knowing before you act on a report:
+App status and machine state come from Fly.io's control plane. They aren't health checks.
 
-- A `started` machine is not proof that your app works. This connection does not check whether your app responds.
-- A `stopped` machine is not a fault. Fly stops machines that have autostop configured.
-- An unattached volume is still costing you. Fly charges for a volume whether or not a Machine is attached, and a volume becomes unattached only when its Machine is **destroyed**, not when it is stopped.
-- An app with no machines has never been deployed. A pending or not-deployed app is a reserved name, not a failure.
+- A `started` machine doesn't prove your app responds to requests.
+- A `stopped` machine isn't a fault. Fly.io stops machines that have autostop configured.
+- A stopped machine releases its volume, so an unattached volume isn't proof of waste.
+- An app with no machines was never deployed. It's a reserved name, not a failure.
 
 ### Verify the connection
 
@@ -102,49 +94,47 @@ Check the Fly.io connection and list my organizations and apps
 ### Example prompts
 
 ```text
-My Fly.io apps with their status and deployment state as a table
-What to check next for my Fly.io app based on its machine states and regions
-Unattached Fly.io volumes and total provisioned GB for my app
+Show my Fly.io apps with their status and deployment state as a table
+Which machines in my Fly.io app "api" aren't started, and in which regions?
+List unattached Fly.io volumes for my app "api" with total provisioned GB
 ```
-
-Lists are capped by default and say how many rows they hid. Ask for a wider view when you need one.
 
 ## Troubleshooting
 
 <Accordion title="Error: You must be authenticated to view this">
-The token is missing, invalid, or expired. Reissue it with `fly tokens create readonly` and update the connection.
+The token is missing, invalid, or expired. Create a new one with `fly tokens create readonly` and update the connection.
 </Accordion>
 
 <Accordion title="Error: Could not find App">
-The app name is wrong, or it belongs to an organization this token cannot read. Ask the agent to list your apps first and use a name from that list.
+The app name is wrong, or the app belongs to an organization this token can't read. Ask CloudThinker to list your apps and use a name from that list.
 </Accordion>
 
-<Accordion title="Insufficient permissions or 403 on a list call">
-The read-only token does not cover that resource. Confirm the token was created for the organization that owns the app, and that its expiry has not passed.
+<Accordion title="Insufficient permissions or 403 on a list">
+The token doesn't cover that resource. Check that you created it for the organization that owns the app and that it hasn't expired.
 </Accordion>
 
-<Accordion title="A section reports that it is unmeasured">
-A call was refused or unavailable, so the agent reports the gap instead of a number. This is not the same as a count of zero — treat that section as unknown rather than empty.
+<Accordion title="A section says it's unmeasured">
+Fly.io refused or couldn't answer that call, so CloudThinker reports a gap instead of a number. Treat the section as unknown, not as zero.
 </Accordion>
 
-<Accordion title="The agent refuses to deploy, scale, or restart">
-Expected. This connection is read-only by design. Ask the agent for the exact `fly` command and run it yourself.
+<Accordion title="CloudThinker won't deploy, scale, or restart">
+That's expected. The connection is read-only. Ask for the exact `fly` command and run it yourself.
 </Accordion>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Read-only at the provider** — the token type Fly.io issues here cannot make changes, so the guarantee holds even if something asks it to, and a leaked token's blast radius stays one organization.
-- **Set a short expiry and revoke when finished** — Fly.io defaults tokens to 20 years, so always pass `--expiry`; `fly tokens revoke <token id>` invalidates one, and the Fly.io dashboard lists organization tokens under **Tokens**.
+- **Read-only at Fly.io:** the token can't make changes, so a leaked token exposes read access to one organization and nothing more.
+- **Short expiry, revoke when done:** list tokens with `fly tokens list` and revoke one with `fly tokens revoke <token-id>` when the work is finished.
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Vercel Connection" icon="/images/icons/vercel.svg" href="/guide/connections/vercel">
-    Similar setup for another application hosting platform
+  <Card title="Render connection" icon="server" href="/guide/connections/render">
+    Connect another app platform, with logs and approval-gated deploys
   </Card>
-  <Card title="Rancher Connection" icon="/images/icons/rancher.svg" href="/guide/connections/rancher">
-    Another read-only inventory and health connection
+  <Card title="Connections overview" icon="plug" href="/guide/connections/overview">
+    See every platform you can connect and how connections work
   </Card>
 </CardGroup>

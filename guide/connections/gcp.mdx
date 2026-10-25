@@ -1,187 +1,194 @@
 ---
 title: Google Cloud
-description: "Connect Google Cloud to CloudThinker for resource management, cost optimization, and security monitoring via service account"
+description: "Connect a Google Cloud project with a read-only service account so agents can investigate compute, GKE, BigQuery, identity, and cost."
 icon: "/images/icons/gcp.svg"
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your GCP projects to enable CloudThinker agents to analyze costs, optimize resources, audit security, and manage infrastructure across Google Cloud services.
-
-GCP authenticates with a **service-account key** (a JSON file); the service account's IAM roles determine what each agent can reach.
-
----
+CloudThinker runs the Google Cloud CLI against your projects to answer questions about compute, GKE, BigQuery, storage, identity, and cost. You connect with a service account's JSON key, and that service account's IAM roles decide what agents can reach.
 
 ## Prerequisites
 
-- A GCP project with IAM administrator access.
-- Permission to create service accounts and assign IAM roles in the project.
-- The [Google Cloud Console](https://console.cloud.google.com/) accessible in your browser.
-
-<Info>
-A viewer-level service account is sufficient for cost analysis, security audits, and resource inspection. Widen the roles only if you need write capabilities.
-</Info>
-
----
+- A Google Cloud project where you can create service accounts and grant IAM roles.
+- Permission to create service account keys. If your organization enforces the `iam.disableServiceAccountKeyCreation` policy, ask an organization admin for an exception on this project first.
+- For cost questions and [Optimize](/guide/cost-optimization/overview): a Cloud Billing **Standard usage cost** export to BigQuery. The export dataset must be in the same project as the service account, because Optimize only reads billing tables in the connected project.
 
 ## Setup
 
+Create the service account in Google Cloud first, then upload its key to CloudThinker.
+
+<Tabs>
+  <Tab title="Google Cloud console">
+    <Steps>
+      <Step title="Create the service account">
+        In the [Google Cloud console](https://console.cloud.google.com/), select the project and go to **IAM & Admin → Service Accounts**. Click **Create service account**, name it `cloudthinker-readonly`, and click **Create and continue**.
+      </Step>
+      <Step title="Grant read-only roles">
+        Add **Viewer** (`roles/viewer`). For Optimize, also add **BigQuery Data Viewer** (`roles/bigquery.dataViewer`) and **BigQuery Job User** (`roles/bigquery.jobUser`). Click **Done**.
+      </Step>
+      <Step title="Create a JSON key">
+        Open the service account, go to the **Keys** tab, and click **Add key → Create new key**. Choose **JSON** and click **Create**. The key file downloads once and can't be downloaded again.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="gcloud CLI">
+    Run these in [Cloud Shell](https://shell.cloud.google.com/) or any terminal signed in to Google Cloud. Replace `PROJECT_ID` with your project ID.
+
+    ```bash
+    PROJECT_ID=your-project-id
+    SA=cloudthinker-readonly@$PROJECT_ID.iam.gserviceaccount.com
+
+    gcloud iam service-accounts create cloudthinker-readonly \
+      --project="$PROJECT_ID" --display-name="CloudThinker read-only"
+
+    for ROLE in roles/viewer roles/bigquery.dataViewer roles/bigquery.jobUser; do
+      gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+        --member="serviceAccount:$SA" --role="$ROLE"
+    done
+
+    gcloud iam service-accounts keys create cloudthinker-key.json --iam-account="$SA"
+    ```
+
+    The last command writes the key to `cloudthinker-key.json`. Drop the two BigQuery roles if you don't use Optimize.
+  </Tab>
+</Tabs>
+
+Then connect it in CloudThinker:
+
 <Steps>
-  <Step title="Create a service account">
-    In the [Google Cloud Console](https://console.cloud.google.com/), select your project and navigate to **IAM & Admin → Service accounts**. Click **Create Service Account** and enter:
-    - **Name**: `cloudthinker-readonly`
-    - **Description**: Read-only access for CloudThinker monitoring
+  <Step title="Open the connect dialog">
+    In the sidebar, click **More → Workspace settings → Connections**, select **Google Cloud Platform**, and click **Connect**.
   </Step>
-  <Step title="Assign roles">
-    Grant the required viewer roles:
-    - `Viewer` (basic read access)
-    - `Monitoring Viewer` (for monitoring data)
-    - `Security Reviewer` (for security analysis)
+  <Step title="Name the project">
+    Fill in **Alias** (for example `prod-gcp`) and **Description** (for example `Production GCP project, GKE workloads`). Agents read the description to pick the right connection when you have several.
   </Step>
-  <Step title="Generate a JSON key">
-    Click on the created service account from the list, go to **Keys** tab → **Add key** → **Create new key**, select **JSON** format, and click **Create**. Download the key file and store it securely.
-  </Step>
-  <Step title="Add the connection in CloudThinker">
-    Navigate to **Connections → GCP** and upload the JSON key file (or paste its contents). Click **Connect**. CloudThinker verifies the credentials and shows a **Connected** status.
+  <Step title="Upload the key and pick a region">
+    Drag the JSON key file into **GOOGLE_SERVICE_ACCOUNT_KEY**, or click to browse for it. Pick your main region in **GCP_DEFAULT_REGION**, for example `us-central1`. Click **Connect**.
+
+    **Success state:** the status moves through **Connecting** and **Verifying**, and the project shows a **Connected** status.
   </Step>
 </Steps>
 
-<Warning>
-Store the JSON key file securely. Never commit it to version control or share it publicly.
-</Warning>
+### Connect more projects
 
-### Multi-project setup
+You have two options:
 
-For organizations with multiple GCP projects:
+| Option | How | Best when |
+|---|---|---|
+| One service account, many projects | Grant the same roles to the service account in each project, or once on a folder or the organization | You want one connection that can look across projects |
+| One connection per project | Repeat the setup in each project and click **Connect** again on **Google Cloud Platform** with a new alias | Projects belong to different teams, or each has its own billing export |
 
-<Steps>
-  <Step title="Grant organization-level access">
-    Grant the service account roles at the organization or folder level so it can reach all target projects.
-  </Step>
-  <Step title="Add billing account access">
-    Add **Billing Account Viewer** for cross-project cost analysis.
-  </Step>
-  <Step title="Add projects">
-    CloudThinker automatically discovers accessible projects after connecting.
-  </Step>
-</Steps>
-
----
+Optimize reads billing only from the project the key belongs to (its `project_id`), whichever option you pick.
 
 ## Connection details
 
 | Field | Description | Example |
-|-------|-------------|---------|
-| **Service Account Key (JSON)** | Full GCP service-account key JSON, uploaded or pasted into the connection dialog | `{"type": "service_account", "project_id": "your-project-id", ...}` |
+|---|---|---|
+| **Alias** | Short name for this connection. Blank picks one for you. | `prod-gcp` |
+| **Description** | What the project is. Agents use it to choose between connections. | `Production GCP project` |
+| **GOOGLE_SERVICE_ACCOUNT_KEY** | The service account's JSON key file, uploaded | `cloudthinker-key.json` |
+| **GCP_DEFAULT_REGION** | Starting region for agent commands | `us-central1` |
 
-The key file contains the following structure:
+The key file is JSON with fields such as `type`, `project_id`, `private_key`, and `client_email`. Upload it unchanged.
 
-```json
-{
-  "type": "service_account",
-  "project_id": "your-project-id",
-  "private_key_id": "key-id",
-  "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
-  "client_email": "cloudthinker-readonly@your-project.iam.gserviceaccount.com",
-  "client_id": "123456789012345678901",
-  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-  "token_uri": "https://oauth2.googleapis.com/token"
-}
-```
-
----
+After connecting, set **Environment** (**Production**, **Staging**, **Development**, or **Not set**) in **Edit Instance** so [approval rules](/guide/approvals/rules) can treat projects differently. **Not set** counts as production.
 
 ## Required permissions
 
-### Minimum (read-only analysis)
-
-```
-roles/viewer                    # Basic read access
-roles/monitoring.viewer         # Cloud Monitoring access
-roles/logging.viewer            # Cloud Logging access
-```
-
-### Recommended (full analysis)
-
-```
-# All of the above, plus:
-roles/compute.viewer            # Compute Engine details
-roles/container.viewer          # GKE cluster access
-roles/cloudsql.viewer           # Cloud SQL access
-roles/bigquery.dataViewer       # BigQuery analysis
-roles/billing.viewer            # Billing and cost data
-roles/securitycenter.viewer     # Security Command Center
-```
+| You want | Role | Grant on |
+|---|---|---|
+| Inventory, health, and IAM questions | Viewer (`roles/viewer`) | Each project, or a folder or organization |
+| Optimize cost data | BigQuery Data Viewer (`roles/bigquery.dataViewer`) | The billing export dataset (or the project) |
+| Optimize cost queries | BigQuery Job User (`roles/bigquery.jobUser`) | The connected project |
+| Agents to make specific changes | Only the narrow roles for those changes | Where the change happens. See [Write access](#write-access). |
 
 <Tip>
-Start with the minimum roles and add more only as needed. A viewer role at the project level is sufficient for cost analysis and most security audits.
+**Viewer** can't change anything, so it's a safe starting point. Granting BigQuery Data Viewer on the billing export dataset instead of the whole project keeps agents out of your other BigQuery data.
 </Tip>
-
----
 
 ## Agent capabilities
 
-Once connected, CloudThinker can analyze and optimize your GCP resources.
-
 | Area | What CloudThinker does |
-|-------|------------------|
-| **Cost** | Cost analysis, VM right-sizing, committed use recommendations, resource optimization |
-| **Security** | Security Command Center findings, IAM audits, compliance checks |
-| **Databases** | Cloud SQL performance, BigQuery optimization, Spanner tuning |
-| **Containers** | GKE cluster management, workload optimization, Autopilot analysis |
+|---|---|
+| **Inventory** | Lists and describes Compute Engine, GKE, Cloud Storage, BigQuery, and other resources across the projects the service account can see |
+| **Identity** | Reviews IAM bindings and service accounts for broad or unused access |
+| **Containers** | Checks GKE cluster and node pool configuration and health |
+| **Cost** | Reads your BigQuery billing export to break down spend by project, service, and label. Feeds [Optimize](/guide/cost-optimization/overview). |
+| **Changes** | Runs Google Cloud CLI writes only when **Allow writes** is on, the service account permits them, and your approval settings allow them |
 
 ### Verify the connection
 
 ```text
-Run a GCP account check and list connected projects and active services
+Which Google Cloud projects can you reach through my GCP connection, and which services are enabled in each?
 ```
+
+The answer lists your real project IDs.
 
 ### Example prompts
 
 ```text
-Analyze Compute Engine costs over the last 30 days and right-sizing opportunities
-Audit GCP IAM bindings and flag any over-permissioned service accounts
-Inspect GKE cluster health and any pod failures or resource pressure
+List Compute Engine instances that have been stopped for more than 30 days and the disks still attached to them
+Find service accounts with the Owner or Editor role in my projects
+Break down last month's Google Cloud spend by project and service
 ```
 
----
+## Write access
+
+**Allow writes** on the connection's detail panel controls whether agents may change anything in Google Cloud. It's on by default, but a service account with only **Viewer** and the BigQuery read roles can't change anything, so Google Cloud refuses every write until you grant more.
+
+| IAM roles | Allow writes | Result |
+|---|---|---|
+| Read-only roles only | On or off | Read-only. Google Cloud rejects any change. |
+| Extra write roles granted | Off | Read-only. CloudThinker refuses every change before it reaches Google Cloud. |
+| Extra write roles granted | On | Agents can propose changes. Your [Rules and Approval mode](/guide/approvals/overview) decide each one. |
 
 ## Troubleshooting
 
-<Accordion title="Permission denied errors">
-Verify the service account has the required roles. Check project-level IAM bindings, ensure APIs are enabled (Compute, Monitoring, etc.), and confirm the JSON key is valid and not expired.
+<Accordion title="You can't create a key: key creation is disabled">
+**Cause:** the organization policy `iam.disableServiceAccountKeyCreation` is enforced.
+
+**Fix:** ask an organization policy admin to allow key creation for this project, or to create the key for you.
 </Accordion>
 
-<Accordion title="Invalid key file">
-Verify the JSON file is complete and properly formatted. Check that the private key hasn't been truncated and that no extra whitespace or characters were added. Try regenerating the key from GCP Console.
+<Accordion title="The upload is rejected or the test fails right away">
+**Cause:** the file isn't the original JSON key. Common cases are a P12 key, a copied snippet, or a file that was edited and lost its `private_key` line breaks.
+
+**Fix:** create a new JSON key and upload the downloaded file unchanged.
 </Accordion>
 
-<Accordion title="Missing billing data">
-Verify **Billing Account Viewer** role is assigned. Enable the Cloud Billing API and check that billing export to BigQuery is configured.
+<Accordion title="Agents get PERMISSION_DENIED or 'API not enabled'">
+**Check:** the service account has a role on the project you asked about, and the API for that service (for example Compute Engine or Kubernetes Engine) is enabled in that project.
+
+**Fix:** grant **Viewer** on the project or its folder, or enable the API under **APIs & Services**. No reconnect needed: the next request uses the new access.
 </Accordion>
 
-<Accordion title="GKE access issues">
-Ensure **Kubernetes Engine Viewer** role is assigned. Verify the cluster is in an accessible project and check if the cluster uses Workload Identity.
+<Accordion title="Optimize says no billing export was found">
+**Cause:** Optimize needs a Cloud Billing Standard usage cost export table (named `gcp_billing_export_v1_...`) in the connected project.
+
+**Fix:** turn on the Standard usage cost export in **Billing → Billing export**, pointing at a dataset in the same project as the service account. If Optimize says the table is outside the connected project, move the export or create the service account in the project that holds it. If it asks you to select a table, pick the one you want Optimize to use.
 </Accordion>
 
----
+<Accordion title="The connection shows Error">
+**Cause:** the key was deleted, disabled, or expired in Google Cloud.
+
+**Fix:** create a new key, then open the connection and click **Replace credentials** to upload it. Scheduled work resumes once the status is **Connected**.
+</Accordion>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Project scope** — limit the service account's IAM roles to only the GCP projects CloudThinker needs to access.
-- **Key storage** — store the service-account JSON in a secret manager and delete local copies after uploading to CloudThinker.
-
----
+- **Delete local copies of the key.** After you upload the JSON file, delete it from your downloads folder or store it in a secret manager. It grants the service account's access to anyone who holds it.
+- **Rotate by replacing.** Create a new key, upload it with **Replace…** in **Edit Instance**, then delete the old key under the service account's **Keys** tab.
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="AWS Connection" icon="/images/icons/aws.svg" href="/guide/connections/aws">
-    Connect Amazon Web Services
+  <Card title="Optimize quickstart" icon="chart-line" href="/guide/cost-optimization/quickstart">
+    Turn your billing export into cost findings and savings recommendations.
   </Card>
-  <Card title="Agents" icon="dharmachakra" href="/guide/agents/overview">
-    See what CloudThinker can do with this connection.
+  <Card title="Connections" icon="plug" href="/guide/connections/overview">
+    Rotate credentials, set the environment, and read Discovery results.
   </Card>
 </CardGroup>

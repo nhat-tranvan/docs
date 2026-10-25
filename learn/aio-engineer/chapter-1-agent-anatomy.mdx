@@ -1,14 +1,16 @@
 ---
 title: "Chapter 1 · The Anatomy of an Operations Agent"
-description: "Everything that matters — quality, cost, safety — is decided by what you put inside the agent loop."
+description: "Break an operations agent into its loop, then judge any platform by its context handling, cost controls, execution rails, and verification."
 icon: arrows-rotate
 ---
 
-*Strip the marketing away and an operations agent is a loop. Everything that matters — quality, cost, safety — is decided by what you put inside that loop.*
+*Strip the marketing away and an operations agent is a loop. Quality, cost, and safety are all decided by what you put inside that loop.*
 
 ## 1.1 The loop, precisely
 
-An operations agent is software that repeatedly executes one cycle: assemble context → reason → select an action → execute a tool → observe the result → decide whether to continue, conclude, or escalate. Each pass is a step. An incident investigation is a trajectory of steps; a remediation is a trajectory whose final steps change the world and then verify the change. The Field Guide named the outer pipeline — Detect → Analyze → Resolve → Validate — and this chapter is about what happens inside each stage of it.
+An **operations agent** is software that runs one cycle over and over: assemble context, reason, pick an action, run a tool, observe the result, then continue, conclude, or escalate. Each pass is a **step**. An investigation is a **trajectory**, a sequence of steps. A remediation is a trajectory whose last steps change something and then verify the change.
+
+The [Leadership Edition](/learn/aio/chapter-4-architecture) names the outer pipeline: Detect, Analyze, Resolve, Validate. This chapter is about what happens inside each stage.
 
 ```text
 loop (one step):
@@ -22,43 +24,67 @@ loop (one step):
   guard: step budget, token budget, time budget, loop detector
 ```
 
-Three properties of this loop drive every architectural decision that follows. First, it is stateful across steps but stateless across incidents unless you build memory deliberately — Chapter 2. Second, its cost is multiplicative: tokens per step × steps per task × tasks per day, which is why economics get their own treatment in Chapter 4. Third, every input to the loop that came from the environment — logs, tickets, alert annotations — is untrusted data sitting next to trusted instructions, which is why security gets Chapter 5.
+Three properties of this loop drive every design decision in the rest of the book:
+
+| Property | What it means | Covered in |
+|---|---|---|
+| **Stateful across steps, stateless across incidents** | The agent forgets the last incident unless you build memory on purpose | [Chapter 2](/learn/aio-engineer/chapter-2-context-engineering) |
+| **Cost multiplies** | Tokens per step × steps per task × tasks per day | [Chapter 4](/learn/aio-engineer/chapter-4-orchestration-economics) |
+| **Untrusted input sits next to trusted instructions** | Logs, tickets, and alert annotations come from the environment, and any of them can carry an attack | [Chapter 5](/learn/aio-engineer/chapter-5-threat-model) |
 
 ## 1.2 What a step really costs
 
-Engineers evaluating agents should think in unit economics from day one. A realistic investigation of a non-trivial incident runs tens of steps and hundreds of thousands of tokens once telemetry excerpts are included; independent benchmark harnesses cap agents at around a hundred turns per task for exactly this reason, and publish token and cost curves alongside accuracy. The implications are concrete:
+Think in unit economics from day one. A real investigation of a non-trivial incident runs tens of steps and hundreds of thousands of tokens once telemetry excerpts are in context. Independent benchmark harnesses cap agents at around a hundred turns per task for this reason, and publish token and cost curves next to accuracy.
 
-1. **Context dominates cost.** Tool results — log excerpts, metric series, config dumps — are almost always the largest token line, not the model’s own reasoning. Controlling what re-enters the loop (summarize, truncate, reference-by-pointer) is the first optimization, not the last.
+Three consequences follow:
 
-2. **Steps are your latency.** Each step is a full model round-trip. A 40-step investigation on a slow frontier model is not a real-time responder. Parallel tool calls and specialist delegation (Chapter 4) are latency tools as much as quality tools.
+1. **Context dominates cost.** Tool results (log excerpts, metric series, config dumps) are almost always the largest token line, not the model's own reasoning. Controlling what re-enters the loop is the first optimization: summarize, truncate, or pass a pointer instead of the payload.
+2. **Steps are your latency.** Each step is a full model round-trip. A 40-step investigation on a slow frontier model can't respond in real time. Parallel tool calls and delegation to specialists ([Chapter 4](/learn/aio-engineer/chapter-4-orchestration-economics)) cut latency as much as they improve quality.
+3. **Budgets are guardrails.** Production agents run with explicit step, token, time, and spend ceilings per task. They also need a **loop detector**: a check that notices the same tool being called with the same arguments to no new effect. An agent without budgets is a cost incident waiting for a quiet weekend.
 
-3. **Budgets are guardrails.** Production agents run with explicit step, token, time, and spend ceilings per task, and a loop detector that recognizes when the same tool is being called with the same arguments to no new effect. An agent without budgets is a cost incident waiting for a quiet weekend.
+**When you evaluate a platform, ask:** what are the per-task budgets, what happens when one is hit, and where can you see tokens and steps per run?
 
 ## 1.3 The determinism boundary
 
-The single most useful design question inside the loop is: which parts must be deterministic, and which parts benefit from judgment? Mature systems draw the line deliberately:
+The most useful design question inside the loop: which parts must be deterministic code, and which parts benefit from model judgment? Mature systems draw the line on purpose.
 
 | Layer | Deterministic (code) | Generative (model) |
 |---|---|---|
-| Sensing & triggering | Alert routing, dedup windows, severity mapping, policy filters | Deciding an anomaly is worth deep investigation |
-| Investigation | Tool execution, data collection, redaction, timeouts | Hypothesis formation, evidence weighing, next-probe selection |
-| Remediation | The runbook steps themselves; pre-flight checks; rollback mechanics | Choosing which remediation fits this incident; drafting a new plan when no runbook exists |
-| Verification | Health checks, SLO probes, diff of before/after state | Judging whether the overall outcome matches intent; deciding to escalate |
+| Sensing and triggering | Alert routing, dedup windows, severity mapping, policy filters | Deciding an anomaly deserves a deep investigation |
+| Investigation | Tool execution, data collection, redaction, timeouts | Forming hypotheses, weighing evidence, choosing the next probe |
+| Remediation | The runbook steps themselves, pre-flight checks, rollback mechanics | Choosing which fix fits this incident; drafting a plan when no runbook exists |
+| Verification | Health checks, SLO probes, before/after state diffs | Judging whether the outcome matches intent; deciding to escalate |
 
-The pattern is deterministic rails, generative core. Reasoning chooses; code executes. Every consequential side effect should pass through versioned, testable, idempotent code paths — never through freeform shell strings the model composed under pressure. Chapter 3 turns this into tool and runbook design; Chapter 6 turns it into policy.
+The pattern is **deterministic rails, generative core**. The model chooses; code executes. Every consequential side effect should go through versioned, testable, idempotent code paths, never through a shell string the model composed under pressure. [Chapter 3](/learn/aio-engineer/chapter-3-tools-skills-protocol) turns this into tool and runbook design. [Chapter 6](/learn/aio-engineer/chapter-6-policy-approvals) turns it into policy.
 
 <Info>
-**IN PRACTICE — STEP KINDS AS A CONTRACT**
+**IN PRACTICE: READ-ONLY VERSUS CHANGE-MAKING COMMANDS**
 
-CloudThinker’s runbook engine makes the determinism boundary explicit in its type system: every runbook is composed of five step kinds — Note (context for the reader), Check (read-only probe with an expected result), Act (a side-effecting, idempotent operation), Confirm (verification against intent), and Ask (an explicit human decision point). An agent may select and parameterize runbooks and may draft new ones for review, but Act steps execute as code under policy — the model never free-hands a mutation. The same contract is a useful lens on any platform you evaluate: ask where reasoning ends and execution begins.
+When CloudThinker uses one of your [runbooks](/guide/incident/runbooks) during a Resolve investigation, it treats read-only commands (like `kubectl get pods`) differently from commands that change something (like `kubectl rollout restart`). Read-only commands run without waiting. A change-making command stops at **Action requires approval** until a person decides, and every attempt lands on the **Execution history** tab with its policy decision, approval, and outcome. Which actions need a person is set by your [Approvals](/guide/approvals/overview) rules and mode. Ask the same question of any platform: where does reasoning end and execution begin, and who signs off on the crossing?
 </Info>
 
-## 1.4 Verification is the species difference
+## 1.4 Verification is what makes it an agent
 
-Automation executes and hopes. Agents execute and check. The validate stage — re-probing the symptom, diffing state against intent, watching the SLO for a soak period, and rolling back on failure — is what makes graduated autonomy defensible at all, and it is the first thing to inspect in any platform demo. Two engineering notes: verification must run against independent signals (the alert clearing is not proof; alerts can be cleared by the very restart that masked the fault — a failure mode documented in public benchmarks, Chapter 7), and verification must have a timeout with an opinion — an explicit soak window after which the system either declares success with evidence or escalates with a rollback already staged.
+Automation executes and hopes. Agents execute and check. The validate stage is what makes graduated autonomy defensible: re-probe the symptom, diff state against intent, watch the SLO for a soak period, and roll back on failure. It's the first thing to inspect in any demo.
+
+Two rules for verification:
+
+- **Check independent signals.** A cleared alert is not proof. The restart that masked the fault can also clear the alert, a failure mode documented in public benchmarks ([Chapter 7](/learn/aio-engineer/chapter-7-evaluating-agents)). Verify against a signal the fix couldn't have silenced, such as an SLO probe or a before/after state diff.
+- **Give verification a deadline.** Set an explicit soak window. When it ends, the system either declares success with evidence or escalates with a rollback already staged.
 
 <Tip>
 **KEY TAKEAWAY**
 
-An operations agent is a budgeted, observable loop with a deliberate determinism boundary and independent verification. Judge any platform by the loop’s internals — context handling, cost controls, execution rails, verification signals — not by the eloquence of its findings.
+An operations agent is a budgeted, observable loop with a deliberate determinism boundary and independent verification. Judge any platform by the loop's internals (context handling, cost controls, execution rails, verification signals), not by how well its findings read.
 </Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Chapter 2 · Context Engineering" icon="layer-group" href="/learn/aio-engineer/chapter-2-context-engineering">
+    The biggest lever on agent quality: what the agent is given to reason about.
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    See how CloudThinker decides which actions run on their own and which wait for a person.
+  </Card>
+</CardGroup>

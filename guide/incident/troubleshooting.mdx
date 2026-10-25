@@ -1,0 +1,138 @@
+---
+title: "Resolve Troubleshooting"
+description: "Find and fix the stage where Resolve stopped: alerts not arriving, clusters not forming, investigations stuck, or runbooks not running."
+icon: wrench
+---
+
+Every Resolve problem sits at one stage of the path from alert to fix. Find the stage from the symptom below, then work through its cause, check and fix.
+
+## Find the stage
+
+| Symptom | Stage | Go to |
+|---|---|---|
+| **Resolve → Pulse** shows nothing from a source | Delivery | [Alerts not arriving](#alerts-not-arriving) |
+| Alerts arrive, but each one is its own cluster, or none appears | Grouping | [Clusters not forming](#clusters-not-forming) |
+| Clusters appear, but no incident is created or no investigation starts | Triage | [Investigation not starting](#investigation-not-starting) |
+| The incident sits in **AI is handling** or **Needs your decision** | Investigation | [Investigation stuck](#investigation-stuck) |
+| A fix is proposed but never applied | Remediation | [Runbook not running](#runbook-not-running) |
+
+Two quick checks rule out most problems before you dig in:
+
+- **Resolve → Integrations** shows a readiness badge per platform. Anything other than **Ready** points at delivery. See [readiness badges](/guide/pulse/setup#read-the-readiness-badge).
+- The header of **Resolve → Investigation** shows **On duty** or **Paused**. **Paused** means nothing is investigated automatically. See [Resolve settings](/guide/incident/settings).
+
+## Alerts not arriving
+
+A connection that shows as healthy doesn't prove alerts reach Resolve. A platform is a working source only once at least one signal path delivers.
+
+<AccordionGroup>
+  <Accordion title="Pulse shows No signals yet">
+    **Cause:** the monitoring tool never sent, or sent to the wrong URL. **Check:** the delivery log in your monitoring tool, and the platform's signal row on **Resolve → Integrations**. **Fix:** copy the webhook URL from the platform's **Signals to Resolve** section again, paste it into the tool, and fire a test alert. Then open **Resolve → Pulse** and set the lane to **All**.
+  </Accordion>
+  <Accordion title="The platform shows Needs connection or Needs setup">
+    **Cause:** **Needs connection** means the account isn't connected, so no signal can be added. **Needs setup** means it's connected but has no signal path. **Fix:** connect the account in the platform's **Connection** section, then click **Add signal**. See [Connect Pulse sources](/guide/pulse/setup).
+  </Accordion>
+  <Accordion title="The platform shows Needs attention or Partially ready">
+    **Cause:** a connection is unhealthy, or one signal path fails while others work. **Check:** open the platform and read each signal row's hint. **Fix:** follow the hint. For AWS polling, check the [AWS connection](/guide/connections/aws) and its permissions.
+  </Accordion>
+  <Accordion title="The tool reports success, but nothing shows in Pulse">
+    **Cause:** an HTTP success only proves delivery. Pulse can still drop the event as noise: an exact repeat within one hour, an event past 100 per minute from one source, or a match for a snooze. **Check:** the **All** lane, and any snooze on that source or resource. **Fix:** send a different test alert, or click **Unsnooze**. Critical and high events are never dropped by the rate limit. See [noise suppression](/guide/pulse/clusters#noise-suppression).
+  </Accordion>
+  <Accordion title="Slack or Teams mentions aren't picked up">
+    **Cause:** the channel isn't on the watch list. **Fix:** on the Slack or Teams platform under **Resolve → Integrations**, add the channel in **Listen for incidents**.
+  </Accordion>
+</AccordionGroup>
+
+## Clusters not forming
+
+A cluster is a group of related signals that Pulse treats as one problem. Every signal lands in a cluster, even a cluster of one. A repeat of the same fault joins the open cluster for that fault, matched on the source, the alert type and the resource ID.
+
+<AccordionGroup>
+  <Accordion title="Every alert opens its own cluster">
+    **Cause:** the alerts carry no resource ID, or a different one each time, so Pulse can't tell they're the same fault. Pulse never joins two alerts by title alone when their resource IDs differ. **Check:** open a cluster in **Resolve → Pulse** and read the raw payload of each member. **Fix:** for a [custom source](/guide/incident/webhook-integrations/custom-source), map the **Resource** field to a stable ID in the payload. Paths are dotted, like `alert.resource.id`.
+  </Accordion>
+  <Accordion title="Alerts arrive but no cluster appears">
+    **Cause:** the webhook has **Send directly to CloudThinker** on, which skips Pulse filtering and grouping. **Check:** open the webhook under **Resolve → Integrations**. **Fix:** turn it off unless the source is low volume and every event matters.
+  </Accordion>
+  <Accordion title="Clusters have no useful title">
+    **Cause:** a custom source's **Incident title** mapping points at the wrong field. **Fix:** edit the webhook, send a fresh payload, and pick the title field again.
+  </Accordion>
+  <Accordion title="A new alert didn't start a new investigation">
+    **Cause:** the cluster is routed, which means an open incident already holds it. A matching signal joins that cluster and updates the incident instead of starting a second investigation. **Check:** look for the cluster in the **Routed** lane. **Fix:** work it from the incident. See [cluster lifecycle](/guide/pulse/clusters#cluster-lifecycle).
+  </Accordion>
+</AccordionGroup>
+
+## Investigation not starting
+
+<AccordionGroup>
+  <Accordion title="Incidents wait in Not started">
+    **Cause:** **On duty** is paused. Pulse still files incidents, but nothing is investigated automatically. **Check:** the header of **Resolve → Investigation**. **Fix:** turn **On duty** back on, then click **Investigate** on each incident filed while paused.
+  </Accordion>
+  <Accordion title="On duty is on, but one source never triggers an investigation">
+    **Cause:** that webhook has **Auto-investigate** off, or **Only from a minimum severity** is set above the alert's severity. Lower-severity alerts still group into clusters but don't start an investigation. **Fix:** open the webhook under **Resolve → Integrations** and adjust either option.
+  </Accordion>
+  <Accordion title="A cluster never became an incident">
+    **Cause:** the classifier judged its signals **Not actionable**, so they were suppressed before triage. IAM, SSO and KMS key lifecycle events are never dropped this way. **Fix:** if you need it handled, open the cluster, click **Escalate**, then **Send to triage**. Or use **Attach to incident...** to link it to an incident you pick.
+  </Accordion>
+  <Accordion title="There's no Investigate button">
+    **Cause:** you don't have the workspace Admin role, a session is already running, or the incident is part of a correlated group. **Fix:** ask an Admin, wait for the running session, or click **View Parent Analysis** to open the incident that owns the investigation.
+  </Accordion>
+</AccordionGroup>
+
+## Investigation stuck
+
+Click **Watch live** on the incident to see each check CloudThinker runs as it runs. If the timeline is moving, the investigation isn't stuck.
+
+<AccordionGroup>
+  <Accordion title="Action requires approval">
+    **Cause:** CloudThinker wants to run a command that needs a person's decision, so the run stops until someone answers. **Check:** the **Action requires approval** banner on the incident, or the **Awaiting my approval** filter on **Resolve → Investigation**. **Fix:** click **Go to conversation** and approve or reject the action there.
+  </Accordion>
+  <Accordion title="The incident is On Hold">
+    **Cause:** CloudThinker is waiting for information, access or a decision. The incident sits in **Needs your decision** until someone supplies it. **Fix:** open **More actions → Open AI Conversation** and answer what CloudThinker asked for.
+  </Accordion>
+  <Accordion title="Analysis Failed">
+    **Cause:** the session hit an error, or stopped responding and was marked failed. The incident shows **Analysis Failed** with the error message. **Fix:** fix what the message names, such as an unhealthy connection, then click **Retry Analysis**.
+  </Accordion>
+  <Accordion title="The verdict is Cause unproven or Not Found">
+    **Cause:** CloudThinker couldn't read enough of your systems to back a root cause. **Fix:** add the missing [connection](/guide/connections/overview), add context in the conversation, and investigate again. See [evidence labels](/guide/incident/root-cause-analysis#evidence-labels).
+  </Accordion>
+</AccordionGroup>
+
+## Runbook not running
+
+A runbook is a step-by-step fix procedure that Resolve reads from Confluence, GitHub, GitLab or a manual upload. Each change-making command in it carries an effect that decides whether it runs. Open **Resolve → Runbooks → Execution history** to see what happened to each run.
+
+| Column | Values | What to do |
+|---|---|---|
+| **Policy** | **Auto Execute**, **Requires Approval**, **Denied**, **Per Command** | **Denied** never runs. Change the command's effect if it should. |
+| **Approval** | **Pending**, **Approved**, **Rejected** | **Pending** waits for a person. Approve it in the investigation conversation. |
+| **Status** | **Not Started**, **Completed**, **Skipped**, **Failed** | **Failed**: read the run's result before retrying or resolving the incident. |
+
+<AccordionGroup>
+  <Accordion title="Execution history says No runbook executions yet">
+    **Cause:** Resolve hasn't searched your runbooks during an investigation yet, or no source is connected. **Check:** the **Runbook sources** tab. **Fix:** add a source. For Confluence, GitHub or GitLab, make sure the [connection](/guide/connections/overview) behind it can read the space or repository.
+  </Accordion>
+  <Accordion title="A command waits even though nobody set it to Require Approval">
+    **Cause:** a command with no matching effect defaults to **Require Approval**, so an unrecognized command from an external source waits for a person. **Fix:** approve it in the conversation. For manual uploads, set a per-command effect. See [Control command effects](/guide/incident/runbooks#control-command-effects).
+  </Accordion>
+  <Accordion title="The command was blocked">
+    **Cause:** its effect is **Deny**, so Resolve can't execute it. **Check:** the **Policy** column in **Execution history** reads **Denied**. **Fix:** if the command should run, change its effect to **Require Approval** or **Allow**. See [Control command effects](/guide/incident/runbooks#control-command-effects).
+  </Accordion>
+</AccordionGroup>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Connect Pulse sources" icon="plug" href="/guide/pulse/setup">
+    Set up signal paths and read readiness badges.
+  </Card>
+  <Card title="Signal clusters" icon="layer-group" href="/guide/pulse/clusters">
+    Understand grouping, suppression and cluster actions.
+  </Card>
+  <Card title="Investigation and RCA" icon="magnifying-glass" href="/guide/incident/root-cause-analysis">
+    Read verdicts, outcomes and evidence labels.
+  </Card>
+  <Card title="Runbooks" icon="book-open" href="/guide/incident/runbooks">
+    Add sources and control command effects.
+  </Card>
+</CardGroup>

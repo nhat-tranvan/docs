@@ -1,179 +1,170 @@
 ---
 title: Microsoft SQL Server
-description: "Connect SQL Server or Azure SQL to CloudThinker for schema discovery, record inspection and aggregation, and approval-gated row changes"
+description: "Connect SQL Server or Azure SQL so agents can map your tables, read and aggregate rows, and change single rows after approval"
 icon: "/images/icons/mssql.svg"
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your SQL Server or Azure SQL database to let [CloudThinker](/guide/agents/overview) discover your schema, read and aggregate records, and make single-row changes you approve one at a time.
-
-The connection reaches your **tables** directly. It cannot run arbitrary SQL, call stored procedures, or change your schema; reads happen without a prompt, and every create, update, and delete asks you first, one call at a time.
-
-## Supported platforms
-
-| Platform | Supported | Notes |
-|----------|-----------|-------|
-| **SQL Server** | Yes | 2016 or later, on-premises or self-managed |
-| **Azure SQL Database / Managed Instance** | Yes | Managed, no version to choose |
-| **SQL Server on Azure VMs / Azure Arc** | Yes | 2016 or later |
-| **SQL Server 2014 and earlier** | No | Below the minimum version |
-| **SQL database in Microsoft Fabric** | No | Does not accept SQL Server logins, so this connection's credential cannot reach it |
+Connect a SQL Server or Azure SQL database to let CloudThinker agents list your tables and columns, read and aggregate rows, and insert, update, or delete one row at a time after you approve. The connection signs in with a **connection string** for a dedicated SQL login, and that login's grants decide which tables agents can see.
 
 ## Prerequisites
 
-- A SQL Server or Azure SQL database reachable from CloudThinker on its SQL port, `1433` by default.
-- Permission to create a login or a database user and grant it read access.
-- The tables you want the agent to reach in a normal user schema. Objects in `sys` and `INFORMATION_SCHEMA` are never exposed, whatever the user is granted.
+- SQL Server 2016 or later, Azure SQL Database, or Azure SQL Managed Instance, reachable from CloudThinker on its SQL port (`1433` by default).
+- Permission to create a login or a contained database user and grant it access.
+- SQL Server authentication enabled on the server. A server set to Windows authentication only rejects the login.
+
+<Info>
+Agents work with tables, not raw SQL. There's no SQL console, no stored procedure calls, and no schema changes through this connection. Objects in `sys` and `INFORMATION_SCHEMA` are always excluded.
+</Info>
 
 ## Setup
 
 <Steps>
   <Step title="Create a dedicated user">
-    **SQL Server and Azure SQL Managed Instance** — create a login in `master`, then a user for it in your database:
-    ```sql
-    -- In master
-    CREATE LOGIN cloudthinker WITH PASSWORD = '<strong-password>';
-    -- In your database
-    CREATE USER cloudthinker FOR LOGIN cloudthinker;
-    ```
+    <Tabs>
+      <Tab title="SQL Server or Managed Instance">
+        Create a login in `master`, then a user for it in your database:
 
-    **Azure SQL Database** — create the user directly in your database, with no login in `master`, the form Microsoft recommends because it keeps the database portable:
-    ```sql
-    CREATE USER cloudthinker WITH PASSWORD = '<strong-password>';
-    ```
+        ```sql
+        -- In master
+        CREATE LOGIN cloudthinker WITH PASSWORD = '<strong-password>';
+        -- In your database
+        CREATE USER cloudthinker FOR LOGIN cloudthinker;
+        ```
+      </Tab>
+      <Tab title="Azure SQL Database">
+        Create a contained user directly in your database. No login in `master` is needed:
+
+        ```sql
+        CREATE USER cloudthinker WITH PASSWORD = '<strong-password>';
+        ```
+      </Tab>
+    </Tabs>
   </Step>
-  <Step title="Grant read access to only what the agent should see">
-    Grant on the schema that holds the tables you want reachable, or tighter, one table at a time:
+  <Step title="Grant read access to the tables agents should see">
+    Grant on one schema, or tighter, one table at a time:
+
     ```sql
     GRANT SELECT ON SCHEMA :: dbo TO cloudthinker;
-    -- or: GRANT SELECT ON OBJECT::dbo.orders TO cloudthinker;
+    -- or: GRANT SELECT ON OBJECT :: dbo.orders TO cloudthinker;
     ```
-    Adding the user to `db_datareader` also works, but it grants read access to every table in the database — a schema or object grant is the better boundary.
+
+    A table the user can't read doesn't appear to agents at all.
   </Step>
-  <Step title="Allow network access">
-    - **Azure SQL Database and Managed Instance**: add CloudThinker to the server firewall rules.
-    - **SQL Server**: allow inbound `1433` from CloudThinker, and confirm the server accepts SQL Server authentication rather than Windows authentication only.
+  <Step title="Open network access">
+    For Azure SQL, add CloudThinker to the server firewall rules. For SQL Server, allow inbound TCP `1433` from CloudThinker and confirm the TCP/IP protocol is enabled, since some installs ship with it off.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Go to **Connections → Microsoft SQL Server** and fill in the single **Connection string** field:
+    Open **Connections** in the sidebar and select **Microsoft SQL Server**. Paste your connection string into **Connection string**:
 
-    ```
-    Server=<host>,1433;Initial Catalog=<database>;User ID=cloudthinker;Password=<password>;Encrypt=True;
+    ```ini
+    Server=sql.example.com,1433;Initial Catalog=sales;User ID=cloudthinker;Password=<password>;Encrypt=True;
     ```
 
-    Click **Connect**. CloudThinker opens the connection, reads the tables the user can see, and the **Connected** message reports what it loaded. A failure comes back with the reason SQL Server gave — see [Troubleshooting](#troubleshooting).
+    Click **Connect**.
+
+    **Success state:** the connection shows a **Connected** status. Run the verify prompt below to confirm agents can see your tables.
   </Step>
 </Steps>
 
 ## Connection details
 
-One field carries everything: an ADO.NET connection string for the user you created above.
+The single **Connection string** field takes an ADO.NET connection string.
 
-| Keyword | What to put |
-|---------|-------------|
-| `Server` | Host and port in SQL Server's own form, `sql.example.com,1433` — a comma, not a colon |
-| `Initial Catalog` | The database name. **Required** when the user was created directly in the database |
-| `User ID` / `Password` | The user created in step 1 |
-| `Encrypt` | `True` |
-| `TrustServerCertificate` | Leave it out, or `False`. Set `True` only for a self-signed or internal-CA certificate |
-
-<Warning>
-With `Encrypt=True` and `TrustServerCertificate=False`, Microsoft's client encrypts traffic **only if the server presents a verifiable certificate** — otherwise the connection fails rather than falling back to plaintext. That failure is the most common one on a first connect against a self-hosted server.
-</Warning>
+| Keyword | What to put | Example |
+|---------|-------------|---------|
+| `Server` | Host and port, separated by a comma, not a colon | `sql.example.com,1433` |
+| `Initial Catalog` | Database name. Required for an Azure SQL contained user | `sales` |
+| `User ID` / `Password` | The user from step 1 | `cloudthinker` |
+| `Encrypt` | `True` | `True` |
+| `TrustServerCertificate` | Leave out, or `False`. Use `True` only for a self-signed or internal-CA certificate on a private network | `False` |
 
 ## Required permissions
 
-`GRANT SELECT` on the schema (Setup step 2) is enough for schema discovery, reading records, and aggregation. Only if you want the agent to change data:
+| You want agents to | Grant |
+|--------------------|-------|
+| List tables, read rows, and aggregate | `SELECT` on the schema or table |
+| Insert, update, or delete rows | `INSERT`, `UPDATE`, `DELETE` on the specific schema or table |
 
 ```sql
 GRANT INSERT, UPDATE, DELETE ON SCHEMA :: dbo TO cloudthinker;
 ```
 
-Grant these on the specific schema you want changeable, never database-wide. The grant is the durable boundary: the per-call approval prompt decides whether CloudThinker asks, the grant decides whether SQL Server allows it. A user holding only `SELECT` cannot write, no matter what anyone approves.
+<Tip>
+Skip `db_datareader`: it opens every table in the database. A schema or object grant is a tighter boundary. If agents should never change data, don't grant `INSERT`, `UPDATE`, or `DELETE` at all. That's stronger than declining each approval.
+</Tip>
 
 ## Agent capabilities
 
-Once connected, CloudThinker can:
+| Capability | What agents can do | Approval |
+|------------|--------------------|----------|
+| **Schema discovery** | List reachable tables and their columns | No |
+| **Read rows** | Select columns, filter, sort, and page through one table at a time | No |
+| **Aggregate** | Count, sum, average, minimum, and maximum, with group by and having | No |
+| **Insert a row** | Create one record | Yes |
+| **Update or delete a row** | Change or remove one record, addressed by its primary key | Yes |
 
-| Capability | Description |
-|------------|-------------|
-| **Schema discovery** | List the reachable tables with their columns |
-| **Record inspection** | Read rows with column selection, filtering, sorting, and paging |
-| **Aggregation** | Count, sum, average, minimum, and maximum, with grouping and having |
-| **Row changes** | Insert a row, or update and delete a row by its primary key — each one after you approve it |
+Each read covers one table, so there are no joins in a single call. Reads return 25 rows by default and at most 100 per page. Aggregations time out after 30 seconds, and a single response is capped at 4 MB.
 
-What the connection cannot do, by design: no arbitrary SQL, no stored procedures, no schema changes, and no joins across tables in a single read — each read covers one table.
+Every insert, update, and delete waits for your approval in the conversation, one call at a time. Approving one delete doesn't approve the next. Because updates and deletes target a primary key, a bad filter can't sweep a table.
 
 ### Verify the connection
 
 ```text
-The SQL Server tables you can reach and their columns
+List the SQL Server tables you can reach and their columns
 ```
+
+Expect each table named `<schema>_<table>`, such as `dbo_orders`, with its column list.
 
 ### Example prompts
 
 ```text
-How many orders were placed per status in the last 30 days
-The ten most recent rows in dbo.orders
-Which columns in dbo.orders look like they need an index
+How many orders were placed per status in the last 30 days?
+Show the ten most recent rows in dbo.orders
+Set status to shipped on order 4821 in dbo.orders
 ```
-
-## Write access
-
-There is no connection-wide write switch. Every insert, update, and delete is approved individually, in the conversation, before it runs — and needs the matching `INSERT`, `UPDATE`, or `DELETE` grant on the table.
-
-Two things to weigh:
-
-- **Updates and deletes are keyed, not filtered.** The agent addresses one row by its primary key, so a mistyped filter cannot sweep a table. A table without a primary key cannot be updated or deleted through this connection at all.
-- **Approval is per call, not per session.** Approving one delete does not approve the next.
-
-If you never want the agent to change data, do not grant `INSERT`, `UPDATE`, or `DELETE`. That is stronger than declining each prompt.
 
 ## Troubleshooting
 
 <Accordion title="Login failed for user">
-Confirm the user exists in the right place — a login lives in `master`, a user created with `WITH PASSWORD` lives in your database — and that the server accepts SQL Server authentication. Retype the password rather than pasting it; a stray space or line break fails here.
+The user is in the wrong place, the password is wrong, or the server accepts Windows authentication only. A login lives in `master`. A contained user lives in your database and needs `Initial Catalog` set. Retype the password rather than pasting it, since a stray space fails here.
 </Accordion>
 
 <Accordion title="The connection fails on a certificate error">
-The server did not present a certificate the client could verify, and the client refused to continue unencrypted. Install a trusted certificate, or — for a self-signed or internal-CA certificate on a private network — add `TrustServerCertificate=True`. Traffic stays encrypted, but the server's identity is no longer checked.
+With `Encrypt=True`, the client refuses a server certificate it can't verify instead of falling back to plaintext. Install a trusted certificate. For a self-signed or internal-CA certificate on a private network, add `TrustServerCertificate=True`. Traffic stays encrypted, but the server's identity is no longer checked.
 </Accordion>
 
-<Accordion title="The server is unreachable, or the connection times out">
-Check that `Server` uses a comma (`host,1433`), that Azure SQL firewall rules include CloudThinker, and — for SQL Server — that the firewall allows inbound `1433` and the server is listening on TCP/IP, which is off by default on some installations.
+<Accordion title="The server is unreachable or the connection times out">
+Check that `Server` uses a comma (`host,1433`). For Azure SQL, confirm the firewall rules include CloudThinker. For SQL Server, confirm inbound `1433` is open and TCP/IP is enabled.
 </Accordion>
 
-<Accordion title="The agent cannot find a table it should see">
-The user needs `SELECT` on that table or its schema — a table the user cannot read does not appear at all, and `sys` and `INFORMATION_SCHEMA` are always excluded. Name the table with its schema, for example `dbo.orders`, since an unqualified name can be ambiguous.
+<Accordion title="An agent can't find a table">
+The user needs `SELECT` on that table or its schema. Name the table with its schema, such as `dbo.orders`, because an unqualified name can be ambiguous.
 </Accordion>
 
-<Accordion title="An update or delete is refused, and the table has no primary key">
-Updates and deletes address exactly one row by its primary key. Without one, the operation is refused; reading and aggregating still work. Add a primary key if you want the agent to change the table.
+<Accordion title="An update or delete is refused">
+The table has no primary key, or the user lacks the matching `UPDATE` or `DELETE` grant. Reads and aggregations still work. Add a primary key or the grant if agents should change that table.
 </Accordion>
 
-<Accordion title="A column never appears in results">
-Some data types are not carried over this connection: `geography`, `geometry`, `hierarchyid`, `json`, `rowversion`, `sql_variant`, `vector`, and `xml`. The table still works; those columns are not returned.
-</Accordion>
-
-<Accordion title="The agent will not run the SQL I gave it">
-Expected — this connection has no SQL console and no stored-procedure access. Ask for the result you want, a filtered read or a grouped count, rather than a statement to execute.
+<Accordion title="The agent won't run my SQL statement">
+Expected. This connection has no SQL console or stored procedure access. Ask for the result you want, such as a filtered read or a grouped count, instead.
 </Accordion>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Grant the schema, not the database** — scope `SELECT` to the schema holding the tables the agent should reach; everything else stays invisible.
-- **Read-only by omission** — withhold `INSERT`, `UPDATE`, and `DELETE` and the connection is permanently read-only, regardless of what is approved in a conversation.
+- **Grant the schema, not the database**: scope `SELECT` to the schema holding the tables agents need, and everything else stays invisible.
+- **Read-only by omission**: a user with only `SELECT` can't write, whatever gets approved in a conversation.
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Agents" icon="database" href="/guide/agents/overview">
-    See what CloudThinker can do with this connection.
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Control how row changes wait for a person before they run.
   </Card>
-  <Card title="PostgreSQL Connection" icon="/images/icons/postgresql.svg" href="/guide/connections/postgresql">
-    Similar setup for PostgreSQL databases
+  <Card title="PostgreSQL connection" icon="/images/icons/postgresql.svg" href="/guide/connections/postgresql">
+    Connect a PostgreSQL database the same way.
   </Card>
 </CardGroup>

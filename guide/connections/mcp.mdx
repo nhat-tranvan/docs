@@ -1,164 +1,195 @@
 ---
 title: MCP
-description: "Connect custom tools and APIs to CloudThinker via Model Context Protocol (MCP) for extensible agent capabilities"
+description: "Connect your own MCP server so CloudThinker agents can call its tools next to the built-in connections."
 icon: "/images/icons/mcp.svg"
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Model Context Protocol (MCP) is an open protocol for connecting AI agents to external tools and data sources. Add any service that exposes an MCP server — an internal metrics system, a ticketing platform, a legacy integration — as a custom [connection](/guide/connections/overview), and every agent can call its tools.
+Model Context Protocol (MCP) is an open standard for exposing tools to AI agents. If you run an MCP server, for example in front of an internal metrics API, a ticketing system, or a legacy service, you can add it as a custom [connection](/guide/connections/overview). Every tool the server exposes then becomes a tool agents can call in chat, automations, and investigations.
 
-CloudThinker authenticates to your server with the **HTTP headers you configure**, typically an `Authorization` header carrying a token your server validates.
+CloudThinker reaches your server over the public internet and authenticates with the HTTP headers you set on the connection, usually an `Authorization` header with a token your server checks.
 
-## Prerequisites
+## What agents can do
 
-- An **MCP server** that CloudThinker can reach over the internet, speaking either the **Streamable HTTP** or **SSE** transport.
-- The server's endpoint **URL**.
-- Any **header values** your server requires for authentication, such as a bearer token.
+After you connect, CloudThinker loads the server's tool list. Each tool is available to agents as `prefix__tool_name`, where the prefix is the one you set on the connection. A server with prefix `weather` that exposes `get_forecast` gives agents a tool called `weather__get_forecast`.
 
-## Setup
+Agents can only call tools your server serves. To keep a tool away from agents, don't expose it from the server.
+
+### How reads and writes are decided
+
+CloudThinker sorts each tool into a read or a write when it first discovers it:
+
+| Check, in order | Result |
+|---|---|
+| The tool declares `readOnlyHint: true` | Read |
+| The tool declares `destructiveHint: true` | Write |
+| The tool name contains a read word: `get`, `list`, `search`, `query`, `read`, `describe`, `show`, `find`, `fetch`, `check`, `count`, `view`, `lookup`, `browse`, `inspect`, `export`, `download` | Read |
+| Anything else | Write |
+
+Name words are split on `_` and `-`, so `list_tickets` and `get-status` are reads, while `listTickets` (one word) and `close_ticket` are writes.
+
+Reads run without asking. Writes go through your [Rules](/guide/approvals/rules) and [Approval mode](/guide/approvals/approval-mode), so a write tool on your server is never called without the checks you configured.
+
+<Tip>
+Set `readOnlyHint` and `destructiveHint` on your server's tools. Hints are more reliable than tool names, and a read tool marked as a read won't trigger an approval request.
+</Tip>
+
+## Before you start
+
+- An MCP server that speaks **Streamable HTTP** or **Server-Sent Events** (SSE), reachable from the internet.
+- The server's endpoint URL, for example `https://mcp.example.com/mcp`.
+- A credential for your server, if it requires one. Issue one only for CloudThinker (see [Permissions](#permissions)).
+- Permission to edit connections in your workspace.
+
+## Set up the connection
 
 <Steps>
-  <Step title="Create the connection">
-    Navigate to **Connections → MCP** and click **Add MCP Connection**.
+  <Step title="Open the MCP form">
+    Open **Connections**, select the **MCP Connections** tab, and click **+** (**New MCP connection**). The **Create MCP Connection** dialog opens.
   </Step>
-  <Step title="Name it and choose a prefix">
-    Enter:
-    - **Connection Name**: a descriptive display name
-    - **Description**: optional
-    - **Prefix**: a short handle for this server. Its tools appear to agents as `prefix__tool_name`, so a server with prefix `weather` exposing `get_forecast` becomes `weather__get_forecast`.
-  </Step>
-  <Step title="Configure the transport">
-    Select the **Transport Type** your server speaks — **Streamable HTTP** or **SSE** — and enter:
-    - **URL**: the server endpoint, such as `https://example.com/mcp` (see [Server URL](#server-url))
-    - **Timeout**: connection timeout in seconds (default 30)
-    - **SSE Read Timeout**: event stream timeout in seconds (default 300)
+  <Step title="Fill in Basic Information">
+    - **Connection Name**: a name your team will recognize, such as `Internal metrics`.
+    - **Description**: optional, up to 500 characters.
+    - **Prefix**: a short handle for this server, such as `metrics`. Tools appear as `metrics__tool_name`, and you'll see the prefix in approval requests and Rules.
+    - **Transport Type**: **Streamable HTTP** or **Server-Sent Events**, whichever your server speaks.
   </Step>
   <Step title="Add headers">
-    Add any HTTP headers your server needs, as key-value pairs — typically `Authorization` with a value like `Bearer your-token`. Headers are sent to the MCP server on every request.
+    Under **Headers Configuration (Optional)**, add each header your server needs as a **Key** and **Value**, for example `Authorization` and `Bearer <your-token>`. CloudThinker sends these headers on every request. Header keys must be unique.
   </Step>
-  <Step title="Connect">
-    Click **Connect**. CloudThinker contacts the server, loads its tool definitions, and shows a **Connected** status when the server responds correctly.
+  <Step title="Fill in Connection Configuration">
+    - **URL**: the server endpoint, such as `https://mcp.example.com/mcp`. See [Server URL rules](#server-url-rules).
+    - **Timeout (seconds)**: how long to wait for the server to respond. Default 30, allowed 0.1 to 300.
+    - **SSE Read Timeout (seconds)**: how long to wait on the event stream. Default 300, allowed 1 to 600.
+  </Step>
+  <Step title="Create">
+    Click **Create**. CloudThinker contacts the server and loads its tool list.
+
+    **Success state:** the connection shows as connected in the **MCP Connections** list, and its detail panel shows the transport and URL under **Server config**. If it fails, a **Connection error** alert explains why. See [Troubleshooting](#troubleshooting).
   </Step>
 </Steps>
 
 <Warning>
-The URL must not embed credentials (`user:password@host`). Put authentication in a header instead — for basic auth, `Authorization` with `Basic <base64(user:password)>`.
+Don't put credentials in the URL (`https://user:password@host/mcp`). The form rejects it. For basic auth, add a header with key `Authorization` and value `Basic <base64 of user:password>`.
 </Warning>
 
-## Server URL
+## Server URL rules
 
-| URL | Notes |
-|-----|-------|
-| `https://mcp.example.com/mcp` | **Recommended.** Needs a certificate from a public certificate authority, not a self-signed one. |
-| `http://203.0.113.10:8000/mcp` | Works. The form warns: "Not encrypted. Headers and tool results are sent as plain text." |
-
-CloudThinker cannot reach private or internal addresses, such as `localhost`, `10.x.x.x`, `192.168.x.x`, or cloud metadata addresses.
+| URL | Result |
+|---|---|
+| `https://mcp.example.com/mcp` | Recommended. The certificate must come from a public certificate authority. Self-signed certificates are rejected. |
+| `http://203.0.113.10:8000/mcp` | Accepted, with the warning "Not encrypted. Headers and tool results are sent as plain text." Your token travels unencrypted. |
+| `http://localhost:8000/mcp`, `http://10.0.0.5/mcp`, `http://192.168.1.20/mcp` | Rejected. CloudThinker can't reach loopback, private, or cloud metadata addresses. |
+| A host name that resolves to a private address | Rejected, even if it looks public. |
 
 ### Add HTTPS with a reverse proxy
 
-If your server speaks only HTTP, put [Caddy](https://caddyserver.com/docs/install) in front of it. Point a DNS `A` record, such as `mcp.example.com`, at the server, then use this Caddyfile:
+If your server only speaks HTTP, put a reverse proxy in front of it. With [Caddy](https://caddyserver.com/docs/install):
+
+<Steps>
+  <Step title="Point DNS at the server">
+    Create a DNS `A` record, such as `mcp.example.com`, that points to the server's public IP.
+  </Step>
+  <Step title="Configure Caddy">
+    Save this as your `Caddyfile`, replacing the port with the one your MCP server listens on:
+
+    ```text
+    mcp.example.com {
+        reverse_proxy localhost:8000
+    }
+    ```
+  </Step>
+  <Step title="Start Caddy">
+    Open ports 80 and 443 and start Caddy. It requests a public certificate on its own.
+
+    **Success state:** `https://mcp.example.com` loads in a browser with a valid certificate. Enter `https://mcp.example.com/mcp` as the **URL**.
+  </Step>
+</Steps>
+
+## Permissions
+
+Your server decides what the connection can do. CloudThinker only holds the header values you give it.
+
+- Issue a token used only by CloudThinker, so you can revoke it without affecting anything else.
+- Scope it to the least access the exposed tools need. Start with read tools only, and add write tools when you're ready to approve them.
+- Have the server validate the token on every request.
+
+## Verify the connection
+
+Start a chat and type `#` to pick the connection, then ask:
 
 ```text
-mcp.example.com {
-    reverse_proxy localhost:8000
-}
+#Internal metrics List the tools this connection exposes, then call the simplest read-only one and show me the result.
 ```
 
-Open ports 80 and 443 and start Caddy. It gets a public certificate on its own. Then enter `https://mcp.example.com/mcp` as the **URL**.
+**Expected result:** CloudThinker lists the tools by their `prefix__tool_name` names and returns output from one read tool, with no approval request.
 
-## Connection details
+## Example prompts
 
-| Field | Description | Required |
-|-------|-------------|----------|
-| **Connection Name** | Display name | Yes |
-| **Prefix** | Tool name prefix; tools appear as `prefix__tool_name` | Yes |
-| **Transport Type** | Streamable HTTP or SSE | Yes |
-| **URL** | MCP server endpoint, with no embedded credentials | Yes |
-| **Headers** | Key-value pairs sent on every request, such as `Authorization` | No |
-| **Timeout** | Connection timeout in seconds | No (default 30) |
-| **SSE Read Timeout** | Event stream timeout in seconds | No (default 300) |
-
-## Required permissions
-
-Authentication is between CloudThinker and your server: whatever token or credential you place in the headers defines what the connection can do. Issue your server a credential dedicated to CloudThinker, scoped to the least access its tools need, and have the server validate it on every request.
-
-<Tip>
-Only expose the tools agents should have. A tool your server does not serve cannot be called, which is a stronger boundary than any setting inside CloudThinker.
-</Tip>
-
-## Agent capabilities
-
-Once connected, every tool your server exposes becomes an agent tool named `prefix__tool_name`, available to all agents in the workspace alongside the built-in connections.
-
-CloudThinker sorts each tool into a read or a write when it discovers the tool. A tool with `readOnlyHint` is a read, and a tool with `destructiveHint` is a write. Otherwise, a name with a word such as `get`, `list`, or `search` counts as a read, and any other name counts as a write. Reads always run. Your [Rules](/guide/approvals/rules) and [Approval mode](/guide/approvals/approval-mode) decide each write.
-
-### Verify the connection
+Replace `#Internal metrics` with your connection's name.
 
 ```text
-List the tools available from my custom MCP connection and call the simplest read-only one to confirm it responds
+#Internal metrics What is the current status of the checkout service?
 ```
 
-### Example prompts
+```text
+#Internal metrics Compare today's error counts with the last 7 days and flag anything unusual.
+```
 
 ```text
-The current status of our internal metrics service using the mytools connection
-The trend in today's records from the mytools connection
-Which tools the mytools connection exposes and what each one does
+#Internal metrics Which tools here can change data? Describe what each one does before calling any of them.
 ```
 
 ## Troubleshooting
 
-<Accordion title="Connection timeout">
-Verify the MCP server is running, check network connectivity from CloudThinker, increase the **Timeout** value, and confirm the firewall allows the traffic.
-</Accordion>
-
-<Accordion title="This server does not use HTTPS on this port. Use an http:// URL, or turn on HTTPS on the server.">
-The URL starts with `https://`, but the server speaks plain HTTP on that port. Change it to `http://`, or [add HTTPS](#add-https-with-a-reverse-proxy).
-</Accordion>
-
-<Accordion title="This server's TLS certificate is not trusted: it is self-signed, expired, or issued for another name. Use a certificate from a public certificate authority.">
-Replace a self-signed certificate with one from a public certificate authority, such as Let's Encrypt. Renew an expired one. Use the certificate's host name in the **URL**.
-</Accordion>
-
-<Accordion title="This server refused the connection. Check the host and port, and that the server is running.">
-Nothing answered at that host and port. Fix the URL, or start the server.
-</Accordion>
-
-<Accordion title="URL points to a private or metadata IP address / URL resolves to a private or metadata IP address">
-The URL holds a private address, or DNS maps the host name to one. A single private record rejects the name. The messages "URL points to a private network hostname" and "URL points to a blocked internal hostname" cover names such as `localhost` or `.internal`. Use a public host name or IP address.
-</Accordion>
-
-<Accordion title="Could not resolve hostname">
-CloudThinker could not find the host name from your **URL** in DNS. Check the spelling. A name that exists only inside your network does not resolve.
-</Accordion>
-
-<Accordion title="Tools not appearing">
-Verify the prefix is set, check that the server returns tool definitions, ensure the protocol version is compatible, and review the server's own logs for errors.
-</Accordion>
-
-<Accordion title="Authentication errors">
-Verify the header values are set correctly, that the token or key is still valid on your server, and that the server validates the credential the way you expect.
-</Accordion>
-
-<Accordion title="SSE connection drops">
-Increase the **SSE Read Timeout**, check for proxy interference, verify the server sends keepalive events, and review network stability.
-</Accordion>
+<AccordionGroup>
+  <Accordion title="This connection did not respond in time. Try connecting again.">
+    The server didn't answer within **Timeout (seconds)**. Check that the server is running and that its firewall allows inbound traffic, then raise the timeout and try again.
+  </Accordion>
+  <Accordion title="This server does not use HTTPS on this port.">
+    The URL starts with `https://`, but the server speaks plain HTTP on that port. Change the URL to `http://`, or [add HTTPS](#add-https-with-a-reverse-proxy).
+  </Accordion>
+  <Accordion title="This server's TLS certificate is not trusted: it is self-signed, expired, or issued for another name.">
+    Replace a self-signed certificate with one from a public certificate authority, such as Let's Encrypt. Renew an expired one. Make sure the host name in the **URL** matches the certificate.
+  </Accordion>
+  <Accordion title="This server refused the connection.">
+    Nothing is listening at that host and port. Fix the URL, or start the server.
+  </Accordion>
+  <Accordion title="URL points to a private or metadata IP address / URL resolves to a private or metadata IP address">
+    The URL contains a private address, or DNS maps the host name to one. The message "URL points to a blocked internal hostname" covers names such as `localhost`. Use a public host name or IP address.
+  </Accordion>
+  <Accordion title="Could not resolve hostname">
+    DNS has no record for the host name in your **URL**. Check the spelling. A name that only exists inside your network won't resolve.
+  </Accordion>
+  <Accordion title="The provider rejected these credentials. Update them, then connect again.">
+    Your server returned 401 or 403. Check the header key and value, confirm the token is still valid on your server, and check how the server expects it (for example `Bearer` versus a custom header).
+  </Accordion>
+  <Accordion title="The provider endpoint was not found. Check the connection settings.">
+    The host answered but the path is wrong. Many servers serve MCP at `/mcp` or `/sse`. Check your server's docs for the exact path.
+  </Accordion>
+  <Accordion title="Connected, but tools are missing">
+    Check that the server returns its tools in the tool list response and look at the server's own logs. Tools the server doesn't list can't be called.
+  </Accordion>
+  <Accordion title="SSE connection drops">
+    Raise **SSE Read Timeout (seconds)**, check that no proxy between CloudThinker and the server buffers or cuts long-lived connections, and have the server send keepalive events.
+  </Accordion>
+</AccordionGroup>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Use HTTPS** — over `http://`, headers, including your credential, travel as plain text.
-- **Rotate header credentials** — replace the token on your server and in the connection's headers on your normal rotation schedule.
+- **Use HTTPS.** Over `http://`, headers, including your token, and tool results travel as plain text.
+- **Mark tool hints.** Set `readOnlyHint` and `destructiveHint` so CloudThinker treats each tool the way you intend.
+- **Rotate header credentials.** Replace the token on your server, then edit the connection and update the header value.
 
-## Related
+## Next steps
 
 <CardGroup cols={2}>
-  <Card title="Connections Overview" icon="plug" href="/guide/connections/overview">
-    All connection types
+  <Card title="Set approval Rules" icon="shield-check" href="/guide/approvals/rules">
+    Decide which of your server's write tools run, ask first, or are refused.
   </Card>
-  <Card title="Agents" icon="robot" href="/guide/agents/overview">
-    How agents use connections
+  <Card title="Connections overview" icon="plug" href="/guide/connections/overview">
+    See every built-in connection before building your own server.
   </Card>
 </CardGroup>

@@ -1,208 +1,152 @@
 ---
 title: PostgreSQL
-description: "Connect PostgreSQL databases to CloudThinker for query analysis, index optimization, and performance monitoring"
+description: "Connect a PostgreSQL database so agents can find slow queries, suggest indexes, and check vacuum, locks, and replication health"
 icon: "/images/icons/postgresql.svg"
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your PostgreSQL databases to enable [CloudThinker](/guide/agents/overview) to analyze queries, optimize performance, and monitor database health.
-
-## Supported platforms
-
-| Platform | Support |
-|----------|---------|
-| **Self-hosted PostgreSQL** | 12.x, 13.x, 14.x, 15.x, 16.x |
-| **AWS RDS PostgreSQL** | All versions |
-| **AWS Aurora PostgreSQL** | All versions |
-| **Google Cloud SQL** | All PostgreSQL versions |
-| **Azure Database for PostgreSQL** | Flexible Server, Single Server |
+Connect a PostgreSQL database to let CloudThinker agents read schemas, rank slow queries, recommend indexes, and check vacuum, lock, and replication health. You give CloudThinker one connection URL for a dedicated read-only user, and CloudThinker runs the connection in restricted mode, so agents can read but never change data.
 
 ## Prerequisites
 
-- A PostgreSQL instance reachable from CloudThinker over the network.
-- Admin access to create a dedicated user and grant privileges.
-- The `pg_stat_statements` extension installed if you want query-level analysis (required for slow-query data).
+- A PostgreSQL endpoint CloudThinker can reach over the network, such as self-hosted PostgreSQL, Amazon RDS or Aurora, Cloud SQL, or Azure Database for PostgreSQL. Agents connect from CloudThinker's managed sandbox, so `localhost` and private addresses resolve there, not on your network.
+- An admin account that can run `CREATE ROLE` and `GRANT`.
+- The `pg_stat_statements` extension, if you want slow-query ranking and workload index advice. Everything else works without it.
 
 ## Setup
 
 <Steps>
-  <Step title="Connect as admin">
-    Connect to your PostgreSQL instance using an admin account:
-    ```bash
-    psql -h your-host -U postgres -d your-database
-    ```
-  </Step>
   <Step title="Create a read-only user">
-    Create a dedicated user for CloudThinker:
+    Connect as an admin and create a login role for CloudThinker:
+
     ```sql
-    CREATE USER cloudthinker_readonly WITH PASSWORD 'your-secure-password';
+    CREATE ROLE cloudthinker_readonly WITH LOGIN PASSWORD '<secure-password>';
     ```
   </Step>
-  <Step title="Grant connection and schema access">
-    Allow connection and schema usage:
+  <Step title="Grant read access">
+    Run these in the database you want analyzed. Repeat the schema lines for every schema besides `public` that agents should read.
+
     ```sql
     GRANT CONNECT ON DATABASE your_database TO cloudthinker_readonly;
     GRANT USAGE ON SCHEMA public TO cloudthinker_readonly;
-    GRANT USAGE ON SCHEMA information_schema TO cloudthinker_readonly;
-    ```
-  </Step>
-  <Step title="Grant SELECT permissions">
-    Grant SELECT on all tables and views, including future ones:
-    ```sql
     GRANT SELECT ON ALL TABLES IN SCHEMA public TO cloudthinker_readonly;
-    GRANT SELECT ON ALL TABLES IN SCHEMA information_schema TO cloudthinker_readonly;
-
-    ALTER DEFAULT PRIVILEGES IN SCHEMA public
-    GRANT SELECT ON TABLES TO cloudthinker_readonly;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO cloudthinker_readonly;
+    GRANT pg_monitor TO cloudthinker_readonly;
     ```
+
+    `pg_monitor` lets agents see every session, lock, and query statistic, not only their own.
   </Step>
-  <Step title="Enable pg_stat_statements">
-    This extension is required for query analysis:
+  <Step title="Turn on pg_stat_statements">
+    Add `pg_stat_statements` to `shared_preload_libraries` and restart PostgreSQL. On RDS, Aurora, or Cloud SQL, set it in the parameter group or database flags and reboot. Then, as an admin in the target database:
+
     ```sql
-    -- Enable extension (requires superuser)
     CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
-
-    -- Grant access to the user
-    GRANT SELECT ON pg_stat_statements TO cloudthinker_readonly;
     ```
 
-    For RDS/Aurora, add to your parameter group:
-    ```
-    shared_preload_libraries = 'pg_stat_statements'
-    ```
+    **Success state:** `SELECT count(*) FROM pg_stat_statements;` returns a number instead of an error.
   </Step>
-  <Step title="Configure network access">
-    Ensure CloudThinker can reach your database:
-    - Add CloudThinker IPs to your security group or firewall
-    - For RDS: enable public access or use VPC peering
+  <Step title="Open network access">
+    Allow inbound connections on the PostgreSQL port (default `5432`) from CloudThinker in your firewall, security group, or authorized networks list. Check that `pg_hba.conf` accepts password logins for `cloudthinker_readonly` from outside the host.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Navigate to **Connections → PostgreSQL** and enter:
-    - **Host**: your database hostname or IP
-    - **Port**: database port (default: `5432`)
-    - **Database**: database name
-    - **Username**: `cloudthinker_readonly`
-    - **Password**: the password you set above
-    - **SSL mode**: `require` (recommended)
+    Open **Connections** in the sidebar and select **PostgreSQL**. Optionally set an **Alias** and **Description** (agents read the description to pick the right database when you connect several). Paste the URL into **DATABASE_URI** and click **Connect**:
 
-    Click **Connect**. CloudThinker shows a **Connected** status once it succeeds.
+    ```text
+    postgresql://cloudthinker_readonly:<secure-password>@db.example.com:5432/your_database?sslmode=require
+    ```
+
+    **Success state:** the connection shows **Testing**, then **Connected**.
   </Step>
 </Steps>
 
 ## Connection details
 
-| Field | Description | Default |
-|-------|-------------|---------|
-| **Host** | Database hostname or IP | — |
-| **Port** | PostgreSQL port | `5432` |
-| **Database** | Database name | — |
-| **Username** | Dedicated user, e.g. `cloudthinker_readonly` | — |
-| **Password** | User password | — |
-| **SSL mode** | `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full` | `require` |
-| **Connection timeout** | Seconds to wait for connection | `10` |
-| **Statement timeout** | Max query execution time in ms | `30000` |
+| Field | Required | Description | Example |
+|-------|----------|-------------|---------|
+| **Alias** | No | Short name for this database. Blank picks a free alias | `prod-db` |
+| **Description** | No | What this database is. Agents read it to choose between instances | `Production orders database` |
+| **DATABASE_URI** | Yes | Full connection URL: user, password, host, port, database, and SSL mode | `postgresql://cloudthinker_readonly:<password>@db.example.com:5432/shop?sslmode=require` |
 
-Connection string format:
-
-```
-postgresql://cloudthinker_readonly:your-secure-password@your-host:5432/your-database
-```
+If the password contains `@`, `:`, `/`, or `#`, URL-encode it (for example, `@` becomes `%40`), or the URL won't parse.
 
 ## Required permissions
 
-### Minimum
-
-```sql
-GRANT CONNECT ON DATABASE dbname TO cloudthinker_readonly;
-GRANT USAGE ON SCHEMA public TO cloudthinker_readonly;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO cloudthinker_readonly;
-```
-
-### Recommended (full analysis)
-
-```sql
--- All of the above, plus:
-GRANT SELECT ON pg_stat_statements TO cloudthinker_readonly;
-GRANT SELECT ON pg_stat_activity TO cloudthinker_readonly;
-GRANT SELECT ON pg_stat_user_tables TO cloudthinker_readonly;
-GRANT SELECT ON pg_stat_user_indexes TO cloudthinker_readonly;
-GRANT SELECT ON pg_statio_user_tables TO cloudthinker_readonly;
-GRANT pg_read_all_stats TO cloudthinker_readonly;  -- PostgreSQL 14+
-```
+| You want agents to | Grant |
+|--------------------|-------|
+| Read schemas, tables, indexes, and run read-only queries | `CONNECT` on the database, `USAGE` on each schema, `SELECT` on its tables |
+| See all sessions, locks, and blocking queries | `pg_monitor` |
+| Rank slow queries and get workload index advice | `pg_stat_statements` extension plus `pg_monitor` |
+| Test an index without building it | The `hypopg` extension, installed by an admin |
 
 <Tip>
-Start with the minimum grants and add the recommended stats grants to unlock query-level analysis and cache hit reporting.
+Keep the user read-only. Restricted mode already blocks writes from agents, but a `SELECT`-only role means a mistake in either layer still can't change data.
 </Tip>
 
 ## Agent capabilities
 
-Once connected, CloudThinker can:
-
-| Capability | Description |
-|------------|-------------|
-| **Query analysis** | Identify slow queries, analyze execution plans |
-| **Index recommendations** | Find missing indexes, identify unused indexes |
-| **Performance metrics** | Monitor connections, I/O, cache hit rates |
-| **Table statistics** | Analyze table bloat, dead tuples, vacuum status |
-| **Replication monitoring** | Check lag and streaming status on replicas |
+| Capability | What agents can do |
+|------------|--------------------|
+| **Schema inspection** | List schemas, tables, views, and sequences, and read column types, constraints, and indexes |
+| **Read-only SQL** | Run `SELECT` queries to answer questions about your data |
+| **Slow queries** | Rank statements by total time, mean time, or overall resource use from `pg_stat_statements` |
+| **Query plans and index advice** | Explain a query, recommend indexes for one query or the whole workload, and test hypothetical indexes with `hypopg` |
+| **Health checks** | Find invalid, duplicate, bloated, and unused indexes, cache hit rates, sequences near their limit, and connection use |
+| **Vacuum and locks** | Report table bloat, overdue autovacuum, transaction ID wraparound risk, and blocking queries |
+| **Replication** | Check replica lag and replication slot health |
 
 ### Verify the connection
 
 ```text
-Check PostgreSQL connection health and list active database sessions
+List the schemas and tables in the connected PostgreSQL database with their sizes
 ```
+
+Expect table names grouped by schema with their sizes. A `permission denied` error names the object the user can't read.
 
 ### Example prompts
 
 ```text
-Analyze slow queries on the production PostgreSQL instance
-Find missing indexes on the orders table
-Show database performance metrics including cache hit rates
+Which 10 queries use the most resources on PostgreSQL, and what indexes would help them?
+Run a health check on the database and list the indexes I can safely drop
+Is anything blocking right now? Show the blocking and waiting queries
 ```
 
 ## Troubleshooting
 
-<Accordion title="Connection refused">
-- Verify host and port are correct
-- Check your security group or firewall allows CloudThinker IPs
-- For RDS: ensure "Publicly accessible" is enabled or use VPC peering
-- Confirm PostgreSQL is listening on the correct interface
+<Accordion title="Connection refused or timed out">
+CloudThinker can't reach the host. Check that the host and port in **DATABASE_URI** are public or otherwise reachable, that your firewall or security group allows CloudThinker, and that `listen_addresses` in `postgresql.conf` isn't `localhost`. On RDS, the instance must be publicly accessible or reachable through your network setup.
 </Accordion>
 
-<Accordion title="Authentication failed">
-- Verify username and password are correct
-- Check `pg_hba.conf` allows the connection method
-- Ensure the user has `CONNECT` privilege on the database
+<Accordion title="Password authentication failed or no pg_hba.conf entry">
+The user or password is wrong, or `pg_hba.conf` doesn't allow this user from CloudThinker's address. Check that the password is URL-encoded in **DATABASE_URI**, add a `pg_hba.conf` line for the user, and reload PostgreSQL.
 </Accordion>
 
-<Accordion title="Missing pg_stat_statements">
-- Verify the extension is installed: `SELECT * FROM pg_extension WHERE extname = 'pg_stat_statements';`
-- Check `shared_preload_libraries` includes `pg_stat_statements`
-- Restart PostgreSQL after changing `shared_preload_libraries`
-- For RDS: modify the parameter group and reboot the instance
+<Accordion title="pg_stat_statements not found, or no slow-query data">
+The extension isn't loaded or created. Confirm `SHOW shared_preload_libraries;` includes `pg_stat_statements`, restart if you just added it, and run `CREATE EXTENSION pg_stat_statements;` in the target database. Statistics start from the last reset, so a fresh server has little history.
 </Accordion>
 
-<Accordion title="Permission denied">
-- Verify the user has `SELECT` on the required tables
-- Grant `pg_read_all_stats` role for PostgreSQL 14+
-- Check schema permissions with `\dn+` in psql
+<Accordion title="Permission denied for a table or schema">
+The user lacks `USAGE` on the schema or `SELECT` on the table. Tables created after your grants need the `ALTER DEFAULT PRIVILEGES` line, run by the role that creates them.
+</Accordion>
+
+<Accordion title="HypoPG not installed">
+Hypothetical index tests need the `hypopg` extension. Install it, or ask for index recommendations without testing them.
 </Accordion>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **SSL required** — always use SSL mode `require` or higher to encrypt data in transit.
-- **Minimal grants** — grant only `SELECT` to the CloudThinker user; never grant write access.
+- **Encrypt in transit**: put `sslmode=require` or `sslmode=verify-full` in **DATABASE_URI** so credentials and results never cross the network in plain text.
+- **Restricted mode on every query**: CloudThinker launches the PostgreSQL connection read-only, so agents can't write even if the role's grants would allow it.
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Agents" icon="database" href="/guide/agents/overview">
-    See what CloudThinker can do with this connection.
+  <Card title="CockroachDB" icon="/images/icons/cockroachdb.svg" href="/guide/connections/cockroachdb">
+    Connect a PostgreSQL-compatible CockroachDB cluster with separate read and write users.
   </Card>
-  <Card title="MySQL Connection" icon="/images/icons/mysql.svg" href="/guide/connections/mysql">
-    Similar setup for MySQL databases
+  <Card title="MySQL" icon="/images/icons/mysql.svg" href="/guide/connections/mysql">
+    Connect MySQL with the same read-only pattern.
   </Card>
 </CardGroup>

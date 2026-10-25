@@ -1,221 +1,187 @@
 ---
 title: ArgoCD
-description: "Connect ArgoCD to CloudThinker for GitOps operations and application management"
+description: "Connect Argo CD so agents can find out-of-sync and degraded apps, read events and logs, and sync an app after approval"
 icon: "/images/icons/argocd.svg"
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your ArgoCD instances to enable [CloudThinker](/guide/agents/overview) to analyze deployments, manage applications, and troubleshoot GitOps workflows. ArgoCD authenticates with an **API token** — the setup varies between self-hosted instances and the Akuity Platform.
-
----
+Connect Argo CD to let CloudThinker agents list your applications, explain why one is out of sync or degraded, read its Kubernetes events and pod logs, and sync it once you approve. The connection signs in with one Argo CD **API token** and works with self-hosted Argo CD and the Akuity Platform.
 
 ## Prerequisites
 
-- An ArgoCD instance accessible from CloudThinker: self-hosted (default port `8888`) or managed via [Akuity Platform](https://akuity.cloud).
-- **ArgoCD CLI** installed (`brew install argocd`); Akuity Platform also requires the [Akuity CLI](https://docs.akuity.io/akuity-platform/akuity-cli).
-- Admin access to ArgoCD to enable the `apiKey` capability and generate a token.
-
----
+- An Argo CD server reachable from CloudThinker over HTTPS. A `localhost` or cluster-internal address won't work.
+- Admin access to Argo CD, so you can create a local account and generate a token for it.
+- The [Argo CD CLI](https://argo-cd.readthedocs.io/en/stable/cli_installation/) on your machine to generate the token.
 
 ## Setup
 
-Select your ArgoCD platform:
+Create a dedicated `cloudthinker` account instead of using `admin`. Its token then carries only the permissions you grant in [Required permissions](#required-permissions), and you can revoke it without touching anyone else.
 
 <Tabs>
-  <Tab title="Self-hosted ArgoCD">
-
+  <Tab title="Self-hosted Argo CD">
     <Steps>
-      <Step title="Get connection details">
-        Ensure ArgoCD is running and accessible. Get your host IP address:
+      <Step title="Create a local account with API key access">
+        Add a `cloudthinker` account that can only use API keys, not the web login:
 
         ```bash
-        hostname -I | awk '{print $1}'
+        kubectl -n argocd patch configmap argocd-cm --type merge \
+          -p '{"data":{"accounts.cloudthinker":"apiKey"}}'
         ```
       </Step>
-      <Step title="Generate an API token">
-        Enable the `apiKey` capability and generate a token for the admin account:
+      <Step title="Generate a token">
+        Sign in as an admin, then generate a token for the new account:
 
         ```bash
-        kubectl -n argocd patch configmap argocd-cm --type merge -p '{"data":{"accounts.admin":"apiKey, login"}}'
-        argocd login <host-ip>:8888 --username admin --password '<password>' --insecure
-        argocd account generate-token --account admin --insecure
+        argocd login argocd.example.com --username admin
+        argocd account generate-token --account cloudthinker
         ```
+
+        Copy the token. Add `--insecure` to both commands only if the server uses a self-signed certificate.
+
+        **Success state:** the second command prints a long token string.
       </Step>
       <Step title="Add the connection in CloudThinker">
-        Navigate to **Connections → ArgoCD** and enter:
+        Open **Workspace Settings → Connections**, stay on the **Builtin Connections** tab, and select **ArgoCD**. Fill in:
 
-        - **Base URL**: `https://<host-ip>:8888`
-        - **API Token**: token from the previous step
-        - **TLS Verification**: Disable
-        - **Read-only Mode**: Enable
+        - **ARGOCD_BASE_URL**: your server address, such as `https://argocd.example.com`
+        - **ARGOCD_API_TOKEN**: the token you copied
+        - **NODE_TLS_REJECT_UNAUTHORIZED**: **Verify TLS (default)**, or **Skip TLS verification** for a self-signed certificate
+        - **READ_ONLY**: **Read-only** to start (see [Agent capabilities](#agent-capabilities))
 
-        Click **Connect**. CloudThinker verifies the credentials and shows a **Connected** status.
+        Click **Connect**.
+
+        **Success state:** the **Connect ArgoCD** dialog closes without an error. Run the verify prompt below.
       </Step>
     </Steps>
-
   </Tab>
-
   <Tab title="Akuity Platform">
-
     <Steps>
-      <Step title="Install CLIs">
-        Install ArgoCD CLI:
-
-        ```bash
-        brew install argocd
-        ```
-
-        Install Akuity CLI:
-
-        ```bash
-        curl -sSL -o /tmp/akuity \
-          "https://dl.akuity.io/akuity-cli/$(curl -sL https://dl.akuity.io/akuity-cli/stable.txt)/$(uname)/$(uname -m)/akuity"
-        chmod +x /tmp/akuity
-        sudo mv /tmp/akuity /usr/local/bin/akuity
-        ```
+      <Step title="Create a system account">
+        In the [Akuity Portal](https://akuity.cloud), open your Argo CD instance, go to **Settings → System Accounts**, and add an account named `cloudthinker` with the **apiKey** capability.
       </Step>
-      <Step title="Create an admin account">
-        In the [Akuity Portal](https://akuity.cloud):
-
-        1. Navigate to **Organization** → **API Keys** → click **Create API Key** (role: Owner).
-        2. Under your ArgoCD instance → **Settings** → **System Accounts**.
-        3. Click **Add Account** → name: `admin`.
-        4. Enable both **login** and **apiKey** capabilities and set a password.
-      </Step>
-      <Step title="Generate an API token">
-        Log in and generate a token:
+      <Step title="Generate a token">
+        Sign in to the instance as an admin and generate a token for the new account:
 
         ```bash
-        argocd login <instance-id>.cd.akuity.cloud --grpc-web \
-          --username admin --password '<your-password>'
-        argocd account generate-token --account admin --grpc-web
+        argocd login <instance-id>.cd.akuity.cloud --grpc-web --username admin
+        argocd account generate-token --account cloudthinker --grpc-web
         ```
+
+        Copy the token.
       </Step>
       <Step title="Add the connection in CloudThinker">
-        Navigate to **Connections → ArgoCD** and enter:
+        Open **Workspace Settings → Connections**, stay on the **Builtin Connections** tab, and select **ArgoCD**. Fill in:
 
-        - **Base URL**: `https://<instance-id>.cd.akuity.cloud`
-        - **API Token**: token from the previous step
-        - **TLS Verification**: Enable
-        - **Read-only Mode**: Enable
+        - **ARGOCD_BASE_URL**: `https://<instance-id>.cd.akuity.cloud`
+        - **ARGOCD_API_TOKEN**: the token you copied
+        - **NODE_TLS_REJECT_UNAUTHORIZED**: **Verify TLS (default)**
+        - **READ_ONLY**: **Read-only** to start
 
-        Click **Connect**. CloudThinker verifies the credentials and shows a **Connected** status.
+        Click **Connect**.
+
+        **Success state:** the **Connect ArgoCD** dialog closes without an error.
       </Step>
     </Steps>
-
   </Tab>
 </Tabs>
 
----
-
 ## Connection details
 
-| Field | Description | Example |
+| Field | Description | Default |
 |-------|-------------|---------|
-| **Base URL** | ArgoCD server address | `https://192.168.1.100:8888` (self-hosted); `https://<id>.cd.akuity.cloud` (Akuity) |
-| **API Token** | Token generated for the ArgoCD admin account | — |
-| **TLS Verification** | Enable for Akuity; disable for self-hosted with a self-signed certificate | — |
-| **Read-only Mode** | Enable to prevent unsanctioned writes | — |
-
----
+| **ARGOCD_BASE_URL** | Argo CD server address, HTTPS | none |
+| **ARGOCD_API_TOKEN** | Token for the account CloudThinker uses | none |
+| **NODE_TLS_REJECT_UNAUTHORIZED** | **Verify TLS (default)** checks the server certificate. **Skip TLS verification** accepts self-signed certificates; use it only for local or dev servers | Verify TLS |
+| **READ_ONLY** | **Read-only** turns off the sync, create, update, delete, and resource action tools. **Full access (default)** keeps them on | Full access |
 
 ## Required permissions
 
-Apply the following RBAC policy in ArgoCD to grant CloudThinker read-only access:
+Grant the `cloudthinker` account a role in Argo CD RBAC. Add these lines to the existing `policy.csv` in the `argocd-rbac-cm` ConfigMap with `kubectl -n argocd edit configmap argocd-rbac-cm`. On Akuity, add them to the instance's RBAC policy.
 
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: argocd-rbac-cm
-  namespace: argocd
-data:
-  policy.default: role:readonly
-  policy.csv: |
-    p, role:cloudthinker-readonly, applications, get, */*, allow
-    p, role:cloudthinker-readonly, applications, list, */*, allow
-    p, role:cloudthinker-readonly, repositories, get, *, allow
-    p, role:cloudthinker-readonly, repositories, list, *, allow
-    p, role:cloudthinker-readonly, clusters, get, *, allow
-    p, role:cloudthinker-readonly, clusters, list, *, allow
-    g, cloudthinker-readonly, role:cloudthinker-readonly
+```csv
+p, role:cloudthinker, applications, get, */*, allow
+p, role:cloudthinker, logs, get, */*, allow
+g, cloudthinker, role:cloudthinker
 ```
 
-```bash
-kubectl apply -f argocd-rbac.yaml
-```
+`applications, get` covers application status, resource trees, managed resources, and events. `logs, get` lets agents read pod logs. To let agents sync after approval, also add `p, role:cloudthinker, applications, sync, */*, allow`.
 
-<Tip>
-Follow least privilege: grant only `get` and `list` actions on applications, repositories, and clusters.
-</Tip>
-
----
+<Warning>
+Edit the ConfigMap rather than applying a new one. `kubectl apply` with a fresh `argocd-rbac-cm` replaces your whole policy and can lock other users out.
+</Warning>
 
 ## Agent capabilities
 
-Once connected, CloudThinker can investigate and act on your ArgoCD applications.
+| Capability | What agents can do | Approval |
+|------------|--------------------|----------|
+| **Discovery** | List applications with sync status, health, repo, path, and namespace, plus resource trees and recent events for the unhealthy or out-of-sync ones | No |
+| **Application detail** | Read one app's spec, managed resources, and the live versus desired diff | No |
+| **Events and logs** | Read Kubernetes events for an app or resource, and pod logs from its workloads | No |
+| **Sync** | Trigger a sync of one application | Yes, and off in Read-only |
+| **Change applications** | Create, update, or delete an application | Yes, and off in Read-only |
+| **Resource actions** | Run an action such as a restart on a managed resource | Yes, and off in Read-only |
 
-| Capability | Description |
-|------------|-------------|
-| **Application status** | View sync status, health state, and last sync time |
-| **Deployment analysis** | Identify out-of-sync and failed deployments |
-| **Repository insights** | Analyze Git repository state and commits |
-| **Health monitoring** | Track application health across all apps |
-| **Sync operations** | Trigger manual syncs — **requires approval** |
+Every change goes through [Approvals](/guide/approvals/overview), and a rejected request isn't retried. To let agents sync, set **READ_ONLY** to **Full access (default)** and add the `applications, sync` permission. Leave either one out and agents can only read.
 
 ### Verify the connection
 
 ```text
-List all ArgoCD applications and show their sync and health status
+List my Argo CD applications with their sync status and health, and call out any that are OutOfSync or Degraded
 ```
+
+Expect a table of application names with a sync status such as **Synced** or **OutOfSync** and a health status such as **Healthy** or **Degraded**, plus counts at the end.
 
 ### Example prompts
 
 ```text
-Show all out-of-sync ArgoCD applications and the details
-Analyze deployment failures for the payment service and fixes
-Check the health status of all applications in production
+Why is the checkout app Degraded? Check its resource tree, recent events, and pod logs
+Which resources in payments-api differ from Git, and what changed?
+Sync the payments-api app and tell me when it's Healthy
 ```
 
----
+Name the application. Agents use real names from the application list and won't guess one. The sync prompt needs **Full access (default)** and the `applications, sync` permission.
 
 ## Troubleshooting
 
-<Accordion title="Cannot connect to ArgoCD server">
-For self-hosted instances, use the host IP address (not `localhost`) in the Base URL. If the server is behind a port-forward, run `kubectl port-forward svc/argocd-server -n argocd 8888:443 --address 0.0.0.0`. Check firewall rules if the host remains unreachable.
+<Accordion title="Connect fails with fetch failed">
+CloudThinker can't reach **ARGOCD_BASE_URL**, or the server's certificate was rejected. Check that the address is public HTTPS, not `localhost` or a cluster-internal name. For a self-signed certificate, set **NODE_TLS_REJECT_UNAUTHORIZED** to **Skip TLS verification**.
 </Accordion>
 
-<Accordion title="401 Unauthorized">
-Verify the API token is correct and that the admin account has both `login` and `apiKey` capabilities enabled. For self-hosted, confirm `argocd-cm` was patched; for Akuity, check the System Account capabilities in the portal.
+<Accordion title="Requests return 401">
+The token is missing, expired, or was generated for a different account. Run `argocd account generate-token --account cloudthinker` again, edit the connection, and paste the new token.
 </Accordion>
 
-<Accordion title="Cannot generate API token">
-The `apiKey` capability is not enabled for the account. Run `argocd account get` to inspect the account's capabilities, then enable `apiKey` and retry.
+<Accordion title="Permission denied (code 7)">
+The account's RBAC role doesn't allow that action. Check the `policy.csv` lines in [Required permissions](#required-permissions): logs need `logs, get` and syncs need `applications, sync`.
 </Accordion>
 
-<Accordion title="TLS certificate errors">
-For self-hosted instances, disable TLS verification in the connection settings (equivalent to the `--insecure` CLI flag). For Akuity, TLS verification should remain enabled.
+<Accordion title="The application list is empty">
+The role grants no access to those projects. The `*/*` pattern in the policy covers every project; if you narrowed it, add the projects agents should see.
 </Accordion>
 
----
+<Accordion title="Sync, create, update, or delete is unavailable">
+**READ_ONLY** is set to **Read-only**. Edit the connection and switch to **Full access (default)** if you want agents to propose those changes.
+</Accordion>
+
+<Accordion title="Generating a token fails">
+The account doesn't have the `apiKey` capability. Run `argocd account get --account cloudthinker` to check, then repeat the first setup step.
+</Accordion>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Read-only RBAC** — apply the `role:cloudthinker-readonly` policy in `argocd-rbac-cm` and enable read-only mode in the connection to prevent unsanctioned writes.
-- **Token rotation** — rotate the ArgoCD API token periodically and update it in CloudThinker.
-
----
+- **Dedicated account**: give CloudThinker its own `cloudthinker` account with API key access only, never the `admin` token.
+- **Keep TLS verification on in production**: skip it only for a local or dev server with a self-signed certificate.
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Agents" icon="dharmachakra" href="/guide/agents/overview">
-    See what CloudThinker can do with this connection.
+  <Card title="Kubernetes connection" icon="/images/icons/kubernetes.svg" href="/guide/connections/kubernetes">
+    Let agents read the clusters Argo CD deploys to.
   </Card>
-  <Card title="Kubernetes Connection" icon="/images/icons/kubernetes.svg" href="/guide/connections/kubernetes">
-    Connect Kubernetes clusters
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Control which syncs and changes wait for a person.
   </Card>
 </CardGroup>

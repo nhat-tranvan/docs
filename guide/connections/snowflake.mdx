@@ -1,24 +1,27 @@
 ---
 title: Snowflake
-description: "Connect Snowflake to CloudThinker for warehouse credit analysis, slow-query triage, storage review, and optional warehouse control"
+description: "Connect Snowflake so CloudThinker can break down warehouse credits, rank slow and failing queries, and review storage overhead"
 icon: "/images/icons/snowflake.svg"
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your Snowflake account to let [CloudThinker](/guide/agents/overview) read warehouse credit burn, rank slow and failing queries, and measure table storage overhead. CloudThinker reaches Snowflake over the SQL REST API with a programmatic access token, and a new connection reads only until you turn the write tool on.
+Connect Snowflake to let CloudThinker show which warehouses burn the most credits, rank slow and failing queries, and measure time travel and failsafe storage. CloudThinker calls the Snowflake SQL REST API with a **programmatic access token** (PAT) for a service user, and a new connection only reads until you turn on **Allow writes**.
+
+---
 
 ## Prerequisites
 
-- `ACCOUNTADMIN` (or equivalent) to create the role, the service user, and the token.
-- A network policy you can attach to that user. Snowflake refuses token authentication until one exists.
-- A warehouse the role can use. Metadata queries need no compute, so the connection test can pass while real analysis still fails without one.
+- `ACCOUNTADMIN`, or an equivalent role, to create a role, a service user, a network policy, and a token.
+- A warehouse the role can use. The connection test needs no compute, so it can pass while real analysis fails without one.
+
+---
 
 ## Setup
 
 <Steps>
   <Step title="Create a read-only role">
-    Run as `ACCOUNTADMIN`. `USAGE_VIEWER` covers metering and storage, `OBJECT_VIEWER` covers object inventory, and `GOVERNANCE_VIEWER` is what makes `QUERY_HISTORY` readable:
+    Run as `ACCOUNTADMIN`. Replace `COMPUTE_WH` with the warehouse the agent should run on:
     ```sql
     USE ROLE ACCOUNTADMIN;
 
@@ -31,7 +34,7 @@ Connect your Snowflake account to let [CloudThinker](/guide/agents/overview) rea
     ```
   </Step>
   <Step title="Create a service user">
-    A `SERVICE` user has no password, no MFA, and no SSO, so it authenticates only with the token:
+    A `SERVICE` user has no password, MFA, or SSO, so the token is its only way in:
     ```sql
     CREATE USER IF NOT EXISTS SVC_CLOUDTHINKER
       TYPE = SERVICE
@@ -42,83 +45,70 @@ Connect your Snowflake account to let [CloudThinker](/guide/agents/overview) rea
     ```
   </Step>
   <Step title="Attach a network policy">
-    Narrow `ALLOWED_IP_LIST` to your egress ranges for anything beyond a test account:
+    Snowflake refuses token sign-in until the user has a network policy. Narrow `ALLOWED_IP_LIST` to your allowed ranges for anything beyond a test account:
     ```sql
     CREATE NETWORK POLICY IF NOT EXISTS CT_POLICY ALLOWED_IP_LIST = ('0.0.0.0/0');
     ALTER USER SVC_CLOUDTHINKER SET NETWORK_POLICY = CT_POLICY;
     ```
-    Skipping this step is the most common setup failure, and the resulting error (`390403`) does not name the policy.
   </Step>
-  <Step title="Mint a programmatic access token">
+  <Step title="Create a programmatic access token">
     ```sql
-    ALTER USER SVC_CLOUDTHINKER ADD PROGRAMMATIC ACCESS TOKEN CT_DEV
+    ALTER USER SVC_CLOUDTHINKER ADD PROGRAMMATIC ACCESS TOKEN CT_TOKEN
       ROLE_RESTRICTION = 'CT_READONLY'
       DAYS_TO_EXPIRY = 90;
     ```
-    Snowflake shows the token once, on creation. `DAYS_TO_EXPIRY` is a hard expiry: on that day the connection starts failing with `390318` and you mint a new token.
+    Copy the token now. Snowflake shows it only once, and it stops working on the expiry day.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Go to **Connections → Snowflake** and enter:
-    - **Account identifier**: `MYORG-MYACCOUNT`, found under **Snowsight → Account details**. Not the full URL.
-    - **Programmatic access token**: the token from the previous step. Not an account password.
-    - **Role**: optional; leave blank to use the user's default role.
-    - **Warehouse**: optional; leave blank to use the user's default warehouse.
+    Go to **Connections → Snowflake**, fill in the fields from [Connection details](#connection-details), and click **Connect**.
 
-    Click **Connect**. The status shows **Connected** once CloudThinker resolves the account, region, role, and warehouse.
+    **Success state:** Snowflake shows a **Connected** status, and the message names what the token resolved to, for example `Connected to MYORG-MYACCOUNT (AWS_US_WEST_2), role CT_READONLY, warehouse COMPUTE_WH`.
   </Step>
 </Steps>
 
+---
+
 ## Connection details
 
-| Field | Description | Default |
-|-------|-------------|---------|
-| **Account identifier** | `ORG-ACCOUNT`, from **Snowsight → Account details** | — |
-| **Programmatic access token** | Token created with `ALTER USER ... ADD PROGRAMMATIC ACCESS TOKEN` | — |
-| **Role** | Role the connection assumes; must sit inside the token's `ROLE_RESTRICTION` | User's default role |
-| **Warehouse** | Warehouse billed for the credits this connection burns | User's default warehouse |
+| Field | Required | Description | Default |
+|-------|----------|-------------|---------|
+| **Account identifier** | Yes | `MYORG-MYACCOUNT`, from **Snowsight → Account details**. Not the full URL | |
+| **Programmatic access token** | Yes | The token from Setup step 4. Not an account password | |
+| **Role** | No | Role the connection uses. Must be inside the token's `ROLE_RESTRICTION` | User's default role |
+| **Warehouse** | No | Warehouse billed for the credits this connection uses | User's default warehouse |
 
-<Tip>
-The REST host lowercases the account identifier and renders the separator as a hyphen, so an identifier written with an underscore still resolves.
-</Tip>
+An identifier written with an underscore (`MYORG_MYACCOUNT`) also works.
+
+---
 
 ## Required permissions
 
-### Read-only (default)
+| Grant | What it unlocks |
+|-------|-----------------|
+| `SNOWFLAKE.USAGE_VIEWER` | Credit metering and storage history |
+| `SNOWFLAKE.OBJECT_VIEWER` | Database, schema, and table inventory |
+| `SNOWFLAKE.GOVERNANCE_VIEWER` | `QUERY_HISTORY`, which slow-query and error answers need |
+| `MONITOR USAGE ON ACCOUNT` | Account-level usage views |
+| `USAGE ON WAREHOUSE` | Compute to run the analysis queries |
 
-```sql
-GRANT DATABASE ROLE SNOWFLAKE.USAGE_VIEWER      TO ROLE CT_READONLY;
-GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER     TO ROLE CT_READONLY;
-GRANT DATABASE ROLE SNOWFLAKE.GOVERNANCE_VIEWER TO ROLE CT_READONLY;
-GRANT MONITOR USAGE ON ACCOUNT                  TO ROLE CT_READONLY;
-GRANT USAGE ON WAREHOUSE COMPUTE_WH             TO ROLE CT_READONLY;
-```
+<Tip>
+`GOVERNANCE_VIEWER` is the grant people miss. Without it, credit and storage answers work but every slow-query and error answer fails. Keep the token's `ROLE_RESTRICTION` on this read-only role so the connection can't reach anything else.
+</Tip>
 
-`GOVERNANCE_VIEWER` is easy to miss. Without it, spend and storage answers keep working while every slow-query and error answer fails on `QUERY_HISTORY`.
-
-### Write access (only if you enable it)
-
-```sql
--- Suspend and resume: name each warehouse the agent may control.
-GRANT USAGE, OPERATE, MONITOR ON WAREHOUSE CT_AGENT_WH TO ROLE CT_READWRITE;
-
--- Where the findings table lives.
-GRANT USAGE ON DATABASE MONITORING                    TO ROLE CT_READWRITE;
-GRANT USAGE, CREATE TABLE ON SCHEMA MONITORING.ALERTS TO ROLE CT_READWRITE;
-```
-
-Grant `OPERATE` on the warehouses the agent may act on, never on a shared production warehouse. A dedicated agent warehouse with a resource monitor gives its compute a ceiling no prompt can raise.
+---
 
 ## Agent capabilities
-
-Once connected, CloudThinker can:
 
 | Capability | Description |
 |------------|-------------|
 | **Account discovery** | Identity, warehouses, databases, and which `ACCOUNT_USAGE` views the role can read |
-| **Credit analysis** | Metered credits per warehouse and per day, with the measured window stated |
-| **Query health** | Slowest readable queries, recurring error classes, and remote spill |
-| **Storage review** | Largest tables, time-travel and failsafe overhead, and per-database growth |
+| **Credit analysis** | Metered credits per warehouse and per day, over a stated window (30 days by default) |
+| **Query health** | Slowest queries, recurring error types, and queries that spill to remote storage |
+| **Storage review** | Largest tables, time travel and failsafe overhead, and per-database growth |
 | **Inventory** | Schemas, roles, and this connection's own grants |
+| **Warehouse control** | With **Allow writes** on: suspend or resume one named warehouse |
+
+CloudThinker reports Snowflake spend in credits, never in money. The price per credit isn't readable through this connection.
 
 ### Verify the connection
 
@@ -126,83 +116,95 @@ Once connected, CloudThinker can:
 List my Snowflake warehouses and which ACCOUNT_USAGE views this connection can read
 ```
 
+**Success state:** CloudThinker lists your warehouses and marks each `ACCOUNT_USAGE` view as readable or blocked, with the `GRANT` that fixes a blocked one.
+
 ### Example prompts
 
 ```text
-Which Snowflake warehouses burned the most credits in the last 30 days
-Show the slowest Snowflake queries and any recurring errors
-Where are time travel and failsafe adding storage overhead
+Which Snowflake warehouses burned the most credits in the last 30 days?
+Show the slowest Snowflake queries this week and any errors that keep recurring
+Where are time travel and failsafe adding the most storage?
 ```
 
-Snowflake exposes credits, not currency, and the price per credit is not readable through this connection. Agents report credits as credits.
+---
 
 ## Write access
 
-The connection ships read-only, and write is a per-connection decision because access follows the credential. One workspace can hold a read-only token and a write-capable token at the same time.
+**Allow writes** is off on new Snowflake connections. Turn it on under the connection's **Settings → Allow writes**. Each write then goes through your [Rules](/guide/approvals/rules) and [Approval mode](/guide/approvals/approval-mode).
 
-| Allow writes | Credential | What the agent can do |
-|--------------|------------|------------------------|
-| Off (default) | any | Reads only. Every change is refused. |
-| On | read-only role | Still nothing. Snowflake denies the statement and the agent reports the denial. |
-| On | write-capable role | Suspend or resume a named warehouse, and keep measured findings in a `CT_FINDINGS` table. |
+Write means exactly two actions, not arbitrary SQL:
 
-Turn it on under **Connections → Snowflake → Settings → Allow writes**. Two things to weigh first:
+- Suspend or resume one named warehouse.
+- Keep measured findings in a `CT_FINDINGS` table, in a schema where the role has `CREATE TABLE`.
 
-- **Write means exactly two actions, not arbitrary SQL.** Raising a resource monitor, lowering `DATA_RETENTION_TIME_IN_DAYS`, or resizing a warehouse is still reported to you as a statement to run in Snowsight.
-- **The grant is the stronger control.** **Allow writes** decides whether CloudThinker can request a write; the token's `ROLE_RESTRICTION` and the role's grants decide whether Snowflake allows one.
+Resizing a warehouse, changing a resource monitor, or lowering `DATA_RETENTION_TIME_IN_DAYS` is still handed to you as a statement to run in Snowsight.
+
+**Allow writes** only lets CloudThinker ask. The role still needs the grants, so use a separate write-capable role and token:
+
+```sql
+CREATE ROLE IF NOT EXISTS CT_READWRITE;
+-- Plus the five read grants from Required permissions, then:
+GRANT USAGE, OPERATE, MONITOR ON WAREHOUSE CT_AGENT_WH TO ROLE CT_READWRITE;
+GRANT USAGE ON DATABASE MONITORING                    TO ROLE CT_READWRITE;
+GRANT USAGE, CREATE TABLE ON SCHEMA MONITORING.ALERTS TO ROLE CT_READWRITE;
+```
+
+Grant `OPERATE` only on warehouses the agent may suspend, never a shared production warehouse. With a read-only token, Snowflake denies every write even when **Allow writes** is on.
 
 <Warning>
-A suspend cannot be conditional in Snowflake. The busy check and the `ALTER` are two statements, so a query can start between them and lose its compute. Agents report the state change and this limit, never that the suspend was safe.
+Two or more Snowflake connections in one workspace turn writes off for all of them, because an approved write can't name which account it targets. Also, a suspend can't be made conditional: a query can start between CloudThinker's busy check and the suspend and lose its compute.
 </Warning>
 
-When **Allow writes** is on, your [Rules](/guide/approvals/rules) and [Approval mode](/guide/approvals/approval-mode) decide each write.
+---
 
 ## Troubleshooting
 
-<Accordion title="Authentication fails immediately (390403)">
-The user has no network policy. Snowflake refuses token authentication until one is attached: `ALTER USER SVC_CLOUDTHINKER SET NETWORK_POLICY = CT_POLICY;`
+<Accordion title="Authentication fails at once (390403)">
+The service user has no network policy. Run `ALTER USER SVC_CLOUDTHINKER SET NETWORK_POLICY = CT_POLICY;`.
 </Accordion>
 
-<Accordion title="It worked yesterday and now fails (390318)">
-The token expired or was revoked. `DAYS_TO_EXPIRY` is a hard expiry. Mint a new token and update the connection.
+<Accordion title="It worked yesterday and fails today (390318)">
+The token expired or was revoked. Create a new one (Setup step 4) and update the connection.
 </Accordion>
 
 <Accordion title="Object does not exist or not authorized (002003)">
-A missing database role, not a typo in the view name. Ask the agent to run discovery: it lists every `ACCOUNT_USAGE` view the role can read and prints the exact `GRANT` line for the ones it cannot.
+The role is missing a database role. Run the verify prompt: CloudThinker lists every `ACCOUNT_USAGE` view it can't read and the exact `GRANT` for each.
 </Accordion>
 
 <Accordion title="Connected, but every query fails (090073)">
-A resource monitor is over quota, or the warehouse is suspended and cannot resume. This is account capacity, not permission, so no `GRANT` fixes it. An account admin raises or resets the resource monitor.
-
-The connection stays **Connected** because the credential is valid and the test probe needs no compute.
+A resource monitor is over quota, or the warehouse is suspended and can't resume. No `GRANT` fixes this. An account admin raises or resets the resource monitor. The status stays **Connected** because the token is valid and the test needs no compute.
 </Accordion>
 
 <Accordion title="No active warehouse selected (000606)">
-The service user has no `DEFAULT_WAREHOUSE` and none was configured. Set **Warehouse** on the connection, or give the user a default.
+The service user has no `DEFAULT_WAREHOUSE` and the connection has none. Set **Warehouse**, or give the user a default.
 </Accordion>
 
 <Accordion title="Role not authorized (090105)">
-The role sits outside the token's `ROLE_RESTRICTION`. Use a role the token may assume, or clear **Role** to take the user's default.
+The role is outside the token's `ROLE_RESTRICTION`. Use a role the token allows, or clear **Role** to use the user's default.
 </Accordion>
 
 <Accordion title="A section comes back empty">
-Not an error. `ACCOUNT_USAGE` lags by up to a few hours and keeps one year of history, so a narrow window over a quiet account returns no rows.
+Not an error. `ACCOUNT_USAGE` lags by up to a few hours and keeps 365 days of history, so a short window on a quiet account can return no rows.
 </Accordion>
+
+---
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Dedicated service user** — a `TYPE = SERVICE` user has no password, no MFA, and no SSO, so the token is the only way in and the audit trail stays readable.
-- **Restrict and expire the token** — `ROLE_RESTRICTION` bounds everything the connection can reach, and `DAYS_TO_EXPIRY` forces a rotation you would otherwise forget.
+- **Dedicated service user**: a `TYPE = SERVICE` user has no password, MFA, or SSO, so the token is the only way in and its activity is easy to audit.
+- **Restrict and expire the token**: `ROLE_RESTRICTION` caps what the connection can reach, and `DAYS_TO_EXPIRY` forces rotation.
+
+---
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Agents" icon="database" href="/guide/agents/overview">
-    See what CloudThinker can do with this connection.
+  <Card title="Databricks Connection" icon="layer-group" href="/guide/connections/databricks">
+    Connect Databricks for job, cluster, and catalog analysis
   </Card>
-  <Card title="ClickHouse Connection" icon="/images/icons/clickhouse.svg" href="/guide/connections/clickhouse">
-    Similar setup for ClickHouse clusters
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Decide which writes run on their own and which wait for you
   </Card>
 </CardGroup>

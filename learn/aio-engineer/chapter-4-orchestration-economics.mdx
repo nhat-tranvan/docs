@@ -1,49 +1,129 @@
 ---
 title: "Chapter 4 · Orchestration and Two-Engine Economics"
-description: "Multi-agent is not a philosophy; it is a set of engineering trade-offs about context, credentials, latency, and cost."
+description: "Design agent handoffs, shared incident state, and a two-engine cost model you can measure at your own signal volume."
 icon: sitemap
 ---
 
-*Multi-agent is not a philosophy; it is a set of engineering trade-offs about context, credentials, latency, and cost. This chapter is the mechanics behind the reference architecture.*
+*Multi-agent design is a set of engineering trade-offs about context, credentials, latency, and cost. This chapter gives you the mechanics behind the reference architecture and the three numbers that tell you whether 24/7 agent coverage pays for itself.*
 
 ## 4.1 What the orchestrator actually does
 
-Strip the org-chart metaphor and the orchestrator is five concrete responsibilities: intake (normalize goals, incidents, and events into tasks); decomposition and routing (decide what the task needs and which specialist owns each part); context management (give each specialist the subset of context its subtask needs — the single biggest cost and quality lever in a multi-agent system); integration (reconcile specialist findings into one evidenced conclusion, including when they disagree); and escalation (own the conversation with humans — approvals, notifications, the incident record). Specialists extend the orchestrator; they never compete with it. That design keeps one audit trail, one approval surface, and one place where “what is the system doing right now?” has an answer.
+The **orchestrator** is the agent that receives the work, splits it up, and owns the result. Strip away the org-chart metaphor and it has five jobs:
 
-The published evidence cuts both ways, and honest engineering uses both halves. Anthropic’s account of its multi-agent research system reports large quality gains from an orchestrator-worker pattern with parallel specialists — at materially higher token cost. Microsoft’s SRE Agent team reports the opposite correction: collapsing dozens of micro-agents and a hundred-plus tools into a few generalists with core tools. The synthesis this series has argued from the start: specialize by operational domain and credential boundary — cloud, security, database, Kubernetes — because those boundaries pay for themselves in least-privilege and depth; resist fragmenting further, because every additional agent is coordination overhead, duplicated context, and another thing to evaluate.
+| Job | What it means in practice |
+|---|---|
+| **Intake** | Turn goals, incidents, and events into tasks with a clear question |
+| **Decomposition and routing** | Decide what the task needs and which helper handles each part |
+| **Context management** | Give each helper only the context its subtask needs. This is the biggest cost and quality lever you have (Chapter 2). |
+| **Integration** | Reconcile what the helpers found into one evidenced conclusion, including when they disagree |
+| **Escalation** | Own the conversation with humans: approvals, notifications, and the incident record |
+
+Helpers extend the orchestrator. They never compete with it. That gives you one audit trail, one approval surface, and one place that can answer "what is the system doing right now?"
+
+The published evidence cuts both ways (sources in [Appendix D](/learn/aio-engineer/appendix-d-sources)). Anthropic reports large quality gains from an orchestrator-worker pattern with parallel helpers, at a materially higher token cost. Microsoft's Azure SRE Agent team went the other way, collapsing many micro-agents and more than a hundred tools into a few generalists with core tools.
+
+Use both lessons:
+
+- **Split along credential and domain boundaries** such as cloud, security, database, and Kubernetes. Those splits pay for themselves in least privilege and depth.
+- **Don't split further.** Every extra agent adds coordination overhead, duplicated context, and another thing to evaluate.
 
 ## 4.2 Handoffs are contracts
 
-The failure point of multi-agent systems is rarely a specialist’s competence; it is the handoff. Engineer handoffs as typed contracts, not chat: a delegated subtask carries objective (what question to answer or outcome to achieve), scoped context (what the specialist gets to see), budget (steps, tokens, time), and return schema (findings with evidence pointers, confidence, and explicit “what I did not check”). The orchestrator’s integration step then has structured inputs to reconcile — and the audit trail records who concluded what from which evidence, which monolithic reasoning hides. Parallelism falls out naturally: independent subtasks fan out concurrently (latency win), but only when their write-scopes cannot collide; concurrent mutations to one estate are a race condition with an apology attached.
+Multi-agent systems rarely fail because a helper is bad at its job. They fail at the handoff. Treat a handoff as a typed contract, not a chat message:
 
-> *Figure 2 — A delegation contract: objective, scoped context, budget, and return schema. Handoffs are typed; integration is evidenced; the audit trail survives.*
+| Field | Contents |
+|---|---|
+| **Objective** | The question to answer or the outcome to reach |
+| **Scoped context** | What the helper gets to see, and nothing more |
+| **Budget** | Limits on steps, tokens, and time |
+| **Return schema** | Findings with evidence pointers, a confidence level, and an explicit list of what it did not check |
+
+With structured returns, the integration step has something concrete to reconcile, and the audit trail records who concluded what from which evidence. A single long reasoning chain hides that.
+
+Parallelism follows naturally. Independent subtasks can fan out at the same time to cut latency, but only when they can't write to the same thing. Two helpers changing one system at once is a race condition.
+
+> *Figure 2: A delegation contract carries an objective, scoped context, a budget, and a return schema. Handoffs are typed, integration is evidenced, and the audit trail survives.*
+
+<Info>
+**IN PRACTICE: SUBAGENTS IN CLOUDTHINKER**
+
+CloudThinker uses one built-in assistant, also called CloudThinker, as the orchestrator. For focused work it spawns **temporary subagents**: short-lived helpers that each get one bounded objective and never talk to you directly. See [Agents](/guide/agents/overview).
+
+- During an incident investigation, CloudThinker hands focused checks (logs, metrics, traces, recent changes, dependencies) to subagents and merges their results into one verdict. See [Investigation and RCA](/guide/incident/root-cause-analysis).
+- By default, a subagent is refused any tool that changes your systems. Changes stay with the orchestrator, where [Approvals](/guide/approvals/overview) applies.
+- When a subagent fails, the parent gets a fixed failure code (such as a timeout or a refused start), a short redacted message, and one suggested next action, so it can recover instead of guessing.
+</Info>
 
 ## 4.3 The two-engine economics, quantified
 
-The Field Guide introduced the pattern qualitatively: a cheap, always-on sensing engine and an expensive, on-demand resolver engine. The Engineer Edition’s job is to make you compute it. The naive design — frontier reasoning on every signal — fails arithmetic: thousands of daily signals × a multi-step reasoning pass each is a model bill that erases the program’s ROI before its first renewal, and “unbounded model spend” is one of the documented ways agentic projects die. The two-engine design changes the equation structurally:
+The [Leadership Edition](/learn/aio/introduction) described the pattern in words: a cheap, always-on **sensing engine** and an expensive, on-demand **resolver engine**. Here you compute it.
 
-|  | Sensing engine (“pulse”) | Resolver engine |
+The naive design runs frontier-model reasoning on every signal. At thousands of signals a day, each with a multi-step reasoning pass, the model bill erases the return before the first renewal. Unbounded model spend is one of the documented ways agentic projects get cancelled. Two engines change the shape of the cost:
+
+|  | Sensing engine | Resolver engine |
 |---|---|---|
-| Runs | Continuously, on every signal | On demand, when sensing promotes an event |
-| Work | Ingest, dedup, correlate, policy-filter, enrich, score | Full investigative loop: hypotheses, tools, plan, verify |
-| Compute | Streams + rules + small/cheap models | Frontier or fine-tuned models, tens of steps |
-| Cost shape | Near-flat with signal volume | Linear with promoted incidents only |
-| Failure mode | Misses or over-promotes (tune with evals) | Expensive wandering (budgets, Ch. 1) |
+| **Runs** | Continuously, on every signal | On demand, when sensing promotes an event |
+| **Work** | Ingest, deduplicate, correlate, filter by policy, enrich, score | The full investigation: hypotheses, tool calls, plan, verify |
+| **Compute** | Streams, rules, and small, cheap models | Frontier or fine-tuned models over tens of steps |
+| **Cost shape** | Close to flat as signal volume grows | Grows only with promoted incidents |
+| **Failure mode** | Misses real problems or promotes too many (tune with evals, Chapter 7) | Expensive wandering (cap with budgets, Chapter 1) |
 
-Instrument the seam: promotion rate (what fraction of signals wake the resolver), cost per promoted investigation, and cost per resolved incident. Those three numbers are your unit economics, they belong on the Chapter 8 dashboard, and they are the honest answer to “what will this cost at our scale?” — a question you should never let a vendor answer with a shrug. A second-order lever on the same seam: routine daily operations do not need frontier reasoning. Fine-tuned small models running the high-volume, well-understood work — with frontier models reserved for novel investigation — cut the resolver line further and, for regulated buyers, compose with self-hosted deployment for full model control.
+### Measure the seam
+
+Three numbers are your unit economics. Put them on the Chapter 8 dashboard:
+
+| Metric | Formula | What it tells you |
+|---|---|---|
+| **Promotion rate** | Promoted events ÷ all signals | How often the expensive engine wakes up |
+| **Cost per investigation** | Resolver spend ÷ investigations | Whether budgets and context discipline are working |
+| **Cost per resolved incident** | Total spend (both engines) ÷ incidents resolved | Whether 24/7 coverage is viable at your scale |
+
+A worked example with made-up round numbers (not CloudThinker prices): 20,000 signals a day at a 0.5% promotion rate is 100 investigations a day. Halving the promotion rate to 0.25% halves resolver spend without touching the sensing bill. Raising signal volume tenfold at the same promotion rate barely moves the sensing bill but multiplies resolver spend tenfold. That's why promotion rate is the dial to watch.
+
+A second lever on the same seam: routine, well-understood daily work doesn't need frontier reasoning. Small fine-tuned models can handle the high-volume cases, with frontier models kept for novel investigations. For regulated teams, this pairs with self-hosted deployment for full control of the model.
 
 <Info>
-**IN PRACTICE — Resolve: PULSE + RESOLVER**
+**IN PRACTICE: PULSE AND INVESTIGATIONS IN RESOLVE**
 
-CloudThinker’s Resolve is this pattern shipped as the flagship: Pulse ingests and filters the event stream continuously (Redis Streams + time-series storage under the hood); the Resolver Engine spins up the full DARV investigation only for promoted events, inside a sandboxed runtime, with per-incident budgets. The tagline is the architecture: they see, we act, we learn. Whatever platform you evaluate, ask for its promotion rate and its cost-per-resolved-incident at a reference scale — if it cannot answer, it has not run at scale.
+[Resolve](/guide/incident/overview), CloudThinker's incident response module, ships this split.
+
+- **Sensing: [Pulse](/guide/pulse/overview).** Pulse takes every alert your tools send, drops noise with four suppression checks, groups related signals into clusters, classifies each cluster, and sends only actionable ones to triage. Pulse never opens an incident by itself.
+- **Resolving: [investigation](/guide/incident/root-cause-analysis).** Investigations run only on incidents. You control what wakes the resolver with **Auto-investigate** and **Only from a minimum severity** on each webhook under **Resolve → Integrations**, and the **On duty** switch under **Resolve → Investigation**. See [Resolve settings](/guide/incident/settings).
+- **Measuring.** [Pulse analytics](/guide/pulse/analytics) shows raw events in, **Noise suppressed**, and signals collapsing into clusters, which is your promotion picture.
+- **Capping spend.** [Credit limits](/guide/billing/credit-limits) set a monthly budget per workspace, with **Throttle** or **Notify only** when it's reached.
+
+Whatever platform you evaluate, ask for its promotion rate and cost per resolved incident at a reference scale. If it can't answer, it hasn't run at scale.
 </Info>
 
 ## 4.4 State: the incident record as shared truth
 
-Multi-agent systems need one durable, append-only record per task: the timeline of signals, hypotheses, tool calls, evidence, decisions, approvals, actions, and verifications. Everything reads from it; everything writes to it; humans join it mid-flight and see the same truth the agents see. Engineering it as an event log (rather than mutable chat state) buys you replay for evaluation (Chapter 7), a natural audit artifact (Chapter 6), and crash-safe resumability — an agent that dies mid-investigation resumes from the record, not from amnesia.
+A multi-agent system needs one durable, append-only record per task. It holds the timeline of signals, hypotheses, tool calls, evidence, decisions, approvals, actions, and verifications. Every agent reads from it and writes to it. A human who joins mid-flight sees the same truth the agents see.
+
+Build it as an event log, not as mutable chat state. That buys you three things:
+
+- **Replay for evaluation** (Chapter 7): rerun a past incident against a new model or prompt and compare.
+- **An audit artifact for free** (Chapter 6): who did what, on which evidence, with whose approval.
+- **Crash-safe resumption:** an agent that dies mid-investigation resumes from the record instead of starting over.
+
+<Info>
+**IN PRACTICE: ONE RECORD PER INCIDENT**
+
+In Resolve, an incident has one investigation record. Each new session, started by a person or automatically, adds its steps to the same **Investigation timeline** under a session marker. If the conclusion changes, the timeline records a root-cause revision instead of creating a second report, and earlier sessions stay under **More actions → Earlier sessions**. Click **Watch live** to follow the conversation where CloudThinker is working. See [Investigation and RCA](/guide/incident/root-cause-analysis).
+</Info>
 
 <Tip>
 **KEY TAKEAWAY**
 
-Orchestration is intake, routing, context allocation, integration, and escalation — with handoffs as typed contracts and one append-only incident record as shared truth. Economics are a design input: two engines, measured at the seam, with cost per resolved incident as the number that decides whether 24/7 agentic coverage is viable at your scale.
+Orchestration is five jobs: intake, routing, context allocation, integration, and escalation. Make handoffs typed contracts and keep one append-only incident record as shared truth. Treat economics as a design input: two engines, measured at the seam, with cost per resolved incident as the number that decides whether 24/7 agent coverage works at your scale.
 </Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Chapter 5 · The Threat Model" icon="shield-virus" href="/learn/aio-engineer/chapter-5-threat-model">
+    Why an operations agent is an attack surface, and the layered defenses that contain it.
+  </Card>
+  <Card title="Pulse overview" icon="wave-pulse" href="/guide/pulse/overview">
+    See how Resolve filters alerts before any investigation starts.
+  </Card>
+</CardGroup>

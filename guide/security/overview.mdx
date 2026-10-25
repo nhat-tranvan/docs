@@ -1,125 +1,124 @@
 ---
-title: Security & Authentication
-description: "Secure access to CloudThinker with MFA, SSO, and role-based access control"
+title: Security and Trust
+description: "Answer a vendor security review: what CloudThinker stores, where agents run, who can act, how writes are approved, and what is logged."
 icon: shield-halved
 ---
 
-CloudThinker agents can read — and, with approval, change — your cloud infrastructure, so access to the platform itself is controlled with multi-factor authentication (MFA), single sign-on (SSO), and role-based permissions. Every agent action is logged with the user who initiated it and the approval it went through.
+CloudThinker agents read your cloud accounts, clusters, and tools through connections you add, and can change them only when Approvals allows it. This page collects the facts a security reviewer asks for, with a link to the page that covers each control in depth.
 
-## Authentication methods
+## At a glance
 
-| Method | Description |
-| --- | --- |
-| Email & password | Standard sign-in with secure password requirements |
-| Multi-factor authentication | Six-digit codes from an authenticator app (TOTP) plus one-time backup codes |
-| Single sign-on (SSO) | SAML 2.0 or OIDC with your identity provider, on Scale, Scale+, and Enterprise plans |
+| Question | Answer | Details |
+|---|---|---|
+| Where does CloudThinker run? | A CloudThinker-managed cloud service at `app.cloudthinker.io` by default. Dedicated, self-hosted, and air-gapped deployments are in early access. | [Deployment](/guide/deployment/overview) |
+| Where do agent commands run? | In a CloudThinker managed sandbox, or on a machine you control (a Worker, in beta). | [Self-hosted sandboxes](/guide/workers) |
+| How do agents reach my systems? | Only through [connections](/guide/connections/overview) a workspace Admin adds, with the credentials and permissions you grant. | [Connections](/guide/connections/overview) |
+| Can agents change things on their own? | Reads always run. Every write goes through Rules and the Approval mode, and can wait for a person or be refused. | [Approvals](/guide/approvals/overview) |
+| Who can sign in, and how? | Email and password, an authenticator app as a second factor, or SSO with SAML 2.0 or OIDC. | [Single sign-on](/guide/security/sso) |
+| Who can do what? | Organization roles and workspace roles: Admin, Developer, Viewer, plus an organization Owner. | [Roles](/guide/security/roles) |
+| Are secrets kept out of chat and model calls? | Pasted secrets are caught before a message sends. Known secrets and protected identifiers are replaced with placeholders before the model or the screen sees them. | [Data protection](/guide/security/data-protection) |
+| Is there an audit trail? | Yes. User, agent, and system actions across the organization, kept 90 days by default, exportable as CSV. | [Audit logs](/guide/security/audit-logs) |
+| Can we use our own LLM account? | Yes, with BYOK on Scale, Scale+, and Enterprise plans. | [BYOK](/guide/byok) |
 
-## Multi-factor authentication
+## Data CloudThinker handles
 
-Add a second factor to your own account:
+| Data | Why CloudThinker holds it | How it's protected |
+|---|---|---|
+| Connection credentials (cloud keys, tokens, database logins) | So agents can query the systems you connected | Encrypted at rest. Injected into the managed sandbox when a command runs, never sent to a Worker. |
+| Workspace [credentials](/guide/credentials) (other API keys a command needs) | So a command can call a vendor API without anyone pasting a key | Encrypted at rest, never sent back to the browser. Chat shows key names only. |
+| Conversations, findings, reports, and artifacts | The record of what agents found and did | Scoped to the workspace and visible by role. Known secrets are replaced with placeholders before they're stored. |
+| Account passwords | Email and password sign-in | Stored as bcrypt hashes, never in plain text. |
+| Unsent chat drafts | So a page reload doesn't lose your typing | Kept only in your browser, cleared on log out. Never sent to CloudThinker. |
 
-<Steps>
-  <Step title="Open your account settings">
-    Open your account menu and go to **Account Settings → 2FA**.
-  </Step>
-  <Step title="Set up the authenticator">
-    Start MFA setup and scan the QR code with an authenticator app (Google Authenticator, Authy, 1Password, and more).
-  </Step>
-  <Step title="Confirm with a code">
-    Enter the 6-digit code from your authenticator to finish setup.
-  </Step>
-  <Step title="Save your backup codes">
-    Download and store the one-time backup codes. At sign-in, you can enter an 8-character backup code instead of an authenticator code.
-  </Step>
-</Steps>
+Model calls go to CloudThinker's LLM provider unless your organization uses [BYOK](/guide/byok), which routes them through your own AWS Bedrock or Anthropic key.
 
-<Warning>
-Each backup code works once. If you lose your authenticator and all backup codes, account recovery requires identity verification through support.
-</Warning>
+## Where agents run
 
-## Single sign-on
+Every chat and Automation runs in one of two places:
 
-[SSO](/guide/security/sso) is available on Scale, Scale+, and Enterprise plans and is configured by the organization Owner in **Admin Settings → Identity and access**:
+- **CloudThinker Cloud.** Commands run in an isolated, CloudThinker-managed sandbox. Connection credentials are injected there for the command and aren't printed back.
+- **A Worker.** A machine you control, such as a laptop, server, or CI runner, runs file tools and shell commands in one folder you name. A connection command still runs in the managed sandbox, so the credential stays in the cloud. Workers are in beta.
 
-- **Domain verification** — prove ownership of your email domain with a DNS TXT record before setting up SSO
-- **SAML 2.0 or OIDC** — choose the protocol your identity provider supports
-- **Require SSO** — optionally disable all other sign-in methods for your users
-- **Provisioning** — invite users manually, auto-create accounts on first SSO login (JIT), or sync your directory with [SCIM](/guide/security/scim)
+A run doesn't fall back from a Worker to the cloud. If the Worker is unavailable, the run reports an error. See [Self-hosted sandboxes](/guide/workers).
 
-## Roles and permissions
+## Who can act
 
-Access is controlled at two levels. An organization role applies across every workspace; a workspace role can grant a specific member a different level in one workspace.
+Access works at two levels. An organization role applies across every workspace. A workspace role sets what a member can do inside one workspace.
 
-### Organization roles
+| Workspace role | Can do |
+|---|---|
+| **Admin** | Manage connections, credentials, members, Approvals, Guardrails, and settings |
+| **Developer** | Chat with agents and work findings, reviews, and scans |
+| **Viewer** | View dashboards, findings, and incidents. Can't chat with agents or change anything. |
 
-| Role | What it grants | Role in each workspace |
-|------|----------------|------------------------|
-| **Owner** | Full control: billing, SSO, BYOK, members, workspaces, organization deletion | Admin |
-| **Admin** | Manage members, create workspaces, manage credit limits | Admin |
-| **Developer** | Work in assigned workspaces; no organization administration | Developer |
-| **Viewer** | Read-only view of assigned workspaces | Viewer |
+Organization Owners and Admins hold workspace Admin in every workspace. Full matrix: [Roles](/guide/security/roles).
 
-### Workspace roles
+### Sign-in controls
 
-| Role | What it grants |
-|------|----------------|
-| **Admin** | Everything in the workspace: connections, members, settings, approval policies, knowledge, automations, deletion |
-| **Developer** | Chat with agents, edit dashboards, customize agents, work Optimize findings, act on code reviews, run Cyber scans |
-| **Viewer** | View dashboards, findings, incidents, and settings; cannot chat with agents or change anything |
+| Control | Where | Plans |
+|---|---|---|
+| Authenticator app (TOTP) with one-time backup codes | **Account Settings → 2FA** | All |
+| SSO with SAML 2.0 or OIDC, domain verification, and enforced SSO | **Admin Settings → Identity and access** | Scale, Scale+, Enterprise |
+| SCIM user and group sync | **Admin Settings → Identity and access** | Scale, Scale+, Enterprise |
 
-### Permission matrix
+See [Single sign-on](/guide/security/sso) and [SCIM](/guide/security/scim).
 
-| Action | Admin | Developer | Viewer |
-|--------|-------|-----------|--------|
-| View dashboards, findings, and incidents | Yes | Yes | Yes |
-| Chat with agents | Yes | Yes | No |
-| Edit dashboards and customize agents | Yes | Yes | No |
-| Work Optimize findings and code reviews | Yes | Yes | No |
-| Manage connections | Yes | No | No |
-| Manage workspace members and settings | Yes | No | No |
-| Manage approval policies and automations | Yes | No | No |
-| Billing and subscription | Organization Owner only | — | — |
+## How agent changes are approved
 
-## Data security
+A **write** is any agent call that changes a connected system, such as restarting a service. Reads always run. Each write passes these checks in order:
 
-| Layer | Protection |
-|-------|------------|
-| **Transit** | TLS for all connections |
-| **At rest** | Encrypted databases and backups |
-| **Secrets** | Cloud credentials and tokens stored encrypted |
+1. A built-in list of calls that never run. Nothing can override it.
+2. Your **Rules**, which allow, ask first, or deny a named kind of write.
+3. The **Approval mode** for the run: **Manual** asks a person for every write. **Auto** lets AI judgment allow a safe write, then asks you or refuses the rest.
+4. The approver, who approves or declines.
 
-[BYOK](/guide/byok) is about model access, not encryption keys: workspaces on Scale, Scale+, and Enterprise plans can route LLM inference through their own AWS Bedrock credentials for cost control and data residency.
+New workspaces start on **Auto · Rules + AI · Ask me**. To require a person for every write, switch the workspace to **Manual**. See [Approvals](/guide/approvals/overview) and [Approval mode](/guide/approvals/approval-mode).
 
-## Audit logs
+## Audit and retention
 
-Organization activity — sign-ins, administrative changes, and agent actions — is recorded in **Admin Settings → Audit Logs**, available on Scale, Scale+, and Enterprise plans. Filter by user, action, and date, and export entries for compliance review.
+**Admin Settings → Audit Logs** shows one timeline of user, agent, and system actions across all workspaces: connection changes, approval decisions, credential changes, member changes, and module activity. Each entry records the actor, the workspace, and the outcome.
 
-## Security best practices
+| Fact | Value |
+|---|---|
+| Who can view | Organization Owner and Admin |
+| Plans | Scale, Scale+, Enterprise |
+| Retention | 90 days by default, then deleted automatically |
+| Export | **Export CSV**, respecting your current filters |
 
-- **Enable MFA** for every member, especially Owners and Admins — or enforce SSO and let your identity provider require it.
-- **Assign the minimum role** each member needs, and review access quarterly.
-- **Use read-only cloud credentials** where possible, scoped to the services and regions agents need.
-- **Rotate credentials** — cloud keys, SCIM tokens, and webhook secrets — on a regular schedule.
-- **Review audit logs** for unexpected administrative changes or sign-ins.
+Credential entries never include the value or the key name. See [Audit logs](/guide/security/audit-logs).
 
-For security questionnaires and compliance documentation, contact [security@cloudthinker.io](mailto:security@cloudthinker.io).
+## Encryption and sessions
 
-## Related
+| Layer | What CloudThinker does |
+|---|---|
+| In transit | The app and API are served over HTTPS |
+| Stored secrets | Connection credentials, workspace credentials, and integration tokens are encrypted at rest |
+| Passwords | Hashed with bcrypt |
+| Sessions | Access tokens are signed with RS256. Refresh tokens rotate on use and are stored as hashes. |
+
+## Before you connect production
+
+- Start each connection with read-only credentials, scoped to the accounts and regions agents need.
+- Keep production workspaces on **Manual**, or add Rules that ask first for the writes you care about.
+- Turn on 2FA for every Owner and Admin, or enforce SSO.
+- Give each member the lowest role that fits.
+- Check the built-in protections in **Admin Settings → Guardrails**, and add patterns for your own ID formats.
+
+For a security questionnaire or a dedicated deployment, [contact us](https://cloudthinker.io/contact).
+
+## Next steps
 
 <CardGroup cols={2}>
+  <Card title="Data Protection" icon="user-shield" href="/guide/security/data-protection">
+    See what happens when a secret is pasted or printed
+  </Card>
   <Card title="Custom Guardrails" icon="square-asterisk" href="/guide/security/custom-guardrails">
-    Choose built-in protections and add patterns for your team's identifier formats
+    Choose which identifiers agents never see
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Decide which writes run, wait, or never run
   </Card>
   <Card title="Single Sign-On" icon="key" href="/guide/security/sso">
-    Verify your domain, connect your identity provider, and enforce SSO
-  </Card>
-  <Card title="SCIM Provisioning" icon="users-gear" href="/guide/security/scim">
-    Automate user and group sync from your identity provider
-  </Card>
-  <Card title="Organization Management" icon="building-columns" href="/guide/organization">
-    Manage members, roles, and workspaces
-  </Card>
-  <Card title="Bring Your Own Key" icon="key" href="/guide/byok">
-    Route LLM inference through your own AWS Bedrock account
+    Connect your identity provider and enforce SSO
   </Card>
 </CardGroup>

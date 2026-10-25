@@ -1,111 +1,150 @@
 ---
 title: OpenSearch
-description: "Connect OpenSearch to CloudThinker for read-only index, query, cluster health, and search relevance investigation"
+description: "Connect OpenSearch so agents can check cluster health, inspect indices and shards, search documents, and explain relevance, read-only"
 icon: magnifying-glass-chart
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your OpenSearch cluster to let CloudThinker agents review indices, mappings, shards, cluster health, documents, queries, and relevance explanations.
-
-OpenSearch authenticates with the **cluster URL and a basic-auth user**. The connection is **read-only by design** — agents can list, search, count, and explain, and your search environment stays unchanged during investigation.
+Connect an OpenSearch cluster to let CloudThinker agents check cluster health, inspect indices, mappings, and shards, search and count documents, and explain why a document scored the way it did. The connection signs in with a **username and password** (basic auth) and is read-only by design: it exposes eight read tools and nothing that writes.
 
 ## Prerequisites
 
-- An **OpenSearch cluster** reachable from the internet over HTTPS, or from wherever your CloudThinker deployment runs.
-- A **basic-auth user** scoped to the indices this workspace should reach — not the cluster admin.
+- An OpenSearch cluster with an HTTPS endpoint CloudThinker can reach over the network. `localhost` and private addresses aren't reachable from CloudThinker Cloud.
+- The OpenSearch security plugin with an internal user you can create. On Amazon OpenSearch Service, that means a domain with fine-grained access control, because the connection uses basic auth, not AWS request signing.
+- The indices agents should read, such as `logs-app` or `products`.
 
 ## Setup
 
 <Steps>
-  <Step title="Create a dedicated user">
-    In your cluster's security settings, create a user with read access to the indices agents should investigate.
+  <Step title="Create a read-only role">
+    In **OpenSearch Dashboards → Dev Tools**, create a role scoped to the indices agents need. Replace `logs-*` with your own patterns.
+
+    ```json
+    PUT _plugins/_security/api/roles/cloudthinker_read
+    {
+      "cluster_permissions": ["cluster_monitor"],
+      "index_permissions": [
+        {
+          "index_patterns": ["logs-*"],
+          "allowed_actions": ["read", "indices_monitor", "indices:admin/mappings/get"]
+        }
+      ]
+    }
+    ```
+  </Step>
+  <Step title="Create a dedicated user and map the role">
+    ```json
+    PUT _plugins/_security/api/internalusers/cloudthinker
+    {
+      "password": "<a long random password>",
+      "backend_roles": []
+    }
+
+    PUT _plugins/_security/api/rolesmapping/cloudthinker_read
+    {
+      "users": ["cloudthinker"]
+    }
+    ```
+
+    You can do the same in **OpenSearch Dashboards → Security** under **Roles** and **Internal users**.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Navigate to **Connections → OpenSearch** and enter:
-    - **Cluster URL**: the cluster endpoint, such as `https://opensearch.internal:9200`
-    - **Username** and **Password**: the dedicated user's credentials
-    - **Connection timeout (seconds)**: a value such as `15` — without it, an unreachable cluster stalls the conversation turn instead of failing
+    Open **Connections** in the sidebar and select **OpenSearch**. Enter the **Cluster URL**, **Username**, and **Password**. Set **Connection timeout (seconds)** to a value such as `15`. Click **Connect**.
 
-    Click **Connect**. CloudThinker verifies the credentials and shows a **Connected** status.
+    **Success state:** the connection shows **Testing**, then **Connected**.
   </Step>
 </Steps>
 
+<Note>
+Always set **Connection timeout (seconds)**. With it empty there is no timeout, so an unreachable cluster or a failed TLS check stalls the conversation instead of returning an error.
+</Note>
+
 ## Connection details
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| **Cluster URL** | Endpoint of the OpenSearch cluster | `https://opensearch.internal:9200` |
-| **Username** | Basic-auth user scoped to the indices this workspace should reach | — |
-| **Password** | Password for that user | — |
-| **Verify TLS certificate** | Leave empty to verify the certificate; set to `false` only for a self-signed certificate | — |
-| **Connection timeout (seconds)** | Bounds how long a call waits for the cluster; empty means no timeout | `15` |
-
-<Note>
-A TLS verification failure surfaces as a hung call rather than an error, so set **Connection timeout (seconds)** whenever you change **Verify TLS certificate**.
-</Note>
+| Field | Required | Description | Example |
+|-------|----------|-------------|---------|
+| **Cluster URL** | Yes | Cluster endpoint, including scheme and port | `https://opensearch.example.com:9200` |
+| **Username** | Yes | A dedicated user scoped to the indices this workspace should reach, not the cluster admin | `cloudthinker` |
+| **Password** | Yes | That user's password | |
+| **Verify TLS certificate** | No | Leave empty to verify. Set to `false` only for a self-hosted cluster with a self-signed certificate | `false` |
+| **Connection timeout (seconds)** | No, but recommended | How long a call waits for the cluster. Empty means no limit | `15` |
 
 ## Required permissions
 
-Grant the user **read** access to the target indices and cluster health. The connection exposes only read operations — list indices, read mappings, search, count, multi-search, shard and cluster health checks, and query explanations — so write permissions on the user are wasted surface.
+| Agents need to | Grant |
+|----------------|-------|
+| Check cluster health | Cluster action group `cluster_monitor` |
+| List indices and read shard allocation | Index action group `indices_monitor` |
+| Read field mappings | Index action `indices:admin/mappings/get` |
+| Search, count, multi-search, and explain | Index action group `read` |
+
+Write permissions on the user add nothing, because the connection has no tool that uses them.
 
 <Tip>
-Scope the user to the indices agents actually need. A cluster-admin credential grants nothing extra here and widens the blast radius if it leaks.
+Scope `index_patterns` to the indices agents need. A cluster admin credential gives agents nothing extra here and widens the damage if it leaks.
 </Tip>
 
 ## Agent capabilities
 
-Once connected, agents have read access to your cluster:
+| Capability | What agents can do |
+|------------|--------------------|
+| **Cluster health** | Report cluster status, node count, and unassigned shard count |
+| **Index inventory** | List indices with health and document counts, and read field mappings |
+| **Search and count** | Run DSL searches, counts, and multi-search requests against named indices |
+| **Shard triage** | Show shard allocation for one index and separate an unassigned primary (data you can't read) from an unassigned replica (lost redundancy) |
+| **Relevance explanation** | Explain why one document matched, missed, or scored as it did for a query |
 
-| Capability | Description |
-|------------|-------------|
-| **Index inventory** | List indices and read their mappings |
-| **Search and count** | Run search, count, and multi-search queries against selected indices |
-| **Cluster health** | Check cluster health and shard allocation |
-| **Relevance explanation** | Explain why a document matched or scored the way it did |
+Name the index in your prompt when you can. Index inventory and shard checks run against exact index names, not wildcards, so a prompt like "check logs-app-2026.10.24" gets a faster, more precise answer than "check the logs".
 
 ### Verify the connection
 
 ```text
-Check the OpenSearch cluster health and list the largest indices
+Check OpenSearch cluster health and list the indices with their document counts
 ```
+
+Expect a status of green, yellow, or red, the node count, any unassigned shards, and a list of indices.
 
 ### Example prompts
 
 ```text
-The pattern of authentication failures in the logs-app index over the last 24 hours
-Why the products search returns irrelevant results for "wireless charger", explaining the top hit's score
-What to rebalance in the OpenSearch cluster's shard allocation
+Count authentication failures in logs-app over the last 24 hours, broken down by level
+Why does the products index return irrelevant results for "wireless charger"? Explain the top hit's score
+Which shards in logs-app-2026.10.24 are unassigned, and are any of them primaries?
 ```
 
 ## Troubleshooting
 
 <Accordion title="401 Unauthorized">
-The username or password is wrong, or the user was removed. Update the credentials on the connection.
+The username or password is wrong, or the user was removed. Check the user under **Security → Internal users** and update the credentials on the connection.
 </Accordion>
 
 <Accordion title="Calls hang instead of failing">
-The cluster is unreachable, or TLS verification is failing against a self-signed certificate. Set **Connection timeout (seconds)**, and set **Verify TLS certificate** to `false` only if the cluster genuinely serves a self-signed certificate.
+The cluster is unreachable, or TLS verification is failing against a self-signed certificate. Set **Connection timeout (seconds)** so calls fail fast. Set **Verify TLS certificate** to `false` only if the cluster really serves a self-signed certificate.
 </Accordion>
 
-<Accordion title="Agent cannot see an index">
-The basic-auth user lacks read access to that index. Widen the user's index permissions in the cluster's security settings.
+<Accordion title="security_exception, or an agent can't see an index">
+The user's role doesn't cover that index. Add the index to `index_patterns` on the `cloudthinker_read` role. Agents report which index was refused instead of retrying with a wider pattern.
+</Accordion>
+
+<Accordion title="Connection fails on Amazon OpenSearch Service">
+The domain uses IAM-only access. This connection signs in with basic auth, so the domain needs fine-grained access control with an internal user database.
 </Accordion>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Read-only surface** — the connection cannot write, delete, or change cluster settings, whatever the user's permissions allow.
-- **TLS verification on** — keep certificate verification enabled unless the cluster serves a self-signed certificate you trust.
+- **Read-only surface**: the connection can't write, delete, or change cluster settings, whatever the user's permissions allow.
+- **Credentials stay on your cluster**: agents can't point the stored username and password at a different host. CloudThinker rejects per-call connection overrides before a request is sent, even if a document asks for one.
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Elasticsearch Connection" icon="/images/icons/elasticsearch.svg" href="/guide/connections/elasticsearch">
-    Search and log analytics
+  <Card title="Elasticsearch" icon="/images/icons/elasticsearch.svg" href="/guide/connections/elasticsearch">
+    Connect an Elasticsearch cluster with a read-only API key.
   </Card>
-  <Card title="Graylog Connection" icon="/images/icons/graylog.svg" href="/guide/connections/graylog">
-    Centralized log management
+  <Card title="Root cause analysis" icon="magnifying-glass" href="/guide/incident/root-cause-analysis">
+    See how agents use log searches to find what caused an incident.
   </Card>
 </CardGroup>

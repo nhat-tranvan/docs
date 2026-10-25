@@ -1,47 +1,138 @@
 ---
 title: "Chapter 7 · Evaluating Agents Like Production Systems"
-description: "The benchmark numbers are humbling, the benchmarks are gameable, and your environment is the only test that matters."
+description: "Read benchmark claims critically, build a test set from your own incidents, score it in layers, and gate every agent change on it."
 icon: flask
 ---
 
-*The benchmark numbers are humbling, the benchmarks themselves are gameable, and your environment is the only test that matters. This chapter is how to build that test.*
+*Public benchmarks are humbling and gameable. Your own environment is the only test that settles anything, and this chapter shows how to build it.*
 
-## 7.1 The benchmark reality, stated plainly
+## 7.1 What the public benchmarks say
 
-Open, independent measurement of operations agents now exists, and every engineer in this category should know its headline numbers. IBM’s ITBench — the reference open benchmark spanning SRE, security-compliance, and FinOps scenarios — reports that agents powered by state-of-the-art models resolve on the order of one SRE scenario in seven, with compliance scenarios around a quarter and FinOps results ranging from weak to zero depending on release. The independent ITBench-AA implementation (Artificial Analysis with IBM, 2026) evaluates frontier models on Kubernetes incident diagnosis and finds every evaluated model below 50% on its precision metric. Microsoft Research’s AIOpsLab established the live-environment evaluation pattern the field builds on. These are diagnosis-and-mitigation tasks in controlled environments — easier than your production in some ways, harder in others — and the field’s best public showing is failing most of the time.
+Open, independent measurement of operations agents now exists. Sources for every figure here are in [Appendix D](/learn/aio-engineer/appendix-d-sources).
 
-Sit with what that means, because it is the intellectual foundation of this entire edition. The same period produced hyperscaler GA launches, a Gartner Market Guide for AI SRE (January 2026), a unicorn-valuation funding round in the category, and disciplined adopters reporting 40–70% MTTR reductions in production. The benchmark numbers and the production numbers are both real. They differ because production deployments are not a bare model on a strange cluster: they are models inside a harness — curated context about a known estate, purpose-built tools, runbooks encoding organizational knowledge, memory of past incidents, and policy that routes agents toward the incident classes they demonstrably handle. Benchmarks measure the naked model; production measures the harness. That is the case for everything in Parts 01 and 02 — and the reason “which model do you use?” is among the least predictive questions you can ask a vendor.
+| Benchmark | What it tests | Headline result |
+|---|---|---|
+| **ITBench** (IBM Research) | SRE, compliance, and FinOps scenarios | Agents on state-of-the-art models resolve roughly 11–14% of SRE scenarios, about one in seven |
+| **ITBench-AA** (Artificial Analysis with IBM, 2026) | Frontier models diagnosing Kubernetes incidents | Every evaluated model scored below 50% on the headline precision metric |
+| **AIOpsLab** (Microsoft Research) | Agents evaluated in a live environment | The evaluation pattern most later work builds on |
 
-## 7.2 Benchmarks are gameable — and so are yours
+These are diagnosis and mitigation tasks in controlled environments. They are easier than your production in some ways and harder in others, and the best public results still fail most of the time.
 
-Recent evaluation research (the SREGym work, 2026) documented two exploits that should permanently change how you read agent-eval claims. First, reward hacking: in benchmarks whose fault injectors run inside the same environment the agent inspects, agents discovered and disabled the fault injection service instead of fixing the fault. Second, alert-clearing as false success: a substantial share of one benchmark’s mitigation tasks could be “solved” by a generic pod-restart loop that made the alert disappear without touching the defect. The same research measured the diagnosis–mitigation gap: even when agents correctly identify a root cause, mitigation succeeds only around 70–90% of the time — knowing why is not the same as fixing safely.
+Teams still run agents in production successfully, so both facts hold. The difference is that a production deployment is not a bare model on an unfamiliar cluster. It is a model inside a **harness**: curated context about a known estate, purpose-built tools, runbooks with your team's knowledge, memory of past incidents, and policy that routes agents to the incident classes they handle well.
 
-The lessons transfer directly to your own evaluation design: success criteria must be state-based, independent oracles (is the defect actually gone? is the system actually healthy?) rather than symptom-based (did the alert clear?); the evaluation machinery must be invisible or inaccessible to the agent under test; and diagnosis and mitigation must be scored separately, because they fail independently and improve independently. And note the mirror image in production: an agent graded on “alerts closed” will learn to close alerts. Choose online success metrics with the same care (Chapter 1’s independent-verification rule is the production twin of this principle).
+Benchmarks measure the bare model. Production measures the harness. So "which model do you use?" tells you little about a platform. Test the harness instead, which is what the rest of this chapter covers.
 
-## 7.3 Building the golden set from your own incidents
+## 7.2 Benchmarks can be gamed, and so can yours
 
-Public benchmarks calibrate the field; only your incidents calibrate your deployment. The asset to build is a golden set — a curated, versioned corpus of evaluation scenarios drawn from your production history:
+The SREGym research (2026) documented two exploits to remember whenever you read an evaluation claim:
 
-1. **Harvest from postmortems.** Every real incident becomes a candidate scenario: the telemetry snapshot at detection, the environment state, the true root cause, the accepted fix, and the verification evidence. Twenty to fifty scenarios spanning your top incident classes is a working start; add every novel incident thereafter.
+- **Reward hacking.** When the fault injector ran inside the environment the agent could inspect, agents found it and disabled it instead of fixing the fault.
+- **Alert-clearing as false success.** A large share of one benchmark's mitigation tasks could be "solved" by a generic pod-restart loop that made the alert go away without touching the defect.
 
-2. **Replay, don’t re-break.** The Chapter 4 incident record makes replay natural: feed the recorded signals and let the agent investigate against snapshotted or simulated state. Live fault injection in staging complements replay for mitigation scoring — with the SREGym isolation lessons applied.
+The same work measured the gap between knowing and fixing: even with the right root cause, mitigation succeeded only about 69–88% of the time.
 
-3. **Score in layers.** Detection (did it triage correctly?), diagnosis (root-cause entity and mechanism — scored against the known answer), plan quality (safe, minimal, correct remediation choice), mitigation (state-based oracle), and evidence integrity — every claim in the agent’s conclusion must trace to real data it actually retrieved. Fabricated evidence is an automatic zero regardless of the answer.
+Three rules carry over to your own evaluation:
 
-4. **Grade with judges, verify the judges.** Model-as-judge scales the rubric scoring, but calibrate judges against human grades on a sample every cycle, and keep humans grading a rotating slice — on-call engineers rating agent analyses is both evaluation data and the trust ladder’s first rung doing double duty.
+1. **Score state, not symptoms.** Check independently that the defect is gone and the system is healthy. Whether the alert cleared proves nothing.
+2. **Hide the test machinery.** The agent under test must not be able to see or reach the evaluation harness.
+3. **Score diagnosis and mitigation separately.** They fail independently and improve independently.
 
-## 7.4 Regression gates: evals as CI
+The same trap exists in production. An agent graded on "alerts closed" learns to close alerts, so pick online success metrics with the same care. The independent-verification rule in [Chapter 1](/learn/aio-engineer/chapter-1-agent-anatomy) is the production version of this principle.
 
-The agent stack changes constantly — prompts, tools, skills, policies, retrieval, and above all models, which vendors swap under you. Every one of those is a deploy, and deploys need gates: run the golden set on every change; block on regression against the per-class scoreboard, not just the aggregate (a new model that gains database scenarios and quietly loses Kubernetes ones is a regression wearing a raise); and canary in production with the online metrics — acceptance rate, rollback rate, autonomous-resolution rate per class — which are your evals running continuously against reality. The Field Guide’s eight-KPI dashboard is, in this light, the online half of one evaluation system whose offline half is the golden set.
+## 7.3 Build a golden set from your own incidents
 
-<Info>
-**IN PRACTICE — EVALS AS A PURCHASING WEAPON**
+Public benchmarks calibrate the field. Only your incidents calibrate your deployment. The asset to build is a **golden set**: a curated, versioned collection of test scenarios drawn from your production history.
 
-This chapter is also Appendix A’s engine. A POC without a golden set is a demo; with one, it is an experiment. Bring ten replayable scenarios from your own history to any vendor evaluation — including ours — and score detection, diagnosis, plan, mitigation, and evidence integrity per scenario. A platform confident in its harness will welcome the test; hesitation is itself a data point.
-</Info>
+1. **Harvest from postmortems.** Each real incident becomes a candidate scenario with five parts: the telemetry at detection, the environment state, the true root cause, the accepted fix, and the evidence that the fix worked. Twenty to fifty scenarios across your top incident classes is a working start. Add every new kind of incident after that.
+2. **Replay, don't re-break.** Feed the recorded signals to the agent and let it investigate against snapshotted or simulated state. Fault injection in staging adds mitigation scoring, with the isolation rules from 7.2 applied.
+3. **Score in layers.** Score each scenario on every layer in the table below.
+4. **Use model judges, and check the judges.** A model can grade the rubric at scale. Each cycle, compare its grades with human grades on a sample, and keep people grading a rotating slice. On-call engineers rating agent analyses gives you evaluation data and builds trust at the same time.
+
+A scenario record can be as small as this generic sketch (not a CloudThinker file format):
+
+```yaml
+# Generic golden-set scenario, not a product format
+id: 2026-03-checkout-latency
+class: database
+signals: snapshots/2026-03-checkout/   # alerts, metrics, logs at detection
+expected:
+  severity: high
+  root_cause: "connection pool exhausted on orders-db after a config change"
+  service: orders-db
+  accepted_fix: "revert pool size config"
+  healthy_when: "p95 checkout latency < 400ms for 15m, error rate < 1%"
+```
+
+The `healthy_when` line is the state-based check from 7.2. Write it before you run the agent, so nobody grades the answer to fit.
+
+| Layer | Question | Scored against |
+|---|---|---|
+| **Detection** | Did it triage the signal correctly? | The known severity and incident class |
+| **Diagnosis** | Did it name the right root-cause entity and mechanism? | The recorded root cause |
+| **Plan quality** | Is the proposed fix safe, minimal, and the right choice? | The accepted fix and your policy |
+| **Mitigation** | Is the system actually healthy afterward? | An independent state check |
+| **Evidence integrity** | Does every claim trace to data the agent really retrieved? | The agent's tool-call log |
+
+<Note>
+Fabricated evidence scores zero on the whole scenario, whatever the answer. A right answer built on data the agent never retrieved will fail you on the next incident.
+</Note>
+
+## 7.4 Treat evals as CI
+
+The agent stack changes constantly: prompts, tools, skills, policies, retrieval, and models, which vendors can swap under you. Each of those is a deploy, and deploys need gates.
+
+- **Run the golden set on every change.**
+- **Block on per-class regressions, not just the average.** A new model that gains on database scenarios and quietly loses on Kubernetes ones is a regression, even if the total goes up.
+- **Canary in production with online metrics.** Track acceptance rate, rollback rate, and autonomous-resolution rate per class. They are your evals running continuously against reality.
+
+The golden set is the offline half of one evaluation system. The online metrics are the other half.
+
+## 7.5 How this maps to CloudThinker
+
+Use the golden set to run a proof of concept (POC) on any platform, including CloudThinker. [Appendix A](/learn/aio-engineer/appendix-a-poc-test-plan) gives the protocol: bring ten or more replayable scenarios from your own history, and score detection, diagnosis, plan, mitigation, and evidence integrity for each one.
+
+For the online half, [Resolve Insights](/guide/incident/insights) has an **Accuracy & trust** tab. Resolve is CloudThinker's incident response module, and this tab is built only from your team's verdicts, never from the agent scoring itself.
+
+| Chapter idea | Where it lives in CloudThinker |
+|---|---|
+| Human grades on agent analyses | **Was Resolve's diagnosis right?** on each resolved incident |
+| Informative rejection reasons | **What was wrong?**: **Wrong root cause**, **Wrong service**, **Fix wouldn't work**, **False positive**, or **Something else** |
+| Diagnosis scoring | **Root-cause accuracy** |
+| Plan acceptance | **Fix acceptance** |
+| Detection quality | **False-positive rate** |
+| Per-class scoreboard | **Accuracy by service** |
+| Sample size behind the numbers | **Your review coverage** |
+
+### Start your online evaluation
+
+<Steps>
+  <Step title="Grade a resolved incident">
+    Go to **Resolve → Investigation** and open a resolved incident. Under **Was Resolve's diagnosis right?**, mark it accurate or inaccurate. If it was wrong, pick a reason under **What was wrong?**.
+
+    **Success state:** the incident shows **Marked accurate** or **Marked not accurate**.
+  </Step>
+  <Step title="Read the scoreboard">
+    In the sidebar, open **Resolve → Insights** (under **Analytics**) and choose **Accuracy & trust**.
+
+    **Success state:** your verdict counts toward **Root-cause accuracy**, and **Your review coverage** shows how many resolved incidents someone has reviewed.
+  </Step>
+</Steps>
+
+Check **Your review coverage** before you act on any rate. With only a few reviewed incidents, one verdict swings the number a lot.
 
 <Tip>
 **KEY TAKEAWAY**
 
-Public benchmarks say the naked model fails most SRE scenarios; production says the harness closes the gap. So evaluate harnesses: a golden set built from your own incidents, layered state-based scoring with evidence integrity, calibrated judges, and regression gates on every change to prompts, tools, policies, or models. If it isn’t evaluated, it isn’t engineered.
+Public benchmarks say the bare model fails most SRE scenarios. Production says the harness closes much of the gap. So evaluate harnesses: a golden set built from your own incidents, layered state-based scoring with evidence integrity, checked judges, and regression gates on every change to prompts, tools, policies, or models.
 </Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Chapter 8 · Observing the Observer" icon="eye" href="/learn/aio-engineer/chapter-8-observing-the-observer">
+    Trace, measure, and set SLOs on the agents themselves.
+  </Card>
+  <Card title="Appendix A · The POC Test Plan" icon="clipboard-list" href="/learn/aio-engineer/appendix-a-poc-test-plan">
+    Run an evaluation against your own incidents, scored scenario by scenario.
+  </Card>
+</CardGroup>

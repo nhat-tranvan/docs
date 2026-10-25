@@ -1,71 +1,144 @@
 ---
 title: "Chapter 6 · Policy, Approvals, and Execution Safety as Code"
-description: "The trust ladder is a promise to your organization. Policy-as-code is how the promise is kept when nobody is watching."
+description: "Classify agent actions by risk, keep the policy as reviewed code, design approvals people read, and record every change so anyone can replay it."
 icon: clipboard-check
 ---
 
-*The trust ladder is a promise to your organization. Policy-as-code is how the promise is kept when nobody is watching.*
+*Giving an agent more autonomy is a promise to your organization. Policy as code is how you keep that promise when nobody is watching.*
 
-## 6.1 Action classification: the two-axis engine
+This chapter gives you four things to build or demand from a vendor: a risk classification for agent actions, approvals that resist fatigue, execution safeguards, and an audit record anyone can replay.
 
-Everything the governance stack does downstream depends on classifying actions well. Two axes do the work: reversibility (can this be cleanly undone, and how fast?) and blast radius (how much of the estate, and which tiers of it, can this touch?). Classify action classes, not individual commands — “restart a stateless pod” is a class with known properties; and make the classification machine-derivable where possible: skills that declare their access class, reversibility, and scope (Chapter 3) classify themselves, which removes the failure mode of a human forgetting that a script is dangerous.
+## 6.1 Classify actions on two axes
 
-|  | Reversible | Hard / slow to reverse |
+Every control later in this chapter depends on classifying actions well. Two questions do the work:
+
+- **Reversibility.** Can the change be undone cleanly, and how fast?
+- **Blast radius.** How much of your estate can it touch, and which tiers of it?
+
+Classify **action classes**, not single commands. "Restart a stateless pod" is a class with known properties, and policy refers to the class. Where you can, derive the class by machine: a skill or tool that declares its access type, reversibility, and scope (see [Chapter 3](/learn/aio-engineer/chapter-3-tools-skills-protocol)) classifies itself, so nobody has to remember that a script is dangerous.
+
+|  | Reversible | Hard or slow to reverse |
 |---|---|---|
-| Narrow blast radius | Automate first: restarts, cache clears, replica scaling, cert rotation → L3–L4 candidates | Approval-gated even when small: data deletions, credential revocations → L2 |
-| Wide blast radius | Approval with soak: traffic shifts, config rollouts with staged verification → L2–L3 by evidence | Human-owned: schema migrations, failovers, security-group changes on crown jewels → L1–L2, senior approval |
+| **Narrow blast radius** | Automate first. Restarts, cache clears, replica scaling, certificate rotation. | Ask a person, even when small. Data deletions, credential revocations. |
+| **Wide blast radius** | Ask a person, then roll out in stages. Traffic shifts, config rollouts with checks between stages. | Human-owned, senior approval. Schema migrations, failovers, security-group changes on critical systems. |
 
-Policy then binds the matrix to reality per environment and per agent: which agent may take which action class at which autonomy level, where, when (change windows), under what pre-conditions, with what approval quorum. Express it as versioned, reviewable configuration — policy changes go through pull requests with owners, exactly like the infrastructure they govern. A policy diff is an autonomy decision; it deserves the same review as a production change, because it is one.
+Use the matrix as your starting policy: fill each cell with your own action classes before you connect an agent to production.
+
+### Write the policy down as code
+
+Policy binds the matrix to your real estate. For each action class it answers: which agent, in which environment, during which change window, under which preconditions, and with which approvers.
+
+Keep that policy as versioned configuration that changes through pull requests with named owners. A policy diff is an autonomy decision, so review it like a production change. Here is a generic sketch (not a CloudThinker file format) of one action class:
 
 ```yaml
-# policy sketch (illustrative)
+# Generic policy sketch, not a product format
 action_class: rollback_recent_deploy
-  applies_to: [orchestrator]
-  preconditions: [deploy_age < 60m, slo_breach_active, rollback_plan_attached]
-  environments:
-    production: { level: L3, window: any, notify: "#ops-incidents" }
-    payments:   { level: L2, approvers: [sre-senior], quorum: 1 }
-  limits: { max_per_hour: 2, circuit_break_on: repeated_failure }
+preconditions: [deploy_age < 60m, slo_breach_active, rollback_plan_attached]
+environments:
+  staging:    { decision: allow, notify: "#ops-incidents" }
+  production: { decision: ask_first, approvers: [sre-senior] }
+limits: { max_per_hour: 2, halt_on: repeated_failure }
 ```
 
-## 6.2 Approval engineering
+Read it top to bottom: the agent may roll back only a deploy younger than an hour, during an active SLO breach, with a rollback plan attached. Staging runs without asking. Production waits for a senior SRE. Two rollbacks an hour is the ceiling, and a repeated failure stops the class.
 
-Approvals are a human-factors system, and they fail in a known direction: fatigue, then rubber-stamping — at which point the gate is theater and the audit trail records consent that never cognitively happened. The Field Guide gave the operating heuristic (above 95% acceptance, graduate the class; below 70%, fix the agent or the policy). Engineering makes the heuristic real:
+## 6.2 Design approvals people actually read
 
-- **One screen, full context.** The approval artifact carries the finding, the evidence chain, the exact plan (as a diff or plan output, not prose), the blast-radius estimate, the rollback plan, and the verification that will follow. If an approver must go digging, the design has failed.
+Approvals are a human-factors system, and they fail in a known direction: fatigue, then rubber-stamping. Once that happens the gate is theater, and the audit trail records consent that never really happened.
 
-- **Make rejection informative.** A structured reject reason (wrong diagnosis / right diagnosis wrong fix / bad timing / policy exception) is training signal for policy tuning and evaluation — capture it at the moment of rejection or lose it forever.
+A working heuristic: when people accept more than about 95% of a class unchanged, let that class run without asking. When they accept less than about 70%, fix the agent or the policy before you widen anything. Four practices make the heuristic usable:
 
-- **Quorum and identity are policy.** Consequential classes can demand specific roles or two-person rules; approvals authenticate as the person, not the channel, and land in the audit trail as first-class events.
+| Practice | What it means in practice |
+|---|---|
+| **One screen, full context** | The request shows the finding, the evidence, the exact plan (a diff or plan output, not prose), the blast radius, the rollback, and the check that will follow. If an approver has to go digging, the design failed. |
+| **Make rejection informative** | Capture why a request was declined: wrong diagnosis, right diagnosis but wrong fix, bad timing, or a policy exception. That reason feeds policy tuning and evaluation ([Chapter 7](/learn/aio-engineer/chapter-7-evaluating-agents)). Ask for it at the moment of rejection, or lose it. |
+| **Identity and quorum are policy** | Risky classes can require a named group or a second person. Approvals authenticate as the person, not the chat channel, and land in the audit trail as events. |
+| **Measure the gate** | Track approval latency, acceptance rate, and how often people edit the plan, per class. Those numbers are your evidence for loosening a class, and they show fatigue before it turns into rubber-stamping. |
 
-- **Meter the gate.** Track approval latency, acceptance rate, and modification rate per class — these are the graduation evidence, and they surface fatigue before it becomes rubber-stamping.
+<Tip>
+Review approval numbers per action class every few weeks. A class with high acceptance and long approval latency is the clearest candidate to automate: people agree with it, and waiting for them costs you time.
+</Tip>
 
-## 6.3 Execution safety mechanics
+## 6.3 Execution safety between "approved" and "done"
 
-Between “approved” and “done” sits the machinery that makes agentic change safer than the average human change — which is the standard to hold it to:
+Hold agent changes to a higher bar than the average human change. Five mechanisms get you there:
 
-1. **Pre-flight checks.** Recompute preconditions at execution time, not decision time: the world moves between plan and apply. Scope assertions (“affects ≤ N resources, none tagged crown-jewel”) fail closed.
+1. **Pre-flight checks.** Recheck preconditions when the action runs, not when it was planned, because the world moves in between. Scope assertions such as "affects 5 resources or fewer, none tagged critical" fail closed.
+2. **Staged rollout with checks between stages.** Wide changes go out in slices, with the verification loop from [Chapter 1](/learn/aio-engineer/chapter-1-agent-anatomy) between slices. Stage the rollback before slice one.
+3. **Circuit breakers and rate limits.** An agent repeating a failing action, or a fleet above its change-rate ceiling, halts and escalates. Retry with backoff is for network calls, not for production changes.
+4. **Rollback as a deliverable.** Every consequential action ships with an executable rollback attached at plan time, tested where you can. "We can probably reverse it" is not a rollback plan.
+5. **A kill switch.** One action that stops all autonomous execution while investigation keeps running. Give it an owner, a drill schedule, and an audit event. Design it before the day you need it.
 
-2. **Staged application with verification between stages.** Wide changes roll out in slices with the Chapter 1 verification loop between slices; the rollback plan is staged before slice one.
+## 6.4 An audit record anyone can replay
 
-3. **Circuit breakers and rate limits.** An agent repeating a failing action, or the fleet exceeding a change-rate ceiling, halts automatically and escalates. Retry-with-backoff is for network calls, not for production mutations.
+Design the audit record so three readers can replay any action: the engineer the next morning, the auditor at quarter-end, and the regulator in your worst week. For each consequential action, record:
 
-4. **Rollback as artifact.** Every consequential action ships with an executable rollback attached at plan time, tested where feasible. “We can probably reverse it” is not a rollback plan.
+| Field | Answers |
+|---|---|
+| Trigger and its source | What started this? |
+| Context snapshot references | What did the agent know? |
+| Reasoning summary with evidence pointers | Why did it choose this? |
+| Policy evaluation | Which rules matched, and what did they decide? |
+| Approval events | Who approved, when, and what did they see? |
+| Execution log | Which tool calls ran, with which parameters (secrets masked) and results? |
+| Verification outcome and any rollback | Did it work, and was it undone? |
 
-5. **The kill switch.** One action — halting all autonomous execution fleet-wide while leaving investigation running — with an owner, a drill schedule, and an audit event. The day you need it is not the day to design it.
+Make the record immutable and exportable, and keep it as long as your own retention policy requires. Done well, agentic operations produce better change evidence than most human processes, as a side effect of doing the work.
 
-## 6.4 The audit trail schema
+## 6.5 How this maps to CloudThinker
 
-Design the audit record so three audiences can replay any action: the engineer at 09:00, the auditor at quarter-end, the regulator in the worst week of the year. Minimum viable schema per consequential action: trigger and its provenance → context snapshot references (what the agent knew) → reasoning summary with evidence pointers → policy evaluation (which rules matched, which level applied) → approval events (who, when, what they saw) → execution log (tool calls, parameters with secrets tokenized, results) → verification outcomes → and any rollback. Immutable, exportable, retained on your terms — the Field Guide’s data-control question number seven, wearing its engineering clothes. Done well, this is the quiet superpower of agentic operations: change evidence better than most human processes ever produced, generated as a side effect of doing the work.
+In CloudThinker, [Approvals](/guide/approvals/overview) decides every write an agent makes through a connection. Reads always run. Each write passes four checks in order, and the first one with an answer decides:
 
-<Info>
-**IN PRACTICE — THE TRUST STACK IN FOUR NOUNS**
+1. **Always blocked.** A built-in list of calls that never run. No Rule and no person can override it.
+2. **[Rules](/guide/approvals/rules).** Each Rule names one kind of write, such as `ec2:StopInstances` on a staging account, and says **Allow**, **Ask first**, or **Deny**. Agents propose Rules as they work, and a proposed Rule does nothing until a workspace admin accepts it.
+3. **[Approval mode](/guide/approvals/approval-mode).** **Manual** asks a person before every write. **Auto** can let AI judgment allow a safe write, then asks you or refuses the rest. New workspaces start on **Auto · Rules + AI · Ask me**. Automations default to **Auto · Rules + AI · Refuse**, since no one may be there to answer.
+4. **[Approvers](/guide/approvals/approvers).** Default approvers or a named group, an optional two-person rule, and break-glass, which is off until an admin turns it on and needs a written reason each time.
 
-CloudThinker ships this chapter’s machinery as four production objects: Policy — which action classes run at which autonomy level, L1 read-only through L4 unattended-within-policy; Approval — the human gate on consequential and irreversible actions; Operation Runbooks — reviewed execution paths for known work; and Trusted Commands — a command-level allowlist beneath everything else. Manual/Automode is the visible switch on top. These are not architecture-diagram aspirations; they are the objects a customer’s security review inspects and an auditor replays. Ask any vendor for their four equivalents — as running software, with the audit records they emit.
-</Info>
+Each idea in this chapter has a concrete home:
+
+| Chapter idea | Where it lives in CloudThinker |
+|---|---|
+| Action classes and the two-axis matrix | Rules, one per kind of write, scoped to a connection |
+| Policy as reviewed code | **Export active Rules** (in the **More Rule actions** menu on the **Rules** tab) downloads your Rules, approver groups, and Approval modes as YAML. Keep it in Git and import it into another workspace. |
+| Review a policy diff before it ships | When you review a proposed Rule or edit one, a preview replays the last 7 or 30 days of calls and shows which would have run, asked first, or been refused |
+| Quorum and identity | Approver groups and the two-person rule on the **Approvers** tab |
+| Measure the gate | The **Activity** tab shows what each Rule decided in a period, with CSV export |
+| Reviewed procedures for known fixes | Resolve [runbooks](/guide/incident/runbooks). A command in a runbook that changes something still waits for approval. |
+| Replayable audit record | [Audit Logs](/guide/security/audit-logs). Nobody can edit or delete an event from the app. Events are kept 90 days, so export to CSV if you need them longer. |
+
+### Apply it in your workspace
+
+<Steps>
+  <Step title="Open Approvals">
+    Go to **Workspace Settings → Approvals**. The page opens on the **Overview** tab.
+
+    **Success state:** you see what needs you and how many calls ran, asked a person, or were refused in the last 7 days.
+  </Step>
+  <Step title="Fill your matrix with Rules">
+    On the **Rules** tab, review the Rules agents proposed. No proposals yet? Click **Find rules**, and CloudThinker proposes Rules from your connections, findings, incidents, alerts, and approval history. Accept the ones that match your matrix from 6.1.
+
+    **Success state:** each accepted Rule shows **Allow**, **Ask first**, or **Deny**, and nothing changed before you accepted it.
+  </Step>
+  <Step title="Put the policy under review">
+    On the **Rules** tab, open the **More Rule actions** menu, click **Export active Rules**, and commit the YAML file to a repository with named owners.
+
+    **Success state:** future policy changes go through a pull request, like any production change.
+  </Step>
+</Steps>
 
 <Tip>
 **KEY TAKEAWAY**
 
-Autonomy is governable when it is compiled: a two-axis classification feeding versioned policy-as-code, approvals engineered against fatigue and metered for graduation evidence, execution wrapped in pre-flight checks, staged rollout, circuit breakers, and pre-staged rollback — all emitting an audit schema three audiences can replay. If the trust ladder is the promise, this chapter is the mechanism.
+Autonomy is governable when it is written down and enforced. Classify actions by reversibility and blast radius, keep the policy as reviewed code, design approvals against fatigue and measure them, wrap execution in pre-flight checks, staged rollout, circuit breakers, and a ready rollback, and record every action so anyone can replay it.
 </Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Chapter 7 · Evaluating Agents Like Production Systems" icon="flask" href="/learn/aio-engineer/chapter-7-evaluating-agents">
+    Build a test set from your own incidents and gate every agent change on it.
+  </Card>
+  <Card title="Set up Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Review proposed Rules, pick an Approval mode, and choose who approves.
+  </Card>
+</CardGroup>

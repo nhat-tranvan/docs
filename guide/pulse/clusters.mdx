@@ -1,93 +1,109 @@
 ---
 title: "Signal Clusters"
-description: "Understand how Pulse groups related provider events into Signals and moves operational problems through a clear lifecycle."
+description: "Triage Pulse clusters: understand their lifecycle and suppression, then acknowledge, assign, escalate, attach, snooze or resolve them."
 icon: layer-group
 ---
 
-A Cluster groups the related raw events that survive [noise suppression](#noise-suppression) into one candidate Signal. It gives operators one place to assess impact, ownership, timing, and whether the problem should become an Incident.
+A cluster is a group of related signals that Pulse treats as one problem, so a flapping alarm that fires 18 times becomes one item with 18 members. This page covers how clusters open and close, what Pulse drops before clustering, and what each action does.
 
 ## Cluster lifecycle
 
+A cluster has three statuses. Only its own signals, or a person, move it.
+
 ```mermaid
 stateDiagram-v2
-    [*] --> Forming
-    Forming --> Active
-    Forming --> Routed
-    Active --> Routed
-    Forming --> Resolved
-    Active --> Resolved
-    Routed --> Resolved
+    [*] --> Forming: first signal
+    Forming --> Active: second signal joins
+    Forming --> Resolved: 12 hours quiet, or Resolve
+    Active --> Resolved: 12 hours quiet, or Resolve
 ```
 
-| State | Meaning |
+| Status | Meaning |
 |---|---|
-| Forming | Pulse is collecting related raw events and updating the Cluster. |
-| Active | The Cluster represents a current operational problem. |
-| Routed | The Cluster has an open Incident. New matching Signals still join this Cluster rather than starting a new one. |
-| Resolved | The operational problem is closed. Only this state is final. |
+| **Forming** | One signal so far. |
+| **Active** | Two or more signals. |
+| **Resolved** | No signal for 12 hours, or a person resolved it. This is the only closed status. |
 
-A single-signal Cluster can route straight from **Forming**, without waiting for correlation. A critical-severity signal takes this path.
+**Routed is a lane, not a status.** A cluster is routed when an open incident holds it, and it stays Forming or Active underneath. Three rules follow:
 
-Resolving an Incident does not close its Cluster. A later matching Signal opens a successor Incident, and the Cluster follows it.
-
-The Pulse lanes add an attention view on top of this lifecycle. **Needs you** shows unacknowledged high or critical forming Clusters without an owner. **All** shows Clusters across every visible state.
+- A new matching signal joins the routed cluster and updates the incident. It doesn't start a second investigation.
+- Closing the incident doesn't close the cluster. If the same fault fires again, triage decides whether to reopen that incident or open a new one.
+- Once the incident is closed, you can escalate the cluster again.
 
 ## Noise suppression
 
-Before a Signal contributes to a Cluster, Pulse applies eight suppression layers:
+Before a raw event becomes a signal, Pulse runs four checks in order. The first match drops it.
 
-| Layer | What it prevents |
-|---|---|
-| Deduplication | Exact repeated events inside the deduplication window. |
-| Rate limit | Excessive events from one source or pattern. |
-| Snooze | Signals covered by an active operator snooze. |
-| Verdict | Repeated events that match a stable-noise verdict recorded by Pulse Memory, Pulse's store of past verdicts. |
-| Noise signature | Known non-actionable event patterns. |
-| Flapping | Rapid state changes that do not represent separate problems. |
-| Cascade | Downstream symptoms already explained by a parent problem. |
-| Severity normalization | Source-specific severity differences that would distort routing. |
+| Check | Drops | Exceptions |
+|---|---|---|
+| Dedup | Exact repeats of an event within one hour. | None. |
+| Rate limit | Events past 100 per minute from one source. | Critical and high events always pass. |
+| Snooze | Events matching a snooze someone set. | None. |
+| Verdict | Repeats of a pattern CloudThinker learned is noise while investigating. The quiet window grows from 6 hours to 24 hours to 7 days. | Critical and high events always pass. |
 
-A Cluster Pulse judges non-actionable is also suppressed, and appears as **Not Actionable** in the suppression breakdown.
+Surviving signals are then classified. A signal the classifier judges **Not actionable** is suppressed too and doesn't reach triage, except IAM, SSO and KMS key lifecycle events, which are never dropped this way.
 
-<Frame>
-  <img src="/images/pulse/04-pulse-suppression-heatmap.jpg" alt="Pulse suppression analysis for operational signals" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Suppression analysis helps identify which sources create the most avoidable noise.</p>
+## Triage a cluster
 
-## Review a Cluster
+<Steps>
+  <Step title="Open the cluster">
+    In **Resolve → Pulse**, start with the **Needs you** lane, then **Active**. Click a cluster to open its detail panel. It shows the **AI summary**, the **Cluster members** list, each signal's raw payload, and the suppression and enrichment steps each signal went through.
+  </Step>
+  <Step title="Acknowledge or assign it">
+    Click **Acknowledge** to mark it seen. This silences alerts, but the cluster stays open; click again to undo. Use the assign control to pick a teammate.
 
-Open a Cluster to inspect its event history, severity, source, timestamps, and routing state.
+    **Success state:** the cluster leaves **Needs you**.
+  </Step>
+  <Step title="Hand it to an incident">
+    Click **Escalate**, then **Send to triage**. Triage matches the cluster to an open incident, a closed one that's back, or a new one, and opens its conversation. To pick the incident yourself, use **Attach to incident...**. Open incidents are listed first, and picking a closed one reopens it.
 
-<Frame>
-  <img src="/images/pulse/02-pulse-cluster-detail.jpg" alt="Pulse Cluster detail with related operational signals" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Cluster detail keeps the evidence for one operational problem together.</p>
+    **Success state:** the cluster moves to the **Routed** lane.
+  </Step>
+  <Step title="Close it when fixed">
+    Click **Resolve**, then confirm in **Resolve Cluster**. This can't be undone. A routed cluster hides **Escalate** and **Resolve**, because its incident owns it.
+  </Step>
+</Steps>
 
-Use the available actions to move the work forward:
+## Action reference
 
-| Action | Result |
-|---|---|
-| Acknowledge | Mark the Cluster as seen. |
-| Assign | Give the Cluster an owner. |
-| Escalate | Route the problem into an Incident. |
-| Resolve | Close the Cluster. |
-| Snooze | Temporarily suppress matching Signals. |
+| Action | Where | Result |
+|---|---|---|
+| **Acknowledge** | Cluster panel | Marks the cluster seen and silences its alerts. Stays open. |
+| Assign | Cluster panel | Gives the cluster an owner. |
+| **Escalate** | Cluster panel | Sends the cluster to triage. Hidden while an open incident holds it. |
+| **Attach to incident...** | Cluster panel | Links the cluster to an incident you pick. Always available. |
+| **Resolve** | Cluster panel | Closes the cluster for good. Hidden while routed. |
+| **Snooze** | A signal in the panel | Mutes matching signals for **1 hour**, **4 hours**, **1 day** or **Forever**. Click **Unsnooze** to undo. |
 
-When you snooze a Cluster, choose the duration. When the Signal names a specific resource, the snooze covers that resource; otherwise it covers the source and event-type pattern.
+A snooze on a signal that names a resource mutes similar alerts on that resource only. Otherwise it mutes every alert with the same source and event type, so check the hint in the menu before you pick a duration.
 
-## Related
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Escalate and Resolve are missing">
+    The cluster is routed: an open incident holds it. Work it from the incident, or close the incident first.
+  </Accordion>
+  <Accordion title="Triage didn't start after Escalate">
+    A message says it couldn't start or is still queued. Open the cluster again and retry. A failed triage also puts critical and high clusters back in **Needs you**.
+  </Accordion>
+  <Accordion title="An important alert never showed up">
+    Check for a snooze on that source or resource and click **Unsnooze**. Low and medium alerts can also be dropped by the rate limit during a burst.
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
 
 <CardGroup cols={2}>
-  <Card title="Connect Pulse sources" icon="plug" href="/guide/pulse/setup">
-    Add webhook, polling, or chat signal paths.
+  <Card title="Root cause analysis" icon="magnifying-glass" href="/guide/incident/root-cause-analysis">
+    Follow a routed cluster into its investigation.
   </Card>
   <Card title="Pulse Analytics" icon="chart-line" href="/guide/pulse/analytics">
-    Review correlation yield, suppression, volume, and Cluster MTTR.
+    See how much noise Pulse removes and how fast clusters close.
   </Card>
-  <Card title="Investigate incidents" icon="magnifying-glass" href="/guide/incident/root-cause-analysis">
-    Follow a routed Cluster into RCA.
+  <Card title="Connect Pulse sources" icon="plug" href="/guide/pulse/setup">
+    Add more webhook, polling or chat sources.
   </Card>
-  <Card title="Tune Resolve behavior" icon="sliders" href="/guide/incident/settings">
-    Control automatic RCA and re-investigation sensitivity.
+  <Card title="On-call" icon="users" href="/guide/incident/oncall">
+    Choose who gets brought in when an incident qualifies.
   </Card>
 </CardGroup>

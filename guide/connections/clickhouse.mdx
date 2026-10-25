@@ -1,170 +1,191 @@
 ---
 title: ClickHouse
-description: "Connect ClickHouse to CloudThinker for schema inspection, analytical query investigation, and optional write access"
+description: "Connect ClickHouse so CloudThinker can explore schemas, check table health, and rank slow queries with analytical SQL"
 icon: "/images/icons/clickhouse.svg"
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your ClickHouse cluster to let [CloudThinker](/guide/agents/overview) explore schemas, inspect table health, and answer questions with analytical SQL. A new connection is read-only; turn **Write access** on when you want the agent to change data, and **Allow DROP and TRUNCATE** separately when you want it to remove objects.
+Connect ClickHouse to let CloudThinker list databases and tables, check part counts and table sizes, rank slow queries from `system.query_log`, and answer questions with analytical SQL. CloudThinker signs in as a ClickHouse user over the HTTP interface, and a new connection is read-only until you change **Write access**.
+
+---
 
 ## Prerequisites
 
-- A ClickHouse server reachable from CloudThinker over its **HTTP interface** (`8443` with TLS, `8123` without). ClickHouse Cloud, self-hosted, operator-run, and managed clusters all work; the native TCP port (`9000`) is not used.
-- Admin access to create a dedicated user.
+- A ClickHouse server reachable from CloudThinker on its **HTTP interface**: `8443` with TLS, `8123` without. ClickHouse Cloud and self-hosted clusters both work. The native TCP port (`9000`) is not used.
+- An admin login on ClickHouse to create a dedicated user.
+
+---
 
 ## Setup
 
 <Steps>
-  <Step title="Create a dedicated user and grant read access">
-    Connect as an admin, create the CloudThinker user, and grant `SELECT` on the databases the agent should see plus `SHOW`:
+  <Step title="Create a dedicated user with read access">
+    Connect as an admin and run:
     ```sql
     CREATE USER cloudthinker IDENTIFIED BY 'your-secure-password';
     GRANT SELECT ON your_database.* TO cloudthinker;
     GRANT SHOW DATABASES, SHOW TABLES, SHOW COLUMNS ON *.* TO cloudthinker;
+    GRANT SELECT ON system.tables TO cloudthinker;
+    GRANT SELECT ON system.columns TO cloudthinker;
+    GRANT SELECT ON system.parts TO cloudthinker;
+    GRANT SELECT ON system.query_log TO cloudthinker;
     ```
-    For table sizes, part counts, and query investigation, also grant `SELECT` on `system.tables`, `system.columns`, `system.parts`, and `system.query_log`.
+    The `system.*` grants power table health and slow-query answers. Skip them and those questions fail while schema questions still work.
   </Step>
-  <Step title="Pin the user to read-only (recommended)">
-    The connection defaults to read-only, but a settings profile makes the restriction hold at the server, independent of any client:
+  <Step title="Lock the user to read-only at the server (recommended)">
+    Skip this step if you plan to turn **Write access** on. Otherwise, add a settings profile so ClickHouse itself refuses writes, whatever any client asks for:
     ```sql
     CREATE SETTINGS PROFILE cloudthinker_readonly SETTINGS readonly = 1 READONLY;
     ALTER USER cloudthinker SETTINGS PROFILE cloudthinker_readonly;
     ```
-    Skip this step if you plan to turn **Write access** on. The profile uses `READONLY`, so neither the user nor CloudThinker's switch can lift it.
   </Step>
-  <Step title="Configure network access">
-    - ClickHouse Cloud: add CloudThinker to the service **IP access list**, under the service's **Settings → Security**.
-    - Self-hosted: allow inbound `8443` (or `8123`) from CloudThinker in your firewall or security group.
+  <Step title="Open network access">
+    - **ClickHouse Cloud**: add CloudThinker to the service's IP access list under the service **Settings → Security**.
+    - **Self-hosted**: allow inbound `8443` (or `8123`) from CloudThinker in your firewall or security group.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Go to **Connections → ClickHouse** and enter the host, port, username, and password, set **Use TLS**, and leave **Write access** on `Read-only` unless the agent needs to change data.
+    Go to **Connections → ClickHouse**, fill in the fields from [Connection details](#connection-details), leave **Write access** on **Read-only (default)**, and click **Connect**.
 
-    Click **Connect**. CloudThinker runs a single `SELECT version()` as that user, and the **Connected** message names the ClickHouse version, the username, and the default database when you set one. Anything else comes back as a specific reason — see [Troubleshooting](#troubleshooting).
+    CloudThinker runs one `SELECT version()` as that user.
+
+    **Success state:** ClickHouse shows a **Connected** status, and the message reads `ClickHouse <version> reachable as cloudthinker`.
   </Step>
 </Steps>
 
+---
+
 ## Connection details
 
-| Field | Description | Default |
-|-------|-------------|---------|
-| **Host** | Hostname or IP, no scheme and no port | — |
-| **Port** | HTTP interface port | `8443` |
-| **Username** | Dedicated user, for example `cloudthinker` | — |
-| **Password** | User password | — |
-| **Use TLS** | HTTPS instead of plain HTTP | `Yes` |
-| **Verify the TLS certificate** | Turn off only for a self-signed or internal-CA certificate; hidden when TLS is off | `Yes` |
-| **Default database** | Database used when a query does not qualify a table | Server default |
-| **Write access** | Whether the agent may change data | `Read-only` |
-| **Allow DROP and TRUNCATE** | Whether the agent may remove objects; hidden while read-only | `Blocked` |
+| Field | Required | Description | Default |
+|-------|----------|-------------|---------|
+| **Host** | Yes | Hostname only, no `https://` and no port. ClickHouse Cloud looks like `abc123.ap-southeast-1.aws.clickhouse.cloud` | |
+| **Port** | Yes | HTTP interface port: `8443` with TLS, `8123` without | `8443` |
+| **Username** | Yes | The dedicated user, for example `cloudthinker` | |
+| **Password** | Yes | That user's password | |
+| **Use TLS** | No | HTTPS instead of plain HTTP | **Yes** |
+| **Verify the TLS certificate** | No | Set to **No** only for a self-signed or internal-CA certificate. Shown only when TLS is on | **Yes (default)** |
+| **Default database** | No | Database used when a query doesn't name one. Blank uses the server default | Blank |
+| **Write access** | No | **Read-only (default)** or **Full access** | **Read-only (default)** |
+| **Allow DROP and TRUNCATE** | No | **Blocked (default)** or **Allowed**. Shown only with **Full access** | **Blocked (default)** |
 
 <Tip>
-`8443` and TLS is the ClickHouse Cloud pair. A self-hosted server without TLS answers on `8123`; set **Use TLS** to `No` and the port to `8123` together, because a mismatch fails at connect time.
+Change **Port** and **Use TLS** together. `8443` goes with TLS on, `8123` with TLS off. A mismatch fails at connect time.
 </Tip>
+
+---
 
 ## Required permissions
 
-The grants in Setup step 1 cover read-only analysis; `system.query_log` is what turns "this dashboard is slow" into a ranked list of the queries responsible. Only if you enable write access, additionally grant:
+The Setup grants cover everything read-only. Add write grants only if you set **Write access** to **Full access**, and only on the databases the agent should change:
 
 ```sql
 GRANT INSERT, ALTER, CREATE TABLE, CREATE VIEW ON your_database.* TO cloudthinker;
--- Only if the agent should remove objects:
+-- Only if the agent should remove tables:
 GRANT DROP TABLE, TRUNCATE ON your_database.* TO cloudthinker;
 ```
 
-Grant these on the specific databases the agent should change, never on `*.*`. A grant the user does not hold is the boundary the **Write access** switch cannot cross.
+<Tip>
+Never grant writes on `*.*`. The ClickHouse grants are the real boundary: the **Write access** field only decides whether CloudThinker sends `readonly=1`, and it can't give the user a privilege ClickHouse didn't grant.
+</Tip>
+
+---
 
 ## Agent capabilities
-
-Once connected, CloudThinker can:
 
 | Capability | Description |
 |------------|-------------|
 | **Schema discovery** | List databases and tables with engine, sorting key, row count, and column types |
-| **Analytical queries** | Run SQL, including aggregates, joins, and window functions |
-| **Table health** | Inspect part counts, compressed and uncompressed size, and index granularity |
+| **Analytical queries** | Run SQL with aggregates, joins, and window functions |
+| **Table health** | Check part counts, compressed and uncompressed size, and index granularity from `system.parts` |
 | **Query investigation** | Rank slow or expensive queries from `system.query_log` |
+| **Changes** | With **Full access** only: insert rows, alter tables, and create tables and views |
 
 ### Verify the connection
 
 ```text
-The ClickHouse databases and the tables in each one
+List the ClickHouse databases and the tables in each one
 ```
+
+**Success state:** CloudThinker returns your databases with their tables, engines, and row counts.
 
 ### Example prompts
 
 ```text
-Which ClickHouse tables grew the most in the last week
-Per-service p95 latency from the events table
-A better sorting key for our largest MergeTree table
+Which ClickHouse tables grew the most in the last week?
+Show the 10 slowest queries from system.query_log in the last 24 hours, with the user and table for each
+Suggest a better sorting key for our largest MergeTree table, based on the queries that hit it
 ```
+
+---
 
 ## Write access
 
-The connection ships read-only, and two switches open it up one step at a time.
-
 | Write access | Allow DROP and TRUNCATE | What the agent can do |
 |--------------|-------------------------|------------------------|
-| `Read-only` (default) | hidden | `SELECT` only; everything else is refused by ClickHouse with error `164 READONLY` |
-| `Full access` | `Blocked` (default) | `INSERT`, `ALTER`, `CREATE`, and materialized views; `DROP TABLE` and `TRUNCATE` are refused |
-| `Full access` | `Allowed` | Everything above, plus dropping and truncating tables and databases |
+| **Read-only (default)** | Hidden | `SELECT` only. ClickHouse refuses anything else with error `164` (`READONLY`) |
+| **Full access** | **Blocked (default)** | `INSERT`, `ALTER`, and `CREATE`. `DROP TABLE` and `TRUNCATE` are refused |
+| **Full access** | **Allowed** | Everything above, plus dropping tables and databases |
 
-Three things to weigh before turning write access on:
+Before you choose **Full access**:
 
-- **`Blocked` protects the table, not the rows.** It does not reject `ALTER TABLE ... DELETE`, `DROP PARTITION`, or `DROP COLUMN`, each of which removes data while leaving the table in place. Treat `Full access` as "the agent can destroy data".
-- **ClickHouse has no transactions.** Mutations and drops cannot be rolled back, so recovery means restoring from a backup.
-- **Grants are the stronger control.** The switches only decide whether CloudThinker sends `readonly=1`; they never grant a privilege the ClickHouse user does not hold.
+- **Blocked protects the table, not the rows.** `ALTER TABLE ... DELETE`, `DROP PARTITION`, and `DROP COLUMN` still run and still remove data. Treat **Full access** as "the agent can destroy data".
+- **Nothing rolls back.** ClickHouse has no transactions, so recovery means restoring from a backup.
 
-To turn write access on for an existing connection, open **Connections → ClickHouse → Edit**, change **Write access**, and reconnect.
+To change **Write access** on an existing connection, click **Disconnect**, then **Connect** again with the new value.
 
 <Warning>
-An agent with write access acts without a per-query confirmation prompt. Point it at an analytics or staging cluster before you point it at the one your dashboards read from.
+ClickHouse runs every query through one tool, so CloudThinker can't ask for approval on writes separately from reads. With **Full access**, a write runs without a per-query confirmation. Try it on a staging cluster before the one your dashboards read from.
 </Warning>
+
+---
 
 ## Troubleshooting
 
 <Accordion title="ClickHouse rejected the username or password">
-Confirm the user exists (`SHOW USERS;`) and retype the password rather than pasting it — a pasted value carrying a line break is rejected before CloudThinker contacts the server. ClickHouse Cloud disables password auth for some SSO-provisioned users; create a dedicated database user instead of reusing a console login.
+Check the user exists with `SHOW USERS;`, then retype the password instead of pasting it. A value with a line break is rejected before CloudThinker contacts the server. On ClickHouse Cloud, create a database user rather than reusing a console sign-in.
 </Accordion>
 
-<Accordion title="ClickHouse has no database named …">
-The name in **Default database** is not a database ClickHouse found. Names are case-sensitive — check the spelling, or leave the field blank to use the server default.
-</Accordion>
-
-<Accordion title="ClickHouse rejected the request path, or is unreachable">
-Confirm **Port** and **Use TLS** agree: `8443` with TLS, `8123` without — the native TCP port `9000` is not the HTTP interface. Check that **Host** carries no `https://` prefix and no `:port` suffix. On ClickHouse Cloud, add CloudThinker to the service IP access list; self-hosted, confirm `<listen_host>` includes the exposed interface and the firewall allows the port.
+<Accordion title="ClickHouse is unreachable, or rejected the request path">
+- **Port** and **Use TLS** must agree: `8443` with TLS, `8123` without. `9000` is the native TCP port, not the HTTP interface.
+- **Host** must have no `https://` prefix and no `:port` suffix.
+- On ClickHouse Cloud, add CloudThinker to the service IP access list. Self-hosted, check the firewall and that `<listen_host>` covers the exposed interface.
 </Accordion>
 
 <Accordion title="ClickHouse did not answer in time">
-On ClickHouse Cloud this is usually automatic idling: an inactive service suspends and connections time out until it restarts. Wake the service, then connect again. A 5xx answer means the server is running but not serving queries — check the cluster's own health.
+On ClickHouse Cloud, an idle service suspends and connections time out until it wakes. Wake the service in the ClickHouse Cloud console, then connect again.
+</Accordion>
+
+<Accordion title="ClickHouse has no database named ...">
+The **Default database** doesn't exist. Names are case-sensitive. Fix the spelling or leave the field blank.
 </Accordion>
 
 <Accordion title="Cannot execute query in readonly mode">
-The connection is read-only, which is the default. If the agent should write, set **Write access** to `Full access` and reconnect. If it still fails, the restriction is server-side: check whether the user carries a `readonly` settings profile (`SHOW CREATE USER cloudthinker;`) and holds the write grants the query needs.
+The connection is read-only, which is the default. If the agent should write, reconnect with **Write access** set to **Full access**. If it still fails, the limit is on the server: run `SHOW CREATE USER cloudthinker;` and look for a `readonly` settings profile or missing write grants.
 </Accordion>
 
-<Accordion title="DROP is refused even with write access on">
-`DROP` and `TRUNCATE` sit behind their own switch. Set **Allow DROP and TRUNCATE** to `Allowed`; it appears only once **Write access** is `Full access`.
+<Accordion title="The table list is empty">
+The user needs `SHOW TABLES` and `SELECT` on the database, not only on single tables, plus `SELECT` on `system.tables`.
 </Accordion>
 
-<Accordion title="Empty table list">
-The user needs `SHOW TABLES` and `SELECT` on the database, not only on individual tables. Grant `SELECT ON system.tables` so metadata queries return rows.
-</Accordion>
+---
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Grants over switches** — the privileges on the ClickHouse user are the durable boundary; the **Write access** switch decides whether CloudThinker asks for a write, the grant decides whether ClickHouse allows one.
-- **Server-side read-only** — for a connection that must never write, add the settings profile in step 2; `READONLY` makes it un-liftable from the client side.
+- **Grants over switches**: the privileges on the ClickHouse user decide what's possible. **Write access** only decides what CloudThinker asks for.
+- **Server-side read-only**: for a connection that must never write, keep the `READONLY` settings profile from Setup step 2. No client can lift it.
+
+---
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Agents" icon="database" href="/guide/agents/overview">
-    See what CloudThinker can do with this connection.
-  </Card>
   <Card title="PostgreSQL Connection" icon="/images/icons/postgresql.svg" href="/guide/connections/postgresql">
-    Similar setup for PostgreSQL databases
+    Connect a PostgreSQL database the same way
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Control which agent changes run on their own and which wait for you
   </Card>
 </CardGroup>

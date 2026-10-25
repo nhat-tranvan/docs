@@ -1,193 +1,150 @@
 ---
 title: Elasticsearch
-description: "Connect Elasticsearch to CloudThinker for log analysis, index management, and search performance optimization"
+description: "Connect Elasticsearch so agents can search logs, read mappings, run ES|QL, and check shard and cluster health with read-only access"
 icon: "/images/icons/elasticsearch.svg"
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your Elasticsearch clusters to enable CloudThinker agents to search logs, analyze observability data, and investigate incidents.
-
-Elasticsearch authenticates with an **API key** scoped to specific indices and cluster permissions.
-
----
+Connect an Elasticsearch cluster to let CloudThinker agents list indices, read field mappings, run DSL searches and ES|QL queries, and check shard allocation while they investigate an incident. The connection signs in with an **API key** or a **username and password**, and every tool it exposes is a read.
 
 ## Prerequisites
 
-- An **Elasticsearch** (7.x, 8.x), **OpenSearch** (1.x, 2.x), **AWS OpenSearch Service**, or **Elastic Cloud** cluster reachable from CloudThinker.
-- Admin access to Kibana (**Stack Management → Security → API Keys**) or the Elasticsearch API to create an API key.
-- The cluster endpoint URL.
-
----
+- An Elasticsearch cluster with an HTTPS endpoint CloudThinker can reach over the network, such as an Elastic Cloud deployment or a public DNS name. `localhost` and private addresses aren't reachable from CloudThinker Cloud.
+- Permission to create an API key (Kibana **Stack Management → Security → API keys**, or the `_security/api_key` API) or a dedicated user.
+- The index patterns agents should read, such as `logs-*` or `filebeat-*`.
 
 ## Setup
 
 <Steps>
-  <Step title="Open Kibana">
-    Navigate to your Kibana instance and sign in with admin access.
-  </Step>
-  <Step title="Navigate to API Keys">
-    Go to **Stack Management → Security → API Keys**.
-  </Step>
-  <Step title="Create API key">
-    Click **Create API key** and enter:
-    - **Name**: `cloudthinker-readonly`
-  </Step>
-  <Step title="Set permissions">
-    Add role descriptors for read-only access (see [Required permissions](#required-permissions) for the full JSON). At minimum, grant `monitor` on the cluster and `read` + `view_index_metadata` on the index patterns you need.
-  </Step>
-  <Step title="Generate and copy">
-    Click **Create API key** and immediately copy the encoded key — Elasticsearch will not show it again.
-  </Step>
-  <Step title="Note the cluster endpoint">
-    Copy your Elasticsearch endpoint:
-    - Self-hosted: `https://elasticsearch.your-domain.com:9200`
-    - Elastic Cloud: found in deployment settings
-    - AWS OpenSearch: domain endpoint from the AWS console
-  </Step>
-  <Step title="Add connection in CloudThinker">
-    Navigate to **Connections → Elasticsearch** and enter:
-    - **Cluster URL**: your Elasticsearch endpoint
-    - **API Key**: the encoded key you copied
-    - **Index patterns**: patterns to access (e.g., `logs-*`)
+  <Step title="Create a read-only API key">
+    In Kibana, open **Dev Tools** and run the request below. Replace `logs-*` with your own index patterns.
 
-    Click **Connect**. CloudThinker verifies the credentials and shows a **Connected** status.
+    ```json
+    POST /_security/api_key
+    {
+      "name": "cloudthinker",
+      "expiration": "90d",
+      "role_descriptors": {
+        "cloudthinker_read": {
+          "cluster": ["monitor"],
+          "indices": [
+            {
+              "names": ["logs-*"],
+              "privileges": ["read", "view_index_metadata", "monitor"]
+            }
+          ]
+        }
+      }
+    }
+    ```
+
+    Copy the `encoded` value from the response. Elasticsearch shows it once.
+
+    You can also create the key in **Stack Management → Security → API keys** by clicking **Create API key**, turning on **Control security privileges**, and pasting the same `role_descriptors` object.
+  </Step>
+  <Step title="Copy the cluster endpoint">
+    Use the full URL with scheme and port, such as `https://elasticsearch.example.com:9200`. On Elastic Cloud, copy the Elasticsearch endpoint from the deployment page.
+  </Step>
+  <Step title="Add the connection in CloudThinker">
+    Open **Connections** in the sidebar and select **Elasticsearch**. Enter the endpoint in **ES_URL**, choose **API key** under **Authentication**, and paste the encoded key. Leave **TLS certificate** on **Verify** unless the cluster serves a self-signed certificate. Click **Connect**.
+
+    **Success state:** the connection shows **Testing**, then **Connected**.
   </Step>
 </Steps>
 
-<Warning>
-Copy the API key immediately after creation. Elasticsearch will not show it again, and you'll need to create a new key if lost.
-</Warning>
-
----
-
 ## Connection details
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| **ES_URL** | Elasticsearch cluster URL | `https://your-cluster.es.region.cloud.es.io:9243` |
-| **ES_API_KEY** | Base64-encoded API key | `VnVhQk...` |
+| Field | Required | Description | Example |
+|-------|----------|-------------|---------|
+| **ES_URL** | Yes | Cluster endpoint, including scheme and port | `https://elasticsearch.example.com:9200` |
+| **Authentication** | Yes | **API key** (default) or **Username & password** | **API key** |
+| **API key** | API key only | The `encoded` value from the create response | `VnVhQ2ZHY0JDZGJr...` |
+| **Username** | Username & password only | A dedicated Elasticsearch user | `cloudthinker` |
+| **Password** | Username & password only | That user's password | |
+| **TLS certificate** | No | **Verify** (default) or **Allow self-signed** | **Verify** |
 
-Common index patterns to configure:
-
-| Pattern | Use case |
-|---------|----------|
-| `logs-*` | Application logs |
-| `filebeat-*` | Filebeat-collected logs |
-| `metricbeat-*` | Infrastructure metrics |
-| `apm-*` | Application performance data |
-| `kubernetes-*` | Kubernetes cluster logs |
-
----
+Fill in one method only. If you enter both an API key and a username or password, the connection is rejected with "Choose either an API key or username and password."
 
 ## Required permissions
 
-### Minimum
+| Agents need to | Grant |
+|----------------|-------|
+| Check cluster health | Cluster privilege `monitor` |
+| List indices and read shard allocation | Index privilege `monitor` on your patterns |
+| Read field mappings | Index privilege `view_index_metadata` on your patterns |
+| Run DSL searches and ES\|QL queries | Index privilege `read` on your patterns |
 
-```json
-{
-  "cluster": ["monitor"],
-  "indices": [
-    {
-      "names": ["logs-*", "metrics-*"],
-      "privileges": ["read"]
-    }
-  ]
-}
-```
-
-### Recommended
-
-```json
-{
-  "cluster": ["monitor", "read_ilm"],
-  "indices": [
-    {
-      "names": ["*"],
-      "privileges": ["read", "view_index_metadata"]
-    }
-  ]
-}
-```
+If you use **Username & password**, give the user a role with the same privileges.
 
 <Tip>
-Grant only `read` privileges on the index patterns CloudThinker needs. Never grant `write` or cluster-admin permissions to the CloudThinker API key.
+List the index patterns agents need instead of `*`. A key scoped to `logs-*` can't read a `customers` index, even if a search asks for it.
 </Tip>
-
----
 
 ## Agent capabilities
 
-Once connected, agents can:
+| Capability | What agents can do |
+|------------|--------------------|
+| **Index inventory** | List indices with their status and document count, and spot naming patterns such as `logs-app-*` |
+| **Mappings** | Read field names and types before filtering, so queries use fields that exist |
+| **Search** | Run bounded DSL queries with a time range, sort, and result size |
+| **ES\|QL** | Aggregate with ES\|QL, such as error counts per service, always with a `LIMIT` |
+| **Shards and health** | Find unassigned shards and report cluster health as green, yellow, or red |
 
-| Capability | Description |
-|------------|-------------|
-| **Log search** | Search application and infrastructure logs |
-| **Error analysis** | Find error patterns and anomalies |
-| **Incident investigation** | Correlate events across services |
-| **Metrics query** | Query stored metrics data |
+The connection has no tool that writes, deletes, or changes cluster settings.
 
 ### Verify the connection
 
 ```text
-Search Elasticsearch for application errors in the last hour
+Check Elasticsearch cluster health and list the five largest indices by document count
 ```
+
+Expect a health status, a shard count with any unassigned shards, and five index names with document counts.
 
 ### Example prompts
 
 ```text
-Search logs for authentication failures in the last 24 hours
-Find error patterns in application logs for the api-gateway service
-Search for pod crash events in Kubernetes logs
+Count ERROR log lines per service in logs-app-* over the last hour
+Search logs-* for authentication failures in the last 24 hours and group them by source IP
+Why is the cluster yellow? List the unassigned shards and the indices they belong to
 ```
-
----
 
 ## Troubleshooting
 
-<Accordion title="Connection refused">
-- Verify the cluster URL is correct and accessible from CloudThinker.
-- Check that firewall rules allow CloudThinker's egress IPs.
-- For AWS OpenSearch, enable public access or configure a VPC endpoint.
-- Confirm Elasticsearch is running and accepting requests.
+<Accordion title="Connection fails with a timeout or connection refused">
+**ES_URL** points at an address CloudThinker can't reach. Use a public endpoint, include the scheme and port, and check that your firewall or Elastic Cloud traffic filters allow inbound requests.
 </Accordion>
 
-<Accordion title="Authentication failed">
-- Verify the API key is correct and has not expired.
-- Confirm the key has the required index and cluster permissions.
-- For AWS OpenSearch, verify the IAM role or access policy is correctly configured.
+<Accordion title="401 Unauthorized">
+The API key is wrong, expired, or was invalidated, or the password changed. Create a new key and paste the `encoded` value, not the `id` or the `api_key` field alone.
 </Accordion>
 
-<Accordion title="API key expired">
-- Navigate to **Stack Management → Security → API Keys**.
-- Create a new key with the same permissions.
-- Update the key in CloudThinker connection settings.
+<Accordion title="security_exception on one index">
+The key or user has no privileges on that index. Add its pattern to `names` in a new key, then update the connection.
 </Accordion>
 
-<Accordion title="No data returned">
-- Verify index patterns match existing indices in the cluster.
-- Check the API key has `read` permission on those indices.
-- Ensure the indices contain data in the requested time range.
+<Accordion title="Certificate errors on a self-hosted cluster">
+The cluster serves a self-signed certificate. Set **TLS certificate** to **Allow self-signed** only if you trust that cluster.
 </Accordion>
 
----
+<Accordion title="A search returns nothing">
+The index pattern doesn't match, the field name differs from what the prompt assumed, or the time range is empty. Ask the agent to list indices and read the mapping for the index first.
+</Accordion>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **API key rotation** — rotate API keys every 90 days; set an expiration date when creating the key
-- **Limited indices** — restrict the key to the index patterns CloudThinker actually needs rather than granting access to `*`
-
----
+- **Set an expiration on the key**: an `expiration` such as `90d` limits how long a leaked key works. Create a new key before it expires and update the connection.
+- **Treat indexed content as sensitive**: logs can carry tokens or personal data that an application wrote. Scope the key to the indices you want agents to read.
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Agents" icon="shield-check" href="/guide/agents/overview">
-    See what CloudThinker can do with this connection.
+  <Card title="Root cause analysis" icon="magnifying-glass" href="/guide/incident/root-cause-analysis">
+    See how agents use log searches to find what caused an incident.
   </Card>
-  <Card title="Grafana Connection" icon="/images/icons/grafana.svg" href="/guide/connections/grafana">
-    Visualize Elasticsearch data
+  <Card title="OpenSearch" icon="magnifying-glass-chart" href="/guide/connections/opensearch">
+    Connect an OpenSearch cluster with a read-only user.
   </Card>
 </CardGroup>

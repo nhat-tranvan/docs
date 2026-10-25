@@ -1,75 +1,122 @@
 ---
-title: Incident Memory
-description: "Understand how agent-written incident lessons are stored, recalled during later RCA runs, and verified after remediation."
+title: "Incident Memory"
+description: "Learn what CloudThinker records from each investigation, how it reuses those notes on repeat failures, and how to confirm a fix held."
 icon: brain
 ---
 
-Incident Memory is the set of saved notes CloudThinker can write during root-cause analysis ([RCA](/guide/incident/root-cause-analysis)) and read at the start of a later investigation. It is the incident-focused part of [workspace memory](/guide/memory), and it preserves useful operational knowledge without influencing how [Pulse](/guide/pulse/overview) classifies new events.
+Incident memory is the set of notes CloudThinker writes at the end of a [root cause investigation](/guide/incident/root-cause-analysis) and reads at the start of the next one. When the same service fails the same way again, CloudThinker starts from what your team already learned instead of from zero.
 
-## What gets written
+## Prerequisites
 
-Incident Memory is agent-written. CloudThinker does not automatically extract a fixed record from every completed Incident.
+- Resolve receiving alerts from at least one source. See [Connect Pulse sources](/guide/pulse/setup).
+- The workspace **Admin** role to start investigations. Developers and Viewers can read the results. See [Roles](/guide/security/roles).
+- Nothing to switch on: incident memory is on by default. In a self-hosted deployment, an instance administrator can turn it off.
 
-| Memory kind | Use |
-|---|---|
-| Observation | A concrete fact or action from one investigation |
-| Recollection | What happened in a specific past Incident and what changed |
-| Lesson | A reusable pattern supported by more than one source Incident |
+## What CloudThinker records
 
-Entries can include the affected service, evidence, action taken, a verification command, and an outcome. The agent writes only material it judges useful for later RCA.
+CloudThinker writes memory itself. You don't fill in a form, and not every incident produces an entry. Each entry is one of three kinds, and an entry that breaks its rule is discarded when CloudThinker reads memory back.
+
+| Kind | What it holds | Kept only if |
+|---|---|---|
+| **Recollection** | One incident's story: symptom, root cause, what changed, the fix, and a check that proves the fix | It's tied to a specific incident |
+| **Observation** | A finding from a live investigation | It includes an `Action:` line telling a responder what to do |
+| **Lesson** | A pattern seen across incidents | It cites at least two source incidents |
+
+CloudThinker writes or updates a recollection after any run where it actually investigated and reached a disposition (it saved an assessment, a severity and a close decision). It writes nothing for a plain question, an aborted run, or a run that never reached a disposition. When an incident reopens, CloudThinker updates that incident's existing recollection instead of adding a second one.
+
+Every recollection follows the same five-line shape. This example shows what one looks like:
+
+```text
+Symptom: checkout-api 5xx rate above 20% on target group tg-checkout at 14:02 (CloudWatch)
+Root cause: Inferred. Connection pool exhausted after max connections was lowered
+Origin changed: unknown
+Fix: operator-applied. Pool size restored to its previous value
+Verify-with: 5xx rate on tg-checkout over 15 minutes; expected below 1%
+```
+
+CloudThinker keeps observed facts, inferences and unknown history separate. A field it can't support says `unknown` rather than a guess.
 
 ## How recall works
 
-1. CloudThinker writes incident memory files during an RCA run.
-2. At the start of a later RCA, CloudThinker reads valid, recent entries from the workspace memory tree.
-3. The selected entries appear in CloudThinker's incident-memory context before hypothesis work begins.
-4. CloudThinker compares the current evidence with those lessons instead of treating a past resolution as proof.
+When a new investigation starts, CloudThinker reads memory before it forms any hypothesis:
 
-Recall re-enters Resolve at the **Analyze** stage. Pulse may maintain separate cluster memory, but it never reads raw incident-memory files when classifying events.
+1. It loads valid entries, most recently updated first, up to 20 across all three kinds. It never reads the whole history.
+2. It looks for a matching recollection: the same symptom on the same service or component.
+3. If the matching incident was resolved before, it runs one cheap check from that recollection's `Verify-with:` line.
+   - **Check passes:** the old fix still holds. CloudThinker reads the current evidence to decide the disposition. A repeated report of the same episode isn't counted as a new occurrence.
+   - **Check fails:** CloudThinker investigates the current fault on its own terms. It doesn't assume the old cause came back.
+4. It treats every recalled entry as a lead, not as evidence. The verdict still rests on data from your systems, and memory never upgrades an **Inferred** cause to **Verified**.
 
-<Note>
-The current Incident UI does not show an "Informed by similar incidents" badge or a per-memory recall list. Memory changes the RCA context behind the scenes.
-</Note>
+Incident memory isn't listed in **Settings → Memory**, which shows [workspace memory](/guide/memory) items. To see what CloudThinker checked, click **Watch live** while it runs, or open **More actions → Open AI Conversation** afterwards.
 
-## Verification outcomes
+## Confirm a fix held
 
-An incident-memory entry can carry one of three outcomes:
+A recollection that records an applied fix starts as **Unverified**. A follow-up check turns it into **Verified** or **Failed**, which decides whether later investigations trust it.
 
-| Outcome | Meaning |
-|---|---|
-| Verified | A follow-up check confirmed the expected result |
-| Unverified | No conclusive follow-up result is recorded |
-| Failed | The expected result did not hold; the entry becomes counter-evidence |
+<Steps>
+  <Step title="Open the investigation conversation">
+    Go to **Resolve → Investigation**, select the incident, and open **More actions → Open AI Conversation**.
+  </Step>
+  <Step title="Enable the follow-up card">
+    When CloudThinker applied a fix and recorded a `Verify-with:` check, it proposes a follow-up as a card in the conversation. Enable the card. Nothing is scheduled until you do.
 
-When a runbook includes a verification command, CloudThinker can schedule one follow-up check and update the outcome. Resolve does not run a universal post-remediation process for every Incident.
+    **Success state:** the follow-up becomes an [automation](/guide/automation/automations) that runs at the proposed time and posts back into this conversation.
+  </Step>
+  <Step title="Or ask for one yourself">
+    If no card appeared, ask in the same conversation:
 
-Failed lessons are never presented to CloudThinker as valid guidance. Failed recollections can remain as counter-examples so a later RCA does not repeat the same assumption.
+    ```text
+    Tomorrow at 09:00, re-run the Verify-with check for this incident and update its recollection with the result.
+    ```
+  </Step>
+  <Step title="Read the result">
+    When the follow-up runs, it reports the check result in the conversation and sets the recollection's outcome.
+  </Step>
+</Steps>
 
-## Availability and limits
+### Verification outcomes
 
-- Incident memory must be available for your workspace before entries can be written or recalled.
-- Only entries that pass the memory format and safety checks are eligible for recall.
-- Recall is capped and ordered by recent updates, so CloudThinker never reads the entire history.
-- Cancelled or failed RCA runs contribute memory only if the agent already wrote a valid entry.
-- Re-running RCA does not mechanically replace an older entry; CloudThinker can revise, combine, or supersede memory when evidence changes.
+| Outcome | Meaning | Effect on later investigations |
+|---|---|---|
+| **Unverified** | No conclusive check yet. The default for any entry without an outcome. | Used as a lead |
+| **Verified** | A follow-up check confirmed the expected result | Used as a lead |
+| **Failed** | The expected result didn't hold | A failed lesson is never shown again as guidance. A failed recollection or observation stays as a counter-example, so the same assumption isn't repeated. |
 
-## Use memory well
+## How memory stays accurate
 
-- Record the evidence that distinguishes the root cause from a symptom.
-- Add a concrete verification command to remediation runbooks where practical.
-- Treat recalled context as a hypothesis lead, not as a diagnosis.
-- Review a failed verification before reusing the same [Scoped Action](/guide/incident/overview).
+There's no screen for editing incident memory. CloudThinker maintains it as it works:
 
-## Related
+- When new evidence contradicts a sentence in a past recollection, CloudThinker edits that sentence and states the observation that corrects it.
+- An unsupported historical claim is marked unverified, not deleted. A different fault today doesn't erase a supported older incident.
+- Two lessons that contradict each other are merged into one corrected lesson, or the obsolete one is deleted.
+- An outdated entry is edited in place rather than duplicated.
+
+You help by letting investigations finish, settling each remediation suggestion with **Mark as Done** or **Dismiss** and a note on what you actually did, and enabling follow-up checks.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="A repeat incident started from scratch">
+    **Cause:** the earlier run never reached a disposition, so no recollection was written. Or the new incident has a different symptom, service or component. **Check:** open the earlier incident and confirm it shows a **Current assessment** and a closed outcome. **Fix:** let investigations run to a verdict. For a custom webhook, map the **Service** and **Resource** fields so incidents name the component consistently. See [custom source](/guide/incident/webhook-integrations/custom-source).
+  </Accordion>
+  <Accordion title="CloudThinker proposed a fix that failed last time">
+    **Cause:** the earlier fix was never checked, so its recollection stayed **Unverified**. **Fix:** enable the follow-up card next time, or ask for a follow-up check in the conversation as shown above.
+  </Accordion>
+  <Accordion title="The follow-up check never ran">
+    **Cause:** the card was never enabled. A proposed follow-up isn't an automation until you enable it. **Check:** look for the follow-up under your [automations](/guide/automation/automations). **Fix:** enable the card in the conversation, or ask CloudThinker to schedule the check.
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
 
 <CardGroup cols={2}>
   <Card title="Investigation and RCA" icon="magnifying-glass" href="/guide/incident/root-cause-analysis">
-    See where memory enters the three-phase investigation.
+    Run an investigation and read its verdict.
   </Card>
   <Card title="Runbooks" icon="book-open" href="/guide/incident/runbooks">
-    Add the procedures and verification commands Resolve can use during response.
+    Give Resolve approved procedures for applying fixes.
   </Card>
-  <Card title="Workspace Memory" icon="brain-circuit" href="/guide/memory">
-    What agents remember platform-wide, and how to correct a remembered note.
+  <Card title="Workspace memory" icon="brain-circuit" href="/guide/memory">
+    See what agents remember across all conversations.
   </Card>
 </CardGroup>

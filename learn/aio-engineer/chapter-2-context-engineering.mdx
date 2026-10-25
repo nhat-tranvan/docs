@@ -1,59 +1,135 @@
 ---
 title: "Chapter 2 · Context Engineering: The Real Determinant of Agent Quality"
-description: "Two agents on the same model, tools, and incident can differ by an order of magnitude in usefulness. The difference is context."
+description: "Design the context an operations agent reasons over: five sources, a context budget, memory rules, and discovery that works on day one."
 icon: layer-group
 ---
 
-*Two agents on the same model, the same tools, and the same incident can differ by an order of magnitude in usefulness. The difference is context. This is where “garbage context in, garbage autonomy out” becomes an engineering discipline.*
+*Give two agents the same model, the same tools, and the same incident, and one can be ten times more useful than the other. The difference is context: what the agent is given to reason about.*
 
 ## 2.1 Why context beats model choice
 
-Frontier models are increasingly interchangeable for operations reasoning; what is not interchangeable is what they are given to reason about. An agent that knows your topology, your deploy history, your conventions, and your past incidents will out-diagnose a smarter model that knows none of them. The industry has converged on a name for this discipline — context engineering: the systematic design of what enters the context window, how it is structured, and when it is evicted or refreshed. Two findings from current practice anchor the discipline. Bigger windows did not solve it: model performance degrades as context bloats with irrelevant material, so curation beats accumulation. And in multi-agent systems, context is the multiplier on cost — routing each agent only what its task needs is the difference between viable and unviable economics.
+Frontier models are increasingly interchangeable for operations reasoning. What they are given is not. An agent that knows your topology, deploy history, conventions, and past incidents will out-diagnose a smarter model that knows none of them.
+
+**Context engineering** is the deliberate design of what enters the model's context window (the text the model reads on each step), how it is structured, and when it is dropped or refreshed. Two lessons from current practice anchor it:
+
+- **Bigger windows did not solve it.** Model quality drops as the window fills with irrelevant material. Curation beats accumulation.
+- **Context multiplies cost.** When several agents work one task, each pays for every token it carries. Sending each agent only what its task needs is what keeps the economics viable (Chapter 4).
+
+The practical rule: when an agent underperforms, audit its context before you blame its model. Section 2.6 gives you the checklist.
 
 ## 2.2 The five context sources of an operations agent
 
-1. **Topology and inventory.** What exists and how it connects: services, dependencies, infrastructure resources, ownership. This is the skeleton every hypothesis hangs on — “what changed upstream of the symptom?” is unanswerable without it. It must be discovered and refreshed, not hand-maintained; stale topology is worse than none because it is trusted.
+| Source | What it holds | How it enters the loop | What breaks when it's missing or stale |
+|---|---|---|---|
+| **Topology and inventory** | Services, dependencies, resources, owners | Discovered and refreshed automatically | "What changed upstream of the symptom?" has no answer. Stale topology is worse than none, because the agent trusts it. |
+| **Change history** | Deploys, config changes, infrastructure changes, feature flags, in time order with an author | Queried per investigation | Most incidents correlate with a change. Without the change stream, the agent investigates with one eye closed. |
+| **Operational knowledge** | Runbooks, SLO definitions, architecture notes, conventions ("we always drain before scaling down"), known failure patterns | Retrieved per task | The agent gives generic advice instead of your procedure. Imperfect knowledge is fine; absent knowledge is not. |
+| **Incident memory** | Past investigations: root cause, what fixed it, what didn't | Recalled at the start of an investigation | The second occurrence of a failure takes as long as the first. |
+| **Live telemetry** | Metrics, logs, traces, events | Pulled on demand by tools during the loop, never bulk-loaded | The agent reasons from a stale or partial picture. |
 
-2. **Change history.** Deploys, config changes, infra mutations, feature flags — time-ordered and attributable. The majority of incidents correlate with a change; an agent without the change stream investigates with one eye closed.
+The first four are durable knowledge, assembled per task. The fifth is fetched step by step: the context layer decides what is worth pulling, the tool layer pulls it (Chapter 3), and summarization decides what survives into the next step.
 
-3. **Operational knowledge.** Runbooks, SLO definitions, architecture notes, conventions (“we always drain before scaling down”), known failure patterns. Imperfect is fine; absent is not. This is tribal knowledge made machine-readable — and it compounds.
-
-4. **Incident memory.** Past investigations, what the root cause was, what fixed it, what didn’t. Retrieval over this corpus is how the second occurrence of a failure gets resolved in minutes instead of hours — the compounding the Field Guide promised, delivered mechanically.
-
-5. **Live telemetry.** Metrics, logs, traces, events — pulled on demand by tools during the loop, never bulk-loaded. The context layer decides what is worth pulling; the tool layer pulls it; summarization decides what survives into the next step.
-
-> *Figure 1 — The context stack: durable knowledge (topology, changes, runbooks, memory) assembled per task; live telemetry pulled on demand; everything filtered by a context budget.*
+```mermaid
+flowchart LR
+  subgraph Durable["Durable knowledge"]
+    T[Topology and inventory]
+    C[Change history]
+    K[Operational knowledge]
+    M[Incident memory]
+  end
+  L[Live telemetry<br/>pulled by tools on demand]
+  Durable --> B{Context budget<br/>retrieve, re-rank, compact}
+  L --> B
+  B --> W[Context window<br/>for one step]
+```
 
 ## 2.3 Assembly: the context budget
 
-Treat the context window like a production resource with a budget and an allocation policy. A workable starting allocation for an investigation step: a stable system core (identity, policies, output contracts); the task frame (the incident record so far, pinned so it cannot scroll away); retrieved knowledge (top-k runbooks and similar incidents, re-ranked, with citations back to source); and a working set of tool results (recent results verbatim, older results as agent-written summaries with pointers to the full data). Retrieval discipline matters more than retrieval technology: high-recall retrieve then aggressive re-rank to a precise top-few beats dumping fifty chunks and hoping — the “lost in the middle” failure is real and measurable.
+Treat the context window as a production resource with a budget and an allocation policy. A workable starting allocation for one investigation step:
 
-Eviction is the other half. Long investigations must compact: the agent summarizes its own trajectory (“checked X, ruled out Y because Z”) and drops raw excerpts, keeping pointers so any claim can be re-expanded and audited. Compaction is also where fabrication sneaks in — summaries must be traceable to the evidence they compress, which is an evaluation target in Chapter 7.
+| Slot | Contents | Rule |
+|---|---|---|
+| System core | Identity, policies, output format | Stable across steps |
+| Task frame | The incident record so far | Pinned, so it can't scroll away |
+| Retrieved knowledge | The few most relevant runbooks and similar past incidents | Re-ranked, each with a citation back to its source |
+| Working set | Tool results | Recent results verbatim; older ones as agent-written summaries with a pointer to the full data |
+
+Retrieval discipline matters more than retrieval technology. Retrieve broadly, then re-rank hard down to a precise few. Dumping fifty chunks into the window fails in a measurable way: models miss facts buried in the middle of long contexts.
+
+Eviction is the other half. Long investigations must **compact**: the agent summarizes its own trajectory ("checked X, ruled out Y because Z"), drops the raw excerpts, and keeps pointers so any claim can be expanded and audited later. Compaction is also where fabrication sneaks in. Every summary must trace back to the evidence it compresses, which makes it an evaluation target in Chapter 7.
+
+<Info>
+**IN PRACTICE: OVERSIZED TOOL OUTPUT**
+
+CloudThinker compresses an oversized tool result before the model reads it and keeps the full original in the conversation's sandbox, so an agent can reopen the raw data when a claim needs checking. A large log query costs a summary's worth of context, not the whole dump.
+</Info>
 
 ## 2.4 Memory: what to write, what to decay
 
-Persistent memory is where an agent deployment becomes un-copyable — and where it can quietly rot. Engineering rules that survive contact with production:
+Persistent memory is what makes an agent deployment hard to copy, and it can quietly rot. Four rules hold up in production:
 
-- **Write conclusions, not transcripts.** Persist the incident summary, root cause, fix, and verification — not the 300k-token trajectory. Structure it (entities, symptoms, cause, resolution) so retrieval hits on the pattern, not the prose.
+1. **Write conclusions, not transcripts.** Persist the symptom, root cause, fix, and verification, not the 300,000-token trajectory. Give it a fixed structure so retrieval matches on the pattern, not the prose.
+2. **Record provenance on every memory.** Who wrote it (human, agent, import), from which incident, when, and how confident. Unattributed memory is how one bad conclusion poisons a hundred later investigations.
+3. **Decay and challenge.** Topology changes invalidate old causal paths. Lower the weight of old memories, and let contradicting evidence flag a memory for review instead of letting the two silently coexist.
+4. **Keep a human-curated tier.** A small, high-trust layer of conventions and standing decisions ("never do X on the payments cluster") that only humans edit and that always outranks learned memory. This is a policy surface as much as a quality one.
 
-- **Provenance on every memory.** Who wrote it (human, agent, import), from what incident, when, and with what confidence. Unattributed memory is how one bad conclusion poisons a hundred future investigations.
+<Info>
+**IN PRACTICE: STRUCTURED INCIDENT MEMORY**
 
-- **Decay and challenge.** Memories age: topology changes invalidate old causal paths. Time-decay relevance, and let contradicting evidence flag a memory for review instead of silently coexisting with it.
+[Incident memory](/guide/incident/incident-memory) in CloudThinker follows these rules. Each investigation that reaches a disposition writes one recollection with a fixed shape:
 
-- **Human-curated tier.** Keep a small, high-trust layer — conventions, standing decisions, “never do X on the payments cluster” — that only humans edit and that always outranks learned memory. This is also a policy surface, not just a quality surface.
+```text
+Symptom: checkout-api 5xx rate above 20% on target group tg-checkout at 14:02 (CloudWatch)
+Root cause: Inferred. Connection pool exhausted after max connections was lowered
+Origin changed: unknown
+Fix: operator-applied. Pool size restored to its previous value
+Verify-with: 5xx rate on tg-checkout over 15 minutes; expected below 1%
+```
+
+A recalled entry is a lead, never evidence: the verdict still rests on data from your systems. A lesson is kept only if it cites at least two incidents, and a fix whose follow-up check fails stays on record as a counter-example.
+
+Outside incidents, [workspace memory](/guide/memory) is the human-curated tier. Every member can read it and correct it in plain words, only workspace Admins can edit or delete an item directly, and the nightly [Dreaming](/guide/memory-dreaming) run merges duplicates and removes what newer conversations contradict.
+</Info>
 
 ## 2.5 Discovery: context as onboarding
 
-The fastest-moving platforms treat context acquisition as a product phase, not a documentation request. On connection, the system discovers: it walks the cloud accounts and clusters read-only, builds the topology and inventory, ingests the change stream, and drafts its own system map for human confirmation. Discovery is what makes an agent useful on day one and safe later — a system that understands the estate can predict blast radius before it ever requests write access. It is also the engineering foundation under a strategic direction the whole category is heading toward: operations where the human does not prompt at all, because the system already knows the estate well enough to bring findings, plans, and evidence to the human for approval. The context layer is what makes that credible rather than reckless.
+The strongest platforms treat context acquisition as a product phase, not a documentation request. On connection, the system walks the account or cluster read-only, records what exists and how it is set up, and shows its understanding to a human before anything else happens.
+
+Discovery makes an agent useful on day one and safer later: a system that understands the estate can predict blast radius before it ever asks to change anything. It is also the foundation for operations where nobody has to prompt, because the system already knows the estate well enough to bring findings, plans, and evidence for approval. Without a context layer, that direction is reckless.
 
 <Info>
-**IN PRACTICE — DISCOVERY BEFORE AUTONOMY**
+**IN PRACTICE: DISCOVERY BEFORE ACTION**
 
-CloudThinker’s onboarding runs Connect → Discover before anything else: read-only credentials, an automated walk of the estate (clusters, services, databases, cost surfaces), and a generated system map plus first findings — deep investigation and a fix plan produced entirely on read-only access. Write access, and the trust ladder that governs it, comes only after the human has seen the system’s understanding of their world. The evaluation question for any platform: what does it know about your estate one hour after connection, and can it show you?
+The first time a [connection](/guide/connections/overview) reaches **Connected**, CloudThinker runs **Discovery**, one background investigation of the service you just connected. The **Discovery** section of the connection's detail panel then shows evidence (each fact cites the read that produced it), related connections worth adding, and suggested recurring checks you can turn into [automations](/guide/automation/automations). Reads run freely; every change still goes through [Approvals](/guide/approvals/overview).
+
+The question to ask of any platform: what does it know about your estate one hour after you connect it, and can it show you the evidence?
 </Info>
+
+## 2.6 Audit an agent's context
+
+Run this checklist when an agent gives a weak or wrong answer, before you change models or prompts:
+
+| Question | If the answer is no |
+|---|---|
+| Could the agent see the service's dependencies and owner? | Connect the missing source, or run discovery again |
+| Did it see the changes made in the hour before the symptom? | Connect the deploy or change source |
+| Did it retrieve your runbook for this failure class? | Add the runbook to a [knowledge base](/guide/knowledge), or turn it into a [skill](/guide/skills/overview) if it's a procedure |
+| Did it recall the last occurrence of this incident? | Check that the earlier investigation reached a disposition and its fix was confirmed |
+| Does every claim in its summary trace to a tool result? | Treat the summary as unverified and evaluate compaction (Chapter 7) |
 
 <Tip>
 **KEY TAKEAWAY**
 
-Context is the moat and the failure mode. Engineer it like a subsystem: five sources, a budgeted assembly policy, traceable compaction, provenance-tagged memory with decay, and automated discovery. When an agent underperforms, audit its context before you blame its model.
+Context is both the moat and the failure mode. Engineer it like a subsystem: five sources, a budgeted assembly policy, traceable compaction, provenance-tagged memory with decay, and automated discovery. When an agent underperforms, audit its context before you blame its model.
 </Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Chapter 3 · Tools, Skills, and the Protocol Layer" icon="toolbox" href="/learn/aio-engineer/chapter-3-tools-skills-protocol">
+    How tool design decides safety and reliability, and how to run MCP in production.
+  </Card>
+  <Card title="Workspace memory" icon="brain" href="/guide/memory">
+    See, teach, and correct what CloudThinker remembers about your workspace.
+  </Card>
+</CardGroup>

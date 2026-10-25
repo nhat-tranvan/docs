@@ -1,105 +1,123 @@
 ---
 title: Render
-description: "Connect Render to CloudThinker to review services, deploys, logs, and datastores, with deploys gated behind your approval"
+description: "Connect Render so agents can review services, deploys, logs, metrics, and datastores, with every deploy or change waiting for your approval."
 icon: server
 ---
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your Render account to let CloudThinker agents review workspaces, services, deploy history, logs, performance, Postgres databases, and key-value stores, and diagnose issues before customers notice.
-
-Render authenticates with an **API key** from your Render account. Deploys and environment-variable changes stay deliberate actions that require your [approval](/guide/approvals/overview).
+Connect Render so CloudThinker can explain why a deploy failed, read build and runtime logs, check service metrics, and review your Render Postgres and Key Value instances. The connection uses a Render API key, and anything that changes your services (a deploy, an environment-variable update, a new resource) waits for your approval first.
 
 ## Prerequisites
 
-- A **Render account** with access to the workspace you want CloudThinker to reach.
-- Permission to create an API key in that account.
+- A Render account that can see the workspace you want CloudThinker to investigate.
+- Permission to create an API key on that account.
+- A CloudThinker workspace where you can add connections.
 
 ## Setup
 
 <Steps>
-  <Step title="Create an API key">
-    In the Render Dashboard, open your **Account Settings** page and create an API key. Copy it immediately — Render shows the key in full only when it is created.
+  <Step title="Create a Render API key">
+    In the Render Dashboard, open **Account Settings → API Keys** and create a key named `cloudthinker`.
+
+    Copy the key right away. Render shows the full value only once.
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Navigate to **Connections → Render** and paste the key into **RENDER_API_KEY**.
+    Go to **Connections**, search for **Render**, and paste the key into **RENDER_API_KEY**.
 
-    Click **Connect**. CloudThinker verifies the credential and shows a **Connected** status.
+    Click **Connect**.
+
+    **Success state:** the Render card shows a **Connected** status.
+  </Step>
+  <Step title="Run the verify prompt">
+    Ask the prompt in [Verify the connection](#verify-the-connection) in a new chat. Don't skip this: Render accepts the connection handshake even with a bad key, so a wrong key only shows up when the first request runs.
+
+    **Success state:** CloudThinker lists your Render workspaces and services by name.
   </Step>
 </Steps>
 
-<Warning>
-Treat the API key as a secret. If you believe it is compromised, revoke it in the Render Dashboard, create a new one, and update the connection.
-</Warning>
-
 ## Connection details
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| **RENDER_API_KEY** | API key from your Render account settings | — |
+| Field | What to enter |
+|-------|---------------|
+| **RENDER_API_KEY** | The API key from **Account Settings → API Keys** in the Render Dashboard |
 
 ## Required permissions
 
-The API key authenticates as your Render account, so agents see the workspaces and services that account can see.
+Render API keys aren't scoped. A key acts as the account that created it and reaches every workspace and service that account can see.
 
 <Tip>
-Create the key from an account scoped to the workspace agents should investigate, rather than an account with access to everything you host.
+For least privilege, create the key from an account that belongs only to the workspace CloudThinker should investigate, not from an owner account that sees everything you host.
 </Tip>
 
 ## Agent capabilities
 
-Once connected, agents can:
+| Capability | What CloudThinker does | Needs approval |
+|------------|------------------------|----------------|
+| **Service inventory** | Lists workspaces, services, URLs, and plans | No |
+| **Deploy history** | Reads deploys per service, flags failed or stuck builds, and links them to incidents | No |
+| **Logs** | Reads build, runtime, and request logs and groups errors by message | No |
+| **Metrics** | Reads CPU, memory, instance count, and HTTP latency for a service | No |
+| **Datastores** | Reviews Render Postgres and Key Value instances | No |
+| **Postgres queries** | Runs bounded, read-only SQL against Render Postgres and shows you the SQL first | No |
+| **Deploys** | Triggers a deploy of a service | Yes |
+| **Environment variables** | Updates a service's environment variables, showing the full resulting set before you approve | Yes |
+| **New resources** | Creates a web service, static site, cron job, Postgres instance, or Key Value instance | Yes |
 
-| Capability | Description |
-|------------|-------------|
-| **Service review** | List workspaces and services with their current state |
-| **Deploy history** | Review deploys and correlate them with incidents |
-| **Log investigation** | Read service logs to diagnose errors and slowdowns |
-| **Datastore review** | Review Render Postgres databases and key-value stores |
-| **Approval-gated changes** | Trigger deploys or environment-variable changes only after you approve them |
+<Warning>
+A deploy ships code to live traffic, and an environment-variable update can restart the service. Read the proposed change in the [approval](/guide/approvals/overview) request before you accept it.
+</Warning>
 
 ### Verify the connection
 
 ```text
-List my Render services and summarize their current status
+List my Render workspaces and services with their current status
 ```
 
 ### Example prompts
 
 ```text
-A fix for my erroring Render web service based on its recent logs
-What shipped this week in the deploy history of the api service on Render
-The plans and status of my Render Postgres instances
+Why did the last deploy of my api service on Render fail? Quote the build log lines that matter.
+Show CPU, memory, and HTTP latency for my Render web services over the last 24 hours
+List my Render Postgres instances with their plans and status
 ```
 
 ## Troubleshooting
 
-<Accordion title="401 Unauthorized">
-The API key is wrong or was revoked. Create a new key in the Render Dashboard's Account Settings and update the connection.
+<Accordion title="Connected, but the first prompt returns 401">
+The key is wrong, expired, or revoked. Render's handshake succeeds without a valid key, so the error appears at the first request. Create a new key in **Account Settings → API Keys** and update the connection.
 </Accordion>
 
-<Accordion title="Agent cannot find expected services">
-The key belongs to an account without access to that workspace. Create the key from an account in the right Render workspace.
+<Accordion title="403, or expected services are missing">
+The key's account isn't a member of that workspace. Ask CloudThinker to list your Render workspaces to see what the key reaches, then create the key from an account in the right workspace.
 </Accordion>
 
-<Accordion title="A change did not apply">
-Deploys and environment-variable changes wait for approval in CloudThinker. Check for a pending [approval](/guide/approvals/overview) before retrying.
+<Accordion title="404 for a service or database">
+The ID is stale or a service name was used as an ID. Ask CloudThinker to list services again and work from the IDs it returns.
+</Accordion>
+
+<Accordion title="429 rate limit">
+Render is throttling requests. Wait a minute and retry with a narrower request, such as one service or a shorter log window.
+</Accordion>
+
+<Accordion title="A deploy or change didn't happen">
+Deploys, environment-variable updates, and new resources wait for approval. Check the chat for a pending approval request and answer it before asking again.
 </Accordion>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Approval for changes** — deploys and environment-variable changes wait for explicit approval in CloudThinker.
-- **One-time visibility** — Render shows an API key in full only at creation, so store it in a password manager before leaving the page.
+- **One-time key display:** Render shows the API key in full only at creation, so store it in your password manager before you leave the page.
+- **Account-wide reach:** because a key reaches every workspace its account can see, revoke it in Render as soon as you delete the connection.
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Heroku Connection" icon="/images/icons/heroku.svg" href="/guide/connections/heroku">
-    App platform review and log investigation
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Decide which Render changes run on their own and which wait for you
   </Card>
-  <Card title="Vercel Connection" icon="/images/icons/vercel.svg" href="/guide/connections/vercel">
-    Frontend deployments and logs
+  <Card title="Heroku connection" icon="/images/icons/heroku.svg" href="/guide/connections/heroku">
+    Connect another app platform with a similar setup
   </Card>
 </CardGroup>

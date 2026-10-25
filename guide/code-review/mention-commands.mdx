@@ -1,86 +1,161 @@
 ---
 title: Mention Commands
-description: "Trigger re-reviews, autofix, and questions from MR/PR comments by mentioning the review bot"
+description: Re-run reviews, fix findings, and ask questions by mentioning @cloudthinker-ai in a merge request or pull request comment.
 icon: at
 ---
 
-Mention `@cloudthinker-ai` in any merge request or pull request comment to trigger commands — restart a review, autofix findings, ask questions, or get help.
+Mention `@cloudthinker-ai` in a merge request or pull request (MR/PR) comment to re-run a review, fix its findings, or ask about the change, all without leaving your Git provider. A **finding** is one issue the review flagged for a human to look at.
 
-<Note>
-  GitLab and GitHub support every command. Bitbucket, Azure DevOps, and AWS CodeCommit support a subset — see [provider support](#provider-support).
-</Note>
+## Prerequisites
+
+- A repository connected in [Review setup](/guide/code-review/setup), with at least one MR/PR the bot has commented on.
+- Comment access on that MR/PR in your Git provider.
 
 ## Commands
 
+Write the command as plain text on its own line in a comment.
+
 | Command | What it does |
-|---------|-------------|
-| `@cloudthinker-ai help` | Shows available commands as a comment |
-| `@cloudthinker-ai review` | Restarts the review from the last reviewed commit — use it to request a re-review. `review again`, `continue`, and `continue review` work too |
-| `@cloudthinker-ai autofix` | Fixes unresolved findings and pushes the result to the original source branch |
-| `@cloudthinker-ai autofix stacked pr` | Fixes findings on a separate branch, then opens a follow-up MR/PR |
-| `@cloudthinker-ai <question>` | Ask a free-form question about the code review |
+|---|---|
+| `@cloudthinker-ai` or `@cloudthinker-ai help` | Posts the list of commands your provider supports |
+| `@cloudthinker-ai <question>` | Answers a question about this MR/PR |
+| `@cloudthinker-ai review` | Starts the first review, or reviews again from the last reviewed commit. `review again`, `continue`, and `continue review` do the same |
+| `@cloudthinker-ai review ultra` | Runs one deeper Ultra review of the latest commit, if your installation has Ultra review turned on |
+| `@cloudthinker-ai autofix` | Fixes the open findings and pushes the commits to this MR/PR's source branch |
+| `@cloudthinker-ai autofix stacked` | Fixes the open findings on a new branch and opens a separate MR/PR for them. `autofix stacked pr` also works |
 
-A command only runs as plain comment text. A mention inside a code block, inline code, or a quoted reply is treated as quoted text, not as a command.
+`review` and `review ultra` must be the whole line. `@cloudthinker-ai review this carefully` is treated as a question, not a command. A mention inside a code block, inline code, or a quoted reply is also never run as a command.
 
-## How autofix works
+## Run a command
 
-1. Post `@cloudthinker-ai autofix` (or `@cloudthinker-ai autofix stacked pr`) as a comment on the MR/PR.
-2. CloudThinker picks up all unresolved findings from the review.
-3. An agent implements fixes for each finding, following your codebase conventions.
-4. CloudThinker commits and pushes the changes — direct autofix to the original source branch, stacked autofix to a separate branch with a follow-up MR/PR.
+<Steps>
+  <Step title="Open the MR/PR on your provider">
+    Use the MR/PR on GitHub, GitLab, Bitbucket, Azure DevOps, or AWS CodeCommit that CloudThinker reviewed.
+  </Step>
+  <Step title="Post the command as a new comment">
+    For example, to re-run a review that stopped part way:
+
+    ```text
+    @cloudthinker-ai review
+    ```
+
+    **Success state:** the bot replies **CloudThinker Review Started**. When the run finishes, a new review summary comment appears on the MR/PR.
+  </Step>
+</Steps>
+
+If a review stops before its summary, the bot edits its progress comment to **CloudThinker Review Did Not Finish**. Findings it already posted stay valid. Comment `@cloudthinker-ai review` to continue from the last reviewed commit.
+
+## Ask a question
+
+Mention the bot followed by your question:
+
+```text
+@cloudthinker-ai does this change break any other caller of parseConfig?
+@cloudthinker-ai what should I test before merging this?
+```
+
+Where you ask changes what the agent focuses on:
+
+| Where you comment | What the agent looks at first |
+|---|---|
+| Reply in a finding's thread | That finding and its file, plus the rest of the MR/PR so it can check side effects |
+| New top-level comment | The whole MR/PR and all its unresolved findings |
+
+Follow-up questions in the same thread build on earlier answers.
+
+## Push back on a finding
+
+If you're the MR/PR author or an assignee and you think a finding is wrong, reply in that finding's thread. No mention is needed. Explain why, for example:
+
+```text
+This is intentional. The retry is capped by the caller in client.go, so it can't loop forever.
+```
+
+CloudThinker re-checks the finding against your reply. If it agrees, it settles the finding, and later reviews of the repository take your reason into account. This works once the review has finished, on every provider except AWS CodeCommit. Other people can still ask about a finding by mentioning the bot, but their reply doesn't settle it.
+
+## Fix findings with autofix
+
+Pick how you want the fixes delivered:
+
+| Command | Where the fixes land | Use it when |
+|---|---|---|
+| `@cloudthinker-ai autofix` | New commits on this MR/PR's source branch | You trust the fixes and want one MR/PR to merge |
+| `@cloudthinker-ai autofix stacked` | A new branch with its own MR/PR that targets this MR/PR's source branch | You want to review the fixes before they reach your branch (GitHub and GitLab only) |
+
+<Steps>
+  <Step title="Post the command as a top-level comment">
+    ```text
+    @cloudthinker-ai autofix stacked
+    ```
+  </Step>
+  <Step title="Wait for the fix run">
+    CloudThinker reads each open finding, changes the code, commits, and pushes. Only one autofix runs per MR/PR at a time; a second request while one runs doesn't start another.
+
+    **Success state:** new commits appear on your source branch, or a new MR/PR opens that targets it.
+  </Step>
+</Steps>
+
+On GitHub and GitLab you can also type `@cloudthinker-ai autofix` as a reply inside one finding's thread. CloudThinker then fixes only that finding.
 
 <Warning>
-  `@cloudthinker-ai autofix` commits and pushes to your source branch without pausing for approval. Use `autofix stacked pr` when you want to review the changes in a separate MR/PR first. CloudThinker never pushes to protected branches.
+  `@cloudthinker-ai autofix` pushes to your source branch without a separate approval step. Use `autofix stacked` when you want to read the changes first.
 </Warning>
-
-### Direct vs. stacked PR
-
-- **`@cloudthinker-ai autofix`** — Commits and pushes directly to the original MR/PR source branch. Findings are marked resolved after fixing.
-- **`@cloudthinker-ai autofix stacked pr`** — Creates and pushes a separate branch, then opens a follow-up MR/PR targeting the original source branch. Findings stay open for your review.
 
 ## Skip a review
 
-Add the marker `@cloudthinker:ignore` anywhere in the MR/PR description to skip reviews for that MR/PR. The marker is case-sensitive and must match exactly.
-
-Skipping works on GitLab, GitHub, Bitbucket, and Azure DevOps. To skip whole categories of PRs — by label, author, or branch — use [filters](/guide/code-review/setup#filter-configuration) instead.
-
-## Free-form questions
-
-Ask anything about the code review by mentioning `@cloudthinker-ai` followed by your question:
+Add this marker anywhere in the MR/PR description to stop CloudThinker reviewing that MR/PR:
 
 ```text
-@cloudthinker-ai why was this function flagged as a security risk?
-@cloudthinker-ai can you explain the performance impact of this change?
-@cloudthinker-ai what's the best way to refactor this?
+@cloudthinker:ignore
 ```
 
-### Thread-aware context
+The marker is case-sensitive and must match exactly. `@cloudthinker-ai review ignore` on its own line in the description does the same. To skip whole groups of MR/PRs, such as bot dependency bumps, use repository filters in [Review setup](/guide/code-review/setup) instead.
 
-- **Reply in a finding's thread** — The agent sees only that specific finding's details (severity, file, line, suggested fix), giving you a focused answer.
-- **Top-level comment** — The agent sees all unresolved findings from the review, giving you a broader perspective.
+## Run an Ultra review
+
+Ultra is a deeper, slower review that uses more credits than a normal one. It's available only when Ultra review is turned on for your installation.
+
+- **Once:** comment `@cloudthinker-ai review ultra`. Only the MR/PR author or an assignee can start it this way. The next push gets your normal review.
+- **On every push:** put `@cloudthinker-ai review ultra` on its own line in the MR/PR description. If the description also has the skip marker, the skip wins.
+
+If Ultra is off, the bot replies **Ultra review is turned off for this installation.**
 
 ## Provider support
 
-| Provider | Questions and help | `review` | `autofix` |
-|----------|--------------------|----------|-----------|
-| GitLab | Yes | Yes | Yes |
-| GitHub | Yes | Yes | Yes |
-| Azure DevOps | Yes | Yes | No |
-| Bitbucket | Replies in finding threads only | Yes | No |
-| AWS CodeCommit | Top-level comments only | No | No |
+| Provider | Help and questions | Replies in finding threads | `review` and `review ultra` | `autofix` | `autofix stacked` |
+|---|---|---|---|---|---|
+| GitHub | Yes | Yes | Yes | Yes | Yes |
+| GitLab | Yes | Yes | Yes | Yes | Yes |
+| Bitbucket Cloud | Yes | Author or assignee replies only | Yes | Top-level comment only | No |
+| Azure DevOps | Yes | Author or assignee replies only | Yes | Top-level comment only | No |
+| AWS CodeCommit | Top-level comments only | No | No | No | No |
 
-## Tips
+A command your provider doesn't support is ignored without a reply.
 
-- **One autofix at a time** — Only one autofix can run per MR/PR. Wait for the current one to finish before starting another.
-- **Reuse conversation context** — Free-form replies in the same thread reuse the conversation context, so follow-up questions build on previous answers.
+## Troubleshooting
 
-## Related
+<AccordionGroup>
+  <Accordion title="The bot didn't reply to my comment">
+    **Check:** the mention is plain text, not inside backticks, a code block, or a quote. **Check:** your provider supports the command in the table above. On Azure DevOps, **Check:** the **Pull request commented on** service hook exists with **Resource version** set to **2.0**, as described in [Provider authentication](/guide/code-review/provider-auth).
+  </Accordion>
+  <Accordion title="My command was answered as a question">
+    **Cause:** `review` and `review ultra` must be the whole line. **Fix:** post `@cloudthinker-ai review` with nothing after it.
+  </Accordion>
+  <Accordion title="Ultra review won't start from a comment">
+    **Cause:** only the MR/PR author or an assignee can start Ultra from a comment, or Ultra is turned off for your installation. **Fix:** ask the author to comment, or use **Run Ultra review** in the [Review workspace](/guide/code-review/review-workspace) if you have it.
+  </Accordion>
+  <Accordion title="My reply in a finding thread didn't settle the finding">
+    **Cause:** only the MR/PR author or an assignee can settle a finding by replying, and only after the review has finished. **Fix:** ask the author to reply, or mark it resolved in the Review workspace.
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
 
 <CardGroup cols={2}>
-  <Card title="Review setup" icon="gear" href="/guide/code-review/setup">
-    Connect your repositories for automated code review
+  <Card title="Review workspace" icon="list-check" href="/guide/code-review/review-workspace">
+    Run the same actions, plus merge, from inside CloudThinker.
   </Card>
-  <Card title="Learnings" icon="book" href="/guide/code-review/convention-rules">
-    See the rules CloudThinker learns from your team's resolved review findings
+  <Card title="Learnings" icon="scroll" href="/guide/code-review/convention-rules">
+    See the rules CloudThinker learns from your team's settled findings.
   </Card>
 </CardGroup>
