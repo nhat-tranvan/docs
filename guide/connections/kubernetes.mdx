@@ -4,9 +4,11 @@ description: "Connect a Kubernetes cluster with a read-only kubeconfig so agents
 icon: "/images/icons/kubernetes.svg"
 ---
 
+import ApprovalDefault from '/snippets/approval-default.mdx';
+
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect a Kubernetes cluster so CloudThinker can find crash-looping and pending pods, read logs and events, check node pressure, and review RBAC and network policies. You upload a **kubeconfig file** that signs in as a dedicated read-only service account; changes such as a rollout restart run only after you approve them, and only if you grant write RBAC (see [Write access](#write-access)).
+Connect a Kubernetes cluster so CloudThinker can find crash-looping and pending pods, read logs and events, check node pressure, and review RBAC and network policies. You upload a **kubeconfig file** that signs in as a dedicated read-only service account; changes such as a rollout restart go through your workspace's Approvals, and run only if you grant write RBAC (see [Write access](#write-access)).
 
 ## Prerequisites
 
@@ -14,9 +16,10 @@ Connect a Kubernetes cluster so CloudThinker can find crash-looping and pending 
 - `kubectl` access to that cluster with permission to create a namespace, a ClusterRole, and a ClusterRoleBinding.
 - Managed clusters (EKS, GKE, AKS) hand out kubeconfigs that sign in through `aws`, `gcloud`, or `az` exec plugins, which don't work in CloudThinker. Step 2 builds one that does. Kubernetes checks the service-account token itself, so you don't map it in cloud IAM (no EKS access entry, for example).
 - Optional: [Metrics Server](https://github.com/kubernetes-sigs/metrics-server) in the cluster. Without it, agents still report pod status and node conditions, but not live CPU and memory usage.
+- The **Admin** role in your CloudThinker workspace, which can add and edit connections. See [Roles](/guide/security/roles).
 
 <Info>
-A workspace holds **one** Kubernetes connection, and agents work in the kubeconfig's **current context**. Upload a kubeconfig for the one cluster you want inspected. For several clusters, use [one workspace per cluster](/guide/workspaces#create-a-workspace), or add a [Rancher connection](/guide/connections/rancher) for inventory and health across the clusters Rancher manages.
+You get **one** Kubernetes connection per workspace, and agents work in the kubeconfig's **current context**. Upload a kubeconfig for the one cluster you want inspected. For several clusters, use [one workspace per cluster](/guide/workspaces#create-a-workspace), or add a [Rancher connection](/guide/connections/rancher) for inventory and health across the clusters Rancher manages.
 </Info>
 
 ## Setup
@@ -147,7 +150,7 @@ A workspace holds **one** Kubernetes connection, and agents work in the kubeconf
     **Success state:** `kubectl --kubeconfig cloudthinker-kubeconfig.yaml get nodes` lists your nodes. This is the same command CloudThinker runs to test the connection. To see everything the role allows, run `kubectl auth can-i --list --as=system:serviceaccount:cloudthinker:cloudthinker-reader`. The `--as` flag needs impersonate rights, which cluster-admin has.
   </Step>
   <Step title="Upload the kubeconfig in CloudThinker">
-    Open **Connections** in the sidebar, select **Kubernetes**, and upload `cloudthinker-kubeconfig.yaml` in the **KUBECONFIG** field. Click **Connect**.
+    Open **More → Workspace settings → Connections**, select **Kubernetes**, and upload `cloudthinker-kubeconfig.yaml` in the **KUBECONFIG** field. Click **Connect**.
 
     **Success state:** the connection shows **Connecting** and **Verifying**, then a **Connected** status.
   </Step>
@@ -175,7 +178,9 @@ Trim the role to what you need. Drop `configmaps` if yours hold sensitive values
 
 ## Write access
 
-Agents can run changes such as `scale`, `rollout restart`, `cordon`, `drain`, or `apply` only when you ask for that change in the conversation, and every one pauses for your approval first. The read-only role above makes them fail with `403`. See [Approvals](/guide/approvals/overview).
+Agents can run changes such as `scale`, `rollout restart`, `cordon`, `drain`, or `apply` only when you ask for that change in the conversation. The read-only role above makes them fail with `403`.
+
+<ApprovalDefault />
 
 To allow a specific change, grant only what it needs:
 
@@ -183,7 +188,7 @@ To allow a specific change, grant only what it needs:
 - **Apply** needs `get`, `create`, and `patch` on each resource type in the manifest you apply, in the namespaces it targets.
 - **Cordon and drain** act on nodes, which are cluster-scoped, so a namespaced Role can't allow them. Use a ClusterRole with `patch` on `nodes` and `create` on `pods/eviction`. The read role already supplies the `get` and `list` on pods and DaemonSets that drain needs.
 
-The write grants bind to the same `cloudthinker-reader` service account on purpose, so the one kubeconfig covers reads and approved changes. If you plan write access from the start, consider renaming the account (for example `cloudthinker-agent`) in both manifests and in step 2, so reviewers aren't surprised that a "reader" can drain nodes.
+The write grants bind to the same `cloudthinker-reader` service account on purpose, so the one kubeconfig covers reads and changes. If you plan write access from the start, consider renaming the account (for example `cloudthinker-agent`) in both manifests and in step 2, so reviewers aren't surprised that a "reader" can drain nodes.
 
 This example allows scaling deployments in one namespace, plus cordon and drain. Replace `payments` with your namespace, save it as `cloudthinker-write.yaml`, and run `kubectl apply -f cloudthinker-write.yaml`.
 
@@ -252,7 +257,7 @@ subjects:
 | **Capacity and scheduling** | Compare requests and limits with usage, and explain why pods cannot be scheduled |
 | **Security and RBAC** | Review role bindings, service accounts, network policies, and privileged workloads |
 | **Configuration** | Inspect ingresses, services, storage, autoscalers, and images across namespaces. Custom resources need a rule added to the role |
-| **Changes** | Scale, restart, cordon, drain, or apply. Each change **requires approval** |
+| **Changes** | Scale, restart, cordon, drain, or apply. Each change goes through Approvals |
 
 ### Verify the connection
 

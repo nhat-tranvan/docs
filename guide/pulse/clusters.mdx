@@ -4,7 +4,7 @@ description: "Triage Pulse clusters: understand their lifecycle and suppression,
 icon: layer-group
 ---
 
-A cluster is a group of related signals that Pulse treats as one problem, so a flapping alarm that fires 18 times becomes one item with 18 members. This page covers how clusters open and close, what Pulse drops before clustering, and what each action does. Every cluster action, including **Snooze**, needs the workspace **Admin** role. Developers and Viewers can read clusters but don't see the actions. See [Roles](/guide/security/roles).
+A **cluster** is a group of related signals that Pulse treats as one problem (a **signal** is an event that survived noise suppression), so a flapping alarm that fires 18 times becomes one item with 18 members. This page covers how clusters open and close, what Pulse drops before clustering, and what each action does. Every cluster action, including **Snooze**, needs the workspace **Admin** role. Developers and Viewers can read clusters but don't see the actions. See [Roles](/guide/security/roles).
 
 ## Cluster lifecycle
 
@@ -33,6 +33,20 @@ A resolved cluster never reopens. The next matching signal starts a new cluster.
 - Closing the incident doesn't close the cluster. If the same fault fires again, triage decides whether to reopen that incident or open a new one.
 - Once the incident is closed, you can escalate the cluster again.
 
+## How signals join a cluster
+
+Pulse compares each new signal with signals from the last 6 hours whose cluster is still open. The first rule that matches decides where it goes:
+
+1. **Same resource or same title.** The signals share a resource ID, or they share a title (letter case ignored). A shared title doesn't count when both signals carry different resource IDs: one alert name on two resources is two faults.
+2. **Same service.** The signals share a **Service** value. Signals with no service, which show as `unknown`, and chat messages skip this rule. This rule ignores resource IDs, so two faults on different resources join when they name the same service.
+
+If neither rule matches, the signal opens a new cluster in **Forming**. A resolved cluster never takes new signals.
+
+The resource ID comes from **Resource ID Path**, or from a top-level `resource_id` key when no path is set. A CloudWatch alarm falls back to its alarm ARN when neither finds a value. The **Resource** field (a display name) isn't used. So, for a webhook source:
+
+- Map **Resource ID Path** so repeats of one fault group even when their titles vary, and so the same alert on two resources stays apart.
+- Map **Service Path** only to a value that names one service, such as `checkout-api`. A broad value like `prod` joins unrelated faults into one cluster.
+
 ## Noise suppression
 
 Before a raw event becomes a signal, Pulse runs four checks in order. The first match drops it.
@@ -44,9 +58,9 @@ Before a raw event becomes a signal, Pulse runs four checks in order. The first 
 | Snooze | Events matching a snooze someone set. | None. |
 | Verdict | Repeats of a pattern CloudThinker learned is noise while investigating. The quiet window grows from 6 hours to 24 hours to 7 days. | Critical and high events always pass. |
 
-The timestamp is the event's own time: for a webhook, the payload's `timestamp` field (or the field you mapped), or the time Pulse received it when there's none. For example, a tool that retries an alert 20 minutes later with its original timestamp is dropped as a duplicate. Two sends with no timestamp, a minute apart, are not.
+The timestamp is the event's own time: for a webhook, the field **Timestamp Path** points to, or a top-level `timestamp` key when no path is set. When that field is missing or isn't a date Pulse can read, Pulse uses the time it received the event. For example, a tool that retries an alert 20 minutes later with its original timestamp is dropped as a duplicate. Two sends with no timestamp, a minute apart, are not.
 
-Dedup counts each dropped repeat on the original signal. Rate limit, Snooze and Verdict keep the event as a suppressed signal instead of deleting it. Suppressed signals don't join clusters. To see how many there are, hover the funnel at the top of **Resolve → Pulse**, which counts every raw event that arrived, or open **Resolve → Insights → Pulse analysis** for **Noise suppressed** and **Top noisy sources**. See [Pulse Analytics](/guide/pulse/analytics).
+Dedup counts each dropped repeat on the original signal. Rate limit, Snooze and Verdict keep the event, marked suppressed, instead of deleting it. Suppressed events don't join clusters. To see how many there are, hover the funnel at the top of **Resolve → Pulse**, which counts every raw event that arrived, or open **Resolve → Insights → Pulse analysis** for **Noise suppressed** and **Top noisy sources**. See [Pulse Analytics](/guide/pulse/analytics).
 
 Learned Verdict patterns aren't listed anywhere you can edit. Three things end one early: a critical or high event with the same pattern, which passes and clears it; **Unsnooze** on a matching snoozed signal, which also clears it; or the quiet window running out, after 7 days at most.
 
@@ -82,7 +96,7 @@ After a signal joins its cluster, CloudThinker classifies it. A signal judged **
 | **Escalate** | Cluster panel | Sends the cluster to triage. Hidden while an open incident holds it. |
 | **Attach to incident...** | Cluster panel | Links the cluster to an incident you pick. Always available. On a cluster that's already routed, it adds a second link: the cluster stays with its first incident too. |
 | **Resolve** | Cluster panel | Closes the cluster for good. Hidden while routed. |
-| **Snooze** | **Snooze** button at the bottom of a signal's panel, when you open a signal that isn't part of a cluster | Mutes matching signals for **1 hour**, **4 hours**, **1 day** or **Forever**. Click **Unsnooze** to undo. |
+| **Snooze** | **Snooze** button at the bottom of a signal's panel. It shows only on a signal row that isn't in a cluster, such as a suppressed signal. A cluster panel and its **Cluster members** list don't offer it. | Mutes matching signals for **1 hour**, **4 hours**, **1 day** or **Forever**. Click **Unsnooze** to undo. |
 
 A snooze on a signal that names a resource mutes similar alerts on that resource only. Otherwise it mutes every alert with the same source and event type, so check the hint in the menu before you pick a duration. A **Forever** snooze never expires: matching alerts stay muted until someone clicks **Unsnooze** on that signal.
 

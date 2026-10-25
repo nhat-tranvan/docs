@@ -4,7 +4,7 @@ description: "Send alerts from a monitoring tool into Resolve with a webhook, ma
 icon: webhook
 ---
 
-A webhook signal is a URL that your monitoring tool calls each time an alert fires, so Resolve sees the alert within seconds. You create one per tool, map the tool's JSON fields to a title, severity, and service, and decide whether CloudThinker starts a root cause analysis (RCA) on its own.
+A webhook is a URL that your monitoring tool calls each time an alert fires, so Resolve sees the alert within seconds. You create one per tool, map the tool's JSON fields to a title, severity, and service, and decide whether CloudThinker starts a root cause analysis (RCA) on its own.
 
 ## How an alert flows
 
@@ -14,11 +14,11 @@ An alert that reaches the webhook doesn't become an incident directly. It goes t
 flowchart LR
     A["Monitoring tool"] -->|POST| B["Webhook URL"]
     B --> C["Pulse: suppress noise, group into clusters"]
-    C -->|actionable| D["Incident"]
-    D -->|Auto-investigate on| E["RCA starts"]
+    C -->|"actionable, Auto-investigate on"| D["Triage"]
+    D --> E["Incident and RCA"]
 ```
 
-A **signal** is one raw event Pulse received. Pulse marks some signals as suppressed (noise) and groups the rest into clusters. A **cluster** is a group of related signals that Pulse treats as one problem. Only an actionable cluster turns into an incident.
+A **signal** is an event that survived noise suppression. A **cluster** is a group of related signals that Pulse treats as one problem. Only a cluster that holds an actionable signal goes to triage, which decides whether it becomes an incident.
 
 ## Before you start
 
@@ -46,10 +46,10 @@ A **signal** is one raw event Pulse received. Pulse marks some signals as suppre
   </Step>
 </Steps>
 
-**Success state:** a dialog shows the **Webhook URL**, the secret under **Authentication Setup**, and **Integration Examples** with **cURL**, **JavaScript**, **Python**, and **Node.js** tabs. Copy the URL and secret now: the secret is shown only once. The same dialog shows a **Setup Guide** for your tool: follow it to paste them in. The **cURL** tab is the fastest way to send a test.
+**Success state:** a dialog shows the **Webhook URL**, the **Secret Key** under **Authentication Setup**, and **Integration Examples** with **cURL**, **JavaScript**, **Python**, and **Node.js** tabs. Copy the URL and the **Secret Key** now: the key is shown only once. The same dialog shows a **Setup Guide** for your tool: follow it to paste them in. The **cURL** tab is the fastest way to send a test.
 
 <Tip>
-Copy the secret before you click **Done**. If you lose it, go to **Resolve → Integrations**, open the tool, and under **Signals to Resolve** open the webhook row's **Manage** menu (**⋯**) → **Regenerate credentials**. That invalidates the current token and secret. The token is the identifier in the **Webhook URL** (it isn't a credential), so the URL changes too. Every tool using the webhook needs the new URL and secret.
+Copy the **Secret Key** before you click **Done**. If you lose it, go to **Resolve → Integrations**, open the tool, and under **Signals to Resolve** open the webhook row's **Manage** menu (**⋯**) → **Regenerate credentials**. That replaces both the **Webhook URL** and the **Secret Key**, and the old pair stops working at once. Every tool using the webhook needs the new URL and key.
 </Tip>
 
 ## Map the fields
@@ -65,8 +65,8 @@ Each mapping field takes a path into the alert's JSON. Only **Title Path** is re
 | **Title Path** | The incident title. Required. |
 | **Severity Path** | The severity level, translated by **Severity Mapping**. |
 | **Description Path** | The incident description. |
-| **Service Path** | The affected service. Helps Pulse group related alerts. |
-| **Resource ID Path** | The affected resource's identifier. |
+| **Service Path** | The affected service. Signals that name the same service can join one cluster, so use one service name, not a broad value like `prod`. |
+| **Resource ID Path** | The affected resource's identifier. Repeats with the same resource ID join one cluster. Left empty, CloudThinker reads a top-level `resource_id` key. See [How signals join a cluster](/guide/pulse/clusters#how-signals-join-a-cluster). |
 | **Resource Name Path** | The affected resource's name. |
 | **Timestamp Path** | When the event started, as an ISO 8601 time. Left empty, CloudThinker reads a top-level `timestamp` key. With neither, or a value it can't parse, it uses the time the delivery arrived. |
 
@@ -120,21 +120,17 @@ If your tool isn't listed, use [Custom source](/guide/incident/webhook-integrati
 | **API Key** | The key in a header you name | The tool only supports API key headers, like CloudWatch through EventBridge. Set **API Key Header** and an optional **Key Prefix**. |
 | **No Authentication** | Nothing | Only for a quick test. Anyone with the URL could send alerts. |
 
+The dialog names the credential after the method you pick: **Secret Key** for **Bearer Token**, **HMAC Secret** for **HMAC Signature**, and **API Secret** for **API Key**. It's the same credential, shown once either way.
+
 ## Decide when RCA starts
 
-**Auto-investigate** is on by default. CloudThinker starts one root cause investigation when this webhook creates an incident. Turn it off and CloudThinker investigates only when someone asks.
+**Auto-investigate** is on by default: this webhook's actionable clusters go to triage, which opens an incident and investigates it. Turn it off and its alerts stay in Pulse until someone clicks **Escalate** and **Send to triage**. With **Only from a minimum severity**, pick a floor: **Info and above**, **Low and above**, **Medium and above**, **High and above**, or **Critical only**. Alerts below it still group with related alerts, but don't start triage on their own.
 
-| Setting | Effect |
-|---|---|
-| **Auto-investigate** off | No automatic RCA from this webhook. |
-| **Auto-investigate** on | Every incident from this webhook gets an RCA. |
-| **Auto-investigate** on, with **Only from a minimum severity** | Pick a floor: **Info and above**, **Low and above**, **Medium and above**, **High and above**, or **Critical only**. Alerts below it still group with related alerts, but get no automatic RCA. |
+[What starts an investigation](/guide/incident/settings#what-starts-an-investigation) shows how these options combine with **On duty** and manual starts.
 
 <Note>
 Each automatic investigation is billed in credits. Set a minimum severity, or a [Credit limit](/guide/billing/credit-limits), before you connect a noisy tool.
 </Note>
-
-The **On duty** switch in the **Resolve → Investigation** header also has to be on. When it shows **Paused**, incidents still open, but no RCA starts until someone starts it. See [Resolve settings](/guide/incident/settings).
 
 **Send directly to CloudThinker** (on the **Configure** step, off by default) skips Pulse filtering and grouping. CloudThinker then judges each event on its own. Leave it off unless the tool already deduplicates its alerts.
 
@@ -170,8 +166,9 @@ Test one alert for each severity row you rely on. With the Datadog example above
 | Response | When |
 |---|---|
 | `200` with `"success": true` | The delivery was accepted. |
-| `401` or `403` | Credentials are missing or wrong, or the webhook is disabled. |
-| `404` | The webhook URL doesn't exist. |
+| `400` | The webhook is paused or disabled. Its row under **Signals to Resolve** shows **Paused**. |
+| `401` | The auth header is missing, or the URL isn't a current **Webhook URL** (mistyped, or replaced by **Regenerate credentials**). |
+| `403` | The secret or signature is wrong. |
 | `413` | The body is larger than 1 MB. |
 | `429` | Too many requests, or too many failed auth attempts: after 10 failures within 15 minutes, the webhook rejects requests until that 15-minute window ends. Retry after the time in the `Retry-After` header when it's present. |
 
@@ -191,7 +188,7 @@ Pulse treats a delivery as a duplicate when its source, resource, title, severit
 
 <AccordionGroup>
   <Accordion title="The tool reports 401 or 403">
-    **Cause:** the auth header doesn't match the **Auth Method**. **Check:** the header name and secret in your tool against **Authentication Setup**. **Fix:** paste the secret again, or use **Regenerate credentials** in the webhook row's **Manage** menu under **Resolve → Integrations**.
+    **Cause:** the auth header doesn't match the **Auth Method**, or (for a `401`) the tool still sends to an old **Webhook URL**. **Check:** the URL, and the header name and secret in your tool against **Authentication Setup**. **Fix:** paste the secret again, or use **Regenerate credentials** in the webhook row's **Manage** menu under **Resolve → Integrations**.
   </Accordion>
   <Accordion title="Delivery succeeds but nothing appears in Pulse">
     **Cause:** Pulse suppressed the alert as noise, counted it as a duplicate of an earlier signal, or the time window hides it. **Check:** widen the window on **Resolve → Pulse**, then hover the funnel at the top to see how many events were suppressed. If you sent the same alert twice within a minute, look for the earlier signal: its count went up instead (see [Limits and responses](#limits-and-responses)). **Fix:** see [Noise suppression](/guide/pulse/clusters#noise-suppression) for each check.
@@ -199,8 +196,8 @@ Pulse treats a delivery as a duplicate when its source, resource, title, severit
   <Accordion title="Signals arrive with an empty title or the wrong severity">
     **Cause:** a path doesn't match the payload, or the tool's severity value has no mapping row. **Fix:** compare the paths against a real payload, then add the missing value to **Severity Mapping**.
   </Accordion>
-  <Accordion title="An incident opened but no RCA started">
-    **Cause:** **Auto-investigate** is off, the severity is below the floor, or **On duty** shows **Paused**. **Fix:** check all three, or start the investigation by hand.
+  <Accordion title="An alert reached Pulse but no RCA started">
+    **Cause:** **Auto-investigate** is off, the severity is below the floor, or **On duty** shows **Paused**. **Fix:** check all three against [What starts an investigation](/guide/incident/settings#what-starts-an-investigation), or click **Escalate** and **Send to triage** on the cluster. If an incident is already open, click **Investigate** on it.
   </Accordion>
 </AccordionGroup>
 

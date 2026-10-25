@@ -10,10 +10,10 @@ CloudThinker has no general REST API for reading resources or recommendations; i
 
 | You want to | Use | Who sets it up |
 | --- | --- | --- |
-| Let an outside system (for example ServiceNow) ask a CloudThinker agent a question and read the answer | [A2A API for outside callers](#a2a-api-for-outside-callers) | A workspace **Developer** or **Admin**, on Scale, Scale+ or Enterprise |
+| Let an outside system (for example ServiceNow) ask a CloudThinker agent a question and read the answer | [A2A API for outside callers](#a2a-api-for-outside-callers) | A workspace **Developer** or **Admin**, on Scale, Scale Plus or Enterprise |
 | Have an external system run an Automation, or send an alert to Resolve that can open an incident, with one POST | [Webhooks](/guide/webhooks/overview) | A workspace **Admin** (both kinds) |
-| Read incidents, costs, code reviews and security findings from a Claude chat, and start agent runs there | [Claude connector](/guide/mcp/overview) | Each user, after a Claude organization owner adds it on Team or Enterprise |
-| Add, suspend and remove CloudThinker members from Okta or Microsoft Entra ID | [SCIM provisioning](/guide/security/scim) | The organization **Owner**, on Scale, Scale+ or Enterprise |
+| Read incidents, costs, code reviews and security findings from a Claude chat, and start agent runs there (starting runs needs the Developer or Admin role; see [What Claude can do](/guide/mcp/overview#what-claude-can-do)) | [Claude connector](/guide/mcp/overview) | Each user, after a Claude organization owner adds it on Team or Enterprise |
+| Add, suspend and remove CloudThinker members from Okta or Microsoft Entra ID | [SCIM provisioning](/guide/security/scim) | The organization **Owner**, on Scale, Scale Plus or Enterprise |
 | Run CloudThinker from a terminal, a shell script or a CI pipeline | [CLI](/guide/cli/overview) | Any user with a CloudThinker login |
 
 <Note>
@@ -28,7 +28,7 @@ A typical case: your platform team wants ServiceNow to ask CloudThinker about an
 
 ### Before you start
 
-- The organization is on **Scale**, **Scale+** or **Enterprise**. See [Pricing](/guide/billing/pricing).
+- The organization is on **Scale**, **Scale Plus** or **Enterprise**. See [Pricing](/guide/billing/pricing).
 - You have the **Developer** or **Admin** workspace role, which can edit agents. See [Workspace users](/guide/workspace-users).
 - You know which agent should answer: CloudThinker itself or one of your Custom Agents. Each outside caller is tied to one agent in one workspace.
 
@@ -133,14 +133,7 @@ Caller ◄── GetTask (Bearer token) ── task state and the answer
       -d '{"jsonrpc": "2.0", "id": 2, "method": "GetTask", "params": {"id": "<task-id>"}}'
     ```
 
-    | `status.state` | Meaning |
-    | --- | --- |
-    | `TASK_STATE_SUBMITTED` | Queued. Poll again. |
-    | `TASK_STATE_WORKING` | The agent is working. Poll again. |
-    | `TASK_STATE_COMPLETED` | Done. The answer is the `text` in `result.artifacts[].parts[]`. |
-    | `TASK_STATE_FAILED` | The run failed. Ask again or check the conversation in CloudThinker. |
-    | `TASK_STATE_REJECTED` | CloudThinker refused the run. |
-    | `TASK_STATE_CANCELED` | The run was stopped, for example because the caller was revoked. |
+    Stop polling when `status.state` is `TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, `TASK_STATE_REJECTED` or `TASK_STATE_CANCELED`. On `TASK_STATE_COMPLETED`, the answer is the `text` in `result.artifacts[].parts[]`. See [Task fields](#task-fields) for every state.
   </Step>
 </Steps>
 
@@ -151,7 +144,7 @@ Caller ◄── GetTask (Bearer token) ── task state and the answer
 | Access | Read-only. The agent answers questions but doesn't make changes for an outside caller. |
 | Identity | The run uses the workspace System user. The conversation shows "Asked by: &lt;client name&gt;" and marks it as an outside caller. |
 | Billing | Credits are charged to the workspace that owns the caller. |
-| Limits | Each caller runs at most 3 questions at once by default. The **Monthly credit limit** is set when you add the caller, and is empty (no limit) by default. See [Errors](#errors) for what a refused ask returns. |
+| Limits | Each caller runs at most 3 questions at once. The **Monthly credit limit** is set when you add the caller, and is empty (no limit) by default. See [A2A errors](#a2a-errors) for what a refused ask returns. |
 | Discovery | The agent's Agent Card lists the `workspaceClient` OAuth scheme, so A2A clients can find the auth method. |
 
 ### Rotate, pause or revoke
@@ -167,6 +160,196 @@ In **Agents → Sharing → Outside callers**, each caller's row has these contr
 <Warning>
 Revoking a caller is permanent. To stop traffic without losing the caller, pause it instead.
 </Warning>
+
+## A2A reference
+
+Everything an outside caller can send and get back. All calls go to `https://app.cloudthinker.io`.
+
+### Endpoints
+
+| Method and path | Auth | What it does |
+| --- | --- | --- |
+| `POST /api/a2a/oauth/token` | Client ID and secret | Issues an access token |
+| `POST /api/a2a` | `Authorization: Bearer <access token>` | JSON-RPC 2.0 endpoint for `SendMessage`, `GetTask` and `CancelTask` |
+| `GET /api/a2a/card` | None | The public Agent Card: the agent URL, the token URL and the supported auth schemes |
+| `GET /api/a2a/.well-known/agent-card.json` | `Authorization: Bearer <access token>` | The extended Agent Card for your caller: the answering agent's name, its workspace, and one `ask` skill that lists the workspace's connection kinds |
+
+You can send an optional `A2A-Version` header on calls to `/api/a2a`. CloudThinker speaks A2A `1.0` and also accepts `1` and `1.0.0`. Any other value fails with JSON-RPC error `-32009`.
+
+### Token request
+
+`POST /api/a2a/oauth/token` with `Content-Type: application/x-www-form-urlencoded`.
+
+| Field | Required | Value |
+| --- | --- | --- |
+| `grant_type` | Yes | `client_credentials` |
+| Client ID and secret | Yes | HTTP Basic auth (client ID as the user, secret as the password), or the form fields `client_id` and `client_secret`. Basic auth wins when both are sent. |
+
+Client IDs start with `cta_`. A success returns `200` with `Cache-Control: no-store`:
+
+```json
+{"access_token": "eyJ...", "token_type": "Bearer", "expires_in": 3600}
+```
+
+Errors return an OAuth 2.0 body, `{"error": "...", "error_description": "..."}`:
+
+| HTTP | `error` | Cause |
+| --- | --- | --- |
+| 400 | `invalid_request` | The body isn't `application/x-www-form-urlencoded` |
+| 400 | `unsupported_grant_type` | `grant_type` isn't `client_credentials` |
+| 401 | `invalid_client` | The ID or secret is missing or wrong, or the caller was revoked. When you used Basic auth, the response carries `WWW-Authenticate: Basic realm="a2a"`. |
+
+A paused caller can still get a token. Its `SendMessage` calls fail with `client_inactive` until you turn it back on.
+
+### JSON-RPC envelope
+
+Every call to `POST /api/a2a` is a JSON-RPC 2.0 request:
+
+```json
+{"jsonrpc": "2.0", "id": 1, "method": "SendMessage", "params": {}}
+```
+
+`id` can be a string, a number or `null`, and comes back unchanged. A success has a `result`; a failure has an `error` (see [A2A errors](#a2a-errors)).
+
+### SendMessage
+
+Starts one agent run, or returns the existing task when the `messageId` was sent before.
+
+| Field in `params` | Required | Notes |
+| --- | --- | --- |
+| `message.messageId` | Yes | 1 to 128 characters. Unique per question. Resending the same ID returns the first task and starts no new run. |
+| `message.parts` | Yes | A list of parts. CloudThinker joins the `text` of every part into the question. Other part fields are ignored. |
+| `message.role` | No | Defaults to `ROLE_USER` |
+| `message.contextId` | No | The `contextId` of an earlier task from this caller. The question continues that conversation. An unknown or someone else's `contextId` fails with `task_not_found`. |
+| `message.metadata`, `metadata` | No | Accepted and ignored for outside callers |
+| `configuration` | No | Accepted. Push notification settings are ignored for outside callers, so poll `GetTask`. |
+
+The question is capped at 8,000 characters; longer text is cut. A question with no text, or one that contains a secret such as an access key, is refused with `blocked_by_guardrail`.
+
+The `result` wraps the task in a `task` field:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "task": {
+      "id": "<task-id>",
+      "contextId": "<context-id>",
+      "status": {"state": "TASK_STATE_SUBMITTED", "timestamp": "2026-10-25T09:00:00Z"},
+      "artifacts": [],
+      "metadata": {"workspaceId": "<workspace-id>", "failureKind": ""}
+    }
+  }
+}
+```
+
+### GetTask
+
+| Field in `params` | Required | Notes |
+| --- | --- | --- |
+| `id` | Yes | The task `id` from `SendMessage`. 1 to 128 characters. |
+
+The `result` is the task itself, with no `task` wrapper. Once the state is `TASK_STATE_COMPLETED`, the answer is in one artifact:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "id": "<task-id>",
+    "contextId": "<context-id>",
+    "status": {"state": "TASK_STATE_COMPLETED", "timestamp": "2026-10-25T09:03:12Z"},
+    "artifacts": [
+      {
+        "artifactId": "<task-id>:answer",
+        "name": "answer",
+        "parts": [{"text": "The checkout-api errors started after ..."}]
+      }
+    ],
+    "metadata": {"workspaceId": "<workspace-id>", "failureKind": ""}
+  }
+}
+```
+
+CloudThinker redacts secrets from the answer text before it returns it. When a run fails, is rejected or is canceled, `status.message.parts[].text` says why, and `metadata.failureKind` holds a short code.
+
+### CancelTask
+
+Stops a task that hasn't finished. It takes the same `params` as `GetTask` and returns the task in the same shape. Canceling a task that already reached a final state fails with `task_not_cancelable`.
+
+### Task fields
+
+| Field | Meaning |
+| --- | --- |
+| `id` | The task ID. Use it with `GetTask` and `CancelTask`. |
+| `contextId` | The conversation the task belongs to. Send it as `message.contextId` to ask a follow-up. |
+| `status.state` | One of the states below |
+| `status.timestamp` | When the state last changed |
+| `status.message` | Present when the run failed, was rejected or was canceled. Its `text` part explains why. |
+| `artifacts` | Empty until the state is `TASK_STATE_COMPLETED`, then one artifact named `answer` |
+| `metadata.workspaceId` | The workspace that answered |
+| `metadata.failureKind` | Empty on success. A short code when the run didn't finish. |
+
+| `status.state` | Final | Meaning |
+| --- | --- | --- |
+| `TASK_STATE_SUBMITTED` | No | Queued. Poll again. |
+| `TASK_STATE_WORKING` | No | The agent is working. Poll again. |
+| `TASK_STATE_INPUT_REQUIRED` | No | Not returned to outside callers. Their runs never wait on a person: a step that would need approval is declined, and the agent answers without it. |
+| `TASK_STATE_COMPLETED` | Yes | Done. Read the `answer` artifact. |
+| `TASK_STATE_FAILED` | Yes | The run failed. Ask again or check the conversation in CloudThinker. |
+| `TASK_STATE_REJECTED` | Yes | CloudThinker refused the run, for example because the workspace hit its credit limit. |
+| `TASK_STATE_CANCELED` | Yes | The run was stopped by `CancelTask`, or because the caller was revoked. |
+
+### A2A errors
+
+A failed JSON-RPC call returns an `error` object. The reason is in `error.data.reason`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32600,
+    "message": "...",
+    "data": {"reason": "busy", "retry_after": 30}
+  }
+}
+```
+
+| Method | HTTP | `error.code` | `error.data.reason` | Meaning |
+| --- | --- | --- | --- | --- |
+| Any | 401 | `-32600` | `invalid_token` | The token is missing, expired or revoked. The response carries `WWW-Authenticate: Bearer realm="a2a"`. |
+| `SendMessage` | 403 | `-32600` | `client_inactive` | The caller is paused |
+| `SendMessage` | 403 | `-32600` | `client_budget_reached` | The caller hit its monthly credit limit |
+| `SendMessage` | 403 | `-32600` | `plan_required` | The organization isn't on Scale, Scale Plus or Enterprise |
+| `SendMessage` | 400 | `-32600` | `blocked_by_guardrail` | The question has no text, or contains a secret |
+| `SendMessage` | 429 | `-32600` | `busy` | 3 questions are already running. Retry after the `Retry-After` header (30 seconds), also in `error.data.retry_after`. |
+| `SendMessage`, `GetTask`, `CancelTask` | 404 | `-32001` | `task_not_found` | No task or context with this ID for this caller |
+| `CancelTask` | 409 | `-32002` | `task_not_cancelable` | The task already reached a final state |
+
+The envelope itself can fail before CloudThinker reads the method:
+
+| HTTP | `error.code` | Cause |
+| --- | --- | --- |
+| 400 | `-32700` | The body isn't valid JSON |
+| 400 | `-32600` | The body isn't a JSON-RPC 2.0 request |
+| 400 | `-32602` | `params` don't match the method, for example a missing `messageId` |
+| 400 | `-32009` | Unsupported `A2A-Version` header |
+| 404 | `-32601` | Unknown method |
+| 500 | `-32603` | Internal error. Retry with the same `messageId`. |
+
+### Limits
+
+| Item | Limit |
+| --- | --- |
+| Access token | 1 hour |
+| Questions running at once, per caller | 3 |
+| Monthly credit limit | Set per caller, none by default |
+| Question length | 8,000 characters, longer text is cut |
+| `messageId`, `contextId`, task `id` | 128 characters |
+| Streaming and push notifications | Not available to outside callers. Poll `GetTask`. |
+| Access | Read-only answers |
 
 ## Webhooks
 
@@ -184,7 +367,7 @@ Add it in claude.ai, the Claude desktop app or Claude Code. Only Claude clients 
 
 ## SCIM provisioning
 
-SCIM 2.0 lets Okta or Microsoft Entra ID add, suspend and remove CloudThinker members. You need **Scale**, **Scale+** or **Enterprise**, an active [SSO connection](/guide/security/sso) with a verified domain, and the organization **Owner** role. While SCIM is on, member invitations from CloudThinker are turned off. See [SCIM provisioning](/guide/security/scim).
+SCIM 2.0 lets Okta or Microsoft Entra ID add, suspend and remove CloudThinker members. You need **Scale**, **Scale Plus** or **Enterprise**, an active [SSO connection](/guide/security/sso) with a verified domain, and the organization **Owner** role. While SCIM is on, member invitations from CloudThinker are turned off. See [SCIM provisioning](/guide/security/scim).
 
 ## CLI
 
@@ -197,23 +380,7 @@ cloudthinker login
 
 If you'd rather not pipe a script into `sh`, download the archive from the [releases page](https://github.com/cloudthinker-ai/cloudthinker-cli/releases). Each archive has a SHA-256 checksum next to it.
 
-For scripts and CI, `cloudthinker chat -p "Check production health"` prints one answer to stdout, and works on every plan, including Free. The interactive agent (`cloudthinker`) needs Team, Scale, Scale+ or Enterprise. The CLI is in preview, so command names and flags may change. See [CLI](/guide/cli/overview).
-
-## Errors
-
-Token errors use the OAuth `error` field. `SendMessage` and `GetTask` errors are JSON-RPC errors, with the reason in `error.data.reason`.
-
-| Call | HTTP | Value | Meaning |
-| --- | --- | --- | --- |
-| Token | 400 | `unsupported_grant_type` | `grant_type` isn't `client_credentials` |
-| Token | 400 | `invalid_request` | The body isn't `application/x-www-form-urlencoded` |
-| Token | 401 | `invalid_client` | Wrong client ID or secret, or the caller was revoked |
-| `SendMessage`, `GetTask` | 401 | `invalid_token` | The token is missing, expired or revoked |
-| `SendMessage` | 403 | `client_inactive` | The caller is paused |
-| `SendMessage` | 403 | `client_budget_reached` | The caller hit its monthly credit limit |
-| `SendMessage` | 403 | `plan_required` | The organization isn't on Scale, Scale+ or Enterprise |
-| `SendMessage` | 429 | `busy` | 3 questions are already running. Retry after the `Retry-After` header (30 seconds). |
-| `GetTask` | 404 | `task_not_found` | No task with this ID for this caller |
+For scripts and CI, `cloudthinker chat -p "Check production health"` prints one answer to stdout, and works on every plan, including Free. The interactive agent (`cloudthinker`) needs Team, Scale, Scale Plus or Enterprise. The CLI is in preview, so command names and flags may change. See [CLI](/guide/cli/overview).
 
 ## Troubleshooting
 

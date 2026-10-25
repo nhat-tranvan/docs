@@ -13,14 +13,14 @@ Every Resolve problem sits at one stage of the path from alert to fix. Find the 
 | **Resolve → Pulse** shows nothing from a source | Delivery | [Alerts not arriving](#alerts-not-arriving) |
 | Alerts arrive, but each one is its own cluster, or none appears | Grouping | [Clusters not forming](#clusters-not-forming) |
 | Clusters appear, but no incident is created or no investigation starts | Triage | [Investigation not starting](#investigation-not-starting) |
-| The incident sits in **AI is handling** or **Needs your decision** | Investigation | [Investigation stuck](#investigation-stuck) |
+| The incident sits in **AI is handling**, or in **Needs your decision** as **On Hold**, **Investigation stopped**, or waiting on an approval. **Cause found** there is a finished result, not a stuck one. | Investigation | [Investigation stuck](#investigation-stuck) |
 | A fix is proposed but never applied | Remediation | [Runbook not running](#runbook-not-running) |
 | An investigation ran, but no updates show in Slack or Teams | Reporting | [No updates in Slack or Teams](#no-updates-in-slack-or-teams) |
 
 Two quick checks rule out most problems before you dig in:
 
 - **Resolve → Integrations** shows a readiness badge per platform. Anything other than **Ready** points at delivery. See [readiness badges](/guide/pulse/setup#read-the-readiness-badge).
-- The header of **Resolve → Investigation** shows **On duty** or **Paused**. **Paused** means nothing is investigated automatically. See [Resolve settings](/guide/incident/settings).
+- The header of **Resolve → Investigation** shows **On duty** or **Paused**. **Paused** means incidents are still filed as **Open**, but CloudThinker doesn't triage or investigate them on its own. See [What starts an investigation](/guide/incident/settings#what-starts-an-investigation).
 
 ## Alerts not arriving
 
@@ -28,16 +28,16 @@ A connection that shows as healthy doesn't prove alerts reach Resolve. A platfor
 
 <AccordionGroup>
   <Accordion title="Pulse shows No signals yet">
-    **Cause:** the monitoring tool never sent, or sent to the wrong URL. **Check:** the delivery log in your monitoring tool, and the platform's signal row on **Resolve → Integrations**. If the tool's log shows `401` or `403`, the secret or URL is wrong. **Fix:** copy the webhook URL from the platform's **Signals to Resolve** section again, paste it into the tool, and fire a test alert. If you no longer have the secret, choose **Regenerate credentials** from the webhook's **...** menu and update the tool with the new URL and secret. Then open **Resolve → Pulse** and pick the **All** lane. Lanes are filters that choose which clusters you see, see [Pulse](/guide/pulse/overview#work-from-the-pulse-page).
+    **Cause:** the monitoring tool never sent, or sent to the wrong URL. **Check:** the delivery log in your monitoring tool, and the platform's source row on **Resolve → Integrations**. If the tool's log shows `401` or `403`, the secret or URL is wrong. **Fix:** copy the webhook URL from the platform's **Signals to Resolve** section again, paste it into the tool, and fire a test alert. If you no longer have the secret, choose **Regenerate credentials** from the webhook's **...** menu and update the tool with the new URL and secret. Then open **Resolve → Pulse** and pick the **All** lane. Lanes are filters that choose which clusters you see, see [Pulse](/guide/pulse/overview#work-from-the-pulse-page).
   </Accordion>
   <Accordion title="The platform shows Needs connection or Needs setup">
     | Badge | Cause | Fix |
     |---|---|---|
     | **Needs connection** | The platform needs a connection first, such as Slack, Teams or Jira Service Management. Webhook-only platforms, such as Amazon Web Services for CloudWatch alarms, never show it. | Connect the account in the platform's **Connection** section, then click **Add signal**. |
-    | **Needs setup** | There's no signal path yet. | Click **Add signal**. See [Connect Pulse sources](/guide/pulse/setup). |
+    | **Needs setup** | There's no signal path yet, or an enabled outcome under **What Resolve can do** has no target. Slack, Teams and Google Chat show it right after you connect, because **Post incident updates** is on by default with no channel. | Click **Add signal**, or pick a target for the outcome marked **Needs setup** (or switch it off). See [Connect Pulse sources](/guide/pulse/setup) and [Integrations](/guide/incident/integrations). |
   </Accordion>
   <Accordion title="The platform shows Needs attention or Partially ready">
-    **Cause:** a connection is unhealthy, or one signal path fails while others work. **Check:** open the platform and read each signal row's hint. **Fix:** follow the hint. For AWS polling, check the [AWS connection](/guide/connections/aws) and its permissions.
+    **Cause:** a connection is unhealthy, or one signal path fails while others work. **Check:** open the platform and read each source row's hint. **Fix:** follow the hint. For AWS polling, check the [AWS connection](/guide/connections/aws) and its permissions.
   </Accordion>
   <Accordion title="The tool reports success, but nothing shows in Pulse">
     **Cause:** an HTTP success only proves delivery. Pulse can still drop the event as noise: an exact repeat (same title, severity and resource, with an event timestamp in the same minute as an event seen in the last hour), an event past Pulse's noise limit of 100 per minute from one source, or a match for a snooze. The noise limit always lets Critical and High events through. **Check:** the **All** lane, and any snooze on that source or resource. **Fix:** send a test alert with a different title, or click **Unsnooze**. See [noise suppression](/guide/pulse/clusters#noise-suppression).
@@ -48,18 +48,18 @@ A connection that shows as healthy doesn't prove alerts reach Resolve. A platfor
   <Accordion title="The tool reports 429">
     **Cause:** one of three things. The source got more than 10 times its hourly rate limit, 10 failed authentication attempts arrived within 15 minutes (common right after a secret is rotated), or CloudThinker was briefly busy. **Check:** whether `401` or `403` responses came before the `429` in the tool's delivery log. **Fix:** for an auth lockout, put the current secret and URL in the tool, then wait for the 15-minute window to clear. For the rate limit, raise **Rate limit (requests per hour)**. Otherwise retry after the `Retry-After` header. See the [custom source Responses table](/guide/incident/webhook-integrations/custom-source#responses).
   </Accordion>
-  <Accordion title="Slack or Teams mentions aren't picked up">
+  <Accordion title="Slack or Teams messages aren't picked up">
     **Cause:** the channel isn't on the watch list. **Fix:** on the Slack or Teams platform under **Resolve → Integrations**, add the channel in **Listen for incidents**.
   </Accordion>
 </AccordionGroup>
 
 ## Clusters not forming
 
-A cluster is a group of related signals that Pulse treats as one problem. Every signal lands in a cluster, even a cluster of one. A repeat of the same fault joins the open cluster for that fault, matched on the source, the alert type and the resource ID.
+A cluster is a group of related signals that Pulse treats as one problem. Every signal that survives noise suppression lands in a cluster, even a cluster of one. A new signal joins a recent open cluster when it shares a resource ID or a title with a signal there, or failing that, the same **Service**. [How signals join a cluster](/guide/pulse/clusters#how-signals-join-a-cluster) has the full rule.
 
 <AccordionGroup>
   <Accordion title="Every alert opens its own cluster">
-    **Cause:** the alerts carry no resource ID, or a different one each time, so Pulse can't tell they're the same fault. Pulse never joins two alerts by title alone when their resource IDs differ. **Check:** in **Resolve → Pulse**, open each signal in the cluster and expand **Raw payload** to compare their resource IDs. **Fix:** for a [custom source](/guide/incident/webhook-integrations/custom-source), open the source's **...** menu, choose **Edit**, and set **Resource ID Path** to a stable ID in the payload, like `alert.resource.id`. The **Resource** field in setup is only a display name and doesn't affect grouping.
+    **Cause:** the alerts carry no resource ID, or a different one each time, so Pulse can't tell they're the same fault. A shared title doesn't join two alerts whose resource IDs differ, and alerts with no **Service** (or `unknown`) can't join by service. **Check:** in **Resolve → Pulse**, open each signal in the cluster and expand **Raw payload** to compare their resource IDs. **Fix:** for a [custom source](/guide/incident/webhook-integrations/custom-source), open the source's **...** menu, choose **Edit**, and set **Resource ID Path** to a stable ID in the payload, like `alert.resource.id`. The **Resource** field in setup is only a display name and doesn't affect grouping. To join different alerts about one service, also map **Service Path** to a single service name.
   </Accordion>
   <Accordion title="Alerts arrive but no cluster appears">
     **Cause:** the webhook has **Send directly to CloudThinker** on, which skips Pulse filtering and grouping. **Check:** open the webhook under **Resolve → Integrations**. **Fix:** turn it off unless the source is low volume and every event matters.
@@ -75,14 +75,17 @@ A cluster is a group of related signals that Pulse treats as one problem. Every 
 ## Investigation not starting
 
 <AccordionGroup>
+  <Accordion title="Alerts show in Pulse, but nothing is triaged or investigated">
+    **Cause:** **On duty** is paused. Pulse keeps detecting and grouping alerts and still files incidents as **Open**, but CloudThinker doesn't triage or investigate them on its own. **Check:** the header of **Resolve → Investigation**. **Fix:** turn **On duty** back on, which changes what happens to new alerts. Incidents already filed while paused still wait for someone to start them. To start one now, click **Investigate** on the incident, or click **Escalate** and **Send to triage** on a cluster in **Resolve → Pulse**.
+  </Accordion>
   <Accordion title="Incidents wait in Not started">
-    **Cause:** **On duty** is paused. Pulse still files incidents, but nothing is investigated automatically. **Check:** the header of **Resolve → Investigation**. **Fix:** turn **On duty** back on, then click **Investigate** on each incident filed while paused.
+    **Cause:** the incident has no investigation yet. **Fix:** select it in **Resolve → Investigation** and click **Investigate** (Admins only).
   </Accordion>
   <Accordion title="On duty is on, but one source never triggers an investigation">
-    **Cause:** that webhook has **Auto-investigate** off, or **Only from a minimum severity** is set above the alert's severity. Lower-severity alerts still group into clusters but don't start an investigation. **Fix:** open the webhook under **Resolve → Integrations** and adjust either option.
+    **Cause:** that webhook has **Auto-investigate** off, or **Only from a minimum severity** is set above the alert's severity. Lower-severity alerts still group into clusters but don't start triage on their own. **Fix:** open the webhook under **Resolve → Integrations** and adjust either option. The full rules are in [What starts an investigation](/guide/incident/settings#what-starts-an-investigation).
   </Accordion>
   <Accordion title="A cluster never became an incident">
-    **Cause:** the classifier judged its signals **Not actionable**, so they were suppressed before triage. See [noise suppression](/guide/pulse/clusters#noise-suppression). **Fix:** if you need it handled, open the cluster on **Resolve → Pulse** and click **Escalate** in the action bar of its detail panel, then **Send to triage**. Or use **Attach to incident...** to link it to an incident you pick.
+    **Cause:** classification runs after a signal joins its cluster. It judged the signals **Not actionable**, so the cluster was never sent to triage. The signals aren't suppressed: the cluster is there in the **All** lane. See [noise suppression](/guide/pulse/clusters#noise-suppression). **Fix:** if you need it handled, open the cluster on **Resolve → Pulse** and click **Escalate** in the action bar of its detail panel, then **Send to triage**. Or use **Attach to incident...** to link it to an incident you pick.
   </Accordion>
   <Accordion title="There's no Investigate button">
     Check each cause in turn:

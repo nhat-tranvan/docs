@@ -28,10 +28,10 @@ In about 10 minutes you create an alert endpoint, send it a test alert with `cur
   <Step title="Name it">
     Enter a **Source name**, for example `quickstart-test`, and click **Create endpoint**.
 
-    **Success state:** the dialog shows a **Webhook URL** and a bearer token, then says **Waiting for the first payload**.
+    **Success state:** the dialog shows a **Webhook URL** and a **Secret Key**, then says **Waiting for the first payload**.
   </Step>
-  <Step title="Copy the URL and token">
-    Copy both into a scratch file. The token is shown only here. If you lose it, see [Troubleshooting](#troubleshooting).
+  <Step title="Copy the URL and Secret Key">
+    Copy both into a scratch file. The **Secret Key** is shown only here. If you lose it, see [Troubleshooting](#troubleshooting).
   </Step>
 </Steps>
 
@@ -41,7 +41,7 @@ Keep the dialog open and run this from your terminal. Replace the two placeholde
 
 ```bash
 curl -X POST "<your-webhook-url>" \
-  -H "Authorization: Bearer <your-token>" \
+  -H "Authorization: Bearer <your-secret-key>" \
   -H "Content-Type: application/json" \
   -d '{
     "title": "Checkout API 5xx rate above 5%",
@@ -71,15 +71,15 @@ curl -X POST "<your-webhook-url>" \
     Click **Save mapping**.
   </Step>
   <Step title="Send the alert twice more, a minute apart">
-    Run the `curl` command again, wait at least one minute, and run it a third time. Repeats of the same fault join one cluster instead of creating new work.
+    Run the `curl` command again, wait at least one minute, and run it a third time. The repeats join the first signal's cluster instead of creating new work, because they share a title and a service. The payload has no `resource_id`, so title and service are what group them here. [Clusters](/guide/pulse/clusters#how-signals-join-a-cluster) has the full rule.
 
-    Every send becomes a signal, including the first one. The payload has no `timestamp` field, so Pulse uses the time it received each send. An identical send in the same minute as an earlier one is dropped as a duplicate, which is why you wait. Expect two or three signals, depending on whether the first two sends landed in the same minute.
+    Every send becomes a signal, including the first one. The payload has no top-level `timestamp` field, so Pulse uses the time it received each send. An identical send in the same minute as an earlier one is dropped as a duplicate, which is why you wait. Expect two or three signals, depending on whether the first two sends landed in the same minute.
   </Step>
 </Steps>
 
 ## Watch Pulse cluster it
 
-Pulse is Resolve's detection layer. A **signal** is an alert that survived noise suppression, and a **cluster** is a group of related signals Pulse treats as one problem.
+Pulse is Resolve's detection layer. A **signal** is an event that survived noise suppression, and a **cluster** is a group of related signals that Pulse treats as one problem.
 
 <Steps>
   <Step title="Open Pulse">
@@ -106,15 +106,18 @@ For a made-up alert, both triage outcomes are normal. A test alert about a servi
   <Step title="Find the incident">
     Go to **Resolve → Investigation**. If triage opened an incident, it's in the queue, under **AI is handling** while RCA runs. The row reads **Investigating** until the result is ready.
 
-    No incident? Click **Log Incident**. Enter the alert title in **What's happening?**, set **Severity** to **Critical**, and save. A logged incident waits for you to start it. See [Log an incident](/guide/incident/manual-logging) for the other fields.
+    No incident? Click **Log Incident**. Enter the alert title in **What's happening?**, set **Severity** to **Critical**, and save. A logged incident starts its investigation as soon as you save, even while **On duty** is **Paused**. See [Log an incident](/guide/incident/manual-logging) for the other fields.
   </Step>
   <Step title="Start RCA if it hasn't started">
-    Check the **On duty** switch in the page header. With **On duty**, RCA starts on its own for incidents from Pulse. With **Paused**, or for a logged incident, open it and click **Investigate**.
+    RCA starts on its own when triage opens an incident from Pulse, and a logged incident starts it as soon as you save. If the incident sits in **Not started**, open it and click **Investigate**. [What starts an investigation](/guide/incident/settings#what-starts-an-investigation) has the full rules.
   </Step>
   <Step title="Read the result">
     Open the incident. CloudThinker shows its verdict, confidence, the evidence it read, a timeline, and remediation suggestions.
 
-    **Success state:** the incident leaves **AI is handling** and lands in **Needs your decision**. With a connection that covers the alert, the row usually reads **Cause found**. With no connections, it reads **Investigation complete** or **Checks incomplete**, and the result says CloudThinker couldn't verify the cause.
+    **Success state:** the incident leaves **AI is handling**. With a connection that covers the alert, it lands in **Needs your decision** and the row usually reads **Cause found**. With no connections, expect one of two results:
+
+    - It lands in **Needs your decision** with **Investigation complete**, and the result says CloudThinker couldn't verify the cause.
+    - Its status becomes **Not Found**, because the evidence didn't support a root cause. A **Not Found** incident drops out of the queue, so copy the incident's URL from your browser before you leave the page. See [Investigation outcomes](/guide/incident/root-cause-analysis#investigation-outcomes).
   </Step>
 </Steps>
 
@@ -136,15 +139,15 @@ The test source keeps accepting alerts until you remove it.
 
     | Status | Usual cause |
     |---|---|
-    | `401` | The token is wrong or missing, or the URL was cut short. Check the `Authorization: Bearer` header and paste the full URL again. |
-    | `404` | The URL path is wrong. Copy the **Webhook URL** again. |
+    | `401` | The `Authorization` header is missing, or the URL isn't the current **Webhook URL** (mistyped, cut short, or replaced by **Regenerate credentials**). Check the header and paste the full URL again. |
+    | `403` | The **Secret Key** is wrong, or the header isn't in the form `Bearer <secret-key>`. Paste the key again. |
     | `422` | The body isn't valid JSON. |
     | `429` | Too many requests or failed sign-ins in a short time. Wait, then retry. |
 
     If the dialog says no field could be read, the body wasn't a JSON object: send `{...}`, not an array or plain text.
   </Accordion>
-  <Accordion title="I lost the token">
-    It isn't shown again. On the **Custom source** card, open the source row's **⋯** menu and click **Regenerate credentials**. The old token stops working, so update anything that already sends to it.
+  <Accordion title="I lost the Secret Key">
+    It isn't shown again. On the **Custom source** card, open the source row's **⋯** menu and click **Regenerate credentials**. That replaces both the **Webhook URL** and the **Secret Key**, and the old pair stops working at once, so update the URL and the key in anything that already sends to it.
   </Accordion>
   <Accordion title="Nothing shows up in Pulse">
     Switch to the **All** lane and widen the time window. Then check the funnel at the top of **Resolve → Pulse**: if the raw event count went up but no cluster appeared, suppression dropped the event, most often as a duplicate sent in the same minute. Change the `title` and send again.
@@ -158,7 +161,7 @@ The test source keeps accepting alerts until you remove it.
 
 <CardGroup cols={2}>
   <Card title="Connect a real source" icon="plug" href="/guide/incident/integrations">
-    Point Datadog, Grafana, PagerDuty, CloudWatch, or Slack alerts at Resolve.
+    Point Datadog, Grafana, PagerDuty, or CloudWatch alerts at Resolve, and watch the Slack channels where people report incidents.
   </Card>
   <Card title="Read an investigation" icon="magnifying-glass" href="/guide/incident/root-cause-analysis">
     What the verdict, confidence, and remediation queue mean.

@@ -70,7 +70,7 @@ The Automation's own on/off switch must be on, or the trigger won't start a run.
     Check **Field Mapping** and **Severity Mapping**. Both come pre-filled for the tool you picked. Click **Next**.
   </Step>
   <Step title="Advanced">
-    Pick an **Auth Method** and set **Auto-investigate**. With Auto-investigate on, you can also turn on **Only from a minimum severity** (off by default; it starts at High when you turn it on), so lower alerts don't start an RCA. Click **Create**.
+    Pick an **Auth Method** and set **Auto-investigate**. The PagerDuty preset already picks **HMAC Signature** with **HMAC Signature Header** set to `X-PagerDuty-Signature`; keep that header, or PagerDuty's signatures fail the check. With Auto-investigate on, you can also turn on **Only from a minimum severity** (off by default; it starts at High when you turn it on), so lower alerts don't start an RCA. Click **Create**.
   </Step>
 </Steps>
 
@@ -85,7 +85,7 @@ An Automation webhook trigger always uses a Bearer token: the caller sends `Auth
 | Auth Method | The sender includes | Use when |
 |---|---|---|
 | **Bearer Token** | `Authorization: Bearer <secret>` | The tool lets you add a custom header. The default for most tools. |
-| **HMAC Signature** | A signature of the body in the **HMAC Signature Header** (default `X-Webhook-Signature`) | The tool signs its own webhooks, like PagerDuty. |
+| **HMAC Signature** | A signature of the body in the **HMAC Signature Header** (default `X-Webhook-Signature`) | The tool signs its own webhooks, like PagerDuty. The PagerDuty preset sets the header to `X-PagerDuty-Signature` for you. |
 | **API Key** | The key in the **API Key Header** (default `X-Api-Key`), after an optional **Key Prefix** | The tool only supports API key headers, like CloudWatch through EventBridge. |
 | **No Authentication** | Nothing | Only for a quick test. Anyone with the URL could send alerts. |
 
@@ -114,9 +114,28 @@ curl -X POST "$WEBHOOK_URL" \
 
 ## What to send
 
-Send a JSON object of up to 1 MB with `Content-Type: application/json`. CloudThinker doesn't read an idempotency key, so a sender's retry counts as a new call. What CloudThinker does with the body depends on the kind of webhook.
+Both kinds share one request format. Send a JSON object of up to 1 MB to the webhook URL.
 
-**Automation trigger.** The whole body is appended after the Automation's instructions, so the agent sees it without any template setup. If you want a value inline in the instructions, use `{{message}}` or `{{event.<key>}}`. A placeholder with no matching key stays in the text as written. The body is treated as data, never as instructions, so a caller can't change what the agent is told to do.
+### Request
+
+| Part | Automation trigger | Resolve webhook |
+| --- | --- | --- |
+| Method | `POST` | `POST` |
+| URL | `https://<CloudThinker API host>/api/v1/webhooks/webhook/<token>/trigger` | Same shape, with the Resolve webhook's token |
+| `Content-Type` | `application/json` | `application/json` |
+| Auth header | `Authorization: Bearer <secret>` | Depends on the **Auth Method** |
+| Body | A JSON object, up to 1 MB | A JSON object, up to 1 MB |
+
+Header details for a Resolve webhook, beyond [Authenticate requests](#authenticate-requests):
+
+- **HMAC Signature:** the value is `sha256=` plus the lowercase hex HMAC-SHA256 of the raw body, keyed with the secret. When the header is set to `X-PagerDuty-Signature`, CloudThinker reads PagerDuty's own format instead: one or more comma-separated `v1=<hex>` values, and any one match passes.
+- **API Key:** with a **Key Prefix** set, the header value must start with that prefix. CloudThinker drops the prefix and any surrounding spaces, then compares the rest with the secret.
+
+A body that isn't a JSON object (an array, a string, or text that isn't JSON) is refused with `422`. CloudThinker doesn't read an idempotency key, so a sender's retry counts as a new call.
+
+### Body: Automation trigger
+
+Any JSON object works. The whole body reaches the agent after the Automation's instructions, so it needs no template setup. The agent sees up to 50,000 characters of it; anything past that is cut. The body is treated as data, never as instructions, so a caller can't change what the agent is told to do.
 
 ```json
 {
@@ -126,7 +145,52 @@ Send a JSON object of up to 1 MB with `Content-Type: application/json`. CloudThi
 }
 ```
 
-**Resolve webhook.** Send your tool's own alert payload. The webhook's **Field Mapping** picks out the title, severity, service, and other fields by JSON path, like `event.data.title`. Only **Title Path** is required.
+### Body: Resolve webhook
+
+Send your tool's own alert payload as it is. The webhook's **Field Mapping** picks fields out of it by JSON path, like `event.data.title`. A leading `$` in a path is dropped, and a path can have up to 8 segments.
+
+| Mapped field | Required |
+| --- | --- |
+| Title | Yes |
+| Description, Severity, Service, Resource ID, Resource name, Timestamp | No |
+
+The value at the severity path is translated by the webhook's **Severity Mapping**. A minimal custom payload:
+
+```json
+{
+  "title": "High CPU on web-server-01",
+  "alert_type": "critical",
+  "service": "checkout-api"
+}
+```
+
+### Amazon SNS
+
+When a request carries the `x-amz-sns-message-type` header, CloudThinker treats it as Amazon SNS. It checks the SNS signature, confirms a `SubscriptionConfirmation` on its own, and unwraps a `Notification` so the inner message is the body. The webhook's auth still applies to every SNS request.
+
+### Response
+
+A call that passes auth and validation gets HTTP `200` with this body:
+
+```json
+{"success": true, "request_id": "req_..."}
+```
+
+`200` means CloudThinker queued the call. The run or the alert happens a moment later, so check the result (see [Test with curl](#test-with-curl)). Keep the `request_id` if you contact support about a call.
+
+Other outcomes are below. A call can pass auth and still get `400`, `413`, `422` or `429`.
+
+| HTTP | Body `detail` | Cause |
+| --- | --- | --- |
+| `400` | `Webhook is not active` | The webhook is turned off |
+| `401` | `Missing Authorization header`, or `Missing <header> header` | The auth header is missing |
+| `403` | `Invalid bearer token`, `Invalid webhook signature`, `Invalid API key` and similar | The header is there, but the secret or signature doesn't match |
+| `404` | `Webhook not found` | The token in the URL is wrong, or the webhook was deleted |
+| `413` | `Request body exceeds 1MB limit` | The body is over 1 MB |
+| `422` | A validation error | The body isn't a JSON object |
+| `429` | A rate limit message | Too many calls or too many failed authentications. See [Rate limits and busy runs](#rate-limits-and-busy-runs). A `429` that says `Webhook ingress is busy` carries a `Retry-After` header; retry after that many seconds. |
+
+Errors use the body `{"detail": "..."}`.
 
 ## Test with curl
 
@@ -139,7 +203,7 @@ curl -X POST "$WEBHOOK_URL" \
   -d '{"message": "hello"}'
 ```
 
-**Expected result:** CloudThinker answers `202 Accepted`. That only proves delivery, so check the result too.
+**Expected result:** CloudThinker answers `200` with `{"success": true, "request_id": "req_..."}`. That only proves delivery, so check the result too.
 
 | Kind | Where to check | What you should see |
 |---|---|---|
@@ -153,13 +217,13 @@ An Automation trigger's delivery list marks each call with a status:
 | Status | Meaning | What to do |
 |---|---|---|
 | **Accepted** | CloudThinker received the call and queued it. | Wait a moment. |
-| **Processed** | The call started a run, or was held for one. | Check the **Runs** tab. |
+| **Processed** | The call started a run, or was held for one. A held call that a newer call replaces, or that is still waiting after 30 minutes, stays **Processed** but never runs. | Check the **Runs** tab. If no run is there, read the note on the trigger card. |
 | **Rate limited** | The call was over the webhook's hourly limit and started nothing. | Slow the sender or batch events. |
 | **Failed** | The call couldn't be processed. The error text says why. | Fix the cause and send again. |
 
 ## Rate limits and busy runs
 
-Each webhook has an hourly limit: 60 calls per hour for an Automation trigger, and 1,000 per hour by default for a Resolve webhook. A call over the limit still gets `202 Accepted` but starts nothing, and an Automation trigger lists it as **Rate limited**. A sender that goes far past the limit (10 times over) gets `429`. After 10 failed authentications in 15 minutes, the webhook also answers `429` for a while. If your sender bursts, batch events into one request or slow it down.
+Each webhook has an hourly limit: 60 calls per hour for an Automation trigger, and 1,000 per hour by default for a Resolve webhook. A call over the limit still gets `200` but starts nothing, and an Automation trigger lists it as **Rate limited**. A sender that goes far past the limit (10 times over) gets `429`. After 10 failed authentications in 15 minutes, the webhook also answers `429` for a while. If your sender bursts, batch events into one request or slow it down.
 
 An Automation runs one run at a time. A call that arrives mid-run is held, and CloudThinker retries it every minute for up to 30 minutes. If a run is already going, expect the held call's run to show as **Pending** on the **Runs** tab.
 
@@ -174,8 +238,8 @@ After 10 failed runs in a row, CloudThinker turns the Automation off and sends t
 ## Troubleshooting
 
 <AccordionGroup>
-  <Accordion title="401 on every request">
-    The auth header is missing or doesn't match. An Automation trigger only accepts `Authorization: Bearer <secret>`. For a Resolve webhook, compare the header name and secret in your tool with **Authentication Setup**. After 10 failures in 15 minutes the webhook answers `429` for a while, so fix the header before you retry. If the secret is lost, use **Rotate webhook secret** on the trigger card (Automation), or open **Resolve → Integrations**, select the tool, open the webhook's menu under **Signals to Resolve**, and choose **Regenerate credentials** (Resolve). Then update every sender with the new values.
+  <Accordion title="401 or 403 on every request">
+    `401` means the auth header is missing; `403` means it's there but the secret or signature doesn't match. An Automation trigger only accepts `Authorization: Bearer <secret>`. For a Resolve webhook, compare the header name and secret in your tool with **Authentication Setup**. After 10 failures in 15 minutes the webhook answers `429` for a while, so fix the header before you retry. If the secret is lost, use **Rotate webhook secret** on the trigger card (Automation), or open **Resolve → Integrations**, select the tool, open the webhook's menu under **Signals to Resolve**, and choose **Regenerate credentials** (Resolve). Then update every sender with the new values.
   </Accordion>
   <Accordion title="HMAC signature mismatch">
     Sign the exact raw body bytes you send. Reformatting or re-serializing the JSON after signing changes the bytes and breaks the signature.
@@ -183,10 +247,10 @@ After 10 failed runs in a row, CloudThinker turns the Automation off and sends t
   <Accordion title="413 or a rejected large payload">
     The body is over 1 MB. Send a short summary plus a link or ID the agent can look up, instead of the full document.
   </Accordion>
-  <Accordion title="202 Accepted but no Automation run">
-    Check the delivery on the trigger card. **Rate limited** means the sender is too fast. **Failed** shows the error text. Also check that the Automation's switch is on, and look for a **Pending** run waiting behind a busy one.
+  <Accordion title="200 response but no Automation run">
+    Check the delivery on the trigger card. **Rate limited** means the sender is too fast. **Failed** shows the error text. Also check that the Automation's switch is on, and look for a **Pending** run waiting behind a busy one. A **Processed** call with no run was held while a run was going, then replaced by a newer call or dropped after 30 minutes; the trigger card's note says why the last call started no run. See [Rate limits and busy runs](#rate-limits-and-busy-runs).
   </Accordion>
-  <Accordion title="202 Accepted but nothing in Resolve">
+  <Accordion title="200 response but nothing in Resolve">
     Pulse may have suppressed the alert as noise, or the time window hides it. Widen the window on **Resolve → Pulse**. If the signal is there with an empty title or wrong severity, fix the path in **Field Mapping** or add the missing value to **Severity Mapping**.
   </Accordion>
   <Accordion title="An incident opened but no RCA started">
