@@ -1,5 +1,6 @@
 ---
 title: CLI Authentication
+sidebarTitle: "Authentication"
 description: "Log in to the CloudThinker CLI from a laptop or over SSH, switch between workspaces, and give scripts and CI jobs a credential."
 icon: key
 ---
@@ -37,6 +38,8 @@ The CloudThinker CLI signs you in through your browser and stores one credential
     </Frame>
 
     **Success state:** the terminal prints `Logged in to <workspace>.`
+
+    Picked **Log in with a code**? Follow [Log in on a remote machine](#log-in-on-a-remote-machine) instead.
   </Step>
 
   <Step title="Verify the credential">
@@ -52,7 +55,15 @@ The CloudThinker CLI signs you in through your browser and stores one credential
 
 ### Log in on a remote machine
 
-Over SSH, or on Linux with no display, the CLI picks the code flow on its own and says so: `No local browser detected (SSH session). Using device-code login.` It prints a URL and a short code under `Enter this code:`. Open the URL in any browser, on any device, and enter the code.
+Over SSH, or on Linux with no display, the CLI picks the code flow on its own and says so: `No local browser detected (SSH session). Using device-code login.` It prints a URL and a short code. Open the URL in any browser, on any device, and enter the code within 10 minutes.
+
+```text
+Open this URL to authorize CloudThinker:
+  <verification URL>
+
+Enter this code:
+  <code>
+```
 
 | To | Run |
 | --- | --- |
@@ -62,7 +73,7 @@ Over SSH, or on Linux with no display, the CLI picks the code flow on its own an
 
 ## Work with several workspaces
 
-Log in once per workspace. Each login is kept for the same host, so a second login never replaces the first.
+Log in once per workspace. Each login is stored by host and workspace, so logging in to a second workspace keeps the first.
 
 | To | Run |
 | --- | --- |
@@ -77,32 +88,44 @@ Log in once per workspace. Each login is kept for the same host, so a second log
 cloudthinker --workspace 11111111-1111-4111-8111-111111111111 chat -p "Check the error budget"
 ```
 
+### Use a custom host
+
+To use a host other than `https://app.cloudthinker.io`, run `cloudthinker login --url <origin>` once. Later commands remember it. You can also set `CLOUDTHINKER_URL`. See the [CLI reference](/guide/cli/reference#environment-variables).
+
 ## Authenticate a script or CI job
 
-A pipeline has no browser, so it can't approve a login. Use one of these instead:
+A pipeline has no browser, so it can't approve a login. CloudThinker has no service account or long-lived API key for the CLI yet. Access tokens last 30 minutes by default.
 
 | Method | Use it when |
 | --- | --- |
-| `CLOUDTHINKER_TOKEN` | The job already holds a CloudThinker bearer token, for example from your secret store. The CLI uses it and ignores stored credentials |
+| Log in on the runner (recommended) | The job runs on a runner you control. Run `cloudthinker login --device-auth` on it once. The saved login refreshes itself, so the job needs no token variable |
+| `CLOUDTHINKER_TOKEN` | A short job gets a token from a wrapper that just ran `cloudthinker auth token`. The CLI uses it and ignores stored credentials. It never refreshes it, so the job fails with [exit code 3](/guide/cli/reference#exit-codes) once the token expires |
 | `cloudthinker auth token` | Another tool needs a bearer. The command prints the current access token on stdout and nothing else, refreshing it first if it is close to expiry |
 
-```bash
-export CLOUDTHINKER_TOKEN="$CI_CLOUDTHINKER_TOKEN"
-cloudthinker chat -p "Summarize last night's failed runs" --json
-
-curl -H "Authorization: Bearer $(cloudthinker auth token)" \
-  https://app.cloudthinker.io/api/v1/...
-```
-
 <Warning>
-The token from `cloudthinker auth token` authenticates as you until it expires. Treat it like a password: never log it, commit it, or paste it into a chat.
+A runner login acts as the person who logged in, so every job on that runner runs with their access. Use a dedicated CloudThinker user for it if your organization allows one. To revoke it, run `cloudthinker logout` on the runner.
 </Warning>
 
-You can't combine `CLOUDTHINKER_TOKEN` with `--workspace`. The token already names its workspace, so the CLI rejects both together with exit code 2.
+```bash
+# Short job: a wrapper hands the CLI a fresh token
+export CLOUDTHINKER_TOKEN="$(cloudthinker auth token)"
+cloudthinker chat -p "Summarize last night's failed runs" --json
+```
+
+The token from `cloudthinker auth token` authenticates as you until it expires. Treat it like a password: never log it, commit it, or paste it into a chat.
+
+You can't combine `CLOUDTHINKER_TOKEN` with `--workspace`. The token already names its workspace, so the CLI rejects both together with [exit code 2](/guide/cli/reference#exit-codes).
 
 ## Where credentials live
 
-The CLI writes credentials to `cloudthinker/credentials.json` in your operating system's config directory, readable only by your user (mode 0600). One file holds every workspace login for a host.
+The CLI writes credentials as plain JSON to one file, readable only by your user (mode 0600). It doesn't use the OS keychain; releases before 0.5.3 did, and upgrading moves those logins into the file.
+
+| OS | Path |
+| --- | --- |
+| macOS | `~/Library/Application Support/cloudthinker/credentials.json` |
+| Linux | `$XDG_CONFIG_HOME/cloudthinker/credentials.json`, or `~/.config/cloudthinker/credentials.json` when that variable isn't set |
+
+The file holds every workspace login, keyed by host and workspace.
 
 ## Log out
 
@@ -110,6 +133,8 @@ The CLI writes credentials to `cloudthinker/credentials.json` in your operating 
 cloudthinker logout          # the selected or active workspace
 cloudthinker logout --all    # every workspace stored for this host
 ```
+
+Logout asks the server to revoke the credential, then deletes it from the local file. The local copy is removed even if the server can't be reached.
 
 **Success state:** the terminal prints `Logged out.`, or `Logged out of all workspaces for this host.`
 
@@ -119,14 +144,11 @@ cloudthinker logout --all    # every workspace stored for this host
   <Accordion title="A command says you are not logged in (exit code 3)">
     The credential is missing or expired, or the server refused access. Run `cloudthinker login` again. In a non-interactive shell, the CLI never opens a browser: it prints the login command to run and stops.
   </Accordion>
-  <Accordion title="The credential in CLOUDTHINKER_TOKEN is rejected">
-    The environment token outranks stored credentials, so logging in again changes nothing. Replace the token, or unset the variable and run `cloudthinker login`.
+  <Accordion title="CLOUDTHINKER_TOKEN is rejected, or auth switch has no effect">
+    The environment token outranks stored credentials, so logging in again or running `auth switch` changes nothing. Replace the token, or run `unset CLOUDTHINKER_TOKEN` and use your saved logins.
   </Accordion>
   <Accordion title="Browser consent timed out">
     The consent link is valid for five minutes. Run `cloudthinker login` again, or use `cloudthinker login --device-auth` to approve from another device.
-  </Accordion>
-  <Accordion title="auth switch worked, but commands still use another workspace">
-    `CLOUDTHINKER_TOKEN` is set, and it wins over saved logins. Run `unset CLOUDTHINKER_TOKEN`.
   </Accordion>
   <Accordion title="A workspace name is not accepted">
     `--workspace` matches an exact name or a workspace ID. Run `cloudthinker auth status` to see your saved workspaces, and quote a name that contains spaces.

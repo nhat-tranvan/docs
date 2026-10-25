@@ -1,5 +1,6 @@
 ---
 title: CLI Reference
+sidebarTitle: "Reference"
 description: "Look up every cloudthinker command, flag, environment variable, exit code, and file path in one place."
 icon: book
 ---
@@ -18,10 +19,10 @@ Put global options before the command name.
 
 | Option | Description |
 |---|---|
-| `--url <URL>` | CloudThinker address. Defaults to the address of your last `login --url`, else `https://app.cloudthinker.io`. Pass the bare origin |
+| `--url <URL>` | CloudThinker address. Defaults to the address of your last `login --url`, else `https://app.cloudthinker.io`. Pass the bare origin, with no path or trailing slash: `--url https://ct.example.com` |
 | `--workspace <ID or NAME>` | Use the stored login for this workspace. Can't be combined with `CLOUDTHINKER_TOKEN` |
-| `--tui-mode <MODE>` | For a bare `cloudthinker` only: `fullscreen` (default) or `regular`, which keeps the chat in terminal scrollback |
-| `--skill [MODULE]` | Print the CLI's operating guide for AI coding agents and exit. Needs no login |
+| `--tui-mode <MODE>` | For a bare `cloudthinker` only: `fullscreen` (default) or `regular`, which keeps the chat in terminal scrollback. With `cloudthinker agent`, pass it after `agent` instead |
+| `--skill [MODULE]` | Print the CLI's operating guide for AI coding agents and exit. Needs no login. With no value it prints the index; modules are `auth`, `chat`, `cloud`, `review`, `cyber`, `cyber-scan`, `cyber-verify`, `cyber-report`, `worker`, and `remote` |
 | `-h`, `--help` | Print help |
 | `-V`, `--version` | Print the CLI version |
 
@@ -57,20 +58,23 @@ Details and CI patterns: [CLI authentication](/guide/cli/authentication).
 | `--list-models` | List the agent modes your workspace offers |
 | `--tools <NAMES>` | Allow only these local tools, comma-separated |
 | `--exclude-tools <NAMES>` | Turn off these local tools, comma-separated |
-| `--tui-mode <MODE>` | `fullscreen` (default) or `regular` |
+| `--tui-mode <MODE>` | `fullscreen` (default) or `regular`. Same as the global option on a bare `cloudthinker` |
 | `-a`, `--approve` | Trust this project's local files for this run |
-| `-na`, `--no-approve` | Ignore this project's local files for this run |
+| `-na`, `--no-approve` | Ignore this project's local files for this run. The spelling is a single dash and two letters |
 
-Put the CLI's own options before `agent`, and use `--` when an agent flag shares a name with a CLI option:
+Put the CLI's own options before `agent`. Everything after `--` goes to the agent without the CLI reading it:
 
 ```bash
-cloudthinker --workspace Production agent
-cloudthinker agent -- --url http://localhost:3000
+cloudthinker --workspace Production agent    # start the agent in the Production workspace
+cloudthinker agent --help                    # the CLI's summary of agent flags
+cloudthinker agent -- --help                 # the agent's own, full help
 ```
+
+`agent` hands off to the agent process, so `agent -p` returns the agent's own exit code, not the codes in [Exit codes](#exit-codes).
 
 ### Remote agent
 
-`remote [TARGET]` runs the agent on another machine over SSH and keeps it running when the connection drops. `TARGET` is a host from `~/.ssh/config`, `user@host`, or `ssh://user@host:port`, and defaults to the last machine you used. Both machines need the CLI on macOS or Linux.
+`remote [TARGET]` runs the agent on another machine over SSH and keeps it running when the connection drops or your laptop sleeps. The remote machine's own CLI holds the agent in a background process, so you don't need `tmux`. `TARGET` is a host from `~/.ssh/config`, `user@host`, or `ssh://user@host:port`, and defaults to the last machine you used. The first time, name it: with no target and no earlier machine, the command exits 2 with `Which machine? Run: cloudthinker remote <ssh-host>`. Both machines need the CLI on macOS or Linux.
 
 | Flag | Description |
 |---|---|
@@ -78,7 +82,11 @@ cloudthinker agent -- --url http://localhost:3000
 | `--name <NAME>` | Attach to or start the agent with this name |
 | `-- <AGENT_ARGS>` | Arguments for the agent when it starts |
 
-Ctrl+Z detaches and leaves the agent running; `cloudthinker remote` returns to it.
+The remote agent runs the remote machine's own `cloudthinker`, so it uses that machine's login and workspace. Run `cloudthinker login` there first; over SSH it shows a short code.
+
+<Note>
+Inside `cloudthinker remote`, Ctrl+Z detaches and leaves the agent running on the remote machine. It doesn't suspend a local job. Run `cloudthinker remote` again to return to it.
+</Note>
 
 ## Chat
 
@@ -109,7 +117,7 @@ Review your local Git changes, or read a [Review](/guide/code-review/overview) C
 
 Every review command takes `--json`. `review` and `review watch` also take `--timeout <SECS>` (default 2400) and `--fail-on <low|medium|high|critical>`, which exits 6 when a finding is at that severity or worse.
 
-A local `review` reads your checkout with read-only tools and prints findings in the terminal. It doesn't post comments, apply fixes, or change your Git index or working tree.
+A local `review` reads your checkout with read-only tools and prints findings in the terminal. It doesn't post comments, apply fixes, or change your Git index or working tree. It runs on CloudThinker Agent modes, so the diff and any file it reads go to CloudThinker's model gateway, and it uses workspace credits. See [What leaves your machine](/guide/cli/agent#what-leaves-your-machine).
 
 ```bash
 cloudthinker review --base origin/main --fail-on high
@@ -118,8 +126,10 @@ cloudthinker review findings https://github.com/acme/api/pull/412 --json
 
 | Field | Values |
 |---|---|
-| Review status | `in review`, `review complete`, `filtered`, `failed` |
-| Review verdict | `in review`, `approved`, `review suggested`, `changes requested`, `filtered`, `failed` |
+| Review status | `queued`, `in review`, `review complete`, `filtered`, `failed`, `stopped` |
+| Review verdict | `in review`, `approved`, `review suggested`, `changes requested`, `filtered`, `failed`, `stopped` |
+
+`filtered` means a repository filter skipped the merge request, so no review ran. `review suggested` means findings worth a look, with nothing blocking. Exit codes: a review that finishes without hitting `--fail-on` exits 0, and so does a `filtered` or `stopped` one. A `failed` review, or an MR URL with no review, exits 1. A wait that passes `--timeout` exits 4.
 
 ## Incidents and recommendations
 
@@ -129,7 +139,7 @@ cloudthinker review findings https://github.com/acme/api/pull/412 --json
 | `incident status <ID> [--wait] [--timeout <SECS>] [--json]` | Show an incident; `--wait` blocks until it closes |
 | `recommendations ls [--status <STATUS>] [--limit <N>] [--json]` | List [cost recommendations](/guide/cost-optimization/recommendations) with monthly savings. `--limit` 1 to 100, default 25 |
 
-Incident statuses: `open`, `acknowledged`, `investigating`, `identified`, `on-hold`, `not-found`, `false-alarm`, `resolved`, `auto-resolved`. `incident status --wait` exits 0 once the incident is resolved, auto resolved, a false alarm, or not found.
+Incident statuses: `open`, `acknowledged`, `investigating`, `identified`, `on-hold`, `not-found`, `false-alarm`, `resolved`, `auto-resolved`. `not-found` is a status, not a lookup error: the investigation found no root cause the evidence supports. `incident status --wait` exits 0 once the incident is `resolved`, `auto-resolved`, `false-alarm`, or `not-found`. If `--timeout` passes first, it exits 4.
 
 Recommendation statuses: `pending`, `in-progress`, `implemented`, `ignored`.
 
@@ -141,17 +151,30 @@ To run a pentest, start the agent and ask for one in plain language, for example
 |---|---|
 | `cyber app ls` | List the apps this workspace tests |
 | `cyber domain ls` | List workspace domains and their ownership proof |
-| `cyber domain add <DOMAIN>` | Add a domain to prove ownership of |
+| `cyber domain add <DOMAIN>` | Add a domain to prove ownership of, with a DNS TXT record. See [Register the app](/guide/security/pentest#register-the-app) |
 | `cyber domain verify <ID>` | Re-check a domain's ownership proof |
-| `cyber run status <RUN_ID> [--wait]` | Show a run's state and finding counts |
+| `cyber run status <RUN_ID> [--wait]` | Show a run's state and finding counts. There's no command that lists runs: the run ID is in the agent's output when it starts a pentest |
 | `cyber run cancel <RUN_ID>` | Stop a running pentest |
-| `cyber finding ls <APP_ID>` | List an app's findings. Filters: `--severity`, `--status`, `--triage`, `--page`, `--take` |
+| `cyber finding ls <APP_ID>` | List an app's findings. Filters: `--severity`, `--status`, `--triage`. Paging: `--page` (from 1, default 1) and `--take` (per page, default 50) |
 | `cyber finding get <FINDING_ID>` | Show one finding |
-| `cyber finding export <APP_ID> [--finding-id <ID>]` | Export findings as a PDF report |
+| `cyber finding export <APP_ID> [--finding-id <ID>]` | Export findings as a PDF report. It writes no local file: it prints the `filename` and a `download_url` to fetch it from |
 | `cyber config show`, `get <KEY>`, `set <KEY> <VALUE> [--user]` | Read or change Cyber settings for this project, or as your default |
 | `cyber doctor [--fix]` | Check this machine can run a pentest; `--fix` installs missing tools |
 
 Every Cyber command takes `--json`.
+
+`finding ls` filter values: `--severity` is `critical`, `high`, `medium`, `low`, or `info`. `--status` is `open`, `resolved`, `dismissed`, or `needs-verification`. `--triage` is `none`, `in-progress`, or `awaiting-retest`.
+
+`cyber doctor --fix` installs pinned versions of `httpx` and `katana` under `~/.cloudthinker/tools/`, in your home folder, so it needs no `sudo`. It reports a missing `curl` but doesn't install it.
+
+`cyber config` reads `.cloudthinker/config.toml` in the project and `~/.cloudthinker/config.toml` for your defaults (`--user`). A value you set wins over a derived one. `cyber config show` lists both.
+
+| Key | Meaning |
+|---|---|
+| `app` | The app this project tests |
+| `repo_path` | The repository root. Derived from Git when not set |
+| `auth.<role>` | The name of the environment variable that holds that test identity's auth header, never the secret itself. In a project file it must be `CYBER_<ROLE>_AUTH` |
+| `context.<name>` | A path or URL to context for the test, such as an OpenAPI spec, a Postman collection, or a HAR file |
 
 ## Workers
 
@@ -175,11 +198,15 @@ Every Cyber command takes `--json`.
 | `update --json` | Print the result as JSON |
 | `completion <bash\|zsh\|fish\|…>` | Print a shell completion script |
 
-On an interactive terminal the CLI also offers an update when a newer release exists, at most every 20 hours. `update` works only on an install the CLI installer created.
+On an interactive terminal the CLI also offers an update when a newer release exists, at most every 20 hours. `update` works only on an install the CLI installer created. On any other install, it refuses and prints the reinstall command: `curl -fsSL https://cloudthinker.io/install.sh | sh`. See the [CLI overview](/guide/cli/overview).
 
 ```bash
 cloudthinker completion zsh > "${fpath[1]}/_cloudthinker"
+cloudthinker completion bash > ~/.local/share/bash-completion/completions/cloudthinker
+cloudthinker completion fish > ~/.config/fish/completions/cloudthinker.fish
 ```
+
+If `${fpath[1]}` isn't writable, save the zsh file to a folder of your own and add that folder to `fpath` in `~/.zshrc` before `compinit`.
 
 ## Environment variables
 
@@ -193,6 +220,8 @@ cloudthinker completion zsh > "${fpath[1]}/_cloudthinker"
 | `CLOUDTHINKER_OUTPOST_ID` | Default outpost for `worker` commands |
 | `CLOUDTHINKER_AUTO_BACKGROUND_SECONDS` | Seconds before the agent moves a long shell command to the background. Default 10; `0` turns it off |
 | `NO_COLOR` | Turn off color on stderr. Color is also off when stderr is not a terminal |
+| `HTTPS_PROXY`, `ALL_PROXY` | Send the CLI's traffic through this proxy. Hosts in `NO_PROXY` skip it |
+| `SSL_CERT_FILE`, `SSL_CERT_DIR` | Trust this CA bundle or folder, for a proxy that re-signs HTTPS. Without them, the CLI uses the OS trust store |
 
 ## Exit codes
 
@@ -205,19 +234,30 @@ cloudthinker completion zsh > "${fpath[1]}/_cloudthinker"
 | 4 | The CLI stopped waiting. The work continues on the server |
 | 5 | The run paused for an approval in the browser |
 | 6 | A review found an issue at or above its `--fail-on` severity |
-| 130 | Ctrl-C stopped a `chat` wait. The run continues on the server |
+| 130 | Ctrl-C stopped a `chat` wait, an `incident status --wait`, or a `login`. A run or incident continues on the server |
 
 ## Files
 
 | Path | Contents |
 |---|---|
 | `~/.local/bin/cloudthinker` | The binary the installer puts on your `PATH` |
-| `<config dir>/cloudthinker/credentials.json` | One login per workspace for each host, readable only by you |
+| `~/Library/Application Support/cloudthinker/credentials.json` (macOS), `$XDG_CONFIG_HOME/cloudthinker/credentials.json` or `~/.config/cloudthinker/credentials.json` (Linux) | One login per workspace for each host |
 | `~/.cloudthinker/agent/` | Agent configuration, including `settings.json` |
 | `~/.cloudthinker/agent/bin/<version>/` | The agent build for that CLI version |
+| `~/.cloudthinker/agent/sessions/` | Local agent session transcripts |
+| `~/.cloudthinker/tools/` | Tools `cyber doctor --fix` installed |
 | `.cloudthinker/config.toml` | Cyber settings saved for a project, in that project's folder |
+| `~/.cloudthinker/config.toml` | Your default Cyber settings, from `cyber config set --user` |
 
-To uninstall, run `cloudthinker logout --all`, then delete the binary and the `~/.cloudthinker` folder.
+`credentials.json` is plain JSON with file mode `0600` in a `0700` folder, so only your user can read it. The CLI doesn't use the OS keychain. Releases before 0.5.3 did, and the first run of a newer release moves those logins into the file and deletes the keychain entry. On a machine other people log in to, give each person their own OS account, and run `cloudthinker logout --all` when you're done.
+
+### Uninstall
+
+1. If this machine runs a worker as a service, run `cloudthinker worker service uninstall`.
+2. Run `cloudthinker logout --all` once for each host you logged in to, using `--url` for any host other than the default. Or delete `credentials.json`.
+3. Delete the binary, `~/.local/bin/cloudthinker`.
+4. Delete the `~/.cloudthinker` folder, and any completion script you saved, such as `"${fpath[1]}/_cloudthinker"`.
+5. Optional: delete `.cloudthinker/` folders inside your projects.
 
 ## Related
 

@@ -1,5 +1,6 @@
 ---
 title: Agent CLI
+sidebarTitle: "Agent"
 description: "Run CloudThinker Agent in your repository to edit code locally and reach your cloud through workspace connections with approval."
 icon: laptop-code
 ---
@@ -7,7 +8,7 @@ icon: laptop-code
 CloudThinker Agent is a coding agent that runs in your terminal. It edits files and runs commands on your machine, and it reaches your cloud only through your workspace [connections](/guide/connections/overview), so no cloud credential ever lands on your laptop.
 
 <Note>
-The agent runs on macOS and Linux and needs a paid workspace plan. On a Free workspace, starting a session is refused with an upgrade prompt. See [Pricing](/guide/billing/pricing).
+The agent runs on macOS and Linux (x86_64 and arm64). There is no native Windows build. It needs a paid plan: Team, Scale, Scale+, or Enterprise. On a Free workspace, starting a session is refused with an upgrade prompt. See [Pricing](/guide/billing/pricing).
 </Note>
 
 ## Prerequisites
@@ -24,25 +25,34 @@ The agent runs on macOS and Linux and needs a paid workspace plan. On a Free wor
     cloudthinker
     ```
 
-    A bare `cloudthinker` and `cloudthinker agent` do the same thing. If you are not logged in yet, the agent starts the browser login for you. It is the only command that does.
+    A bare `cloudthinker` and `cloudthinker agent` do the same thing. If you are not logged in yet, the agent starts the browser login for you. Other commands don't: they exit with code 3 and tell you to run `cloudthinker login`.
 
-    On first run the CLI downloads the agent build for your platform, checks it against the release's SHA-256 checksum, and installs it under `~/.cloudthinker/agent/bin/<version>/`. Later runs reuse it.
+    On first run the CLI downloads the agent build for your platform, checks it against the release's SHA-256 checksum, and installs it under `~/.cloudthinker/agent/bin/<version>/`. Later runs reuse it. If this step fails, you see `agent install failed:` with the cause and exit code 1. Behind a proxy, set `HTTPS_PROXY`, and `SSL_CERT_FILE` if the proxy re-signs HTTPS. See [Environment variables](/guide/cli/reference#environment-variables).
   </Step>
   <Step title="Check the startup screen">
     The header names the workspace, your user, the session link, and the workspace Approval mode as `· Auto` or `· Manual`. Below it, two lines show where work runs:
 
     - `[L] this machine <folder>` with the local tools
-    - `[C] sandbox workspace <name> - <N> connections` with the cloud tools
+    - `[C] sandbox workspace <name> - <N> connections` with the cloud tools, which run on the workspace machine (the startup line calls it the sandbox workspace; see [Where work runs](#where-work-runs))
 
     **Success state:** the prompt is ready and the footer shows the workspace, the Approval mode, `◆ 0.00 credits`, and your connections.
   </Step>
   <Step title="Give it a task">
     Type what you want in plain language. New to the agent? Run `/skill:tour` for a guided first session that explains local and cloud work, your connections, and approvals.
 
+    A cloud investigation. Expect `[C]` read lines, then `[L]` lines as it reads your repository:
+
     ```text
     Why is the api deployment in staging restarting? Check the pod events and logs, then tell me which commit in this repo is the likely cause.
+    ```
+
+    A local edit. Expect `[L]` read and edit lines, and no cloud write:
+
+    ```text
     Add a lifecycle rule to the logs bucket in main.tf that expires objects after 90 days. Don't apply it.
     ```
+
+    To end the session, type `/quit` (or `/exit`). Work already running in the cloud continues.
   </Step>
 </Steps>
 
@@ -53,21 +63,31 @@ Every tool call line starts with `[L]` or `[C]`, so you always know which machin
 | Tag | Where | What runs there | Credentials |
 |---|---|---|---|
 | `[L]` | Your machine | Local tools: `bash`, `read`, `write`, `edit`, `grep`, `find`, `ls` | None from CloudThinker. Commands run as your OS user |
-| `[C]` | CloudThinker cloud | Cloud reads, cloud writes, and delegated work | A workspace connection credential, used for that run and never sent to your machine |
+| `[C]` | The workspace machine | Cloud reads, cloud writes, and delegated work | A workspace connection credential, used for that run and never sent to your machine |
 
-The agent sees the same connection details CloudThinker sees in chat, refreshed before every turn. A connection you add in the browser is available on your next prompt.
+The workspace machine (shown as `sandbox workspace` at startup, and the reason the cloud tools are named `ct_sandbox_*`) is a CloudThinker-hosted machine that your whole workspace shares. It isn't a scratch shell: it keeps the workspace's memory, skills, and files earlier runs left behind. Each session gets its own folder there, but the machine is shared, so treat any file a run writes there as visible to your teammates' runs. Each connection's CLI is installed there and authenticated with that connection's credential. See [Data protection](/guide/security/data-protection) for how workspace data is stored.
+
+The agent gets the workspace's connection list, the same one chat uses, refreshed before every turn. Credentials are never part of it. A connection you add in the browser is available on your next prompt.
+
+<Warning>
+CloudThinker doesn't gate `[L]` tools. Local `bash` runs with whatever your shell already has, such as `AWS_PROFILE` or a kubeconfig. For a read-only session, start the agent with `cloudthinker agent --tools read,grep,find,ls`, or turn off tools with `--exclude-tools bash,write,edit`.
+</Warning>
 
 To keep a session fully local, run `/cloud off`. That hides the cloud tools and delegation; work already running in the cloud continues. `/cloud on` turns them back on.
 
 ## What the agent can do in the cloud
 
-| Tool | Use it for | Example |
-|---|---|---|
-| `ct_sandbox_read` | A bounded, read-only investigation | List S3 buckets, describe a deployment, read CloudWatch logs |
-| `ct_sandbox_write` | One state-changing command you can name | `kubectl rollout restart deployment/api` |
-| `ct_ask` | Work that needs the workspace itself: its [memory](/guide/memory), custom agents, or several dependent steps | "Compare this outage with past incidents on the same service" |
+| Tool | Use it for | Example | Approval |
+|---|---|---|---|
+| `ct_sandbox_read` | One read-only command | List S3 buckets, describe a deployment, read CloudWatch logs | No approval needed |
+| `ct_sandbox_write` | One state-changing command you can name | `kubectl rollout restart deployment/api` | Always decided by the workspace. See [Approve a cloud write](#approve-a-cloud-write) |
+| `ct_ask` | Delegation: the agent hands a multi-step investigation or change to CloudThinker in the cloud, which works with the workspace's [memory](/guide/memory), tools, and incident history | "Compare this outage with past incidents on the same service" | Writes inside it follow the workspace Approval mode, like chat. If one waits, the agent gives you a browser link |
 
-`ct_ask` opens one CloudThinker conversation per session and reuses it. A single command can use several named AWS and GCP connections plus GitLab; name the connection aliases in your prompt when you have more than one.
+A `ct_ask` result line reads `CloudThinker Agent answered`, `waiting for approval in browser → <link>`, or `failed`. It opens one CloudThinker conversation per session and reuses it.
+
+The agent sets each read or write command's timeout itself: 60 seconds by default, at most 120. A longer command runs in the background, and the agent checks its output later. (`CLOUDTHINKER_AUTO_BACKGROUND_SECONDS` in the reference is a separate setting for local `bash` commands.)
+
+The cloud tools can use any [connection](/guide/connections/overview) in the workspace, and one command can use several. When you have more than one of a kind, type `#` to pick one: it inserts `#connection/<prefix>/<alias>` into your prompt.
 
 ## Approve a cloud write
 
@@ -78,27 +98,53 @@ The result line of a write opens with the verdict:
 | Result line | Meaning |
 |---|---|
 | `auto: allowed (trusted command) · ran on the workspace machine · 2.0s` | The command was trusted, so it ran at once |
-| `auto: allowed (…)` | A rule or the AI check allowed it, and it ran at once |
-| `auto: needs approval` | The write waits for a person |
-| `manual: needs approval` | The workspace is in **Manual**, so every write waits for a person |
-| `auto: denied` | A rule or the Approval mode refused it. Nothing runs, and no approval can run it |
+| `auto: allowed (<reason>) · ran on the workspace machine · …` | A rule or the [AI check](/guide/approvals/approval-mode) allowed it, and it ran at once. The reason names why |
+| `auto: needs approval · waiting for approval in browser → <link>` | The write waits for a person |
+| `manual: needs approval · …` | The workspace is in **Manual**, so every write waits for a person |
+| `… · approved by <name> · ran on the workspace machine · …` | A person approved it, and it ran |
+| `… · declined by <name>` | A person declined it. Nothing ran |
+| `auto: denied · <reason>` | A rule or the Approval mode refused it. Nothing runs, and no approval can run it |
+| `… · execution outcome unknown; do not replay` | The command may have started, but CloudThinker has no confirmed result. See the Warning below |
 
 When a write needs approval, the terminal shows **Cloud write needs your approval** with the reason, the connection, the command, and a browser link. Pick one:
 
 | Option | Key | What it does |
 |---|---|---|
 | **Approve and run** | `y` | Runs this one write |
-| **Approve and trust this command** | `a` | Runs it and trusts that exact command for the workspace, so it runs without a pause next time under Auto |
+| **Approve and trust this command** | `a` | Runs it and trusts the command for the workspace, so it runs without a pause next time under Auto. See [Trust a command](#trust-a-command) for how much that covers |
 | **Decline** | `n` | Refuses the write. You can type a reason for the agent |
-| **Decide in the browser** | `b` | Leaves the decision to the browser card |
+| **Decide in the browser** | `b` | Leaves the decision to the browser card. The terminal shows **Waiting for approval in the browser…** and checks every few seconds for up to 10 minutes, then prints the result line. If nobody has decided by then, the agent can pick the same write up later |
 
-Escape also declines. Only a workspace [approver](/guide/approvals/approvers) can approve, and only a workspace Admin can trust a command. A teammate who is an approver sees the same card when they open the session in the browser.
+Escape also declines. A teammate who is an approver sees the same card when they open the session in the browser.
 
-A pending write keeps the exact connections it was requested with. Adding a connection later does not widen it, and removing access blocks it. An unanswered write expires after one hour.
+A pending write keeps the exact connections it was requested with. Adding a connection later does not widen it, and removing access blocks it. An unanswered write expires after one hour. It gets no result line of its own: deciding it after that fails with `Cloud write is expired, so it cannot be decided`, so ask the agent for it again.
 
 <Warning>
 If a write reports an unknown outcome, check its effects in your cloud before asking for it again. The agent never replays a write on its own.
 </Warning>
+
+### Who can do what
+
+| Action | Who can do it |
+|---|---|
+| Approve or decline a cloud write | A workspace [approver](/guide/approvals/approvers) |
+| Trust a command | A workspace Admin or the owner |
+| Change the Approval mode with `/cloudthinker:auto` | A workspace Admin |
+| Read an Agent CLI conversation in the browser | Any workspace member, including Viewers |
+| Delete an Agent CLI conversation | Only the workspace owner, one person. Other Admins can't |
+
+Roles are explained in [Roles](/guide/security/roles).
+
+### Trust a command
+
+Trusting adds an Allow entry to the workspace's default policy. For `aws`, `gcloud`, `az`, and `kubectl`, the entry covers the whole subcommand, not only the arguments you approved:
+
+| You trust | The Allow entry |
+|---|---|
+| `aws ec2 stop-instances --instance-ids i-abc` | `aws ec2 stop-instances *` |
+| `kubectl rollout restart deployment/api` | `kubectl rollout *`, which also covers `deployment/web` and `kubectl rollout undo` |
+
+The entry covers the whole workspace, not only your session: after that, any teammate's Agent CLI session can run a command the entry matches under Auto with no pause. Trust only commands you'd be comfortable seeing run unattended, with any arguments.
 
 ### Ask an approver when you can't approve
 
@@ -108,13 +154,17 @@ The agent sends no approval notification by itself, because the card is already 
 
 The session uses the workspace Approval mode. There is no per-session override and no flag to skip approval from a laptop.
 
+<Warning>
+`/cloudthinker:auto on` and `off` change the mode for the whole workspace, so every teammate's chat and session that uses the workspace mode follows the new one. Only a workspace Admin can switch, and each switch is recorded in the [audit log](/guide/security/audit-logs).
+</Warning>
+
 | Command | What it does |
 |---|---|
 | `/cloudthinker:auto` | Prints the current mode |
-| `/cloudthinker:auto on` | Sets the workspace to **Auto · Rules + AI · Ask me**. A workspace already in an Auto mode keeps its choice |
-| `/cloudthinker:auto off` | Sets the workspace to **Manual** |
+| `/cloudthinker:auto on` | Sets the workspace to **Auto · Rules + AI · Ask me**: rules decide first, then the AI check, and anything still unclear waits for a person. A workspace already in an Auto mode keeps its choice |
+| `/cloudthinker:auto off` | Sets the workspace to **Manual**: every write waits for a person |
 
-Switching changes the whole workspace, needs permission to edit workspace settings, and is recorded in the [audit log](/guide/security/audit-logs). For the other Auto choices, open **Approvals → Approval mode** in the browser.
+For the other Auto choices, open **Approvals → Approval mode** in the browser. Each one is explained in [Approval mode](/guide/approvals/approval-mode).
 
 ## Commands inside the agent
 
@@ -127,7 +177,9 @@ Type `/` to see every command. The CloudThinker ones:
 | `/cloud retry` | Retries a failed cloud link now |
 | `/where` | Shows the two places the agent works |
 | `/open` | Opens this session in the browser |
-| `/model` | Picks the agent mode: `light`, `pro`, or `ultra` |
+| `/model` | Picks the agent mode: `light`, `pro`, or `ultra`. `cloudthinker agent --list-models` shows which ones your workspace offers |
+| `/skill:tour` | A guided first session: local and cloud work, your connections, and approvals |
+| `/quit`, `/exit` | Ends the session. Work already running in the cloud continues |
 | `/share` | Copies this session's CloudThinker link (workspace members only) |
 | `/cloudthinker:workspace` | Switches to another workspace and starts a new session there |
 | `/cloudthinker:session` | Shows messages, tokens, and credits for this session |
@@ -135,7 +187,7 @@ Type `/` to see every command. The CloudThinker ones:
 | `/cloudthinker:notify` | Tells the approvers a cloud write is waiting |
 | `/cloudthinker:about` | Shows versions, the config folder, and the session link |
 | `/login`, `/logout` | Signs in or out of CloudThinker |
-| `/changelog`, `/bug` | Shows what's new, or opens a bug report on GitHub |
+| `/changelog`, `/bug` | Shows what's new, or opens a new issue on the CloudThinker CLI GitHub repository in your browser. The draft holds only the agent version, platform, and architecture; your conversation isn't attached, and nothing is posted until you submit it |
 
 Type `@` to mention a custom agent, a connection, or a file in the repository. `#` opens the connection list alone. The agent reads project instructions from `AGENTS.md` or `CLAUDE.md` in your repository.
 
@@ -149,13 +201,28 @@ git diff | cloudthinker agent -p "Review this change"
 cloudthinker agent --tools read,grep,find,ls -p "Review src/ without editing"
 ```
 
-Every flag is in the [CLI reference](/guide/cli/reference#agent).
+Cloud tools stay on under `-p`. A cloud write that needs approval can't show the terminal card, so the agent prints `waiting for approval in the browser → <link>` on stderr and waits up to 10 minutes for someone to decide there. For an unattended run, keep it local with `--tools read,grep,find,ls`, or ask CloudThinker through [headless chat](/guide/cli/headless-chat), whose exit codes a CI job can branch on. Every flag is in the [CLI reference](/guide/cli/reference#agent).
+
+## What leaves your machine
+
+| Data | Sent to CloudThinker? | Where it goes |
+|---|---|---|
+| Your prompts, and everything the agent reads into its context (file contents, local command output) | Yes | CloudThinker's model gateway, which answers with your organization's [BYOK](/guide/byok) key first when one is set, else CloudThinker's model provider |
+| The session transcript: prompts, answers, tool calls, and their results | Yes | The workspace's **Agent CLI** conversation (the mirror). An entry over 1 MB keeps only its IDs and type, its content is dropped, and it is marked truncated |
+| Files no tool has read | No | They stay on your machine |
+| Cloud connection credentials | They never come to your machine | They stay on the workspace machine |
+
+<Warning>
+Anything the agent reads goes to the model and into the mirror, including secrets: a `.env` file, a kubeconfig, or the output of a command that prints keys. Every workspace member, Viewers included, can read the mirror, and only the owner can delete it. Keep secrets out of reach: start with `--exclude-tools bash`, and don't ask the agent to read credential files.
+</Warning>
+
+For how CloudThinker stores and protects workspace data, see [Data protection](/guide/security/data-protection).
 
 ## Session history and credits
 
-Every session appears in the workspace as an **Agent CLI** conversation. In the browser it is a read-only view of the repository, branch, tool calls, and linked CloudThinker conversation. Any workspace member who can view conversations can read it, and only the workspace owner can delete it.
+Every session appears in the workspace as an **Agent CLI** conversation, the browser copy of the session called the mirror. Run `/open` to go straight to it. In the browser it is a read-only view of the repository, branch, tool calls, and linked CloudThinker conversation. Mirror entries are append-only: nobody can edit them, and only the workspace owner can delete the conversation.
 
-The full transcript stays on your machine. `cloudthinker agent -c` continues the most recent session in this folder, and `-r` lets you pick one.
+A local copy stays on your machine under `~/.cloudthinker/agent/sessions/`, one folder per project. `cloudthinker agent -c` continues the most recent session in this folder, and `-r` lets you pick one.
 
 The footer shows credits charged to this session, for example `◆ 1.75 credits`. See [Usage](/guide/billing/usage).
 
@@ -169,13 +236,19 @@ The footer shows credits charged to this session, for example `◆ 1.75 credits`
     You are not an approver. Run `/cloudthinker:notify`, or send the browser link from the card to an approver.
   </Accordion>
   <Accordion title="The approval was not applied: only a workspace settings editor can trust a command">
-    Nothing ran. Decide again and pick **Approve and run** instead of trusting the command.
+    Only a workspace Admin or the owner can trust a command (the message calls them settings editors). Nothing ran. Decide again and pick **Approve and run** instead.
   </Accordion>
   <Accordion title="The agent works locally but can't reach the cloud">
     Run `/cloud`. If Cloud is off, run `/cloud on`. If it lists no connections, add one under [Connections](/guide/connections/overview), then send your next prompt.
   </Accordion>
+  <Accordion title="agent install failed">
+    The first-run download or its SHA-256 check failed. The message names the cause. Behind a corporate proxy, set `HTTPS_PROXY`, plus `SSL_CERT_FILE` if the proxy re-signs HTTPS, and run `cloudthinker` again. See [Environment variables](/guide/cli/reference#environment-variables).
+  </Accordion>
+  <Accordion title="No CloudThinker Agent mode is loaded, so the message was not sent">
+    The agent couldn't load a mode from your workspace. Run `/cloud retry`, then press ↑ to send the message again. `cloudthinker agent --list-models` shows which modes your workspace offers.
+  </Accordion>
   <Accordion title="The footer shows mirror offline">
-    The session could not sync to the workspace. Keep working; the transcript is safe on your machine, and the next session that links the same conversation sends the pending entries.
+    The browser copy of this session (the mirror) couldn't sync. Keep working: pending entries wait on your machine and upload when the link is back, or when you next continue this session with `cloudthinker agent -c`.
   </Accordion>
 </AccordionGroup>
 
