@@ -6,7 +6,9 @@ icon: code-pull-request
 
 import { ReviewScene } from '/snippets/iso/review.jsx';
 
-Review is CloudThinker's code review product: when someone opens a pull request (PR) or merge request (MR), CloudThinker reads the change, posts a summary comment and inline findings on it, and checks the fix when you push again. You connect your Git provider once and pick repositories, and it runs without anyone starting it.
+**Nothing breaks in production.**
+
+Review is the Frontier Investigation Agent for code changes: when someone opens a pull request (PR) or merge request (MR), CloudThinker reads the change, posts a summary comment and inline findings on it, and checks the fix when you push again. You connect your Git provider once and pick repositories, and it runs without anyone starting it.
 
 <ReviewScene />
 
@@ -15,12 +17,43 @@ A linter matches patterns. Review reads what the change is trying to do: the dif
 ## How it works
 
 1. **A PR or MR opens.** Your provider sends an event to CloudThinker. Draft PRs and MRs are skipped until they're marked ready for review.
-2. **CloudThinker gathers context.** It checks out the change and reads the diff, a ticket linked from the description (Jira, Linear, Backlog or a provider issue, when that connection exists), and the convention files in the repository.
+2. **CloudThinker gathers context.** It checks out the change and reads the diff, a ticket linked from the description (Jira, Linear, Backlog or a provider issue, once you add an [extension](/guide/code-review/extensions)), and the files listed in [What Review reads](#what-review-reads).
 3. **The review runs.** Depth depends on the workspace [review mode](/guide/code-review/setup#choose-a-review-mode): **Fast**, **Auto** or **Advanced**.
 4. **Findings land on the PR.** You get one summary comment plus inline comments. Each finding has a severity (Critical, High, Medium or Low) and a suggested fix.
 5. **New pushes get an incremental review.** Only the commits pushed since the last review are read, and the review checks whether earlier findings were fixed.
 
-Tests, fixtures, snapshots, generated code and Storybook stories are left out of every review automatically.
+Changed test files, fixtures, snapshots, generated code and Storybook stories aren't reviewed: no finding is ever placed in one. Review still knows they're part of the change, so it won't report a missing test that the PR adds.
+
+## What Review reads
+
+Besides the diff, Review reads these files from your repository. All of them are optional.
+
+| File | Where it goes | What it does |
+|---|---|---|
+| `BUSINESS.md` | Repository root, on the target branch | Describes your product's modules and the rules (invariants) they must keep. Business flow findings come from it |
+| `AGENTS.md`, `CLAUDE.md`, `GEMINI.md` | Repository root or any folder | Coding conventions Review follows, when **Repository conventions** is on |
+| `CONVENTIONS.md` | Repository root | Same as above |
+| Coding agent rule files | Their usual paths, such as `.cursor/rules/`, `.github/copilot-instructions.md`, `.windsurf/rules/`, `.clinerules`, `.amazonq/rules/` or `.kiro/steering/` | Same as above |
+
+`BUSINESS.md` has a fixed structure: a `# Business map: <owner>/<repo>` title, a `## Product` section and a `## Modules` section, with an optional `## Flows` section. Each entry is a `###` heading with an ID, and modules list their code roots and invariants:
+
+```markdown
+# Business map: acme/meterly
+
+## Product
+
+### product.meterly: Meterly
+Usage billing.
+
+## Modules
+
+### modules.plans: Plans
+Sources: README.md
+Code roots: `src/plans.py`
+Invariant invariants.plans.trial-fast-only: A Trial workspace starts only Fast runs.
+```
+
+A file that doesn't parse, or is larger than 200 KB, is skipped for that review. The rest of the review still runs.
 
 ## What it checks
 
@@ -33,7 +66,7 @@ Each finding carries one category, so you can tell at a glance what kind of prob
 | Performance | Slow queries, N+1 loops, blocking calls | A full table scan inside a request handler |
 | Pattern | Breaks a convention your repository already follows | A new handler that skips the shared error wrapper |
 | Deploy, migration, backward compatibility | Changes that break a rollout or existing clients | A migration that drops a column the current release still reads |
-| Test gap | A test that mocks the wrong thing | A patch that targets a symbol the code no longer calls |
+| Test gap | Changed behavior that no test covers | A new error path with no test, in a PR that adds none |
 | Business flow | A change that breaks a rule in your `BUSINESS.md` | A path that reports a recommendation as an executed change |
 
 ## What you can do
@@ -45,13 +78,26 @@ Each finding carries one category, so you can tell at a glance what kind of prob
 | Mention commands | Ask a question, re-run a review or fix findings with `@cloudthinker-ai` in a PR comment | [Mention commands](/guide/code-review/mention-commands) |
 | Learnings | Recurring patterns from resolved findings, applied to future reviews | [Learnings](/guide/code-review/convention-rules) |
 | Pipeline analysis | An explanation and suggested fix for each failed CI run | [Pipelines](/guide/code-review/pipelines) |
-| Conflict resolution | A follow-up MR that resolves merge conflicts on an open MR | [Conflict resolution](/guide/code-review/conflict-resolution) |
+| Auto-resolve conflicts | A follow-up MR/PR that resolves merge conflicts on an open MR/PR. Not on Azure DevOps | [Auto-resolve conflicts](/guide/code-review/conflict-resolution) |
 | Releases | A risk report when a release tag is pushed | [Releases](/guide/code-review/releases) |
 | Insights | Which finding categories hit your team, and how fast they get fixed | [Insights](/guide/code-review/analytics) |
 
 ## Supported providers
 
-GitHub, GitLab (GitLab.com or self-hosted), Bitbucket Cloud, Azure DevOps and AWS CodeCommit. Each workspace connects one provider. See [provider authentication](/guide/code-review/provider-auth) for what each one needs.
+GitHub, GitLab (GitLab.com or self-hosted), Bitbucket Cloud, Azure DevOps and AWS CodeCommit. Each workspace connects one provider, so if your team uses two, set up Review in a separate workspace for each. See [provider authentication](/guide/code-review/provider-auth) for what each one needs.
+
+Some actions work on only some providers:
+
+| Action | GitHub | GitLab | Bitbucket | Azure DevOps | CodeCommit |
+|---|---|---|---|---|---|
+| Reviews and questions | Yes | Yes | Yes | Yes | Yes |
+| Autofix and **Fix all findings** | Yes | Yes | Yes | Yes | No |
+| `autofix stacked` | Yes | Yes | No | No | No |
+| **Apply fix** | Yes | Yes | No | Yes | No |
+| **Merge** from CloudThinker | Yes | Yes | No | No | No |
+| Auto-resolve conflicts | Yes | Yes | Yes | No | Yes |
+
+The bot handle is `@cloudthinker-ai`, used in comments. The skip marker you put in a PR description, `@cloudthinker:ignore`, uses a different prefix. Type each one exactly as shown.
 
 ## Get started
 
@@ -61,11 +107,5 @@ GitHub, GitLab (GitLab.com or self-hosted), Bitbucket Cloud, Azure DevOps and AW
   </Card>
   <Card title="Provider authentication" icon="key" href="/guide/code-review/provider-auth">
     Tokens, scopes and webhooks for each Git provider.
-  </Card>
-  <Card title="Mention commands" icon="at" href="/guide/code-review/mention-commands">
-    Talk to the reviewer from a PR or MR comment.
-  </Card>
-  <Card title="Learnings" icon="list-check" href="/guide/code-review/convention-rules">
-    Turn resolved findings into rules for future reviews.
   </Card>
 </CardGroup>

@@ -6,7 +6,9 @@ icon: calendar-check
 
 import { AutomationScene } from '/snippets/iso/automation.jsx';
 
-An automation is a saved set of agent instructions plus the triggers that start it: a schedule, an inbound webhook call, a repository event, or a probe script. Each run gets its own conversation, so you can read exactly what the agent checked, found, and changed.
+**Put routine cloud ops on autopilot.**
+
+Automation runs the Frontier Investigation Agents for you on a schedule or an event. An automation is a saved set of agent instructions plus the triggers that start it: a schedule, an inbound webhook call, a repository event, or a probe script. Each run gets its own conversation, so you can read exactly what the agent checked, found, and changed.
 
 <AutomationScene />
 
@@ -15,7 +17,7 @@ Use an automation for work someone would otherwise have to remember: a daily cos
 ## How it works
 
 1. **A trigger fires.** Triggers are independent: whichever fires first starts a run. **Run now** starts one by hand. The automation's own switch must be on for any trigger to fire.
-2. **The run starts.** CloudThinker reads the automation's instructions, plus the event body when a webhook, repository event, or probe started it. That body is treated as data, never as instructions.
+2. **The run starts.** CloudThinker reads the automation's instructions, plus the event body when a webhook, repository event, or probe started it. That body is treated as data, never as instructions: the agent can use a value from it when your instructions say to (for example, the service named in an alert), but text in the body can't change the instructions or the approvals.
 3. **Approvals govern every write.** Reads always run. A write goes through your [Rules](/guide/approvals/rules), then the automation's [Approval mode](/guide/approvals/approval-mode). Automations default to **Auto · Rules + AI · Refuse**, because no one may be online to answer.
 4. **The result lands in Runs.** Each run shows a status and links to its conversation. Pair it with [notifications](/guide/notifications) to get failures and alerts in Slack, Teams, Google Chat, or email.
 
@@ -34,26 +36,26 @@ flowchart LR
 
 | Trigger | Starts a run when | Created from |
 |---------|-------------------|--------------|
-| **Schedule** | A clock time arrives: **Daily**, **Weekly**, **Monthly**, **No Repeat** (once), or **Custom** (cron). One per automation. | The form or chat |
+| **Schedule** | A clock time arrives: **Daily**, **Weekly**, **Monthly**, **No Repeat** (once), or **Custom** (cron). At most one per automation; the other trigger types can be added more than once. | The form or chat |
 | **Webhook** | An HTTP call arrives at a URL CloudThinker issues | The form or chat |
 | **Repository** | A push, pull or merge request, comment, or pipeline result lands in a repository connected to [Review](/guide/code-review/setup) | The form or chat |
-| **Probe** | A short script the agent wrote finds something, checked every 5 to 60 minutes | Chat only |
+| **Probe** | A short script the agent wrote finds something, checked every 5, 15, 30, or 60 minutes | Chat only |
 | *(none)* | You select **Run now** | |
 
 ### Schedule
 
-**Custom** takes a 5-field cron expression: `minute hour day month weekday`. Minute and hour accept one value, `*`, or a step like `*/15`. A list or range in those two fields is rejected with "This schedule format is not supported." Day, month, and weekday accept ranges and lists, and `MON` to `SUN` are converted for you.
+**Custom** takes a 5-field cron expression: `minute hour day month weekday`. Minute and hour accept one value, `*`, or a step like `*/15`. A list or range in those two fields is rejected with "This schedule format is not supported." Day, month, and weekday accept ranges and lists. Weekdays are numbered `0` (Sunday) to `6` (Saturday), and a single day name such as `MON` is converted for you.
 
 ```text
 */15 * * * *     Every 15 minutes
 0 */6 * * *      Every 6 hours
-0 9 * * MON-FRI  09:00 on weekdays
+0 9 * * 1-5      09:00 on weekdays
 ```
 
-You pick times in your local time zone, and Runs shows them back in your zone. A recurring schedule can take an expiration date, after which it stops.
+To make a recurring schedule stop, tick **Set expiration date** on the schedule and pick the last day.
 
 <Note>
-A recurring schedule keeps its clock time and does not shift for daylight saving, so a run can land an hour off after a DST change.
+Times use your browser's time zone when you save. CloudThinker stores the schedule in UTC using your zone's mid-January offset, and keeps that offset all year. In a zone with daylight saving, runs land one hour off the wall-clock time for part of the year, and saving again doesn't change that. If the exact wall time matters all year, pick a time where an hour either way is fine.
 </Note>
 
 ### Webhook
@@ -68,53 +70,92 @@ curl -X POST '<your trigger URL>' \
 ```
 
 - **The secret is shown once.** Copy it before you select **Done**. If you lose it, use **Rotate webhook secret** on the trigger card: the URL stays the same.
-- **The body reaches the agent.** It's appended after your instructions, so you don't need template variables. `{{message}}` and `{{event.<key>}}` still work if you want a value inline. Bodies are capped at 1 MB.
+- **Send a JSON object.** The body is appended after your instructions, so the agent sees every field. A body that isn't a JSON object (plain text, an array) doesn't reach the agent. Bodies are capped at 1 MB.
 - **Deliveries are listed on the card** as **Accepted**, **Processed**, **Failed**, or **Rate limited**, with any error text.
-- **One run at a time.** A call that arrives mid-run is held, newest call wins, and retried every minute for up to 30 minutes.
+- **60 calls an hour per trigger.** Calls past that start no run and show as **Rate limited** on the card. The caller may still get `200`, so check the card, not only the response.
+- **One run at a time.** A call that arrives mid-run is held and retried every minute for up to 30 minutes. Only one call is held: if more arrive during the run, the newest is kept and the others are discarded.
+
+| Response | Meaning |
+|----------|---------|
+| `200` | Received. A JSON body with `success` and a `request_id`. |
+| `401` | No `Authorization` header, or the URL isn't a trigger |
+| `403` | Wrong secret |
+| `413` | Body over 1 MB |
+| `429` | Too many calls, or too many failed auth attempts. Retry later. |
 
 ### Repository
 
 Pick repositories and one or more events: **Pull or merge request**, **Push**, **Comment**, or **Pipeline finished**. Only repositories with review turned on in Review can be added.
 
+| Event | GitHub | GitLab | Bitbucket | Azure DevOps | AWS CodeCommit |
+|-------|:-:|:-:|:-:|:-:|:-:|
+| Pull or merge request | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Push | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Comment | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Pipeline finished | ✓ | ✓ | | ✓ | |
+
 | Filter | Applies to | Empty means |
 |--------|-----------|-------------|
-| Branch (a name or a glob like `release/*`, case-sensitive) | Push and pull or merge request events only | Every branch |
+| Branch: an exact name, or a case-sensitive glob. `*` matches any characters, including `/`, so `release/*` also matches `release/2026/q4`. `?` matches one character. | Push and pull or merge request events only | Every branch |
 | Action: **Opened**, **New commits**, **Merged**, **Closed** | Pull or merge request events | All four |
+
+Comment and pipeline events take no filters: every one on the chosen repositories starts a run.
 
 - Label, assignee, review-request, and approval changes never start a run.
 - Comments from the CloudThinker review bot never start a run, so an automation can't loop on its own output.
-- Bitbucket and AWS CodeCommit send no pipeline event, so CloudThinker refuses a pipeline trigger for them.
 
 ### Probe
 
-A probe is a bash script the agent writes and saves as a trigger when you ask it to watch for something in chat. On each check the script runs for up to 120 seconds with read-only credentials for the connections it names.
+A probe is a bash script the agent writes and saves as a trigger when you ask it to watch for something in chat:
+
+```text
+Watch the orders-api p95 latency every 15 minutes and start a run if it's above 800 ms.
+```
+
+It checks every 5, 15, 30, or 60 minutes. On each check the script runs for up to 120 seconds with read-only credentials for the connections it names. To change the interval or the script, ask in chat.
 
 | Script exit code | What happens |
 |------------------|--------------|
 | `0` | Quiet. Nothing runs. |
-| `1` | Fired. A run starts with the first 2,000 characters of the script output, unless a cooldown is active. |
-| Anything else | Error. After 3 errors in a row, one repair run starts. |
+| `1` | Fired. A run starts with the first 2,000 characters of the script output, unless the cooldown since the last fired run is active (60 minutes unless you ask for another). |
+| Anything else | Error. After 3 errors in a row, one repair run starts, and the agent is asked to fix the script or change the probe. |
 
 The trigger card shows the interval, the script path, the last check (for example "Quiet · checked 5 minutes ago"), and **Last output**. You can pause or delete a probe from the card. The agent tests a script before saving it, and refuses one that doesn't exit `0` or `1`.
 
 ## Create an automation
 
-You need the workspace Admin role to create or edit automations. The [Automation quickstart](/guide/automation/quickstart) walks through one end to end. In short: open **Automations** in the sidebar, select **New automation**, then pick one of three starts.
+| Role | Can |
+|------|-----|
+| **Admin** | Create, edit, duplicate, delete, turn on or off, **Run now**, and **Enable** a proposal |
+| **Developer**, **Viewer** | See the list, the runs, the calendar, and each run's conversation |
+
+The [Automation quickstart](/guide/automation/quickstart) walks through one end to end. In short: open **Automations** in the sidebar, select **New automation**, then pick one of three starts.
 
 | Start | Use it when |
 |-------|-------------|
 | **Create with chat** | You'd rather describe the job. CloudThinker asks for what's missing, then creates it. Same as typing `/create-automation` in chat. |
-| **Or start from a template** | A template fits, such as **Weekly cost report** or **Daily cost anomaly alert**. It opens the form filled in. |
+| **Or start from a template** | A template below fits. It opens the form filled in. |
 | **Start from a blank form** | You know exactly what you want. |
 
-The form has **What should the agent do?** (with model and **Approval** pickers), the triggers, a **Name**, and **Advanced** settings:
+Every template starts with a **Schedule** trigger, which you can change:
+
+| Template | Schedule |
+|----------|----------|
+| **Weekly cost report** | Every Monday, 09:00 |
+| **Daily cost anomaly alert** | Every day, 08:00 |
+| **Daily security drift check** | Every day, 07:00 |
+| **Weekly incident digest** | Every Monday, 09:00 |
+| **Monthly idle resource sweep** | First day of the month, 09:00 |
+| **Weekly expiry check** | Every Wednesday, 09:00 |
+
+The form has **What should the agent do?** (with model and **Approval** pickers), the triggers, a **Name**, and **Advanced** settings. The model picker offers **Pro** and **Ultra**. Ultra costs 1.7x the credits of Pro, so keep Pro unless a run's answers are too weak. See [Usage](/guide/billing/usage).
 
 | Setting | Options |
 |---------|---------|
 | **Conversation** | **New conversation each run** (fresh each time) or **Continue one conversation** (each run sees earlier runs, long history is compacted) |
-| **Run in** | **CloudThinker Cloud**, or a shared [self-hosted sandbox](/guide/workers). Only workspace admins can change it. |
+| **Run in** | **CloudThinker Cloud**, or a shared [self-hosted sandbox](/guide/workers) |
 
-Agents can also offer one. When chat work is worth repeating, the reply can end with a proposal card. Select **Enable** to create the automation, or **Dismiss**.
+Agents can also offer one. When chat work is worth repeating, the reply can end with a proposal card. An Admin selects **Enable** to create the automation with the schedule shown on the card and the **Default** approval, or **Dismiss**.
 
 ## Runs and statuses
 
@@ -124,7 +165,7 @@ The **Automations** page has three tabs: **Automations** (the list), **Runs** (e
 |--------|---------|
 | **Pending** | Queued, or waiting for a busy conversation |
 | **Running** | In progress |
-| **Succeeded** | Finished |
+| **Succeeded** | Finished. A write the approvals refused doesn't fail the run, so read the conversation to see what was skipped. |
 | **Failed** | Ended with an error |
 | **Required Approval** | Paused on a write that needs a person. Open the run's conversation to approve or decline. |
 | **Cancelled** | Stopped before it finished |
@@ -137,7 +178,7 @@ Each card has **Run now**, an on/off switch, and a **…** menu with **Edit**, *
 After 10 failed runs in a row, CloudThinker turns the automation off and sends the **Automation turned off** notification. **Run now** still works so you can debug. Turn it back on once the cause is fixed.
 </Warning>
 
-Your plan caps how many automations a workspace can hold. The count shows beside **New automation** when a limit applies.
+Automations need a Team plan or above (see [Pricing](/guide/billing/pricing)). When your plan caps the count, **New automation** shows how many you've used, as `<used> of <limit> automations used`.
 
 ## Get started
 

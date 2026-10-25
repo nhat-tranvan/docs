@@ -16,11 +16,25 @@ Source-of-truth hierarchy for facts: **current app UI → confirmed product fact
 7. **BYOK = bring your own LLM credentials** (Admin Settings → BYOK) — never encryption/KMS keys. Canonical UI paths: identity = **Admin Settings → Identity and access**; audit logs = **Admin Settings → Audit Logs**; MFA = **Account Settings → 2FA**.
 8. **Agent model**: one built-in assistant, **CloudThinker** (always on, mention `@CloudThinker` or none), which spawns temporary subagents; plus workspace custom agents. The five personas are retired from customer-facing copy. New workspaces default to the **Auto · Rules + AI · Ask me** Approval mode. Rules decide before the mode; canonical home: `/guide/approvals/overview`.
 
+## Core message (matches cloudthinker.io)
+
+CloudThinker builds **Frontier Investigation Agents**. They find the root cause. You approve the fix. Lead the home page with this, and open every product overview with its website headline below, then one plain sentence on what the product does. Never paraphrase the headlines.
+
+| Product | Website headline | Promise | How the overview introduces it |
+|---|---|---|---|
+| Resolve | Finds the root cause. In minutes. | Finds the root cause, proposes the fix. Every incident makes it smarter. | The Frontier Investigation Agent for production incidents |
+| Review | Nothing breaks in production. | Catches what would break production. Proposes the fix. | The Frontier Investigation Agent for code changes |
+| Cyber | Hacks you before hackers do. | Every finding proven. Every fix ready to merge. | The Frontier Investigation Agent for application security |
+| Optimize | Pays only for what you use. | Finds the why behind every cost spike. Ships the fix as a merge request. | The Frontier Investigation Agent for cloud cost |
+| Customize | Works the way your team works. | Your rules, runbooks and tools. You decide what runs alone. | How you shape the agents to your team |
+| Automation | Put routine cloud ops on autopilot. | Routine checks run on a schedule or an event. Writes wait for your approval. | How you run the agents on a schedule or an event |
+| OnCall | Every incident gets a room. | Every team shares one room. Incidents close faster. | Where agents and engineers work an incident together |
+
 ## Terminology (canonical → banned)
 
 | Canonical | Banned |
 |---|---|
-| Self-healing ops platform (category); frontier investigation agents (the lead capability); AgenticOps (the method — field guide and tutorial only) | "Autonomous Cloud Operations" as the category, "intelligent OS for your cloud", "Multi-Agent System (MAS) orchestration", "AI DevOps platform" |
+| **Frontier Investigation Agents** (the core message: what CloudThinker is, on the home page and in every product overview, capitalized); AgenticOps (the method: field guide and tutorial only) | "Self-healing ops platform" or "Autonomous Cloud Operations" as the category, "intelligent OS for your cloud", "Multi-Agent System (MAS) orchestration", "AI DevOps platform" |
 | Modules: Optimize · Review · Cyber · Resolve | `CostOps`, `Code Review`, `SecOps`, `App Pentesting`, `AppSec`, `Deep Response Engine`, `DRE`, Stack, or Infrastructure as product names |
 | Manual / Auto (autonomy modes) | any 3- or 4-level autonomy model |
 | `@agent #connection request` (both optional), or plain language | `@agent #tool instruction` as required syntax; `@agent [instruction] [#tool] [context]` |
