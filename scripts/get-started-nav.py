@@ -11,6 +11,7 @@ import os
 NAV = [
     ("Start here", ["index", "quickstart", "guide/concepts", "guide/tutorial/agenticops"]),
     ("Learn the basics", ["guide/agents/overview", "guide/activity", "guide/commands", "guide/glossary"]),
+    ("Help", ["guide/troubleshooting", "learn/faq"]),
     ("Work where you are", [
         {"group": "Chat apps", "expanded": False, "pages": [
             "guide/slack-integration", "guide/teams-integration", "guide/google-chat-integration"]},
@@ -23,6 +24,7 @@ L10N = {
     "Start here": {"vi": "Bắt đầu tại đây", "ja": "スタートガイド", "ko": "여기서 시작"},
     "Learn the basics": {"vi": "Kiến thức cơ bản", "ja": "基本を学ぶ", "ko": "기본 익히기"},
     "Work where you are": {"vi": "Làm việc ở nơi bạn quen", "ja": "いつもの場所で使う", "ko": "익숙한 곳에서 사용"},
+    "Help": {"vi": "Trợ giúp", "ja": "ヘルプ", "ko": "도움말"},
     "Chat apps": {"vi": "Ứng dụng chat", "ja": "チャットアプリ", "ko": "채팅 앱"},
     "CLI": {"vi": "CLI", "ja": "CLI", "ko": "CLI"},
 }
@@ -50,6 +52,18 @@ for block in d["navigation"]["languages"]:
         if t.get("tab") == TAB[lang]:
             t["groups"] = [loc({"group": g, "pages": pages}, lang) for g, pages in NAV]
             t.pop("menu", None)
+    # FAQ and Troubleshooting now live in Get started; drop them from Resources.
+    moved = {"guide/troubleshooting", "learn/faq"}
+
+    def prune(node):
+        if isinstance(node, str):
+            return None if node.split(f"{lang}/", 1)[-1] in moved else node
+        node["pages"] = [x for x in (prune(c) for c in node["pages"]) if x]
+        return node if node["pages"] else None
+
+    for t in block["tabs"]:
+        if t.get("tab") in ("Resources", "Tài nguyên", "リソース", "리소스"):
+            t["groups"] = [g for g in (prune(g) for g in t["groups"]) if g]
 
 with open("docs.json", "w") as f:
     json.dump(d, f, indent=2, ensure_ascii=False)

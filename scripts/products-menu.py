@@ -19,7 +19,8 @@ MENU = [
         ("Work incidents", ["guide/pulse/overview", "guide/pulse/clusters", "guide/incident/root-cause-analysis",
                             "guide/incident/oncall", "guide/incident/runbooks", "guide/incident/manual-logging"]),
         ("Learn and improve", ["guide/incident/insights", "guide/pulse/analytics", "guide/incident/incident-memory"]),
-        ("Help", ["guide/incident/troubleshooting", "guide/incident/detectors"]),
+        ("Help", ["guide/incident/troubleshooting"]),
+        ("Coming soon", ["guide/incident/detectors"]),
     ]),
     ("Review", "code-pull-request", [
         ("Get started", ["guide/code-review/overview", "guide/code-review/setup"]),
@@ -49,7 +50,7 @@ MENU = [
         ("Settings", ["guide/credentials", "guide/notifications"]),
     ]),
     ("Automation", "clock", [
-        ("Automation", ["guide/automation/automations", "guide/automation/quickstart",
+        ("Automation", ["guide/automation/quickstart", "guide/automation/automations",
                         "guide/automation/autonomous-agents"]),
     ]),
 ]
@@ -77,6 +78,7 @@ GROUP_L10N = {
     "Agents and skills": {"vi": "Agent và Skills", "ja": "エージェントとスキル", "ko": "에이전트 및 스킬"},
     "Approvals": {"vi": "Approvals", "ja": "Approvals", "ko": "Approvals"},
     "Settings": {"vi": "Cài đặt", "ja": "設定", "ko": "설정"},
+    "Coming soon": {"vi": "Sắp ra mắt", "ja": "近日公開", "ko": "출시 예정"},
     "Automation": {"vi": "Tự động hóa", "ja": "自動化", "ko": "자동화"},
     "Memory": {"vi": "Bộ nhớ", "ja": "メモリ", "ko": "메모리"},
     "Artifacts and sharing": {"vi": "Artifacts và chia sẻ", "ja": "アーティファクトと共有", "ko": "아티팩트 및 공유"},
