@@ -34,12 +34,14 @@ MENU = [
         ("Get started", ["guide/security/cyber-overview", "guide/security/cyber-quickstart"]),
         ("Run tests", ["guide/security/pentest", "guide/security/pentest-deep-dive", "guide/security/captcha"]),
         ("Results", ["guide/security/cyber-findings", "guide/security/cyber-reports"]),
+        ("Help", ["guide/security/cyber-troubleshooting"]),
     ]),
     ("Optimize", "chart-line", [
         ("Get started", ["guide/cost-optimization/overview", "guide/cost-optimization/quickstart"]),
         ("Explore spend", ["guide/cost-optimization/analytics", "guide/cost-optimization/anomalies"]),
         ("Act on savings", ["guide/cost-optimization/recommendations", "guide/cost-optimization/savings",
                             "guide/cost-optimization/reports"]),
+        ("Help", ["guide/cost-optimization/troubleshooting"]),
     ]),
     ("Customize", "sliders", [
         ("Get started", ["guide/agents/customize", "guide/agents/quickstart"]),
