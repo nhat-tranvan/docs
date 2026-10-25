@@ -377,9 +377,9 @@ export const CyberScene = ({ className }) => {
 
     /*
      * Cyber's Attack, Prove, Fix spine, on the same isometric stage as the
-     * homepage workflow. A 12s loop: the Cyber agent probes the web app, auth,
+     * homepage workflow. A 12s loop: CloudThinker probes the web app, auth,
      * API and code like a hacker; one probe gets through on the API; the exploit
-     * is replayed read-only in a sandbox to prove it; the fix ships as a merge
+     * is replayed read-only to prove it; the fix ships as a merge
      * request, engineers approve it, and a retest shows the hole is closed. The
      * case file reuses the page's existing mockup. Simulated product UI, so it
      * stays English in every locale.
@@ -566,7 +566,7 @@ export const CyberScene = ({ className }) => {
                 })()
                 : null}
 
-            {/* hub with the Cyber agent above it */}
+            {/* hub with CloudThinker above it */}
             <Box x={-40} y={60} w={180} d={180} h={40} pal={pal} top={mix(pal.hub, pal.hubHot, agentK)} sw={2}/>
             <polyline points={pts([
                 [50, 150, 40],
@@ -625,7 +625,7 @@ export const CyberScene = ({ className }) => {
             {/* labels */}
             <Label x={P(50, 150, agentZ)[0] + 110} y={P(50, 150, agentZ)[1] - 70} text="CLOUDTHINKER" sub="Attacks like a hacker"/>
             <Label x={P(-230, -60)[0] + 40} y={P(-230, -60)[1] - 6} text="ENGINEERS" sub="Review and merge" anchor="start"/>
-            <Label x={P(110, 500)[0] - 20} y={P(110, 500)[1] + 50} text="SANDBOX" sub="Read-only proof" anchor="middle"/>
+            <Label x={P(110, 500)[0] - 20} y={P(110, 500)[1] + 50} text="PROOF" sub="Read-only replay" anchor="middle"/>
             <Label x={P(740, 80)[0]} y={P(740, 80)[1] + 50} text="YOUR APPS AND APIS" sub="Web app, auth, API, code" anchor="middle"/>
           </g>
 
@@ -634,7 +634,7 @@ export const CyberScene = ({ className }) => {
     }
     /** Cyber's proof loop on its stage. Starts from the first frame on mount. */
     function CyberProofStage({ className }) {
-        return (<IsoMotionStage loop={LOOP} label="The Cyber agent attacks your web app, auth, API and code like a hacker. One probe gets through on the API, the exploit is replayed read-only in a sandbox to prove it, the fix ships as a merge request, engineers approve it, and a retest shows the hole is closed." className={className} frame={(T) => <CyberFrame T={T}/>}/>);
+        return (<IsoMotionStage loop={LOOP} label="CloudThinker attacks your web app, auth, API and code like a hacker. One probe gets through on the API, the exploit is replayed read-only to prove it, the fix ships as a merge request, engineers approve it, and a retest shows the hole is closed." className={className} frame={(T) => <CyberFrame T={T}/>}/>);
     }
 
     return CyberProofStage;

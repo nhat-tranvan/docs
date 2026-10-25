@@ -379,9 +379,9 @@ export const ReviewScene = ({ className }) => {
      * Review as a left-to-right pipeline on the shared isometric stage, so the
      * workflow reads at a glance:
      *
-     *   engineer -> pull request -> Review agent -> merge -> production
+     *   engineer -> pull request -> CloudThinker -> merge -> production
      *
-     * The Review agent runs four checks: security, business logic (informed by
+     * CloudThinker runs four checks: security, business logic (informed by
      * production history), your conventions (rule files like AGENTS.md) on the
      * check rack behind it, and UI in your self-hosted sandbox in front of it (a
      * Worker runs the PR build and Review captures the screen). A 15s loop: the
@@ -760,7 +760,7 @@ export const ReviewScene = ({ className }) => {
     }
     /** Review's pipeline on its stage. Starts from the first frame on mount. */
     function ReviewStage({ className }) {
-        return (<IsoMotionStage loop={LOOP} label="An engineer opens a pull request. The Review agent checks security, business logic against production history, the UI in your self-hosted sandbox, and your conventions, then posts the fix. The engineer approves and the change merges to production." className={className} frame={(T) => <ReviewFrame T={T}/>}/>);
+        return (<IsoMotionStage loop={LOOP} label="An engineer opens a pull request. CloudThinker checks security, business logic against production history, the UI in your self-hosted sandbox, and your conventions, then posts the fix. The engineer approves and the change merges to production." className={className} frame={(T) => <ReviewFrame T={T}/>}/>);
     }
 
     return ReviewStage;

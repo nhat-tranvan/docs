@@ -378,7 +378,7 @@ export const WorkflowScene = ({ className }) => {
     /*
      * Agentic operations workflow, ported from the claude.ai/design project
      * "Agentic OE Hero Animation". A 10s isometric loop: an alert fires on an app,
-     * the Resolve agent investigates across the stack, engineers approve, the fix
+     * CloudThinker investigates across the stack, engineers approve, the fix
      * lands and company memory grows.
      */
     const LOOP = 10;
@@ -599,7 +599,7 @@ export const WorkflowScene = ({ className }) => {
     }
     /** The homepage workflow on its stage. Starts from the first frame on mount. */
     function AgenticWorkflowStage({ className }) {
-        return (<IsoMotionStage loop={LOOP} label="An alert fires on an app, the Resolve agent gathers evidence from cloud, code and observability, engineers approve the fix, the app turns healthy and company memory grows" className={className} frame={(T) => <WorkflowFrame T={T}/>}/>);
+        return (<IsoMotionStage loop={LOOP} label="An alert fires on an app, CloudThinker gathers evidence from cloud, code and observability, engineers approve the fix, the app turns healthy and company memory grows" className={className} frame={(T) => <WorkflowFrame T={T}/>}/>);
     }
 
     return AgenticWorkflowStage;
