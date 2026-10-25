@@ -16,7 +16,7 @@ Connect vCenter Server so CloudThinker can inventory your VMs, hosts, clusters, 
 - A CloudThinker workspace with no VMware vCenter connection yet.
 
 <Info>
-A workspace holds **one** VMware vCenter connection. The connection runs in the CloudThinker cloud, so vCenter must accept HTTPS on its port from the internet. To keep it otherwise private, allow only CloudThinker's egress IPs: ask your CloudThinker contact for the current list. See [Reaching private services](/guide/connections/overview#reaching-private-services).
+A workspace holds **one** VMware vCenter connection. The connection runs in the CloudThinker cloud, so vCenter must accept HTTPS on its port from the internet. To keep it otherwise private, allow only CloudThinker's egress IPs. These docs don't publish CloudThinker's egress IP list: ask your CloudThinker contact, or [contact us](https://cloudthinker.io/contact). See [Reaching private services](/guide/connections/overview#reaching-private-services) for other options.
 </Info>
 
 ## Setup
@@ -26,7 +26,7 @@ A workspace holds **one** VMware vCenter connection. The connection runs in the 
     In the vSphere Client, open **Administration → Single Sign On → Users and Groups**. Select your SSO domain (`vsphere.local` on a default install), open the **Users** tab, click **Add**, and create a user such as `cloudthinker` with a strong password. A new user starts with no privileges.
 
     <Warning>
-    Local SSO passwords expire after 90 days under vCenter's default policy, and the connection breaks when this one does. Change the policy in **Administration → Single Sign On → Configuration**, or plan a rotation and update the password in CloudThinker through [Rotate a credential](/guide/connections/overview#rotate-a-credential).
+    Local SSO passwords expire after 90 days under vCenter's default policy, and the connection breaks when this one does. Change the policy in **Administration → Single Sign On → Configuration**, or plan a rotation and update the password in CloudThinker through [Rotate the password](#rotate-the-password).
     </Warning>
   </Step>
   <Step title="Give the user the Read-only role">
@@ -94,9 +94,19 @@ To change CPU or memory on a powered-on VM, the VM needs CPU or memory hot-add e
 
 If a change fails with a permission error, vCenter names the missing privilege. Add that one and nothing broader.
 
+**Allow writes** on the connection's detail panel is the second control. It's on by default, but the **Read-only** role can't change anything, so vCenter refuses every change until you grant a custom role.
+
+| vSphere role on the CloudThinker user | Allow writes | Result |
+|---|---|---|
+| **Read-only** only | On or off | Read-only. vCenter rejects every change. |
+| A custom role with write privileges | Off | Read-only. CloudThinker refuses every change before it reaches vCenter. |
+| A custom role with write privileges | On | Agents can propose changes. Your [Rules and Approval mode](/guide/approvals/overview) decide each one. |
+
+To lock writes in CloudThinker as well, open **VMware vCenter** in **More → Workspace settings → Connections** and turn off the **Allow writes** switch on its detail panel.
+
 <ApprovalDefault />
 
-See [Approvals](/guide/approvals/overview) for who approves and how Rules apply.
+On a production vCenter, choose **Manual** so a person approves every change — that is the control that works today. Once CloudThinker turns on [Rule enforcement](/guide/approvals/rules#troubleshooting) for your workspace, an **Ask first** [Rule](/guide/approvals/rules) can narrow the wait to power-off and delete. See [Approvals](/guide/approvals/overview) for who approves.
 
 ## Agent capabilities
 
@@ -108,7 +118,7 @@ See [Approvals](/guide/approvals/overview) for who approves and how Rules apply.
 | **Snapshots** | List snapshots by VM and flag ones older than 7 days |
 | **Datastore capacity** | Show used and free space and flag datastores more than 85% full |
 | **Drift** | Compare host settings (NTP, syslog, SSH service, lockdown mode) and flag risky port group security options such as promiscuous mode |
-| **Changes** | Power, change CPU or memory, migrate, snapshot, or delete VMs. Each change goes through [Approvals](#write-access). Use **Manual** mode or an **Ask first** Rule if a person should decide power-off and delete |
+| **Changes** | Power, change CPU or memory, migrate, snapshot, or delete VMs. Each change goes through [Approvals](#write-access), so a person approves it on **Manual** |
 
 The 15% CPU, 8 vCPU, 7-day, and 85% thresholds are defaults. Name a different number in your question, such as `snapshots older than 30 days`. Answers cover only what the user's role can see.
 
@@ -138,6 +148,22 @@ List snapshots older than 7 days, grouped by VM
 Which datastores are above 85% full?
 ```
 
+## Rotate the password
+
+VMware vCenter is a single-connection service, so it has no pencil icon or **Edit Instance** dialog while it's healthy.
+
+| When | How |
+|---|---|
+| Before the password expires | Set the new password on the vCenter user, then click **Disconnect** on the **VMware vCenter** detail panel and connect again with the new value. |
+| After it expires (the connection shows **Error**) | Set the new password on the vCenter user, then click **Replace credentials** on the detail panel and save the new value. |
+
+Change the password in vCenter first, then update CloudThinker. The connection keeps signing in with the saved password, so it breaks between the two steps. Rotate early, in a quiet period, rather than letting the password expire into an outage. Reconnecting starts a new connection:
+
+- Agents and scheduled [automations](/guide/automation/automations) can't use vCenter between the disconnect and the reconnect.
+- Discovery runs again and spends credits.
+- **Allow writes** goes back to on. Turn it off again if you had it off.
+- Check that [Rules](/guide/approvals/rules) naming the VMware vCenter connection still list it.
+
 ## Troubleshooting
 
 <Accordion title="Failed to connect to VMware vCenter">
@@ -161,7 +187,7 @@ This workspace already has a VMware vCenter connection. Edit that connection or 
 </Accordion>
 
 <Accordion title="Failed to connect to VMware vCenter on a connection that used to work">
-The CloudThinker user's SSO password most likely expired (90 days by default) or the account is locked. An SSO administrator opens **Administration → Single Sign On → Users and Groups**, selects the user on the **Users** tab, and unlocks it or sets a new password. Then enter the new password through [Rotate a credential](/guide/connections/overview#rotate-a-credential).
+The CloudThinker user's SSO password most likely expired (90 days by default) or the account is locked. An SSO administrator opens **Administration → Single Sign On → Users and Groups**, selects the user on the **Users** tab, and unlocks it or sets a new password. Then enter the new password through [Rotate the password](#rotate-the-password): VMware vCenter has no pencil icon, so you click **Replace credentials** on the detail panel while the connection shows **Error**.
 </Accordion>
 
 <Accordion title="An agent cannot see a VM, host, or datastore">
@@ -174,7 +200,7 @@ The user's role does not cover that object. Check that the global permission has
 
 - **Use a dedicated user.** A separate vCenter user keeps CloudThinker's access visible in vCenter events and lets you revoke it without touching anyone's account.
 - **Keep certificate checks on.** Reserve **Skip SSL verification** for lab systems with self-signed certificates.
-- **Plan for password expiry.** Local SSO passwords expire after 90 days by default. Change the policy, or update the password before it expires through [Rotate a credential](/guide/connections/overview#rotate-a-credential).
+- **Plan for password expiry.** Local SSO passwords expire after 90 days by default. Change the policy, or update the password before it expires through [Rotate the password](#rotate-the-password).
 - **Revoke at the source.** Remove the user's permission in vCenter, or disable the user in **Single Sign On → Users and Groups**.
 
 ## Related

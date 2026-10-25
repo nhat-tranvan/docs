@@ -9,17 +9,24 @@ os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 d = json.load(open("docs.json"))
 
 GROUPS = [
-    ("Customize", ["guide/agents/customize", "guide/agents/quickstart", "guide/skills/overview",
-                   "guide/skills/custom-skills", "guide/skills/skill-format", "guide/knowledge"]),
+    ("Customize", ["guide/teach-cloudthinker", "guide/agents/quickstart",
+                   "guide/skills/custom-skills", "guide/skills/skill-format"]),
     ("Approvals", ["guide/approvals/overview", "guide/approvals/rules", "guide/approvals/approval-mode",
                    "guide/approvals/approvers"]),
-    ("Workspace settings", ["guide/workspace-settings", "guide/workspaces", "guide/workspace-users",
-                            "guide/workspace-branding", "guide/credentials", "guide/notifications",
-                            "guide/memory", "guide/memory-dreaming"]),
-    ("Admin Settings", ["guide/admin-settings", "guide/organization", "guide/capabilities",
-                        "guide/billing/pricing", "guide/billing/subscription", "guide/billing/usage",
-                        "guide/billing/credit-limits"]),
-    ("Run anywhere", ["guide/workers", "guide/deployment/overview"]),
+    # Mirrors the app's Workspace settings rail (settings-navigation.tsx -> workspaceSettingsItems).
+    # One home per page: workspaces -> Admin Settings, connections/overview -> Connections,
+    # commands -> Get started. admin-settings.mdx / workspace-settings.mdx link them in their tables.
+    ("Workspace settings", ["guide/workspace-settings", "guide/workspace-users",
+                            "guide/workspace-branding", "guide/skills/overview",
+                            "guide/memory", "guide/memory-dreaming", "guide/agents/customize",
+                            "guide/knowledge", "guide/credentials", "guide/notifications"]),
+    # Mirrors the app's Admin Settings rail. Security, identity and audit pages live in the
+    # Enterprise tab; chat apps live in Get started. The hub table links all of them.
+    ("Admin Settings", ["guide/admin-settings", "guide/organization", "guide/workspaces",
+                        "guide/billing/subscription", "guide/billing/pricing",
+                        "guide/billing/credit-limits", "guide/billing/usage",
+                        "guide/capabilities", "guide/workers"]),
+    ("Run anywhere", ["guide/deployment/overview"]),
     ("Artifacts and sharing", ["guide/artifacts/overview", "guide/sharing"]),
 ]
 L10N = {

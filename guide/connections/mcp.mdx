@@ -6,51 +6,20 @@ icon: "/images/icons/mcp.svg"
 
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Model Context Protocol (MCP) is an open standard for exposing tools to AI agents. If you run an MCP server, for example in front of an internal metrics API, a ticketing system, or a legacy service, you can add it as a custom [connection](/guide/connections/overview). Every tool the server exposes then becomes a tool agents can call in chat, automations, and investigations.
+Model Context Protocol (MCP) is an open standard for exposing tools to AI agents. If you run an MCP server, for example in front of an internal metrics API, a ticketing system, or a legacy service, you can add it as a custom [connection](/guide/connections/overview) and every tool it serves becomes a tool agents can call.
 
-CloudThinker reaches your server over the public internet and authenticates with static HTTP headers you set on the connection, usually an `Authorization` header with a token your server checks. The MCP form has no OAuth sign-in, so a server that only accepts OAuth can't be connected.
+## Prerequisites
 
-## What agents can do
-
-After you connect, CloudThinker loads the server's tool list. Each tool is available to agents as `prefix__tool_name`, where the prefix is the one you set on the connection. A server with prefix `weather` that exposes `get_forecast` gives agents a tool called `weather__get_forecast`.
-
-Agents can only call tools your server serves. To keep a write tool away from agents, remove it from the server or add a **Deny** [Rule](/guide/approvals/rules) for it. Reads always run, so a read tool you don't want called must come off the server.
-
-MCP connections have no **Allow writes** switch. Rules and your Approval mode are the only controls on write tools in CloudThinker.
-
-### How reads and writes are decided
-
-CloudThinker sorts each tool into a read or a write when it loads the tool list:
-
-| Check, in order | Result |
-|---|---|
-| The tool declares `readOnlyHint: true` | Read |
-| The tool declares `destructiveHint: true` | Write |
-| The tool name contains a read word: `get`, `list`, `search`, `query`, `read`, `describe`, `show`, `find`, `fetch`, `check`, `count`, `view`, `lookup`, `browse`, `inspect`, `export`, `download` | Read |
-| Anything else | Write |
-
-Name words are split on `_` and `-`, so `list_tickets` and `get-status` are reads, while `listTickets` (one word) and `close_ticket` are writes.
-
-<Warning>
-Any read word anywhere in the name makes the tool a read, unless it declares `destructiveHint: true`. `get_and_delete_user` and `check_and_fix` count as reads and run without approval. Set `destructiveHint: true` on every tool that changes data.
-</Warning>
-
-CloudThinker reloads the tool list, and sorts every tool again, when you click **Edit** and save a change to the URL, headers, or transport. Changing only the name or description doesn't reload it.
-
-Reads run without asking. Writes go through your [Rules](/guide/approvals/rules) and [Approval mode](/guide/approvals/approval-mode), so a write tool on your server is never called without the checks you configured.
-
-<Tip>
-Set `readOnlyHint` and `destructiveHint` on your server's tools. Hints are more reliable than tool names, and a read tool marked as a read won't trigger an approval request.
-</Tip>
-
-## Before you start
-
-- An MCP server that speaks **Streamable HTTP** or **Server-Sent Events** (SSE), reachable from the internet. To limit who can reach it, allowlist CloudThinker's egress IPs (see [Reaching private services](/guide/connections/overview#reaching-private-services)).
+- An MCP server that speaks **Streamable HTTP** or **Server-Sent Events** (SSE), reachable from the internet. To limit who can reach it, allowlist CloudThinker's egress IPs. These docs don't publish CloudThinker's egress IP list: ask your CloudThinker contact, or [contact us](https://cloudthinker.io/contact).
 - The server's endpoint URL, for example `https://mcp.example.com/mcp`.
-- A credential for your server, if it requires one. Issue one only for CloudThinker (see [Permissions](#permissions)).
+- A credential for your server, if it requires one. Issue one only for CloudThinker (see [Required permissions](#required-permissions)).
 - Permission to edit connections in your workspace.
 
-## Set up the connection
+<Note>
+CloudThinker reaches your server over the public internet and authenticates with static HTTP headers you set on the connection, usually an `Authorization` header with a token your server checks. The MCP form has no OAuth sign-in, so a server that only accepts OAuth can't be connected.
+</Note>
+
+## Setup
 
 <Steps>
   <Step title="Open the MCP form">
@@ -81,7 +50,20 @@ Set `readOnlyHint` and `destructiveHint` on your server's tools. Hints are more 
 Don't put credentials in the URL (`https://user:password@host/mcp`). The form rejects it. For basic auth, add a header with key `Authorization` and value `Basic <base64 of user:password>`.
 </Warning>
 
-## Server URL rules
+## Connection details
+
+| Field | Required | Description | Example |
+|-------|----------|-------------|---------|
+| **Connection Name** | Yes | A name your team will recognize | `Internal metrics` |
+| **Description** | No | Up to 500 characters | `Internal metrics API` |
+| **Prefix** | Yes | Short handle. Tools appear as `prefix__tool_name` | `metrics` |
+| **Transport Type** | Yes | **Streamable HTTP** or **Server-Sent Events** | **Streamable HTTP** |
+| **URL** | Yes | The server endpoint. See [Server URL rules](#server-url-rules) | `https://mcp.example.com/mcp` |
+| **Headers Configuration** | No | One **Key** and **Value** per header, sent on every request | `Authorization` / `Bearer <your-token>` |
+| **Timeout (seconds)** | Yes, prefilled | Wait for a response. Default 30, allowed 0.1 to 300 | `30` |
+| **SSE Read Timeout (seconds)** | Yes, prefilled | Wait on the event stream. Default 300, allowed 1 to 600 | `300` |
+
+### Server URL rules
 
 | URL | Result |
 |---|---|
@@ -118,15 +100,42 @@ If your server only speaks HTTP, put a reverse proxy in front of it. With [Caddy
   </Step>
 </Steps>
 
-## Permissions
+## Required permissions
 
 Your server decides what the connection can do. CloudThinker only holds the header values you give it.
 
-- Issue a token used only by CloudThinker, so you can revoke it without affecting anything else.
-- Scope it to the least access the exposed tools need. Start with read tools only, and add write tools when you're ready to approve them.
-- Have the server validate the token on every request.
+<Tip>
+Issue a token used only by CloudThinker, so you can revoke it without affecting anything else. Scope it to the least access the exposed tools need, start with read tools only, and have the server validate the token on every request.
+</Tip>
 
-## Verify the connection
+## Agent capabilities
+
+After you connect, CloudThinker loads the server's tool list. Each tool is available to agents as `prefix__tool_name`, where the prefix is the one you set on the connection. A server with prefix `weather` that exposes `get_forecast` gives agents a tool called `weather__get_forecast`.
+
+Agents can only call tools your server serves. MCP connections have no **Allow writes** switch, so choose **Manual** and a person then approves every write tool call. Taking a tool off the server is the other control that always holds, and it is the only way to stop a read: reads always run without asking.
+
+Once CloudThinker turns on [Rule enforcement](/guide/approvals/rules#troubleshooting) for your workspace, a **Deny** [Rule](/guide/approvals/rules) can refuse one write tool outright while the rest keep asking.
+
+### How reads and writes are decided
+
+CloudThinker sorts each tool into a read or a write when it loads the tool list:
+
+| Check, in order | Result |
+|---|---|
+| The tool declares `readOnlyHint: true` | Read |
+| The tool declares `destructiveHint: true` | Write |
+| The tool name contains a read word: `get`, `list`, `search`, `query`, `read`, `describe`, `show`, `find`, `fetch`, `check`, `count`, `view`, `lookup`, `browse`, `inspect`, `export`, `download` | Read |
+| Anything else | Write |
+
+Name words are split on `_` and `-`, so `list_tickets` and `get-status` are reads, while `listTickets` (one word) and `close_ticket` are writes. Reads run without asking. Writes go through your [Rules](/guide/approvals/rules) and [Approval mode](/guide/approvals/approval-mode).
+
+<Warning>
+Any read word anywhere in the name makes the tool a read, unless it declares `destructiveHint: true`. `get_and_delete_user` and `check_and_fix` count as reads and run without approval. Set `destructiveHint: true` on every tool that changes data.
+</Warning>
+
+CloudThinker reloads the tool list, and sorts every tool again, when you click **Edit** and save a change to the URL, headers, or transport. Changing only the name or description doesn't reload it.
+
+### Verify the connection
 
 Start a chat and type `#` to pick the connection, then ask:
 
@@ -134,21 +143,15 @@ Start a chat and type `#` to pick the connection, then ask:
 #Internal metrics List the tools this connection exposes, then call the simplest read-only one and show me the result.
 ```
 
-**Expected result:** CloudThinker lists the tools by their `prefix__tool_name` names and returns output from one read tool, with no approval request.
+**Success state:** CloudThinker lists the tools by their `prefix__tool_name` names and returns output from one read tool, with no approval request.
 
-## Example prompts
+### Example prompts
 
 Replace `#Internal metrics` with your connection's name.
 
 ```text
 #Internal metrics What is the current status of the checkout service?
-```
-
-```text
 #Internal metrics Compare today's error counts with the last 7 days and flag anything unusual.
-```
-
-```text
 #Internal metrics Which tools here can change data? Describe what each one does before calling any of them.
 ```
 
@@ -156,7 +159,7 @@ Replace `#Internal metrics` with your connection's name.
 
 <AccordionGroup>
   <Accordion title="This connection did not respond in time. Try connecting again.">
-    The server didn't answer within **Timeout (seconds)**. Check that the server is running and that its firewall allows CloudThinker's egress IPs (see [Reaching private services](/guide/connections/overview#reaching-private-services)), then raise the timeout and try again.
+    The server didn't answer within **Timeout (seconds)**. Check that the server is running and that its firewall allows CloudThinker's egress IPs, then raise the timeout and try again.
   </Accordion>
   <Accordion title="This server does not use HTTPS on this port.">
     The URL starts with `https://`, but the server speaks plain HTTP on that port. Change the URL to `http://`, or [add HTTPS](#add-https-with-a-reverse-proxy).
@@ -195,7 +198,7 @@ Replace `#Internal metrics` with your connection's name.
 - **Mark tool hints.** Set `readOnlyHint` and `destructiveHint` so CloudThinker treats each tool the way you intend.
 - **Rotate header credentials.** Replace the token on your server, then edit the connection and update the header value.
 
-## Next steps
+## Related
 
 <CardGroup cols={2}>
   <Card title="Set approval Rules" icon="shield-check" href="/guide/approvals/rules">

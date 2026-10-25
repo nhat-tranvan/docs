@@ -12,7 +12,7 @@ Connect a Kubernetes cluster so CloudThinker can find crash-looping and pending 
 
 ## Prerequisites
 
-- A cluster whose API server CloudThinker can reach over the internet. Commands run in the CloudThinker cloud, so a private-only endpoint fails the connection test. If you restrict API access (EKS public access CIDRs, GKE authorized networks, AKS authorized IP ranges), add CloudThinker's egress IPs instead of opening it to `0.0.0.0/0`. See [Reaching private services](/guide/connections/overview#reaching-private-services).
+- A cluster whose API server CloudThinker can reach over the internet. Commands run in the CloudThinker cloud, so a private-only endpoint fails the connection test. If you restrict API access (EKS public access CIDRs, GKE authorized networks, AKS authorized IP ranges), add CloudThinker's egress IPs instead of opening it to `0.0.0.0/0`. These docs don't publish CloudThinker's egress IP list: ask your CloudThinker contact, or [contact us](https://cloudthinker.io/contact). See [Reaching private services](/guide/connections/overview#reaching-private-services) for other options.
 - `kubectl` access to that cluster with permission to create a namespace, a ClusterRole, and a ClusterRoleBinding.
 - Managed clusters (EKS, GKE, AKS) hand out kubeconfigs that sign in through `aws`, `gcloud`, or `az` exec plugins, which don't work in CloudThinker. Step 2 builds one that does. Kubernetes checks the service-account token itself, so you don't map it in cloud IAM (no EKS access entry, for example).
 - Optional: [Metrics Server](https://github.com/kubernetes-sigs/metrics-server) in the cluster. Without it, agents still report pod status and node conditions, but not live CPU and memory usage.
@@ -26,7 +26,7 @@ You get **one** Kubernetes connection per workspace, and agents work in the kube
 
 <Steps>
   <Step title="Create a read-only service account">
-    Save this manifest as `cloudthinker-reader.yaml`. It grants read access (`get`, `list`, `watch`) to the resources agents inspect, plus pod logs and metrics. The role can't read Secrets. The manifest creates one Secret, the service account's token, which only you read in step 2.
+    Save this manifest as `cloudthinker-reader.yaml`. It also creates one Secret, the service account's token, which only you read in step 2. [Required permissions](#required-permissions) covers what the role allows.
 
     <Accordion title="cloudthinker-reader.yaml">
       ```yaml
@@ -145,9 +145,9 @@ You get **one** Kubernetes connection per workspace, and agents work in the kube
     EOF
     ```
 
-    On older macOS releases, replace `base64 --decode` with `base64 -D`. If you paste the script into a file, keep the closing `EOF` at the very start of its line.
+    On older macOS releases, replace `base64 --decode` with `base64 -D`, and keep the closing `EOF` at the very start of its line.
 
-    **Success state:** `kubectl --kubeconfig cloudthinker-kubeconfig.yaml get nodes` lists your nodes. This is the same command CloudThinker runs to test the connection. To see everything the role allows, run `kubectl auth can-i --list --as=system:serviceaccount:cloudthinker:cloudthinker-reader`. The `--as` flag needs impersonate rights, which cluster-admin has.
+    **Success state:** `kubectl --kubeconfig cloudthinker-kubeconfig.yaml get nodes` lists your nodes. This is the same command CloudThinker runs to test the connection.
   </Step>
   <Step title="Upload the kubeconfig in CloudThinker">
     Open **More → Workspace settings → Connections**, select **Kubernetes**, and upload `cloudthinker-kubeconfig.yaml` in the **KUBECONFIG** field. Click **Connect**.
@@ -162,13 +162,13 @@ You get **one** Kubernetes connection per workspace, and agents work in the kube
 |-------|----------|-------------|---------|
 | **KUBECONFIG** | Yes | A kubeconfig file. The file picker accepts the `.yaml` extension only, so a `.yml` file can't be selected. Rename it to `.yaml` first. CloudThinker uses its current context | `cloudthinker-kubeconfig.yaml` |
 
-Embed everything in the file. A kubeconfig that points to local files (`certificate-authority: /path/...`, `client-certificate: /path/...`) or signs in through an `exec` plugin such as a cloud CLI depends on tools and files on your machine, which CloudThinker does not have. The token-based file from step 2 avoids both.
+Embed everything in the file. A kubeconfig that points to local certificate files, or signs in through an `exec` plugin, needs files and tools CloudThinker doesn't have. The token-based file from step 2 avoids both.
 
 ## Required permissions
 
 The manifest in [step 1](#setup) grants read access (`get`, `list`, `watch`) to the resources agents inspect, plus pod logs and metrics. It can't read Secrets.
 
-Read access is cluster-wide, including `kube-system`, because a ClusterRoleBinding grants the role in every namespace. To limit it to some namespaces, replace the ClusterRoleBinding with a RoleBinding to the same ClusterRole in each namespace you want covered. Cluster-scoped resources such as nodes, namespaces, and persistent volumes then drop out of answers, since a RoleBinding can't grant them.
+Read access is cluster-wide, including `kube-system`, because a ClusterRoleBinding grants the role in every namespace. To cover only some namespaces, replace the ClusterRoleBinding with a RoleBinding to the same ClusterRole in each one. Cluster-scoped resources such as nodes, namespaces, and persistent volumes then drop out of answers, since a RoleBinding can't grant them.
 
 Custom resources aren't covered, so agents can't see CRD-based objects such as Argo CD applications or Istio virtual services. To let them, add a rule with each resource's API group to the ClusterRole.
 
@@ -178,7 +178,15 @@ Trim the role to what you need. Drop `configmaps` if yours hold sensitive values
 
 ## Write access
 
-Agents can run changes such as `scale`, `rollout restart`, `cordon`, `drain`, or `apply` only when you ask for that change in the conversation. The read-only role above makes them fail with `403`.
+Agents run a change such as `scale`, `rollout restart`, `cordon`, `drain`, or `apply` only when you ask for it in the conversation, and the read-only role above makes it fail with `403`. **Allow writes** on the connection's detail panel is the second control. It's on by default, but it can't widen what the role allows.
+
+| RBAC on the `cloudthinker-reader` service account | Allow writes | Result |
+|---|---|---|
+| Read-only rules only | On or off | Read-only. Kubernetes rejects every change with `403`. |
+| Write rules granted | Off | Read-only. CloudThinker refuses every change before it reaches the cluster. |
+| Write rules granted | On | Agents can propose changes. Your [Rules and Approval mode](/guide/approvals/overview) decide each one. |
+
+To lock writes in CloudThinker as well, open **More → Workspace settings → Connections**, select **Kubernetes**, and turn off the **Allow writes** switch on its detail panel.
 
 <ApprovalDefault />
 
@@ -188,7 +196,7 @@ To allow a specific change, grant only what it needs:
 - **Apply** needs `get`, `create`, and `patch` on each resource type in the manifest you apply, in the namespaces it targets.
 - **Cordon and drain** act on nodes, which are cluster-scoped, so a namespaced Role can't allow them. Use a ClusterRole with `patch` on `nodes` and `create` on `pods/eviction`. The read role already supplies the `get` and `list` on pods and DaemonSets that drain needs.
 
-The write grants bind to the same `cloudthinker-reader` service account on purpose, so the one kubeconfig covers reads and changes. If you plan write access from the start, consider renaming the account (for example `cloudthinker-agent`) in both manifests and in step 2, so reviewers aren't surprised that a "reader" can drain nodes.
+The write grants bind to the same `cloudthinker-reader` service account, so one kubeconfig covers reads and changes. If you plan write access from the start, rename the account (for example `cloudthinker-agent`) in both manifests and in step 2.
 
 This example allows scaling deployments in one namespace, plus cordon and drain. Replace `payments` with your namespace, save it as `cloudthinker-write.yaml`, and run `kubectl apply -f cloudthinker-write.yaml`.
 
@@ -275,6 +283,61 @@ Which nodes are under memory or disk pressure, and what is using the most memory
 Which service accounts are bound to cluster-admin?
 ```
 
+## Rotate the token
+
+Kubernetes is a single-connection service, so it has no pencil icon or **Edit Instance** dialog while it's healthy. Create the new token first and delete the old Secret last: deleting it first cuts the cluster off before you have a working replacement.
+
+<Steps>
+  <Step title="Create a second token Secret">
+    Save this as `cloudthinker-reader-token-2.yaml`: a second token for the same service account, so both work while you swap.
+
+    ```yaml
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: cloudthinker-reader-token-2
+      namespace: cloudthinker
+      annotations:
+        kubernetes.io/service-account.name: cloudthinker-reader
+    type: kubernetes.io/service-account-token
+    ```
+
+    Apply it:
+
+    ```bash
+    kubectl apply -f cloudthinker-reader-token-2.yaml
+    ```
+
+    **Success state:** `kubectl get secret cloudthinker-reader-token-2 -n cloudthinker` lists the Secret with a `DATA` count of 3.
+  </Step>
+  <Step title="Build a kubeconfig from the new token">
+    Repeat step 2 of [Setup](#setup) with `cloudthinker-reader-token-2` in place of `cloudthinker-reader-token`.
+
+    **Success state:** `kubectl --kubeconfig cloudthinker-kubeconfig.yaml get nodes` lists your nodes.
+  </Step>
+  <Step title="Swap it in CloudThinker">
+    While the connection shows **Connected**, click **Disconnect** on the **Kubernetes** detail panel, then connect again and upload the new kubeconfig. While it shows **Error**, click **Replace credentials** on the detail panel and upload the new kubeconfig instead, with no disconnect.
+
+    **Success state:** the connection shows **Connected**.
+  </Step>
+  <Step title="Delete the old Secret">
+    Only now, remove the token you replaced:
+
+    ```bash
+    kubectl delete secret cloudthinker-reader-token -n cloudthinker
+    ```
+  </Step>
+</Steps>
+
+A disconnect and reconnect starts a new connection:
+
+- Agents and scheduled [automations](/guide/automation/automations) can't use the cluster between the disconnect and the reconnect.
+- Discovery runs again and spends credits.
+- **Allow writes** goes back to on. Turn it off again if you had it off.
+- Check that [Rules](/guide/approvals/rules) naming the Kubernetes connection still list it.
+
+If your policy bans long-lived credentials, skip the Secret and build the kubeconfig with a short-lived token from `kubectl create token cloudthinker-reader -n cloudthinker --duration=<time>`. The connection breaks when that token expires, so you rebuild and upload the kubeconfig each time.
+
 ## Troubleshooting
 
 A failed test shows `Failed to connect to Kubernetes:` followed by the first error line from `kubectl get nodes`. Match that line to an entry below.
@@ -284,15 +347,15 @@ CloudThinker could not reach the API server in the kubeconfig. Check that the `s
 </Accordion>
 
 <Accordion title="error: You must be logged in to the server (Unauthorized)">
-The token is wrong, expired, or was revoked. Rebuild the kubeconfig from step 2, check that the `cloudthinker-reader-token` Secret still exists, and upload the new file.
+The token is wrong, expired, or was revoked. Check that the `cloudthinker-reader-token` Secret still exists, then rebuild the kubeconfig from step 2 and upload it through [Rotate the token](#rotate-the-token).
 </Accordion>
 
 <Accordion title="Error from server (Forbidden) in an answer">
-The token works but the ClusterRole does not cover that resource. Confirm the ClusterRoleBinding is applied, then add the missing resource to the role.
+The ClusterRole doesn't cover that resource. Confirm the ClusterRoleBinding is applied, then add the resource to the role.
 </Accordion>
 
 <Accordion title="getting credentials: exec, or no such file or directory">
-The kubeconfig relies on a local command or file path. Replace it with the token-based kubeconfig from step 2, which embeds the token and CA certificate.
+The kubeconfig relies on a local command or file path. Replace it with the token-based kubeconfig from step 2.
 </Accordion>
 
 <Accordion title="No CPU or memory usage in answers">
@@ -300,7 +363,7 @@ Metrics Server is not installed or not ready. Run `kubectl top nodes` to check. 
 </Accordion>
 
 <Accordion title="Connection 'k8s' already exists. Only one instance is allowed.">
-`k8s` is the Kubernetes connection. This workspace already has one. Edit that connection to upload a different kubeconfig, or disconnect it first.
+`k8s` is the Kubernetes connection, and a workspace holds one. There's no pencil icon to edit it, so to point CloudThinker at a different cluster, click **Disconnect** on the **Kubernetes** detail panel and connect again with the other kubeconfig.
 </Accordion>
 
 ## Security
@@ -308,8 +371,8 @@ Metrics Server is not installed or not ready. Run `kubectl top nodes` to check. 
 <ConnectionSecurity />
 
 - **Keep Secrets out of the role.** The manifest above never grants Secret reads, so agents can't read Secret objects. Pod logs and ConfigMaps are readable, so drop `pods/log` or `configmaps` from the role if they hold sensitive data. Env values set directly in a pod spec are readable through `pods`, so move sensitive ones into Secrets.
-- **Rotate the token.** The token Secret never expires on its own. To rotate it, run `kubectl delete secret cloudthinker-reader-token -n cloudthinker`, apply `cloudthinker-reader.yaml` again to re-create it, rebuild the kubeconfig from step 2, and upload it through [Rotate a credential](/guide/connections/overview#rotate-a-credential). If your policy bans long-lived credentials, skip the Secret and build the kubeconfig with a short-lived token from `kubectl create token cloudthinker-reader -n cloudthinker --duration=<time>`. The connection breaks when that token expires, so you rebuild and upload the kubeconfig each time.
-- **Revoke in one command.** Delete the token Secret (`kubectl delete secret cloudthinker-reader-token -n cloudthinker`) to cut access immediately, or delete the `cloudthinker` namespace and the ClusterRole and binding to remove everything.
+- **Rotate the token.** The token Secret never expires on its own, so rotate it on your normal schedule. See [Rotate the token](#rotate-the-token).
+- **Revoke in one command.** Delete the token Secret to cut access immediately, or delete the `cloudthinker` namespace plus the ClusterRole and binding to remove everything.
 
 ## Related
 

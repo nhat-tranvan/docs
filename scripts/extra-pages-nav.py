@@ -10,8 +10,7 @@ d = json.load(open("docs.json"))
 
 # (tab names per language, group to append to, pages to add after `after`)
 PLACE = [
-    (("Platform", "Nền tảng", "プラットフォーム", "플랫폼"), ("Workspaces and organization", "Tổ chức", "組織", "조직"),
-     "guide/workspace-branding", ["guide/capabilities"]),
+    # guide/capabilities is placed by platform-nav.py (Admin Settings); entry removed.
     (("Resources", "Tài nguyên", "リソース", "리소스"), ("Scenarios", "Tình huống thực tế", "シナリオ", "시나리오"),
      None, ["guide/use-cases/resolve-checkout-incident", "guide/use-cases/review-risky-pull-request",
             "guide/use-cases/cyber-pentest-staging"]),

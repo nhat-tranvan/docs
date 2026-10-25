@@ -13,14 +13,13 @@ import os
 MENU = [
     ("Resolve", "triangle-exclamation", [
         ("Get started", ["guide/incident/overview", "guide/incident/quickstart"]),
-        ("Set up", ["guide/incident/integrations", "guide/pulse/setup", "guide/incident/webhook-integrations/overview",
+        ("Set up", ["guide/incident/connect-alert-sources", "guide/incident/integrations", "guide/pulse/setup", "guide/incident/webhook-integrations/overview",
                     "guide/incident/webhook-integrations/cloudwatch", "guide/incident/webhook-integrations/custom-source",
                     "guide/incident/settings"]),
         ("Work incidents", ["guide/pulse/overview", "guide/pulse/clusters", "guide/incident/root-cause-analysis",
                             "guide/incident/oncall", "guide/incident/runbooks", "guide/incident/manual-logging"]),
-        ("Learn and improve", ["guide/incident/insights", "guide/pulse/analytics", "guide/incident/incident-memory"]),
+        ("Learn and improve", ["guide/incident/detectors", "guide/incident/insights", "guide/pulse/analytics", "guide/incident/incident-memory"]),
         ("Help", ["guide/incident/troubleshooting"]),
-        ("Coming soon", ["guide/incident/detectors"]),
     ]),
     ("Review", "code-pull-request", [
         ("Get started", ["guide/code-review/overview", "guide/code-review/setup"]),
@@ -32,8 +31,10 @@ MENU = [
     ]),
     ("Cyber", "shield-halved", [
         ("Get started", ["guide/security/cyber-overview", "guide/security/cyber-quickstart"]),
-        ("Run tests", ["guide/security/pentest", "guide/security/pentest-deep-dive", "guide/security/captcha"]),
-        ("Results", ["guide/security/cyber-findings", "guide/security/cyber-reports"]),
+        ("Run tests", ["guide/security/pentest", "guide/security/pentest-deep-dive", "guide/security/captcha",
+                       "guide/security/code-audit"]),
+        ("Results", ["guide/security/cyber-findings", "guide/security/cyber-reports",
+                     "guide/security/cyber-libraries"]),
         ("Help", ["guide/security/cyber-troubleshooting"]),
     ]),
     ("Optimize", "chart-line", [
@@ -44,7 +45,7 @@ MENU = [
         ("Help", ["guide/cost-optimization/troubleshooting"]),
     ]),
     ("Automation", "clock", [
-        ("Automation", ["guide/automation/quickstart", "guide/automation/automations",
+        ("Automations", ["guide/automation/quickstart", "guide/automation/automations",
                         "guide/automation/autonomous-agents"]),
     ]),
 ]
@@ -67,6 +68,7 @@ GROUP_L10N = {
     "Settings": {"vi": "Cài đặt", "ja": "設定", "ko": "설정"},
     "Coming soon": {"vi": "Sắp ra mắt", "ja": "近日公開", "ko": "출시 예정"},
     "Automation": {"vi": "Tự động hóa", "ja": "自動化", "ko": "자동화"},
+    "Automations": {"vi": "Tự động hóa", "ja": "自動化", "ko": "자동화"},
     "Memory": {"vi": "Bộ nhớ", "ja": "メモリ", "ko": "메모리"},
     "Artifacts and sharing": {"vi": "Artifacts và chia sẻ", "ja": "アーティファクトと共有", "ko": "아티팩트 및 공유"},
     "Memory and sharing": {"vi": "Bộ nhớ và chia sẻ", "ja": "メモリと共有", "ko": "메모리 및 공유"},

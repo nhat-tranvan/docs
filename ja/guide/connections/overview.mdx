@@ -5,7 +5,7 @@ description: "クラウドプロバイダー、データベース、サービス
 
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
-接続によって、CloudThinkerエージェントが[Model Context Protocol (MCP)](/ja/guide/connections/mcp)を通じてインフラにアクセスできるようになります。サービスを一度接続するだけで、[CloudThinker](/ja/guide/agents/overview) が個別設定なしに利用できます。
+接続とは、AWS アカウント、Kubernetes クラスター、GitHub organization など、1 つの外部サービスのために保存した認証情報です。サービスを一度接続すれば、[CloudThinker](/ja/guide/agents/overview) とカスタムエージェントが個別の設定なしに利用できます。
 
 ## 接続を追加する
 
@@ -23,6 +23,120 @@ import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
     エージェントに新しい接続に対する質問をします。各ガイドには確認用プロンプトが含まれています。
   </Step>
 </Steps>
+
+## Environment を設定する
+
+各接続には **Environment** があります: **Production**、**Staging**、**Development**、**Not set** のいずれかです。これは接続を読む人とエージェントのためのラベルです。エージェントの変更を実行するか、人の承認を待つか、拒否するかを決める条件である [Rules](/guide/approvals/rules) は、この項目を読みません。
+
+<Note>
+接続ダイアログは environment を尋ねないため、接続した直後に設定してください。Microsoft Azure のように接続を 1 つしか持てないサービスと、GitHub のように OAuth でサインインするサービスは、**Not set** から変更できません。接続ごとに扱いを変えたい場合は、その接続を名前で指定する [Rule](/guide/approvals/rules) を書いてください。
+</Note>
+
+複数の接続に対応するサービスでは、各アカウントがサービスの詳細パネルの行として表示されます。アカウントの行の鉛筆アイコンをクリックし、**Edit Instance** ダイアログで **Environment** を更新します。
+
+## 接続した後に起きること
+
+接続が初めて **Connected** になると、CloudThinker は **Discovery** を実行します。これは接続したサービスを 1 回だけバックグラウンドで調査するものです。結果は接続の詳細パネルの **Discovery** セクションに入ります。
+
+| 結果 | 内容 | できること |
+|---|---|---|
+| Evidence | サービスの構成に関する事実。それぞれ、根拠となった読み取りが示されます | エージェントが到達できる範囲を確認します |
+| Related connection | その証拠をさらに活かせるサービス | カードの **Connect** をクリックします |
+| 自動化の提案 | 証拠から提案された定期チェック | **Schedule** をクリックして [automation](/guide/automation/automations) を作成します |
+
+Discovery は自動で 1 回、最大 30 分実行されます。最初に得られる有用な答えになることが多いので、最初のプロンプトを書く前に確認してください。認証情報の権限を広げた後などは、**Run Discovery** で再実行できます。再実行にはワークスペースの Admin ロールが必要です。
+
+Discovery はクレジットを消費し、費用はサービスが保持しているデータ量によって変わります。[デイリークレジット](/ja/guide/billing/usage)は使えないため、ワークスペースの残高にクレジットが必要です。残高が不足すると通知を出して一時停止するので、クレジットを追加して **Run Discovery** をクリックしてください。
+
+Discovery はチャットと同じツールと [Approvals](/guide/approvals/overview) を使いますが、答える人がいないため承認を待つことはありません。人に尋ねることになる呼び出しはスキップされ、Discovery は読み取れる範囲で続行します。時間の上限に達した場合は **Partial discovery** として終了し、すでに検証した結果を保持します。何も検証できなかった場合は **Discovery could not finish** と表示されます。どちらの場合も接続は動作し続けます。
+
+## アクセスの仕組み
+
+すべての接続は 1 つの[ワークスペース](/ja/guide/workspaces)に属します。そのワークスペースで作業する人は誰でも、[CloudThinker](/ja/guide/agents/overview) とカスタムエージェントも含めて、設定をやり直すことなく利用できます。
+
+| ワークスペースロール | 接続の閲覧 | 追加・編集・ローテーション・削除・Discovery の再実行 |
+|---|---|---|
+| Admin | 可 | 可 |
+| Developer、Viewer | 可 | 不可 |
+
+Organization の Owner と Admin は、すべてのワークスペースで Admin を持ちます。[ワークスペースロール](/ja/guide/workspace-users)を参照してください。
+
+<Warning>
+この設定を持つ接続の多くでは、**Allow writes** が最初からオンです。AWS、Google Cloud、Azure、Kubernetes、GitHub、GitLab が該当します。Docker Hub や Snowflake など、一部はオフで始まります。接続した認証情報に書き込み権限が少しでもあれば、エージェントは接続した時点から変更を提案でき、Rules と Approval mode がそれぞれを判断します。これを既定でオフにするワークスペースや organization の設定はないため、制御手段は読み取り専用の認証情報を使うことと、接続ごとに **Allow writes** をオフにすることの 2 つです。
+</Warning>
+
+エージェントが接続で何をできるかは、2 つの制御で決まります。
+
+| 制御 | 置かれている場所 | 決めること |
+|---|---|---|
+| 認証情報そのものの権限 | プロバイダー側 (IAM ロール、サービスアカウント、API トークンのスコープ) | 上限です。エージェントが認証情報の許す範囲を超えることはありません。 |
+| **Allow writes** | CloudThinker の接続の詳細パネル | オフ: エージェントは読み取りのみで、変更はすべて拒否されます。オン: エージェントが変更を提案し、[Rules](/guide/approvals/rules) と [Approval mode](/guide/approvals/approval-mode) が 1 件ずつ判断します。 |
+
+**Manual** は書き込みのたびに人に尋ねます。新しいワークスペースの既定は **Auto · Rules + AI · Ask me** で、Allow Rule または AI の判断が安全な変更を承認し、残りはあなたに尋ねます。Allow Rule が実際に判断するのは、CloudThinker があなたのワークスペースで Rule の適用を有効にした後だけです。これは既定では無効なので、それまでは **Manual** を選んでください。
+
+各セットアップガイドの **Write access** または **Agent capabilities** セクションに、その接続がどの状態で始まるかが書かれています。切り替えを持たない接続もあります。その場合は認証情報が上限を決め、変更はすべて [Approvals](/guide/approvals/overview) を通ります。Rancher のような読み取り専用の接続には、許可できる書き込み操作がそもそもありません。
+
+## プライベートなサービスに到達する
+
+接続は CloudThinker Cloud から実行されるため、サービスはインターネットからの接続を受け付けられる必要があります。社内の vCenter、PostgreSQL、Prometheus、Argo CD など、プライベートネットワーク上にあるものではこれが問題になります。
+
+| 選択肢 | 使う場面 |
+|---|---|
+| エンドポイントを公開し、CloudThinker の egress IP を許可する | サービスをファイアウォールルールの背後に置ける場合。このドキュメントでは CloudThinker の egress IP の一覧を公開していません。CloudThinker の担当者に尋ねるか、[お問い合わせ](https://cloudthinker.io/contact)ください。認証のないサービスを公開しないでください。 |
+| ネットワーク内で [Worker](/guide/workers) を動かす | サービスをプライベートに保つ必要がある場合。Worker は接続をプライベートにするものではありません。ワークスペースの接続は引き続き CloudThinker Cloud で実行されます。代わりに、サービスのコマンドラインツール (たとえば `psql`) とその認証情報を Worker のマシンに用意します。そのサービスは **More → Workspace settings → Connections** には表示されません。Worker はベータ版です。 |
+
+## 認証情報をローテーションする
+
+保存済みの認証情報は、接続を解除せずに差し替えられます。接続はエイリアス、設定、履歴をそのまま保ちます。AWS の IAM ロール接続は短命な STS 認証情報を使うため、ローテーションするものはなく、External ID も変わりません。アクセスキー、クライアントシークレット、JSON キー、API トークンにはローテーションが必要です。
+
+<Steps>
+  <Step title="プロバイダー側で新しい認証情報を作成する">
+    先に新しいキーまたはトークンを作成します。入れ替えが終わるまで古いものは有効にしておきます。
+  </Step>
+  <Step title="CloudThinker で差し替える">
+    **More → Workspace settings → Connections** でサービスを開き、アカウントの行の鉛筆アイコンをクリックし、**Edit Instance** で保存済みの認証情報の横にある **Replace…** をクリックします。新しい値を入力して **Save and test** をクリックします。
+
+    **Success state:** テストが通り、接続は **Connected** のままになります。テストが失敗した場合、CloudThinker は以前の認証情報を保持してエラーを表示します。
+  </Step>
+  <Step title="古い認証情報を失効させる">
+    プロバイダー側で古いキーを削除または無効化します。
+  </Step>
+</Steps>
+
+Microsoft Azure のように接続を 1 つしか持てないサービスには鉛筆アイコンがありません。これらの **Replace credentials** ボタンは接続が **Error** のときだけ表示されるため、早めにローテーションするには接続を解除し、新しい値で接続し直します。例外はトークンを使う Git プロバイダー (GitLab、Bitbucket、Azure DevOps、AWS CodeCommit) です。Review のセットアップが済んでいれば、接続を解除せずに **Review → Settings → Connection actions → Update token** でトークンをローテーションできます。
+
+解除して接続し直すと新しい接続になるため、業務の少ない時間帯に計画してください。
+
+- 解除から再接続までの間、エージェント、スケジュールされた automation、Optimize の更新はそのサービスを使えません。
+- Discovery が再実行され、クレジットを消費します。
+- **Allow writes** は既定値に戻ります。多くの接続では既定がオンです。オフにしていた場合は、もう一度オフにしてください。
+- その接続を名前で指定している [Rules](/guide/approvals/rules) が、まだ一致しているか確認してください。
+
+OAuth 接続の多くには差し替える認証情報がありません。サインインしているアカウントを変えるには、接続を解除して接続し直します。
+
+## 接続が壊れたとき
+
+バックグラウンドで認証情報が使えなくなると (トークンの期限切れ、キーの失効、ロールの削除)、接続は **Error** に切り替わります。AWS では連続して 3 回バックグラウンドで失敗する必要があるため、一度の不調では切り替わりません。他の接続は、バックグラウンドのトークン更新または実行が認証エラーになった時点で切り替わります。ワークスペースの admin には、障害 1 件につき 1 通の[通知](/ja/guide/notifications)が届きます。再試行の失敗ごとではありません。自分で実行したテストでは誰にも通知されません。
+
+接続が **Error** の間、それに依存するスケジュール実行はスキップされます。[Optimize](/ja/guide/cost-optimization/overview) のコスト更新、スケジュールされた [automation](/guide/automation/automations)、[Pulse](/ja/guide/pulse/overview) のアラート取得が含まれます。
+
+復旧の手順:
+
+1. プロバイダー側で原因を解消します。たとえばロールを復元する、新しいキーを発行するなどです。
+2. 接続を開きます。詳細パネルにエラーが表示されます。**Retry** をクリックして保存済みの認証情報を再テストするか、**Replace credentials** をクリックして新しい値を入力します。OAuth 接続の場合は **Connect** をクリックして再度サインインします。
+3. ステータスが **Connected** に戻ると、スケジュール実行は次の周期から再開します。
+
+## 接続を解除する
+
+**More → Workspace settings → Connections** でサービスを開きます。アカウントの行があるサービスでは、アカウントの行のゴミ箱アイコンをクリックします。接続を 1 つしか持てないサービスでは、詳細パネルの **Disconnect** をクリックします。**Disconnect** ダイアログで確認します。これは取り消せません。
+
+解除が完了した時点で、エージェントはそのサービスへのアクセスを失います。解除してもプロバイダー側のロール、キー、トークンは削除されないため、その後プロバイダー側で削除してください。
+
+サービスを再び接続すると、それは新しい接続になります。
+
+- Discovery が再実行され、クレジットを消費します。
+- **Allow writes** は既定値に戻り、**Environment** は **Not set** に戻ります。
+- [Rules](/guide/approvals/rules) は **Alias** で接続を照合します。再接続時に同じ Alias を使えば、その接続を指定した Rule は引き続き一致します。
 
 ## クラウドプラットフォーム
 
