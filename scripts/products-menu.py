@@ -43,27 +43,12 @@ MENU = [
                             "guide/cost-optimization/reports"]),
         ("Help", ["guide/cost-optimization/troubleshooting"]),
     ]),
-    ("Customize", "sliders", [
-        ("Get started", ["guide/agents/customize", "guide/agents/quickstart"]),
-        ("Agents and skills", ["guide/skills/overview", "guide/skills/custom-skills", "guide/skills/skill-format",
-                               "guide/knowledge"]),
-        ("Approvals", ["guide/approvals/overview", "guide/approvals/rules", "guide/approvals/approval-mode",
-                       "guide/approvals/approvers"]),
-        ("Settings", ["guide/credentials", "guide/notifications"]),
-    ]),
     ("Automation", "clock", [
         ("Automation", ["guide/automation/quickstart", "guide/automation/automations",
                         "guide/automation/autonomous-agents"]),
     ]),
 ]
 
-# Memory and sharing are platform capabilities used by every product, so they
-# live in the Platform tab, right after Workspaces and organization.
-PLATFORM_GROUPS = [
-    ("Memory", ["guide/memory", "guide/memory-dreaming"]),
-    ("Artifacts and sharing", ["guide/artifacts/overview", "guide/sharing"]),
-]
-PLATFORM_TAB = {"en": "Platform", "vi": "Nền tảng", "ja": "プラットフォーム", "ko": "플랫폼"}
 
 GROUP_L10N = {
     "Get started": {"vi": "Bắt đầu", "ja": "はじめに", "ko": "시작하기"},
@@ -116,18 +101,6 @@ for block in d["navigation"]["languages"]:
     for i, t in enumerate(block["tabs"]):
         if t.get("tab") == name:
             block["tabs"][i] = {"tab": name, "anchors": menu}
-    for t in block["tabs"]:
-        if t.get("tab") != PLATFORM_TAB[lang]:
-            continue
-        names = {label(g, lang) for g, _ in PLATFORM_GROUPS}
-        groups = [g for g in t["groups"] if g.get("group") not in names]
-        at = next(
-            (i + 1 for i, g in enumerate(groups) if any(str(p).endswith("guide/organization") for p in g.get("pages", []))),
-            len(groups),
-        )
-        t["groups"] = groups[:at] + [
-            {"group": label(g, lang), "pages": [page(p, lang) for p in pages]} for g, pages in PLATFORM_GROUPS
-        ] + groups[at:]
 
 with open("docs.json", "w") as f:
     json.dump(d, f, indent=2, ensure_ascii=False)
