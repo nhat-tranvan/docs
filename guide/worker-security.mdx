@@ -17,9 +17,9 @@ By default, a [Worker](/guide/workers) runs shell commands as your OS account, w
 
 | | Host (default) | Container |
 |---|---|---|
-| Shell commands run | On the machine, as the Worker's OS account | In a container started by Docker or Podman |
+| Shell commands run | On the machine, as the Worker's OS account | In a container started by Docker |
 | Files the shell can reach | Every file the account can read | Only the served folder, at the same path |
-| Network the shell can reach | Any host | Only hosts on the Worker's allowlist, through the egress proxy |
+| Network the shell can reach | Any host, and services on the machine | Only hosts on the Worker's allowlist, through the egress proxy. Services on the machine are out of reach. |
 | File tools | Only inside the served folder | Only inside the served folder |
 | Label in CloudThinker | **Network unrestricted** | **Container** |
 
@@ -35,7 +35,7 @@ The setting belongs to the Worker, so it applies to every machine enrolled in it
 ## Prerequisites
 
 - The CloudThinker CLI 0.10.0 or newer on every machine of the Worker. Run `cloudthinker update` to upgrade. See [CLI](/guide/cli/overview).
-- Docker or Podman installed and running for the account that runs the Worker. `cloudthinker worker doctor` prints a **Container isolation** line that says whether the machine is ready.
+- Docker installed and running for the account that runs the Worker. Podman isn't supported yet. `cloudthinker worker doctor` prints a **Container isolation** line that says whether the machine is ready.
 - For a shared Worker, the workspace Admin role. For a personal Worker, you must be its owner. See [Roles](/guide/security/roles).
 
 ## Turn on container mode
@@ -47,13 +47,13 @@ The setting belongs to the Worker, so it applies to every machine enrolled in it
   <Step title="Choose Container">
     In the **Security** section, under **Isolation**, select **Container**.
 
-    If no online machine of this Worker has Docker or Podman, a warning reads "No online Worker supports containers yet. Workers without Docker or Podman stop taking work until they have it." Install one of them on the machines first, or continue knowing those machines stop taking work.
+    If no online machine of this Worker has Docker, a warning reads "No online Worker supports containers yet. Workers without Docker stop taking work until they have it." Install Docker on the machines first, or continue knowing those machines stop taking work.
   </Step>
   <Step title="List the hosts commands may reach">
     In **Allowed hosts**, enter one host per line, such as `api.github.com` or `*.github.com`. Presets add common sets, such as GitHub, PyPI, npm, and Docker Hub. Leave it empty to block all outbound access from the container.
   </Step>
   <Step title="Pick an image, if you need one">
-    Leave **Container image (optional)** empty to use the default image, which has bash, git, curl, and Python. To bring your own tools, enter an image such as `ghcr.io/acme/build-tools:1.4`. The machine pulls it with its own Docker or Podman credentials.
+    Leave **Container image (optional)** empty to use the default image, which has bash, git, curl, and Python. To bring your own tools, enter an image such as `ghcr.io/acme/build-tools:1.4`. The machine pulls it with its own Docker credentials.
   </Step>
   <Step title="Save">
     Select **Save security**.
@@ -71,7 +71,7 @@ The setting belongs to the Worker, so it applies to every machine enrolled in it
 
 1. The agent sends a shell command to the Worker over the Worker's outbound connection.
 2. The Worker runs it in a session container for the conversation's folder, never on the host.
-3. A web request from the command goes to the egress proxy. Host names don't resolve inside the container, so there is no other route.
+3. A web request from the command goes to the egress proxy. Host names don't resolve inside the container, and its network has no address on the machine, so there is no other route.
 4. The proxy connects a host that is on the allowlist.
 5. Any other request is refused with status 403 and a message that names the reason.
 6. The command's output goes back to the agent, as in host mode.
@@ -91,7 +91,7 @@ The container sets `HTTP_PROXY` and `HTTPS_PROXY`, so tools that honor them work
 | `*.github.com` | `api.github.com`, `codeload.github.com`, `a.b.github.com` | `github.com` itself. List it on its own line. |
 
 - Enter host names only, without `https://`, a port, or a path. Up to 100 entries. Entries are not case-sensitive, and duplicates are dropped when you save.
-- IP addresses are always refused, and so is a host that resolves to a private, link-local, or cloud metadata address. Container mode can't reach services on your private network.
+- IP addresses are always refused, and so is a host that resolves to a private, link-local, or cloud metadata address. Container mode can't reach services on your private network or on the machine itself.
 - Only ports 80 and 443 are allowed.
 
 Every refusal starts with "Blocked by the Worker egress policy:" and ends with one of these. For an `http://` URL the message is the response body. For an `https://` URL it is in the status line: Python tools such as `pip` print it, while `curl` and `git` print only `CONNECT tunnel failed, response 403`.
@@ -128,7 +128,7 @@ The Worker's settings list each machine with its CLI version and last IP address
 
 | Change | What happens |
 |---|---|
-| Host to container | Machines with Docker or Podman run the next command in a container. Machines without them stop taking work, and their runs in progress stop. The Worker shows **Container isolation unavailable** until a machine can run containers. Nothing falls back to the host. |
+| Host to container | Machines with Docker run the next command in a container. Machines without it stop taking work, and their runs in progress stop. The Worker shows **Container isolation unavailable** until a machine can run containers. Nothing falls back to the host. |
 | Container to host | The next command runs on the machine again. The Worker removes its containers after 15 minutes without work. |
 | Allowlist edit | Running Workers pick it up within a minute, with no restart. |
 
@@ -136,7 +136,7 @@ The Worker's settings list each machine with its CLI version and last IP address
 
 <AccordionGroup>
   <Accordion title="This Worker requires container isolation">
-    The machine has no working Docker or Podman, or the account that runs the Worker can't use it. Install Docker or Podman, check that `docker info` or `podman info` works for that account, and run `cloudthinker worker doctor`. Then start the Worker again.
+    The machine has no working Docker, or the account that runs the Worker can't use it. Install Docker, check that `docker version` works for that account, and run `cloudthinker worker doctor`. Then start the Worker again.
   </Accordion>
   <Accordion title="A command fails with Blocked by the Worker egress policy, or with response 403">
     The message names the host and the reason. Match it in [the table above](#what-the-allowlist-allows), then add the host to **Allowed hosts** if the work needs it. When `curl` or `git` print only `CONNECT tunnel failed, response 403`, run `curl -v` on the same URL to see the reason in the status line.
