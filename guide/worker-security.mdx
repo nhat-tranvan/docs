@@ -1,0 +1,170 @@
+---
+title: Worker Network and Security
+sidebarTitle: Worker security
+description: "Run a Worker's commands in a container that reaches only allowed hosts, limit where it connects from, and see how its credentials work."
+icon: shield-halved
+tag: "Beta"
+---
+
+By default, a [Worker](/guide/workers) runs shell commands as your OS account, with the whole machine and network in reach. Container mode runs them in a container that sees only the served folder and reaches only the hosts you allow.
+
+## How it works
+
+<Frame caption="Host mode runs commands on the machine. Container mode runs them in a container whose only way out is an allowlist proxy.">
+  <img src="/images/workers/security/01-isolation-modes-light.svg" alt="Side by side: in host mode the Worker reaches the whole machine and any network host; in container mode it runs a session container that mounts only the served folder and leaves only through an egress proxy that allows listed hosts" className="block dark:hidden" style={{width: '100%'}} />
+  <img src="/images/workers/security/01-isolation-modes-dark.svg" alt="Side by side: in host mode the Worker reaches the whole machine and any network host; in container mode it runs a session container that mounts only the served folder and leaves only through an egress proxy that allows listed hosts" className="hidden dark:block" style={{width: '100%'}} />
+</Frame>
+
+| | Host (default) | Container |
+|---|---|---|
+| Shell commands run | On the machine, as the Worker's OS account | In a container started by Docker |
+| Files the shell can reach | Every file the account can read | Only the served folder, at the same path |
+| Network the shell can reach | Any host, and services on the machine | Only hosts on the Worker's allowlist, through the egress proxy. Services on the machine are out of reach. |
+| File tools | Only inside the served folder | Only inside the served folder |
+| Label in CloudThinker | **Network unrestricted** | **Container** |
+
+The setting belongs to the Worker, so it applies to every machine enrolled in it and to every conversation that runs on it.
+
+## Why use container mode
+
+- **Keep the machine's secrets out of reach.** SSH keys, cloud credentials, and other files outside the folder aren't in the container.
+- **Decide where data can go.** A command can send data only to the hosts you list.
+- **No silent fallback.** If a machine can't start the container, the command fails with a message. It never runs on the host instead.
+- **Change it without restarts.** Allowlist edits reach running Workers within a minute.
+
+## Prerequisites
+
+- The CloudThinker CLI 0.10.0 or newer on every machine of the Worker. Run `cloudthinker update` to upgrade. See [CLI](/guide/cli/overview).
+- Docker installed and running for the account that runs the Worker. Podman isn't supported yet. `cloudthinker worker doctor` prints a **Container isolation** line that says whether the machine is ready.
+- For a shared Worker, the workspace Admin role. For a personal Worker, you must be its owner. See [Roles](/guide/security/roles).
+
+## Turn on container mode
+
+<Steps>
+  <Step title="Open the Worker's settings">
+    In **Admin Settings → Sandboxes**, select the Worker's row. You can also select the settings icon beside the Worker in the **Run in** menu.
+  </Step>
+  <Step title="Choose Container">
+    In the **Security** section, under **Isolation**, select **Container**.
+
+    If no online machine of this Worker has Docker, a warning reads "No online Worker supports containers yet. Workers without Docker stop taking work until they have it." Install Docker on the machines first, or continue knowing those machines stop taking work.
+  </Step>
+  <Step title="List the hosts commands may reach">
+    In **Allowed hosts**, enter one host per line, such as `api.github.com` or `*.github.com`. Presets add common sets, such as GitHub, PyPI, npm, and Docker Hub. Leave it empty to block all outbound access from the container.
+  </Step>
+  <Step title="Pick an image, if you need one">
+    Leave **Container image (optional)** empty to use the default image, which has bash, git, curl, and Python. To bring your own tools, enter an image such as `ghcr.io/acme/build-tools:1.4`. The machine pulls it with its own Docker credentials.
+  </Step>
+  <Step title="Save">
+    Select **Save security**.
+
+    **Success state:** the Worker shows a **Container** badge in its settings and in the Worker list, and each machine that can run containers shows **Container ready**. The next command on each machine runs in a container.
+  </Step>
+</Steps>
+
+## How a command reaches the network
+
+<Frame caption="In container mode the egress proxy is the only route out of the session container.">
+  <img src="/images/workers/security/02-command-path-light.svg" alt="Numbered flow: the agent sends a command to the Worker, the Worker runs it in the session container, a web request goes to the egress proxy, a listed host is connected, any other host gets 403 Forbidden, and output returns to the agent" className="block dark:hidden" style={{width: '100%'}} />
+  <img src="/images/workers/security/02-command-path-dark.svg" alt="Numbered flow: the agent sends a command to the Worker, the Worker runs it in the session container, a web request goes to the egress proxy, a listed host is connected, any other host gets 403 Forbidden, and output returns to the agent" className="hidden dark:block" style={{width: '100%'}} />
+</Frame>
+
+1. The agent sends a shell command to the Worker over the Worker's outbound connection.
+2. The Worker runs it in a session container for the conversation's folder, never on the host.
+3. A web request from the command goes to the egress proxy. Host names don't resolve inside the container, and its network has no address on the machine, so there is no other route.
+4. The proxy connects a host that is on the allowlist.
+5. Any other request is refused with status 403 and a message that names the reason.
+6. The command's output goes back to the agent, as in host mode.
+
+The container sets `HTTP_PROXY` and `HTTPS_PROXY`, so tools that honor them work: `curl`, `pip`, `npm`, and `git` over HTTPS among them. SSH, database ports, and other raw connections don't leave the container. Use HTTPS remotes for git.
+
+## What the allowlist allows
+
+<Frame caption="The proxy runs four checks in order. The first one that fails refuses the request.">
+  <img src="/images/workers/security/03-egress-checks-light.svg" alt="Decision chain: a host name rather than an IP address, port 80 or 443, a host on the allowlist, and public addresses only; each failed check leads to a refusal message" className="block dark:hidden" style={{width: '100%'}} />
+  <img src="/images/workers/security/03-egress-checks-dark.svg" alt="Decision chain: a host name rather than an IP address, port 80 or 443, a host on the allowlist, and public addresses only; each failed check leads to a refusal message" className="hidden dark:block" style={{width: '100%'}} />
+</Frame>
+
+| Allowlist entry | Allows | Doesn't allow |
+|---|---|---|
+| `api.github.com` | `api.github.com` | `github.com`, `uploads.github.com` |
+| `*.github.com` | `api.github.com`, `codeload.github.com`, `a.b.github.com` | `github.com` itself. List it on its own line. |
+
+- Enter host names only, without `https://`, a port, or a path. Up to 100 entries. Entries are not case-sensitive, and duplicates are dropped when you save.
+- IP addresses are always refused, and so is a host that resolves to a private, link-local, or cloud metadata address. Container mode can't reach services on your private network or on the machine itself.
+- Only ports 80 and 443 are allowed.
+
+Every refusal starts with "Blocked by the Worker egress policy:" and ends with one of these. For an `http://` URL the message is the response body. For an `https://` URL it is in the status line: Python tools such as `pip` print it, while `curl` and `git` print only `CONNECT tunnel failed, response 403`.
+
+| Message | Fix |
+|---|---|
+| `<host> is not on the allowlist. Ask a workspace admin to add it.` | Add the host, or a `*.` entry for its domain, to **Allowed hosts**. |
+| `connect by host name, not by IP address.` | Use the service's host name. |
+| `port <n> is not allowed. Use HTTPS on port 443.` | Use the HTTPS endpoint. |
+| `<host> resolves to a private or metadata address.` | The host is internal. Run this work on a host-mode Worker. |
+| `<host> did not resolve.` | Check the host name for typos. |
+
+## Limit where a Worker connects from
+
+In the same **Security** section, **Allowed IP addresses** takes one IP address or range per line, such as `203.0.113.10` or `203.0.113.0/24`, up to 50. Leave it empty to allow any address. Select **Save security**.
+
+CloudThinker compares the address it sees, which is your network's public egress address, on every call from every machine of the Worker, including runs in progress. A call from another address is refused with "This Worker called from 198.51.100.7, which is not in its IP allowlist. Ask a workspace admin to add the address in this Worker's settings." The Worker stops with exit code 3. The IP allowlist works in both host and container mode.
+
+## How Worker credentials work
+
+<Frame caption="A machine signs in with its own credential, and each run uses a token that ends with it.">
+  <img src="/images/workers/security/04-credentials-light.svg" alt="Machine A uses its credential to wait for and claim work and a run token for each run; CloudThinker checks every call; a revoked Machine B is refused; a credential used from two addresses within 10 minutes is logged under Security" className="block dark:hidden" style={{width: '100%'}} />
+  <img src="/images/workers/security/04-credentials-dark.svg" alt="Machine A uses its credential to wait for and claim work and a run token for each run; CloudThinker checks every call; a revoked Machine B is refused; a credential used from two addresses within 10 minutes is logged under Security" className="hidden dark:block" style={{width: '100%'}} />
+</Frame>
+
+1. Each machine enrolled in a Worker has its own credential. It stays valid for 30 days after its last use and rotates on its own while the Worker runs.
+2. When a machine claims a run, it gets a run token. The run's calls use that token instead of the machine's credential, and the token stops working when the run ends.
+3. CloudThinker checks the machine's credential on every call, including calls made with a run token. Revoking a machine stops its runs right away, and the other machines keep working. A credential that expired, or a call from outside the IP allowlist, is refused the same way.
+4. When one credential is used from two addresses within 10 minutes, CloudThinker writes an entry under the **Security** category of **Admin Settings → Audit Logs**, at most once an hour per credential.
+
+The Worker's settings list each machine with its CLI version and last IP address. A machine whose credential was used from two addresses in the last 24 hours shows a **Used from two IPs** badge. If you don't expect that, for example the same credential copied to a second host, revoke the machine and enroll it again. See [Revoke a Worker](/guide/workers#troubleshooting).
+
+## What happens when you switch modes
+
+| Change | What happens |
+|---|---|
+| Host to container | Machines with Docker run the next command in a container. Machines without it stop taking work, and their runs in progress stop. The Worker shows **Container isolation unavailable** until a machine can run containers. Nothing falls back to the host. |
+| Container to host | The next command runs on the machine again. The Worker removes its containers after 15 minutes without work. |
+| Allowlist edit | Running Workers pick it up within a minute, with no restart. |
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="This Worker requires container isolation">
+    The machine has no working Docker, or the account that runs the Worker can't use it. Install Docker, check that `docker version` works for that account, and run `cloudthinker worker doctor`. Then start the Worker again.
+  </Accordion>
+  <Accordion title="A command fails with Blocked by the Worker egress policy, or with response 403">
+    The message names the host and the reason. Match it in [the table above](#what-the-allowlist-allows), then add the host to **Allowed hosts** if the work needs it. When `curl` or `git` print only `CONNECT tunnel failed, response 403`, run `curl -v` on the same URL to see the reason in the status line.
+  </Accordion>
+  <Accordion title="A tool fails to connect but shows no Blocked message">
+    The tool ignores `HTTP_PROXY` and `HTTPS_PROXY`, or it uses a protocol other than HTTP, such as SSH. Configure the tool's own proxy setting, switch git remotes to HTTPS, or run this work on a host-mode Worker.
+  </Accordion>
+  <Accordion title="The Worker stops with: This Worker called from an address not in its IP allowlist">
+    The machine's public address changed, or it runs on a network you didn't list. Add the address or range in **Allowed IP addresses**, then start the Worker again.
+  </Accordion>
+  <Accordion title="A machine shows Used from two IPs">
+    One credential connected from two addresses within 10 minutes. A VPN that switches exits can cause this. If it isn't that, revoke the machine in the Worker's settings and enroll it again with a new command.
+  </Accordion>
+</AccordionGroup>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Workers" icon="server" href="/guide/workers">
+    Set up a Worker, pick it for a chat, and keep it running.
+  </Card>
+  <Card title="Security overview" icon="lock" href="/guide/security/overview">
+    How CloudThinker protects your data and credentials.
+  </Card>
+  <Card title="CLI" icon="terminal" href="/guide/cli/overview">
+    Install and update the CLI that runs your Workers.
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Choose which agent actions need a person's approval first.
+  </Card>
+</CardGroup>
