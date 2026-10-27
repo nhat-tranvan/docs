@@ -1,0 +1,160 @@
+---
+title: Graylog
+description: "Kết nối Graylog để agent kiểm tra tình trạng cluster, liệt kê stream và index set, tìm kiếm message và đếm chúng theo trường"
+icon: "/images/icons/graylog.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối một cluster Graylog để các agent CloudThinker kiểm tra tình trạng cluster, liệt kê stream và index set, tìm kiếm message gần đây, và đếm message được nhóm theo một trường như source. Kết nối dùng một REST API access token cho một người dùng Graylog chỉ đọc, và CloudThinker không cung cấp cho agent cách nào để thay đổi bất cứ điều gì trong Graylog.
+
+## Điều kiện tiên quyết
+
+- Một cluster Graylog mà CloudThinker truy cập được qua **HTTPS** từ internet, với chứng chỉ từ một nhà phát hành tin cậy. Nếu cluster nằm sau firewall, hoặc phải giữ ở chế độ riêng tư, xem [Tiếp cận dịch vụ trong mạng riêng](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ).
+- Một admin Graylog có thể tạo người dùng và chia sẻ stream.
+- Các stream bạn muốn agent đọc. Agent chỉ thấy những gì bạn chia sẻ với người dùng CloudThinker.
+- Vai trò **Admin** trong workspace CloudThinker của bạn, có quyền thêm và chỉnh sửa kết nối. Xem [Vai trò](/vi/guide/security/roles).
+
+## Thiết lập
+
+<Steps>
+  <Step title="Tạo người dùng chỉ đọc">
+    Trong Graylog, vào **System → Users and Teams** và tạo một người dùng cho CloudThinker, chẳng hạn `cloudthinker`, với vai trò **Reader**. Dùng người dùng riêng thì dễ theo dõi và thu hồi quyền của CloudThinker.
+  </Step>
+  <Step title="Cấp cho người dùng quyền đọc stream và index set">
+    Riêng vai trò Reader không cấp quyền truy cập vào log của bạn. Với mỗi stream mà agent cần đọc, vào **Streams**, nhấn **Share** trên dòng của stream, thêm người dùng `cloudthinker` với quyền **Viewer**, và nhấn **Save**. Đảm bảo người dùng cũng có thể đọc các index set phía sau các stream đó.
+
+    Nếu bỏ qua bước này, kết nối vẫn qua bước kiểm tra với trạng thái **Connected**, nhưng agent không tìm thấy stream nào. Xem [Quyền yêu cầu](#quyền-yêu-cầu).
+  </Step>
+  <Step title="Tạo API access token">
+    Vẫn trong **System → Users and Teams**, tìm người dùng, mở **More** và chọn **Edit tokens**. Nhập tên token, đặt **TTL** dưới dạng khoảng thời gian ISO 8601 (ví dụ `P90D` cho 90 ngày), và nhấn **Create Token**. Sao chép token ngay. Graylog không hiển thị lại.
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Mở **More → Workspace settings → Connections**, chọn **Graylog** và điền:
+
+    - **Graylog base URL**: gốc web/API của Graylog, chẳng hạn `https://graylog.example.com:9000`. Không thêm `/api`.
+    - **API token**: token bạn đã sao chép.
+    - **TLS certificate**: giữ ở **Verify TLS certificate**.
+
+    Nhấn **Connect**. CloudThinker đọc trạng thái cluster để kiểm tra token.
+
+    **Trạng thái thành công:** kết nối hiển thị trạng thái **Connected** với thông báo `Graylog read-only connection verified (3 node(s))`, đếm số node tìm thấy.
+
+    Sau đó chạy prompt trong [Xác minh kết nối](#xác-minh-kết-nối) trong một cuộc chat mới. Đó là bước chứng minh quyền truy cập stream.
+  </Step>
+</Steps>
+
+<Warning>
+Token Graylog hết hạn theo TTL, và TTL mặc định của Graylog là 30 ngày. Khi token hết hạn, kết nối chuyển sang **Error** và admin workspace nhận được thông báo (xem [Khi một kết nối gặp sự cố](/vi/guide/connections/overview#khi-kết-nối-bị-hỏng)). Chọn TTL phù hợp với lịch xoay vòng của bạn, đặt lời nhắc, và cập nhật kết nối trước khi token cũ hết hạn.
+</Warning>
+
+## Chi tiết kết nối
+
+| Trường | Mô tả | Ví dụ |
+|-------|-------------|---------|
+| **Graylog base URL** | Gốc web/API, không có `/api`, đường dẫn, query hay thông tin xác thực | `https://graylog.example.com:9000` |
+| **API token** | REST API access token cho người dùng chỉ đọc | Từ **Edit tokens** |
+| **TLS certificate** | **Verify TLS certificate** (mặc định). **Skip TLS verification** chỉ hoạt động với địa chỉ `localhost`, không bao giờ từ CloudThinker Cloud | **Verify TLS certificate** |
+
+CloudThinker tự thêm `/api` và từ chối URL có bất kỳ thứ gì ngoài phần gốc. Token đi kèm mọi yêu cầu, vì vậy:
+
+- URL phải dùng `https`. `http` thuần bị từ chối.
+- **Skip TLS verification** bị từ chối. Thay vào đó, hãy cài chứng chỉ từ một nhà phát hành tin cậy. Không có tùy chọn tải lên chứng chỉ CA của riêng bạn.
+
+Cả hai quy tắc chỉ được nới lỏng cho địa chỉ `localhost`, vốn không bao giờ áp dụng cho Graylog được truy cập từ CloudThinker Cloud.
+
+## Quyền yêu cầu
+
+Graylog chia quyền đọc thành hai lớp. Bạn cần cả hai.
+
+| Lớp | Cấp gì | Lý do |
+|-------|---------------|-----|
+| **Role** | **Reader** cho người dùng CloudThinker | Mức cơ bản chỉ đọc của Graylog; cho phép CloudThinker đọc trạng thái cluster |
+| **Stream và index set** | Quyền đọc từng stream (chia sẻ ở mức **Viewer**) và index set tương ứng | Quyết định agent có thể thấy log nào. Không chia sẻ gì thì người dùng không thấy log nào |
+
+Không bao giờ cần quyền ghi. Công tắc **Allow writes** của kết nối tắt sẵn, và không có lý do để bật: CloudThinker không có thao tác ghi nào cho Graylog, nên quyền truy cập thêm chỉ mở rộng những gì một token bị lộ có thể làm.
+
+<Tip>
+Nếu agent báo không có stream nào trên một cluster có stream, người dùng đang thiếu quyền truy cập stream. Graylog trả về danh sách trống thay vì lỗi, nên trông như một cluster trống.
+</Tip>
+
+## Khả năng của agent
+
+| Khả năng | Agent có thể làm gì |
+|------------|--------------------|
+| **Tình trạng cluster** | Báo cáo số node, phiên bản Graylog và tình trạng cluster |
+| **Stream và index set** | Liệt kê stream và index set, và xem xét routing, retention và rotation |
+| **Tìm kiếm log** | Tìm kiếm message bằng query Graylog trong một khoảng thời gian và trả về một mẫu |
+| **Đếm** | Đếm message được nhóm theo một trường để tìm source, dịch vụ hoặc lỗi ồn nhất |
+| **Kiểm tra ingestion** | Phát hiện stream bị tắt và source đã ngừng gửi |
+
+Tìm kiếm và đếm mặc định trong 24 giờ gần nhất, và chỉ lùi lại tối đa 30 ngày. Kết quả trả về tối đa 100 dòng hoặc nhóm, và mỗi yêu cầu hết thời gian chờ sau tối đa 300 giây. Agent cho bạn biết khoảng thời gian và giới hạn đã dùng, và nói rõ khi kết quả bị cắt ngắn.
+
+### Xác minh kết nối
+
+Hỏi CloudThinker trong một cuộc chat mới:
+
+```text
+Run Graylog discovery and summarize cluster health, node count, and the streams and index sets this token can read
+```
+
+Kết quả mong đợi là số node và tình trạng, sau đó là các stream và index set bạn đã chia sẻ. Danh sách stream trống thường có nghĩa là thiếu quyền truy cập stream, không phải cluster trống.
+
+### Ví dụ prompt
+
+```text
+Search Graylog for 5xx errors from api-gateway in the last 6 hours and show a sample
+Count Graylog messages by source over the last 24 hours and flag any source that stopped sending
+Which Graylog streams are disabled, and what retention does each index set use?
+```
+
+## Khắc phục sự cố
+
+<Accordion title="Graylog rejected the API token (401)">
+Token đã hết hạn, bị thu hồi, hoặc bị sao chép thiếu. Tạo token mới trong **System → Users and Teams → More → Edit tokens** và cập nhật **API token**.
+</Accordion>
+
+<Accordion title="Token không đọc được trạng thái cluster (403)">
+Người dùng thiếu vai trò **Reader**. Thêm vai trò đó, rồi kiểm tra lại kết nối.
+</Accordion>
+
+<Accordion title="Agent không tìm thấy stream nào">
+Người dùng có vai trò Reader nhưng không có stream nào được chia sẻ, nên Graylog trả về danh sách trống. Chia sẻ từng stream với người dùng ở mức **Viewer** và đảm bảo người dùng có thể đọc các index set.
+</Accordion>
+
+<Accordion title="Could not reach the Graylog API, or the endpoint is not Graylog">
+Base URL trỏ sai gốc hoặc đã chứa `/api`, một proxy trả lời thay vì Graylog, hoặc không có gì trả lời. Kết nối lại chỉ với gốc web/API, chẳng hạn `https://graylog.example.com:9000`, và kiểm tra host và cổng có thể truy cập từ CloudThinker. Để tự kiểm tra URL và token, chạy:
+
+```bash
+curl -u '<token>:token' https://graylog.example.com:9000/api/cluster
+```
+
+Lệnh sẽ trả về JSON với một mục cho mỗi node. Đó cũng là lệnh gọi CloudThinker thực hiện.
+</Accordion>
+
+<Accordion title="Yêu cầu HTTPS, hoặc không thể tắt xác minh TLS">
+CloudThinker từ chối `http` thuần và **Skip TLS verification** cho Graylog từ xa, vì cả hai đều làm lộ token. Phục vụ Graylog qua HTTPS với chứng chỉ tin cậy và giữ **Verify TLS certificate** bật.
+</Accordion>
+
+<Accordion title="Kết quả có vẻ bị cắt ngắn, hoặc Graylog trả về 429">
+Query đã chạm giới hạn 100 dòng, hết thời gian chờ, hoặc Graylog (hoặc một proxy) đã giới hạn tốc độ. Với tìm kiếm bị hết thời gian chờ, số kết quả khớp là không xác định. Thu hẹp query, rút ngắn khoảng thời gian, hoặc nhóm theo một trường cụ thể hơn.
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Thao tác ghi không áp dụng**: CloudThinker không có thao tác ghi nào cho Graylog, nên kết nối luôn chỉ đọc bất kể token cho phép gì. Hãy dùng người dùng ít quyền nhất có thể, như trong [Quyền yêu cầu](#quyền-yêu-cầu).
+- **Chỉ chia sẻ các stream bạn muốn đọc**: quyền truy cập stream, không phải vai trò, quyết định agent thấy log nào.
+- **Theo dõi TTL của token**: token hết hạn khiến kết nối ở trạng thái **Error** cho đến khi bạn dán token mới. Xoay vòng token đúng lịch và cập nhật kết nối.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Elasticsearch" icon="/images/icons/elasticsearch.svg" href="/vi/guide/connections/elasticsearch">
+    Kết nối index và cluster Elasticsearch.
+  </Card>
+  <Card title="Tổng quan Resolve" icon="bolt" href="/vi/guide/incident/overview">
+    Dùng log Graylog khi CloudThinker điều tra một sự cố.
+  </Card>
+</CardGroup>

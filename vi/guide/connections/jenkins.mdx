@@ -1,152 +1,140 @@
 ---
 title: Jenkins
-description: "Kết nối Jenkins CI/CD server với CloudThinker để giám sát build pipeline, phân tích job và theo dõi deployment"
+description: "Kết nối máy chủ Jenkins để agent đọc job, build, log và kết quả test, và kích hoạt build qua Approvals của bạn"
 icon: "/images/icons/jenkins.svg"
 ---
 
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
 import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
 
-Kết nối Jenkins server tự lưu trữ của bạn để cho phép các agent CloudThinker giám sát build, phân tích kết quả test, xem xét log pipeline và quản lý các thao tác job. Jenkins xác thực bằng **tên đăng nhập và API token** qua Jenkins MCP Server Plugin.
-
----
+Kết nối Jenkins để agent của CloudThinker liệt kê job, đọc log build và kết quả test, giải thích vì sao build thất bại, và kích hoạt build qua Approvals của workspace. CloudThinker làm việc với **plugin Jenkins MCP Server** trên máy chủ của bạn và đăng nhập bằng **username và API token của Jenkins**.
 
 ## Điều kiện tiên quyết
 
-- Một instance **Jenkins tự lưu trữ** chạy phiên bản 2.x trở lên (Jenkins được lưu trữ trên đám mây không được hỗ trợ).
-- **[Jenkins MCP Server Plugin](https://github.com/jenkinsci/mcp-server-plugin)** được cài đặt trên server của bạn; cổng MCP mặc định là `9090`.
-- Quyền admin trên Jenkins để cấu hình root URL và tạo thông tin xác thực.
-
-<Info>
-Các dịch vụ Jenkins được lưu trữ trên đám mây không được hỗ trợ. Kết nối này yêu cầu Jenkins MCP Server Plugin.
-</Info>
-
----
+- Máy chủ Jenkins mà CloudThinker truy cập được từ internet, và bạn có quyền admin để cài plugin. Với máy chủ nằm sau tường lửa, hãy đưa các egress IP của CloudThinker vào danh sách cho phép. Tài liệu này không công bố danh sách egress IP của CloudThinker: hãy hỏi đầu mối liên hệ CloudThinker của bạn, hoặc [liên hệ với chúng tôi](https://cloudthinker.io/contact). Xem [Truy cập dịch vụ riêng](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ) để biết các lựa chọn khác.
+- Đã cài [plugin MCP Server](https://plugins.jenkins.io/mcp-server/). Plugin này thêm endpoint mà CloudThinker gọi tới, tại `<your-jenkins-url>/mcp-server/mcp`.
+- Một người dùng Jenkins dành cho CloudThinker, có các quyền trong mục [Quyền yêu cầu](#quyền-yêu-cầu).
+- Vai trò **Admin** trong workspace CloudThinker, vai trò có quyền thêm và sửa kết nối. Xem [Vai trò](/vi/guide/security/roles).
 
 ## Thiết lập
 
 <Steps>
-  <Step title="Cấu hình root URL">
-    Jenkins MCP Server Plugin yêu cầu Jenkins phải có root URL được cấu hình để trả về các đường dẫn job đúng. Chạy lệnh sau trong Jenkins Script Console:
-
-    ```bash
-    COOKIE_JAR=/tmp/jenkins_cookies
-    CRUMB=$(curl -s -c $COOKIE_JAR -u "admin:<password>" \
-      'http://<host-ip>:9090/crumbIssuer/api/json' | python3 -c "import json,sys; print(json.load(sys.stdin)['crumb'])")
-
-    curl -s -X POST "http://<host-ip>:9090/scriptText" \
-      -b $COOKIE_JAR -u "admin:<password>" -H "Jenkins-Crumb: $CRUMB" \
-      --data-urlencode "script=
-    import jenkins.model.JenkinsLocationConfiguration
-    def loc = JenkinsLocationConfiguration.get()
-    loc.setUrl('http://<host-ip>:9090/')
-    loc.save()
-    println('Root URL set to: ' + loc.getUrl())
-    "
-    ```
+  <Step title="Cài plugin MCP Server">
+    Trong Jenkins, vào **Manage Jenkins → Plugins → Available plugins**, tìm **MCP Server**, cài đặt và khởi động lại Jenkins nếu được yêu cầu.
   </Step>
-  <Step title="Xác minh MCP endpoint">
-    Xác nhận plugin đang chạy trước khi kết nối:
+  <Step title="Đặt Jenkins URL">
+    Vào **Manage Jenkins → System** và điền **Jenkins URL** trong mục **Jenkins Location** bằng địa chỉ mọi người dùng để truy cập Jenkins, ví dụ `https://jenkins.acme.com/`. Nhấn **Save**.
 
-    ```bash
-    curl -s http://<host-ip>:9090/mcp-health/
-    ```
+    Plugin dựng liên kết tới job và build từ giá trị này. Nếu để trống hoặc đặt là `localhost`, agent sẽ nhận liên kết hỏng.
+  </Step>
+  <Step title="Tạo API token">
+    Đăng nhập Jenkins bằng người dùng CloudThinker và mở `<your-jenkins-url>/user/<username>/security` (với các phiên bản Jenkins cũ hơn là `/user/<username>/configure`). Trong mục **API Token**, nhấn **Add new Token**. Đặt tên `cloudthinker`, nhấn **Generate**, rồi sao chép token. Jenkins chỉ hiển thị token một lần.
   </Step>
   <Step title="Thêm kết nối trong CloudThinker">
-    Điều hướng đến **Connections → Jenkins** và nhập:
-    - **URL**: `http://<host-ip>:9090`
-    - **Username**: `admin`
-    - **API Token**: mật khẩu admin hoặc API token Jenkins của bạn
+    Ở thanh bên, nhấn **More → Workspace settings → Connections**. Trên tab **Builtin Connections**, tìm **Jenkins**, nhấn **Connect**, rồi điền các trường trong mục [Chi tiết kết nối](#chi-tiết-kết-nối). Nhấn **Connect**.
 
-    Nhấn **Connect**. CloudThinker xác minh thông tin xác thực và hiển thị trạng thái **Connected**.
+    CloudThinker kiểm tra kết nối bằng cách gọi MCP endpoint với username và token của bạn. URL sai, token bị từ chối hoặc thiếu plugin sẽ hiển thị lỗi thay vì **Connected**.
+
+    **Trạng thái thành công:** Jenkins hiển thị **Connected** trên tab **Builtin Connections**.
   </Step>
 </Steps>
 
----
+<Note>
+Bài kiểm tra không xét quyền của người dùng trên các job. Hãy chạy prompt xác minh bên dưới để chắc chắn agent thấy được job của bạn.
+</Note>
 
 ## Chi tiết kết nối
 
-| Trường | Mô tả | Ví dụ |
-|--------|-------|-------|
-| **URL** | URL cơ sở của instance Jenkins | `http://192.168.1.100:9090` |
-| **Username** | Tên đăng nhập Jenkins | `admin` |
-| **API Token** | Mật khẩu admin hoặc API token Jenkins | — |
+Hộp thoại hiển thị các trường với đúng những tên sau.
 
----
+| Trường | Mô tả | Ví dụ |
+|-------|-------------|---------|
+| `JENKINS_URL` | URL gốc của máy chủ Jenkins, không kèm `/mcp-server/mcp`. CloudThinker tự thêm đường dẫn đó | `https://jenkins.acme.com` |
+| `JENKINS_USER` | Username Jenkins sở hữu token | `cloudthinker` |
+| `JENKINS_API_TOKEN` | API token bạn đã tạo cho người dùng đó | `<your-api-token>` |
+
+Nếu bạn bỏ qua scheme, CloudThinker dùng `https://`. Với địa chỉ công khai, CloudThinker luôn kết nối qua HTTPS, kể cả khi bạn nhập `http://`, nên máy chủ của bạn cần chứng chỉ TLS hợp lệ tại địa chỉ đó.
 
 ## Quyền yêu cầu
 
-Cấp cho người dùng Jenkins các quyền sau:
+Cấp cho người dùng CloudThinker các quyền sau trong chiến lược phân quyền của Jenkins (ví dụ **Matrix-based security** trong **Manage Jenkins → Security**):
 
-- **Overall**: Read
-- **Job**: Read, Discover
-- **View**: Read
+| Quyền | Cần cho |
+|------------|------------|
+| **Overall / Read** | Đăng nhập và liệt kê job |
+| **Job / Read** | Đọc build, log, kết quả test và thay đổi |
+| **Job / Discover** | Thấy job trong folder và view |
+| **View / Read** | Đọc view |
+| **Job / Build** | Tùy chọn: kích hoạt build |
+
+Token hành động với đúng các quyền của người dùng này. Bỏ **Job / Build** nếu muốn kết nối chỉ đọc. Người dùng không cần **Overall / Administer**, và không công cụ nào của agent đọc credential hay secret của Jenkins.
 
 <Tip>
-Tạo một người dùng Jenkins riêng cho CloudThinker chỉ với các quyền này. Giữ các thao tác ghi (kích hoạt build, replay pipeline) được kiểm soát bởi phê duyệt.
+Hãy dùng một người dùng Jenkins riêng cho CloudThinker thay vì tài khoản admin. Nếu bạn dùng phân quyền theo folder, chỉ cấp quyền vào các folder mà agent cần thấy.
 </Tip>
-
----
 
 ## Khả năng của agent
 
-Sau khi kết nối, các agent có thể giám sát và điều tra các pipeline Jenkins của bạn.
+Thao tác đọc chạy mà không cần hỏi. Kích hoạt build là thao tác ghi, nên phải đi qua Approvals trước.
 
-| Khả năng | Mô tả |
-|----------|-------|
-| **Giám sát build** | Liệt kê job và kiểm tra trạng thái build |
-| **Phân tích log** | Lấy và tìm kiếm build log |
-| **Kết quả test** | Xem kết quả test |
-| **Tích hợp SCM** | Xem các thay đổi và commit Git |
-| **Điều khiển job** | Kích hoạt build và replay pipeline — **yêu cầu phê duyệt** |
+<ApprovalDefault />
+
+| Khả năng | Agent có thể làm gì |
+|------------|--------------------|
+| **Job** | Liệt kê job và hiển thị trạng thái build gần nhất của từng job |
+| **Log build** | Đọc và tìm kiếm trong log build để xác định bước thất bại |
+| **Kết quả test** | Đọc kết quả test và chỉ ra các test thất bại |
+| **Thay đổi** | Hiển thị các commit và thay đổi SCM nằm trong một build |
+| **Kích hoạt build** | Bắt đầu một build, qua Rules và Approval mode của bạn. Agent có thể truyền tham số build lấy từ yêu cầu của bạn |
 
 ### Xác minh kết nối
 
 ```text
-List all Jenkins jobs and show the last build status for each
+List the Jenkins jobs you can reach and the result of the last build for each
 ```
 
-### Ví dụ lệnh
+Kết nối hoạt động sẽ trả về đúng tên job và kết quả thật của bạn. Danh sách trống thường có nghĩa là người dùng thiếu **Job / Read** hoặc **Job / Discover**.
+
+### Ví dụ prompt
 
 ```text
-Search Jenkins build logs for errors in the last 10 builds and recommend fixes
-Show test results for the main project's recent builds and report failures
-Check the Jenkins build queue and identify any stuck jobs
+Why did the last build of payments-api fail? Show the failing step and the error from the log
+Which tests failed in the last 5 builds of the main pipeline, and are any of them flaky?
+Which commits went into the latest build of web-frontend?
 ```
-
----
 
 ## Khắc phục sự cố
 
-<Accordion title="Kết nối hết thời gian chờ">
-Xác minh Jenkins đang chạy và cổng 9090 có thể truy cập từ CloudThinker. Dùng địa chỉ IP của host (không phải `localhost`) trong trường URL.
+<Accordion title="This connection did not respond in time. Try connecting again.">
+CloudThinker không truy cập được máy chủ Jenkins của bạn. Kiểm tra URL mở được từ bên ngoài mạng của bạn và tường lửa cho phép HTTPS đi vào từ các egress IP của CloudThinker. Không dùng `localhost` hay địa chỉ chỉ phân giải được bên trong mạng của bạn.
 </Accordion>
 
-<Accordion title="Danh sách job trống">
-Root URL chưa được cấu hình hoặc lệnh Script Console thất bại. Chạy lại lệnh Script Console trong phần Thiết lập và kết nối lại.
+<Accordion title="The provider rejected these credentials. Update them, then connect again.">
+Username hoặc token sai, hoặc token đã bị thu hồi. Xác nhận `JENKINS_USER` đúng là người dùng đã tạo token, và tạo token mới nếu cần. Để thay token, chọn **Jenkins** trong **More → Workspace settings → Connections**, nhấn biểu tượng bút chì, nhấn **Replace…** trong mục **Credentials**, rồi nhấn **Save and test**.
 </Accordion>
 
-<Accordion title="Xác thực thất bại">
-Tên đăng nhập hoặc API token không đúng, hoặc người dùng thiếu quyền yêu cầu. Xác minh thông tin xác thực và người dùng Jenkins có quyền Overall Read, Job Read và View Read.
+<Accordion title="The provider endpoint was not found. Check the connection settings.">
+Plugin MCP Server chưa được cài hoặc chưa bật, hoặc `JENKINS_URL` trỏ sai đường dẫn. Cài plugin và chỉ nhập URL gốc. Nếu Jenkins chạy dưới một đường dẫn như `/jenkins`, hãy thêm đường dẫn đó: `https://ci.acme.com/jenkins`.
 </Accordion>
 
----
+<Accordion title="Danh sách job trống hoặc liên kết bị hỏng">
+Người dùng thiếu **Job / Read** hoặc **Job / Discover**, hoặc **Jenkins URL** đang trống hay đặt là `localhost`. Sửa quyền, đặt **Jenkins URL** trong **Manage Jenkins → System**, rồi hỏi lại.
+</Accordion>
 
 ## Bảo mật
 
 <ConnectionSecurity />
 
-- **Người dùng riêng biệt** — tạo người dùng Jenkins riêng cho CloudThinker được giới hạn phạm vi theo chỉ các job và view nó cần.
-- **Cách ly mạng** — giới hạn cổng Jenkins 9090 theo dải IP của CloudThinker hoặc dùng VPN; tránh để lộ giao diện Jenkins ra internet công cộng.
-
----
+- **Hạn chế mức độ phơi bày trên mạng.** Chỉ cho phép lưu lượng vào Jenkins từ những nguồn cần thiết, và giữ giao diện Jenkins sau các biện pháp kiểm soát truy cập thông thường của bạn.
+- **Giữ build qua phê duyệt.** Chỉ cấp **Job / Build** nếu agent cần bắt đầu build, và chọn **Manual** nếu cần có người xem mọi build mà CloudThinker khởi chạy.
 
 ## Liên quan
 
 <CardGroup cols={2}>
-  <Card title="Kết nối MCP" icon="/images/icons/mcp.svg" href="/vi/guide/connections/mcp">
-    Kết nối các công cụ tùy chỉnh qua Model Context Protocol
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Quyết định thao tác nào của agent tự chạy và thao tác nào phải chờ bạn
   </Card>
-  <Card title="Kết nối Kubernetes" icon="/images/icons/kubernetes.svg" href="/vi/guide/connections/kubernetes">
-    Kết nối các cluster Kubernetes
+  <Card title="Tổng quan kết nối" icon="plug" href="/vi/guide/connections/overview">
+    Xem mọi công cụ CloudThinker kết nối được và cách kết nối hoạt động
   </Card>
 </CardGroup>

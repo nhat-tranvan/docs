@@ -1,208 +1,171 @@
 ---
 title: PostgreSQL
-description: "Kết nối cơ sở dữ liệu PostgreSQL với CloudThinker để phân tích truy vấn, tối ưu index và giám sát hiệu suất"
+description: "Kết nối cơ sở dữ liệu PostgreSQL để agent tìm truy vấn chậm, gợi ý index và kiểm tra vacuum, lock cùng tình trạng replication"
 icon: "/images/icons/postgresql.svg"
 ---
 
 import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
 
-Kết nối cơ sở dữ liệu PostgreSQL của bạn để [CloudThinker](/vi/guide/agents/overview) có thể phân tích truy vấn, tối ưu hiệu suất và giám sát sức khỏe cơ sở dữ liệu.
-
-## Nền tảng được hỗ trợ
-
-| Nền tảng | Hỗ trợ |
-|----------|---------|
-| **PostgreSQL tự host** | 12.x, 13.x, 14.x, 15.x, 16.x |
-| **AWS RDS PostgreSQL** | Tất cả phiên bản |
-| **AWS Aurora PostgreSQL** | Tất cả phiên bản |
-| **Google Cloud SQL** | Tất cả phiên bản PostgreSQL |
-| **Azure Database for PostgreSQL** | Flexible Server, Single Server |
+Kết nối cơ sở dữ liệu PostgreSQL để agent CloudThinker đọc schema, xếp hạng truy vấn chậm, đề xuất index và kiểm tra tình trạng vacuum, lock và replication. Bạn cung cấp cho CloudThinker một connection URL của user chỉ đọc dành riêng, và kết nối chạy ở chế độ hạn chế: mọi truy vấn đều chỉ đọc, nên agent không thể ghi dù có phê duyệt của bạn.
 
 ## Điều kiện tiên quyết
 
-- Một instance PostgreSQL có thể tiếp cận từ CloudThinker qua mạng.
-- Quyền admin để tạo người dùng riêng và cấp đặc quyền.
-- Extension `pg_stat_statements` đã cài đặt nếu bạn muốn phân tích ở cấp độ truy vấn (bắt buộc để lấy dữ liệu slow query).
+- Một endpoint PostgreSQL mà CloudThinker truy cập được từ internet, ví dụ PostgreSQL tự host, Amazon RDS hoặc Aurora, Cloud SQL, hay Azure Database for PostgreSQL. Agent kết nối từ CloudThinker Cloud, nên `localhost` và địa chỉ private được phân giải ở phía CloudThinker, không phải trong mạng của bạn.
+- Kết nối này chưa có tùy chọn private link hay VPN. Nếu cơ sở dữ liệu là private, hãy mở một endpoint chỉ cho phép các egress IP của CloudThinker. Mở một read replica giúp giữ primary ở chế độ private, nhưng thống kê truy vấn chỉ phản ánh workload của chính replica đó. Xem [Truy cập dịch vụ private](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ).
+- Một tài khoản admin có thể chạy `CREATE ROLE` và `GRANT`.
+- Extension `pg_stat_statements`, nếu bạn muốn xếp hạng truy vấn chậm và nhận tư vấn index theo workload. Mọi tính năng khác hoạt động mà không cần extension này.
 
 ## Thiết lập
 
 <Steps>
-  <Step title="Kết nối với tư cách admin">
-    Kết nối tới instance PostgreSQL bằng tài khoản admin:
-    ```bash
-    psql -h your-host -U postgres -d your-database
-    ```
-  </Step>
-  <Step title="Tạo người dùng chỉ đọc">
-    Tạo người dùng riêng cho CloudThinker:
+  <Step title="Tạo user chỉ đọc">
+    Kết nối bằng tài khoản admin và tạo login role cho CloudThinker:
+
     ```sql
-    CREATE USER cloudthinker_readonly WITH PASSWORD 'your-secure-password';
+    CREATE ROLE cloudthinker_readonly WITH LOGIN PASSWORD '<secure-password>';
     ```
   </Step>
-  <Step title="Cấp quyền kết nối và truy cập schema">
-    Cho phép kết nối và sử dụng schema:
+  <Step title="Cấp quyền đọc">
+    Chạy các lệnh sau trong cơ sở dữ liệu bạn muốn phân tích. Lặp lại các dòng về schema cho mọi schema ngoài `public` mà agent cần đọc.
+
     ```sql
     GRANT CONNECT ON DATABASE your_database TO cloudthinker_readonly;
     GRANT USAGE ON SCHEMA public TO cloudthinker_readonly;
-    GRANT USAGE ON SCHEMA information_schema TO cloudthinker_readonly;
-    ```
-  </Step>
-  <Step title="Cấp quyền SELECT">
-    Cấp SELECT trên tất cả bảng và view, bao gồm các bảng sau này:
-    ```sql
     GRANT SELECT ON ALL TABLES IN SCHEMA public TO cloudthinker_readonly;
-    GRANT SELECT ON ALL TABLES IN SCHEMA information_schema TO cloudthinker_readonly;
-
-    ALTER DEFAULT PRIVILEGES IN SCHEMA public
-    GRANT SELECT ON TABLES TO cloudthinker_readonly;
+    ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA public GRANT SELECT ON TABLES TO cloudthinker_readonly;
+    GRANT pg_monitor TO cloudthinker_readonly;
     ```
+
+    Thay `app_owner` bằng role tạo bảng cho ứng dụng của bạn, thường là role mà migration chạy dưới tên đó. Default privileges chỉ áp dụng cho bảng do role bạn nêu tạo ra, nên hãy lặp lại dòng này cho từng role có tạo bảng.
+
+    `pg_monitor` cho phép agent xem mọi session, lock và thống kê truy vấn, không chỉ của riêng chúng.
   </Step>
   <Step title="Bật pg_stat_statements">
-    Extension này bắt buộc để phân tích truy vấn:
+    Kiểm tra trước, vì nhiều dịch vụ managed đã preload sẵn:
+
     ```sql
-    -- Enable extension (requires superuser)
+    SHOW shared_preload_libraries;
+    ```
+
+    Nếu thiếu `pg_stat_statements`, thêm vào `shared_preload_libraries` rồi khởi động lại PostgreSQL. Trên RDS, Aurora hoặc Cloud SQL, đặt trong parameter group hoặc database flags rồi reboot. Bỏ qua bước khởi động lại nếu extension đã có trong danh sách. Sau đó, với tài khoản admin trong cơ sở dữ liệu đích:
+
+    ```sql
     CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
-
-    -- Grant access to the user
-    GRANT SELECT ON pg_stat_statements TO cloudthinker_readonly;
     ```
 
-    Với RDS/Aurora, thêm vào parameter group:
-    ```
-    shared_preload_libraries = 'pg_stat_statements'
-    ```
+    **Trạng thái thành công:** khi đăng nhập bằng `cloudthinker_readonly`, `SELECT count(*) FROM pg_stat_statements;` trả về một con số thay vì lỗi. Kết quả này cũng chứng minh quyền `pg_monitor` đã có hiệu lực.
   </Step>
-  <Step title="Cấu hình truy cập mạng">
-    Đảm bảo CloudThinker có thể tiếp cận cơ sở dữ liệu:
-    - Thêm IP CloudThinker vào security group hoặc firewall
-    - Với RDS: bật public access hoặc dùng VPC peering
+  <Step title="Mở truy cập mạng">
+    Cho phép kết nối vào trên cổng PostgreSQL (mặc định `5432`) từ các egress IP của CloudThinker trong firewall, security group hoặc danh sách authorized networks. Tài liệu này không công bố danh sách egress IP của CloudThinker: hãy hỏi đầu mối liên hệ CloudThinker của bạn, hoặc [liên hệ với chúng tôi](https://cloudthinker.io/contact).
+
+    Với PostgreSQL tự host, cũng cần cho phép `cloudthinker_readonly` đăng nhập từ các địa chỉ đó trong `pg_hba.conf`, mỗi IP một dòng:
+
+    ```text
+    hostssl your_database cloudthinker_readonly <cloudthinker-ip>/32 scram-sha-256
+    ```
+
+    Sau đó tải lại cấu hình bằng `SELECT pg_reload_conf();`. Dịch vụ managed tự xử lý phần này.
   </Step>
   <Step title="Thêm kết nối trong CloudThinker">
-    Điều hướng đến **Connections → PostgreSQL** và nhập:
-    - **Host**: hostname hoặc IP cơ sở dữ liệu
-    - **Port**: cổng cơ sở dữ liệu (mặc định: `5432`)
-    - **Database**: tên cơ sở dữ liệu
-    - **Username**: `cloudthinker_readonly`
-    - **Password**: mật khẩu bạn đặt ở trên
-    - **SSL mode**: `require` (khuyến nghị)
+    Mở **More → Workspace settings → Connections**, chọn **PostgreSQL** rồi nhấn **Connect** trên bảng chi tiết. Trong hộp thoại, bạn có thể đổi **Alias** và **Description** (agent đọc description để chọn đúng cơ sở dữ liệu khi bạn kết nối nhiều cơ sở dữ liệu). Dán URL vào **DATABASE_URI** rồi nhấn **Connect**:
 
-    Nhấn **Connect**. CloudThinker hiển thị trạng thái **Connected** khi thành công.
+    ```text
+    postgresql://cloudthinker_readonly:<secure-password>@db.example.com:5432/your_database?sslmode=require
+    ```
+
+    **Trạng thái thành công:** kết nối hiển thị **Connecting** và **Verifying**, rồi **Connected**. Sau đó CloudThinker chạy [Discovery](/vi/guide/connections/overview#điều-gì-xảy-ra-sau-khi-kết-nối) một lần: một lượt xem chỉ đọc trên cơ sở dữ liệu, kết quả hiển thị trong mục **Discovery** trên bảng chi tiết của kết nối.
   </Step>
 </Steps>
 
 ## Chi tiết kết nối
 
-| Trường | Mô tả | Mặc định |
-|-------|-------------|---------|
-| **Host** | Hostname hoặc IP cơ sở dữ liệu | — |
-| **Port** | Cổng PostgreSQL | `5432` |
-| **Database** | Tên cơ sở dữ liệu | — |
-| **Username** | Người dùng riêng, ví dụ: `cloudthinker_readonly` | — |
-| **Password** | Mật khẩu người dùng | — |
-| **SSL mode** | `disable`, `allow`, `prefer`, `require`, `verify-ca`, `verify-full` | `require` |
-| **Connection timeout** | Giây chờ kết nối | `10` |
-| **Statement timeout** | Thời gian thực thi truy vấn tối đa tính bằng ms | `30000` |
+| Trường | Bắt buộc | Mô tả | Ví dụ |
+|-------|----------|-------------|---------|
+| **Alias** | Không | Tên ngắn cho cơ sở dữ liệu này. Điền sẵn alias trống tiếp theo, ví dụ `postgres-1` | `prod-db` |
+| **Description** | Không | Cơ sở dữ liệu này là gì. Agent đọc để chọn giữa các instance | `Production orders database` |
+| **DATABASE_URI** | Có | Connection URL đầy đủ: user, password, host, port, database và SSL mode | `postgresql://cloudthinker_readonly:<password>@db.example.com:5432/shop?sslmode=require` |
 
-Định dạng connection string:
+Biểu mẫu gắn nhãn trường URL là **DATABASE_URI**. Mỗi kết nối chỉ bao phủ một cơ sở dữ liệu được nêu trong URL. Để phân tích cơ sở dữ liệu khác, hãy thêm một kết nối PostgreSQL khác với **Alias** khác.
 
-```
-postgresql://cloudthinker_readonly:your-secure-password@your-host:5432/your-database
-```
+Nếu password chứa `@`, `:`, `/` hoặc `#`, hãy URL-encode (ví dụ `@` thành `%40`), nếu không URL sẽ không phân tích được.
 
-## Quyền bắt buộc
+## Quyền yêu cầu
 
-### Tối thiểu
-
-```sql
-GRANT CONNECT ON DATABASE dbname TO cloudthinker_readonly;
-GRANT USAGE ON SCHEMA public TO cloudthinker_readonly;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO cloudthinker_readonly;
-```
-
-### Khuyến nghị (phân tích toàn diện)
-
-```sql
--- All of the above, plus:
-GRANT SELECT ON pg_stat_statements TO cloudthinker_readonly;
-GRANT SELECT ON pg_stat_activity TO cloudthinker_readonly;
-GRANT SELECT ON pg_stat_user_tables TO cloudthinker_readonly;
-GRANT SELECT ON pg_stat_user_indexes TO cloudthinker_readonly;
-GRANT SELECT ON pg_statio_user_tables TO cloudthinker_readonly;
-GRANT pg_read_all_stats TO cloudthinker_readonly;  -- PostgreSQL 14+
-```
+| Bạn muốn agent | Cấp quyền |
+|--------------------|-------|
+| Đọc schema, bảng, index và chạy truy vấn chỉ đọc | `CONNECT` trên database, `USAGE` trên từng schema, `SELECT` trên các bảng của schema |
+| Xem mọi session, lock và truy vấn đang chặn | `pg_monitor` |
+| Xếp hạng truy vấn chậm và nhận tư vấn index theo workload | Extension `pg_stat_statements` cùng `pg_monitor` |
+| Thử index mà không cần tạo thật | Extension `hypopg`, do admin cài đặt. Mỗi dịch vụ managed khác nhau, nên hãy kiểm tra danh sách extension được hỗ trợ của nhà cung cấp |
 
 <Tip>
-Bắt đầu với các grant tối thiểu và thêm các grant stats khuyến nghị để mở khóa phân tích cấp truy vấn và báo cáo cache hit.
+Giữ user ở chế độ chỉ đọc. Chế độ hạn chế đã chặn thao tác ghi từ agent (khác với [MySQL](/vi/guide/connections/mysql), nơi thao tác ghi đi qua Approvals), nhưng role chỉ có `SELECT` đảm bảo rằng nếu một trong hai lớp có sai sót thì dữ liệu vẫn không bị thay đổi.
 </Tip>
 
 ## Khả năng của agent
 
-Sau khi kết nối, CloudThinker có thể:
-
-| Khả năng | Mô tả |
-|------------|-------------|
-| **Phân tích truy vấn** | Xác định slow query, phân tích execution plan |
-| **Khuyến nghị index** | Tìm index còn thiếu, xác định index không dùng |
-| **Metrics hiệu suất** | Giám sát kết nối, I/O, tỷ lệ cache hit |
-| **Thống kê bảng** | Phân tích table bloat, dead tuple, trạng thái vacuum |
-| **Giám sát replication** | Kiểm tra lag và trạng thái streaming trên replica |
+| Khả năng | Agent làm được gì |
+|------------|--------------------|
+| **Kiểm tra schema** | Liệt kê schema, bảng, view và sequence, đọc kiểu cột, constraint và index |
+| **SQL chỉ đọc** | Chạy truy vấn `SELECT` để trả lời câu hỏi về dữ liệu của bạn |
+| **Truy vấn chậm** | Xếp hạng câu lệnh theo tổng thời gian, thời gian trung bình hoặc mức dùng tài nguyên tổng thể từ `pg_stat_statements` |
+| **Query plan và tư vấn index** | Explain một truy vấn, đề xuất index cho một truy vấn hoặc cả workload, và thử index giả định với `hypopg` |
+| **Kiểm tra tình trạng** | Tìm index không hợp lệ, trùng lặp, phình to và không dùng, tỷ lệ cache hit, sequence sắp chạm giới hạn và mức dùng kết nối |
+| **Vacuum và lock** | Báo cáo bảng phình to, autovacuum quá hạn, nguy cơ transaction ID wraparound và truy vấn đang chặn |
+| **Replication** | Kiểm tra độ trễ replica và tình trạng replication slot |
 
 ### Xác minh kết nối
 
 ```text
-Check PostgreSQL connection health and list active database sessions
+List the schemas and tables in the connected PostgreSQL database with their sizes
 ```
+
+Kết quả mong đợi là tên bảng nhóm theo schema kèm kích thước. Lỗi `permission denied` nêu tên đối tượng mà user không đọc được.
 
 ### Ví dụ prompt
 
 ```text
-Analyze slow queries on the production PostgreSQL instance
-Find missing indexes on the orders table
-Show database performance metrics including cache hit rates
+Which 10 queries use the most resources on PostgreSQL, and what indexes would help them?
+Run a health check on the database and list the indexes I can safely drop
+Is anything blocking right now? Show the blocking and waiting queries
 ```
 
 ## Khắc phục sự cố
 
-<Accordion title="Connection refused">
-- Xác minh host và port chính xác
-- Kiểm tra security group hoặc firewall cho phép IP CloudThinker
-- Với RDS: đảm bảo "Publicly accessible" được bật hoặc dùng VPC peering
-- Xác nhận PostgreSQL đang lắng nghe trên interface đúng
+<Accordion title="Connection refused hoặc timed out">
+CloudThinker không truy cập được host. Kiểm tra host và port trong **DATABASE_URI** là public hoặc truy cập được bằng cách khác, firewall hoặc security group cho phép CloudThinker, và `listen_addresses` trong `postgresql.conf` không phải `localhost`. Trên RDS, instance phải ở chế độ publicly accessible hoặc truy cập được qua thiết lập mạng của bạn.
 </Accordion>
 
-<Accordion title="Xác thực thất bại">
-- Xác minh username và password chính xác
-- Kiểm tra `pg_hba.conf` cho phép phương thức kết nối
-- Đảm bảo người dùng có đặc quyền `CONNECT` trên cơ sở dữ liệu
+<Accordion title="Password authentication failed hoặc no pg_hba.conf entry">
+User hoặc password sai, hoặc `pg_hba.conf` không cho phép user này từ địa chỉ của CloudThinker. Kiểm tra password đã được URL-encode trong **DATABASE_URI**, thêm dòng `pg_hba.conf` cho user rồi tải lại PostgreSQL.
 </Accordion>
 
-<Accordion title="Thiếu pg_stat_statements">
-- Xác minh extension đã cài đặt: `SELECT * FROM pg_extension WHERE extname = 'pg_stat_statements';`
-- Kiểm tra `shared_preload_libraries` bao gồm `pg_stat_statements`
-- Khởi động lại PostgreSQL sau khi thay đổi `shared_preload_libraries`
-- Với RDS: sửa parameter group và reboot instance
+<Accordion title="Không tìm thấy pg_stat_statements, hoặc không có dữ liệu truy vấn chậm">
+Extension chưa được nạp hoặc chưa được tạo. Xác nhận `SHOW shared_preload_libraries;` có `pg_stat_statements`, khởi động lại nếu bạn vừa thêm, và chạy `CREATE EXTENSION pg_stat_statements;` trong cơ sở dữ liệu đích. Thống kê tính từ lần reset gần nhất, nên server mới có rất ít lịch sử.
 </Accordion>
 
-<Accordion title="Permission denied">
-- Xác minh người dùng có `SELECT` trên các bảng bắt buộc
-- Cấp role `pg_read_all_stats` cho PostgreSQL 14+
-- Kiểm tra quyền schema bằng `\dn+` trong psql
+<Accordion title="Permission denied cho bảng hoặc schema">
+User thiếu `USAGE` trên schema hoặc `SELECT` trên bảng. Bảng tạo sau khi cấp quyền cần dòng `ALTER DEFAULT PRIVILEGES FOR ROLE`, nêu tên role tạo ra các bảng đó.
+</Accordion>
+
+<Accordion title="Chưa cài HypoPG">
+Thử index giả định cần extension `hypopg`. Hãy cài extension, hoặc yêu cầu đề xuất index mà không thử nghiệm.
 </Accordion>
 
 ## Bảo mật
 
 <ConnectionSecurity />
 
-- **Bắt buộc SSL** — luôn sử dụng SSL mode `require` hoặc cao hơn để mã hóa dữ liệu truyền tải.
-- **Grant tối thiểu** — chỉ cấp `SELECT` cho người dùng CloudThinker; không bao giờ cấp quyền ghi.
+- **Mã hóa khi truyền**: đặt `sslmode=require` trong **DATABASE_URI** để thông tin xác thực và kết quả không bao giờ đi qua mạng ở dạng văn bản thuần. `verify-full` còn cần CA certificate của server ở phía CloudThinker, mà kết nối không có trường nào để cung cấp, nên hãy dùng `require`.
+- **Chế độ hạn chế cho mọi truy vấn**: CloudThinker mở kết nối PostgreSQL ở chế độ chỉ đọc, nên agent không thể ghi dù quyền của role cho phép.
 
 ## Liên quan
 
 <CardGroup cols={2}>
-  <Card title="Agent" icon="database" href="/vi/guide/agents/overview">
-    Agent tối ưu cơ sở dữ liệu
+  <Card title="CockroachDB" icon="/images/icons/cockroachdb.svg" href="/vi/guide/connections/cockroachdb">
+    Kết nối cluster CockroachDB tương thích PostgreSQL với user đọc và user ghi riêng biệt.
   </Card>
-  <Card title="Kết nối MySQL" icon="/images/icons/mysql.svg" href="/vi/guide/connections/mysql">
-    Thiết lập tương tự cho cơ sở dữ liệu MySQL
+  <Card title="MySQL" icon="/images/icons/mysql.svg" href="/vi/guide/connections/mysql">
+    Kết nối MySQL cũng bằng user chỉ đọc. Khác với PostgreSQL, thao tác ghi trên MySQL đi qua Approvals thay vì bị chặn.
   </Card>
 </CardGroup>

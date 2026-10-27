@@ -1,68 +1,200 @@
 ---
 title: Vận hành Tự động
-description: "Tìm hiểu cách tác vụ theo lịch và Pulse tự chạy công việc, cùng cách Manual và Auto giữ bạn kiểm soát"
+description: "Đặt giới hạn cho công việc agent chạy khi không có ai ngồi máy, và nhận thông báo khi lượt chạy lỗi, chờ duyệt hoặc tự thay đổi."
 icon: robot
 ---
 
 import AutonomyModes from '/snippets/vi/autonomy-modes.mdx';
 
-Các agent CloudThinker không chỉ trả lời prompt — chúng giám sát, phân tích và hành động trên hạ tầng của bạn liên tục. Trang này giải thích những gì chạy tự động và cách hai chế độ tự trị giữ mọi hành động dưới sự kiểm soát của bạn.
+Vận hành tự động là các lượt chạy agent bắt đầu mà không cần ai gõ prompt: automation kích hoạt theo trigger, và Pulse phân loại cảnh báo giám sát của bạn. Trước khi dựa vào chúng, hãy đặt Approval mode cho các lượt chạy không người giám sát, Rule cho các thao tác ghi thường lệ, thông báo cho những việc cần người xử lý, và một giới hạn credit.
 
-## Tại sao cần vận hành tự động
+## Những gì chạy mà không cần prompt trực tiếp
 
-- **Công việc thường ngày tự chạy.** Các nhiệm vụ được lên lịch xử lý kiểm tra chi phí hàng ngày, kiểm toán hàng tuần và báo cáo hàng tháng mà không cần ai nhớ đến.
-- **Tiếng ồn trở thành tín hiệu.** Pulse loại bỏ các sự kiện giám sát trùng lặp và xếp hạng những gì còn lại, vì vậy kỹ sư on-call thấy các nhóm đáng hành động.
-- **Bạn đặt giới hạn rủi ro.** Mọi hành động ghi theo [Approvals](/guide/approvals/overview) của bạn — agent không bao giờ có quyền bạn chưa cấp.
+| Bề mặt | Tự làm gì | Cấu hình tại |
+|---------|-------------------------|-----------------|
+| **Automations** | Chạy các chỉ dẫn đã lưu theo lịch, theo lời gọi webhook, theo sự kiện repository, hoặc theo một probe script do agent viết | [Automations](/vi/guide/automation/automations) |
+| **Pulse** | Gom cảnh báo đến thành các cụm, loại bỏ nhiễu và chuyển những cụm đáng hành động sang phân loại. Các cuộc điều tra Pulse chuyển đi chạy dưới dạng [Resolve](/vi/guide/incident/overview) (sản phẩm điều tra sự cố của CloudThinker), nên thao tác ghi của chúng tuân theo run type **Resolve** trên [Approval mode](/vi/guide/approvals/approval-mode). | [Pulse](/vi/guide/pulse/overview) |
 
-## Mô hình tự trị
+Mỗi lượt chạy automation đều giữ lại cuộc hội thoại, nên bạn có thể mở bất kỳ lượt chạy nào để đọc agent đã kiểm tra và làm gì. Một câu trả lời trong chat cũng có thể kết thúc bằng một đề xuất automation, nhưng chưa có gì chạy cho đến khi Admin chọn **Enable**.
 
-Mỗi lần chạy dùng một Approval mode:
+## Điều kiện tiên quyết
+
+- Gói Team trở lên, vì automation cần gói này. Xem [Pricing](/vi/guide/billing/pricing).
+- Vai trò Admin của workspace. Chỉ admin mới đổi được Approval mode, Rule và automation.
+- Một Owner hoặc Admin của organization, để đặt giới hạn credit cho workspace ở bước 5.
+
+<Note>
+Nếu organization chuyển sang gói không có automation, mỗi automation sẽ tắt ở lượt chạy kế tiếp và gửi thông báo **Automation turned off**.
+</Note>
+
+Hãy đặt các giới hạn này trước khi automation đầu tiên chạy không người giám sát, hoặc ngay sau khi bạn tạo nó bằng [Automation quickstart](/vi/guide/automation/quickstart).
+
+## Cách quyết định một thao tác ghi
+
+Thao tác đọc luôn chạy. Mọi thao tác ghi đều đi qua [Approvals](/vi/guide/approvals/overview), bất kể bề mặt nào khởi động nó:
+
+| Agent muốn | Điều gì quyết định |
+|--------------------|--------------|
+| Đọc dữ liệu | Không gì cả. Thao tác chạy luôn. |
+| Thực hiện thao tác ghi có Rule áp dụng | Rule đó: **Allow** cho chạy, **Ask first** chờ người duyệt, **Deny** từ chối |
+| Thực hiện thao tác ghi không có Rule nào áp dụng | Approval mode của lượt chạy |
+| Thực hiện lời gọi thuộc **Always blocked** | Không gì cả. Lời gọi không bao giờ chạy. [Always blocked](/vi/guide/approvals/overview#cách-quyết-định-một-thao-tác-ghi) là danh sách có sẵn của CloudThinker gồm các lời gọi mà không Rule hay người nào cho phép được, như dừng ghi log CloudTrail, đóng tài khoản AWS hoặc xóa namespace `kube-system`. |
+
+Khi nhiều Rule cùng khớp một thao tác ghi, **Deny** thắng **Ask first**, và **Ask first** thắng **Allow**.
+
+Có hai chế độ, **Manual** và **Auto**:
 
 <AutonomyModes />
 
-Automation mặc định dùng **Auto · Rules + AI · Refuse**, vì có thể không có ai ở đó để trả lời. Bạn đổi chế độ cho mọi Automation, hoặc cho một Automation, trên trang [Approval mode](/guide/approvals/approval-mode).
+Mọi lựa chọn mà automation có thể dùng (bốn lựa chọn Auto, cộng Manual):
 
-Rule chỉ quyết định khi workspace của bạn đã bật Rule enforcement. Mặc định nó tắt, và CloudThinker bật nó theo từng workspace. Khi bước **Rules** trên **Approvals** còn hiển thị **In preview**, Rule chỉ ghi lại quyết định mà chúng sẽ đưa ra, và chỉ Approval mode quyết định mỗi thao tác ghi. Xem [Rules](/guide/approvals/rules#troubleshooting).
+| Lựa chọn | Thao tác ghi không có Rule áp dụng | Dùng khi |
+|--------|------------------------|----------|
+| **Auto · Rules + AI · Refuse** | AI judgment có thể cho phép; nếu không thì bị từ chối | Lượt chạy không người giám sát. Đây là mặc định có sẵn cho automation: có thể không ai online để trả lời, nên thao tác ghi mà AI judgment không cho phép sẽ bị từ chối thay vì nằm chờ. |
+| **Auto · Rules + AI · Ask me** | AI judgment có thể cho phép; nếu không thì chờ người duyệt | Có người theo dõi thông báo và muốn thao tác ghi chờ hơn là thất bại |
+| **Auto · Rules · Refuse** | Bị từ chối | Lượt chạy không người giám sát với một tập thao tác ghi hẹp, đã biết trước và có Rule bao phủ |
+| **Auto · Rules · Ask me** | Chờ người duyệt | Chỉ các Rule đã chấp nhận mới được tự chạy thao tác ghi |
+| **Manual** | Chờ người duyệt, kể cả mọi thao tác ghi mà Rule cho phép | Phải có người xem mọi thao tác ghi |
 
-<Tip>
-Chấp nhận [Rules](/guide/approvals/rules) cho các thao tác ghi mà Automation thường làm. Một Rule quyết định giống nhau ở mọi chế độ, nên lần chạy theo lịch không phụ thuộc vào AI judgment.
-</Tip>
+<Note>
+Rule chỉ quyết định khi workspace của bạn đã bật Rule enforcement. Tính năng này tắt theo mặc định, và CloudThinker bật cho từng workspace. Khi bước **Rules** trên **Approvals** còn hiển thị **In preview**, Rule chỉ ghi lại quyết định mà chúng sẽ đưa ra, còn mỗi thao tác ghi do riêng lựa chọn ở bảng trên quyết định. Vì vậy hãy chọn theo hành vi bạn cần ngay hôm nay. Xem [phần khắc phục sự cố của Rules](/vi/guide/approvals/rules#khắc-phục-sự-cố).
+</Note>
 
-## Những gì chạy tự động
+## Thông báo cho các lượt chạy không người giám sát
 
-Hai bề mặt thực hiện công việc mà không cần prompt từ bạn. Mỗi bề mặt được tài liệu hóa trên trang riêng — hãy cấu hình chúng ở đó.
+| Thông báo | Gửi khi |
+|--------------|-----------|
+| **Agent approvals** | Một thao tác ghi đang chờ người duyệt, và khi thao tác đó được duyệt hoặc bị từ chối |
+| **Automation run failed** | Một lượt chạy thất bại lần đầu sau một lần thành công |
+| **Automation turned off** | Automation dừng sau 10 lượt chạy thất bại liên tiếp, hoặc khi cố chạy trên gói không có automation |
+| **Automation resource missing** | Lượt chạy không bắt đầu được vì một thứ nó cần đã bị xóa |
+| **Watched condition met** | Automation tạo từ thẻ đề xuất của agent kết thúc một lượt chạy thỏa điều kiện theo dõi của thẻ (dòng cạnh biểu tượng con mắt). CloudThinker gửi thông báo này, không phải agent. |
+| **Agent reduced its monitoring** | Một lượt chạy không người giám sát đã tạm dừng hoặc gỡ một trigger của chính automation đó, hoặc giãn tần suất kiểm tra của probe |
 
-| Bề mặt | Tự chạy điều gì | Tìm hiểu thêm |
-|---------|------------------------|------------|
-| **Automations** | Chạy prompt agent theo lịch hàng ngày, hàng tuần hoặc hàng tháng — phân tích chi phí, kiểm toán bảo mật, báo cáo điều hành | [Automations](/guide/automation/automations) |
-| **Pulse** | Nhận sự kiện từ các nguồn như CloudTrail, GuardDuty và Datadog, loại bỏ nhiễu, và hiển thị các nhóm được xếp hạng có thể leo thang thành [sự cố](/vi/guide/incident/overview) | [Cách Pulse hoạt động](/vi/guide/pulse/overview) |
+**Agent alerts** là một dòng khác: mọi cảnh báo agent tạo ra, lọc theo mức độ nghiêm trọng. Dùng dòng này khi chỉ dẫn của bạn có câu "tạo cảnh báo nếu…". **Watched condition met** chỉ áp dụng cho các việc theo dõi tiếp mà agent đề xuất.
 
-Bất kể bề mặt nào kích hoạt công việc, [Approvals](/guide/approvals/overview) quyết định từng lời gọi tới một kết nối:
+<Warning>
+**Automation run failed** chỉ gửi một lần, ở lần thất bại đầu tiên sau một lần thành công. Từ lần thất bại thứ hai đến thứ chín không có thông báo nào, cho đến khi **Automation turned off** gửi ở lần thứ mười. Để phát hiện các lần thất bại này:
 
-| Agent muốn | Điều gì quyết định |
-|------------|--------------------|
-| Đọc dữ liệu | Không gì cả. Thao tác đọc luôn chạy. |
-| Ghi, và có Rule áp dụng | Rule đó: **Allow** cho chạy, **Ask first** chờ một người, **Deny** từ chối |
-| Ghi, và không có Rule nào áp dụng | Approval mode của lần chạy: Manual hỏi một người; Auto có thể để AI judgment cho phép, rồi hỏi hoặc từ chối |
-| Gọi một thao tác **Always blocked** | Không gì cả. Nó không bao giờ chạy. |
+- Xem tab **Runs** hằng ngày. Đổi bộ lọc trạng thái từ **All statuses** sang **Failed**.
+- Thêm câu "nếu không hoàn thành được, hãy tạo cảnh báo mức nghiêm trọng cao và nêu lý do" vào chỉ dẫn. Cách này chỉ có ích khi agent chạy đủ xa để tạo được cảnh báo.
+</Warning>
 
-## Luôn được thông báo
+## Đặt giới hạn
 
-Mọi lần chạy tự động đều được ghi lại trong workspace của bạn, và [thông báo](/vi/guide/notifications) chuyển phát phát hiện, lỗi và yêu cầu phê duyệt đến Slack, Teams hoặc email. Xem xét hoạt động thường xuyên và điều chỉnh Rules hoặc Approval mode khi công việc thay đổi.
+<Steps>
+  <Step title="Chọn chế độ cho mọi automation">
+    Mở **Approvals** trên thanh bên, rồi mở tab **Approval mode**. Trong **Run types**, tìm **Automations**. Giữ mặc định có sẵn, hoặc chọn **Override** rồi chọn chế độ khác. Chọn **Reset** để hủy override.
 
-## Liên quan
+    Chọn **Auto · Rules + AI · Ask me** nếu có người theo dõi thông báo và bạn muốn thao tác ghi chờ hơn là thất bại.
+
+    Nếu dùng Pulse, hãy đặt dòng **Resolve** theo cùng cách: các cuộc điều tra Pulse chuyển đi tuân theo dòng này.
+
+    **Trạng thái thành công:** dòng **Automations** (và **Resolve**, nếu bạn đã đổi) hiển thị chế độ bạn chọn.
+  </Step>
+  <Step title="Chấp nhận một Rule cho mỗi thao tác ghi thường lệ">
+    Chấp nhận một Rule **Allow** cho mỗi thao tác ghi mà automation thực hiện ở mọi lượt chạy. Rule enforcement tắt theo mặc định, và CloudThinker bật cho từng workspace. Trước khi bật, Rule chỉ ghi lại quyết định mà nó sẽ đưa ra, còn chế độ ở bước 1 vẫn quyết định mọi thao tác ghi. Chấp nhận Rule ngay bây giờ nghĩa là chính sách đã sẵn sàng vào ngày enforcement đến với bạn.
+
+    Thêm Rule theo một trong hai cách:
+
+    - **Chấp nhận một gợi ý** trên tab **Rules**. Gợi ý đến từ **Find rules** (một cuộc chat rà soát, trong đó CloudThinker đọc các kết nối và lịch sử phê duyệt của bạn rồi đề xuất Rule), hoặc từ một agent đã đề xuất Rule.
+    - **Yêu cầu tạo Rule** bằng cách gõ `/create-policy` trong chat và mô tả thao tác ghi, ví dụ "Allow posting pull request comments on the github-acme connection from automations". CloudThinker chọn tên thao tác từ danh mục của kết nối.
+
+    | Trường | Đặt thành |
+    |-------|-----------|
+    | **Effect** | **Allow** |
+    | **Operations** | Thao tác ghi mà automation thực hiện |
+    | **Connections** | Kết nối mà automation ghi vào |
+    | **Runs from** | **Automations** |
+
+    Khi enforcement đã bật, Rule quyết định giống nhau ở mọi lựa chọn Auto, nên lượt chạy hằng đêm không còn phụ thuộc vào AI judgment. Xem [Rules](/vi/guide/approvals/rules).
+
+    **Trạng thái thành công:** Rule nằm trên tab **Active** với **Allow**, và **Runs from** đặt thành **Automations**.
+  </Step>
+  <Step title="Đặt chế độ riêng cho một automation nếu cần">
+    Mở automation và dùng bộ chọn **Approval** cạnh bộ chọn model, bên dưới phần chỉ dẫn. Tùy chọn có nhãn **Default** đi theo run type **Automations**. Chọn tùy chọn khác để override riêng cho automation này.
+
+    **Trạng thái thành công:** bộ chọn hiển thị chế độ bạn đã chọn.
+
+    <Warning>
+    Chế độ cụ thể nhất sẽ thắng: chế độ của automation này, rồi đến run type **Automations**, rồi đến chế độ của workspace. Quy tắc này vẫn đúng cả khi chế độ cụ thể hơn lại lỏng hơn. Chỉ Admin mới đổi được, và thay đổi được ghi vào [audit logs](/vi/guide/security/audit-logs) dưới dạng cập nhật automation.
+    </Warning>
+  </Step>
+  <Step title="Chuyển các thông báo cần người xử lý">
+    Vào **More → Workspace settings → Notifications**. Trong **What to notify me about**, mở **Agents & Tasks** và bật một kênh cho các sự kiện trong [Thông báo cho các lượt chạy không người giám sát](#thông-báo-cho-các-lượt-chạy-không-người-giám-sát) ở trên. Cảnh báo do agent tạo nằm ở một dòng riêng, **Agent alerts** trong **Alerts**. Xem [Notifications](/vi/guide/notifications).
+
+    **Trạng thái thành công:** mỗi sự kiện có ít nhất một kênh đang bật.
+  </Step>
+  <Step title="Đặt giới hạn credit cho workspace">
+    Không có giới hạn credit cho từng automation, nên [giới hạn credit](/vi/guide/billing/credit-limits) của workspace là lớp chặn cuối cùng cho một trigger chạy mất kiểm soát. Owner hoặc Admin của organization đặt giới hạn này trong **Admin Settings → Credit Limits**, trên gói Scale, Scale Plus hoặc Enterprise. Chọn một trong hai:
+
+    - **Throttle**: khi chạm giới hạn, workspace chỉ được dùng credit miễn phí hằng ngày, vốn chỉ đủ cho chat Light. Lượt chạy automation dùng Pro hoặc Ultra, nên lượt chạy mới không bắt đầu được cho đến khi chu kỳ được đặt lại hoặc bạn nâng giới hạn. Giới hạn được kiểm tra lúc lượt chạy bắt đầu, nên lượt chạy đang diễn ra vẫn chạy hết.
+    - **Notify only**: gửi cảnh báo cho Owner và tiếp tục chạy.
+
+    Gói Team không có giới hạn credit. Thay vào đó, hãy theo dõi [Usage](/vi/guide/billing/usage), giữ chu kỳ probe từ 15 phút trở lên, và lọc trigger repository theo branch và action.
+
+    **Trạng thái thành công:** cột **Usage / limit** của workspace hiển thị một lượng credit, không phải **Unlimited**.
+  </Step>
+</Steps>
+
+## Lượt chạy không người giám sát được tự thay đổi những gì
+
+Agent đang chạy một automation có thể quản lý trigger của chính automation đó, ví dụ gỡ một probe khi sự cố đã đóng. Các giới hạn:
+
+- **Chỉ automation của chính nó.** Lượt chạy không người giám sát không sửa được automation nào khác.
+- **Nới lỏng thì có báo.** Tắt automation, tạm dừng hoặc gỡ trigger, hay giãn tần suất kiểm tra của probe đều gửi cho owner thông báo **Automation turned off** hoặc **Agent reduced its monitoring**. Khi dừng, automation hiển thị lý do, như "Stopped by the agent: the incident is closed".
+- **Thêm vào thì không báo.** Agent có thể thêm probe hoặc trigger repository, hay tăng tần suất kiểm tra của probe, mà không gửi thông báo. Thêm trigger có thể đồng nghĩa với thêm lượt chạy và tốn thêm credit. Agent không thêm được trigger webhook, vì secret phải hiển thị cho người xem.
+- **Mọi thay đổi đều được ghi lại** trong [audit logs](/vi/guide/security/audit-logs) với agent là tác nhân. Không có cài đặt nào ngăn agent thêm trigger, nên hãy rà soát hằng tuần: lọc **Actor Type** là **Agent** và **Category** là **Task**. Audit logs có trên gói Scale, Scale Plus và Enterprise.
+
+Không có giới hạn credit hay giới hạn số lượt chạy mỗi ngày cho từng automation. Các giới hạn hiện có là giới hạn webhook và probe trên [Automations](/vi/guide/automation/automations), cộng với giới hạn credit của workspace (bước 5 ở trên), vốn cũng chặn luôn số credit mà các trigger do agent thêm có thể tiêu. Theo dõi chi tiêu theo từng tính năng trên [Usage](/vi/guide/billing/usage).
+
+## Dừng mọi thứ cùng lúc
+
+Không có công tắc nào tạm dừng mọi automation. Khi đang có sự cố hoặc một lần deploy lỗi:
+
+- Tắt từng automation bằng công tắc trên thẻ của nó trong **Automations**.
+- Để mọi thao tác ghi phải chờ người duyệt trong khi lượt chạy vẫn đọc dữ liệu, đặt run type **Automations** thành **Manual**. Automation nào có cài đặt **Approval** riêng sẽ giữ cài đặt đó, nên hãy kiểm tra cả những automation này.
+- Công tắc không dừng lượt chạy đang diễn ra, lượt chạy đó sẽ chạy hết. Thao tác ghi đang chờ trong **Required Approval** vẫn nằm đó: mở lượt chạy từ **Runs** và chọn **Decline**.
+
+## Quyền sở hữu và offboarding
+
+Owner là người đã tạo automation. Nếu owner mất quyền truy cập workspace, các automation của họ sẽ tắt và hiển thị "Its owner no longer has access to this workspace." Khi đó admin của workspace có thể chọn **Take ownership** trong thông báo này trên trang của automation. Không chuyển quyền sở hữu trước được, chỉ chuyển được sau khi owner mất quyền truy cập. Automation vẫn tắt cho đến khi có người bật lại. Trang Automations không hiển thị ai sở hữu automation nào, nên hãy tự giữ danh sách ai đã tạo automation nào, và đưa danh sách đó vào checklist offboarding. Như vậy sẽ có người nhận quyền sở hữu và bật lại automation ngay trong ngày.
+
+## Ví dụ
+
+- **Báo cáo hằng ngày chỉ đọc.** Một automation tóm tắt chi phí mỗi sáng. Automation chỉ đọc, nên không cần phê duyệt và không ai bị đánh thức. Báo cáo nằm sẵn trong cuộc hội thoại của lượt chạy.
+- **Bình luận trên mỗi pull request mới.** Một trigger repository kích hoạt ở **Opened**, và lượt chạy cần đăng bình luận. Yêu cầu tạo Rule Allow bằng `/create-policy` (bước 2) rồi chấp nhận Rule đó. Khi Rule enforcement đã bật, bình luận sẽ được đăng mọi lần. Nếu không có Rule, kết quả phụ thuộc vào AI judgment, và thao tác nào AI judgment không cho phép sẽ bị từ chối, nên đừng dựa vào cách này cho thao tác ghi bạn muốn chạy ở mọi lượt.
+
+## Khắc phục sự cố
+
+<AccordionGroup>
+  <Accordion title="Lượt chạy theo lịch từ chối thao tác ghi thay vì hỏi">
+    Mặc định cho automation là **Auto · Rules + AI · Refuse**. Hãy chấp nhận một Rule **Allow** cho thao tác ghi đó, hoặc đặt automation hay run type **Automations** sang một lựa chọn **Ask me**.
+  </Accordion>
+  <Accordion title="Lượt chạy nằm ở Required Approval">
+    Một thao tác ghi đang chờ người duyệt. Mở cuộc hội thoại của lượt chạy từ **Runs** và chọn **Approve** hoặc **Decline**. Bật **Agent approvals** để lần sau thông báo đến được với bạn.
+  </Accordion>
+  <Accordion title="Rule Allow không cho thao tác ghi chạy">
+    Trước tiên, kiểm tra Rule enforcement: khi bước **Rules** trên **Approvals** còn hiển thị **In preview**, Rule chỉ ghi lại quyết định mà chúng sẽ đưa ra, nên chưa Rule Allow nào cho thao tác ghi chạy ([chi tiết](/vi/guide/approvals/rules#khắc-phục-sự-cố)). Sau đó kiểm tra chế độ: **Manual** hỏi trước mọi thao tác ghi, kể cả thao tác có Rule Allow bao phủ. Tiếp theo, kiểm tra **Runs from** có bao gồm **Automations** và Rule có ghi đúng kết nối. Cuối cùng, tìm Rule **Deny** hoặc **Ask first** khớp cùng thao tác ghi: Rule đó thắng Rule Allow.
+  </Accordion>
+  <Accordion title="Automation tự tắt">
+    Mở automation để đọc lý do. Mười lượt chạy thất bại liên tiếp, agent dừng automation, hoặc owner mất quyền truy cập đều làm automation tắt. Khắc phục nguyên nhân, dùng **Run now** để xác nhận, rồi bật lại.
+  </Accordion>
+</AccordionGroup>
+
+## Bước tiếp theo
 
 <CardGroup cols={2}>
-  <Card title="Approval" icon="shield-check" href="/guide/approvals/overview">
-    Rules, Approval mode và người phê duyệt cho hành động của agent
+  <Card title="Automation quickstart" icon="rocket" href="/vi/guide/automation/quickstart">
+    Xây dựng một lượt kiểm tra bất thường chi phí hằng ngày có cảnh báo qua Slack
   </Card>
-  <Card title="Approval mode" icon="bolt" href="/guide/approvals/approval-mode">
-    Chọn Manual hoặc Auto cho workspace, một run type, hoặc một Automation
+  <Card title="Approval mode" icon="bolt" href="/vi/guide/approvals/approval-mode">
+    Xem mọi lựa chọn Auto và chế độ mà mỗi lượt chạy sử dụng
   </Card>
-  <Card title="Automations" icon="calendar-check" href="/guide/automation/automations">
-    Lên lịch prompt agent chạy hàng ngày, hàng tuần hoặc hàng tháng
+  <Card title="Approval Rules" icon="list-check" href="/vi/guide/approvals/rules">
+    Xem xét và chấp nhận các Rule mà agent đề xuất trong lúc làm việc
   </Card>
   <Card title="Pulse" icon="wave-pulse" href="/vi/guide/pulse/overview">
-    Loại bỏ sự kiện trùng lặp và hiển thị các cụm tín hiệu được xếp hạng
+    Biến cơn lũ cảnh báo thành các cụm được xếp hạng
   </Card>
 </CardGroup>

@@ -1,51 +1,82 @@
 ---
 title: HashiCorp Vault
-description: "Kết nối HashiCorp Vault để đọc KV secrets, cấp phát dynamic credentials và kiểm toán policy, token và sức khỏe cluster qua xác thực Token hoặc AppRole"
+description: "Kết nối HashiCorp Vault để agent kiểm tra sức khỏe, liệt kê key của secret, kiểm toán policy và cấp dynamic credential qua Approvals"
 icon: "/images/icons/vault.svg"
 ---
 
 import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
 
-Kết nối cụm HashiCorp Vault của bạn để [CloudThinker](/vi/guide/agents/overview) có thể đọc KV secrets, lấy dynamic credentials cho database và cloud, đồng thời kiểm tra policy, token, audit device và sức khỏe cluster — tất cả thông qua CLI `vault` chạy trong sandbox bảo mật của CloudThinker.
-
-## Nền tảng được hỗ trợ
-
-| Nền tảng | Hỗ trợ |
-|----------|---------|
-| **Vault open-source** | Tự host, các phiên bản gần đây |
-| **Vault Enterprise** | Hỗ trợ namespace |
-| **HCP Vault Dedicated** | Đặt namespace (mặc định `admin`) |
+Kết nối cụm HashiCorp Vault để agent của CloudThinker kiểm tra trạng thái seal và sức khỏe, liệt kê nội dung của một secret path, kiểm toán policy, auth method và audit device, và cấp credential ngắn hạn cho database hoặc cloud qua [Approvals](/vi/guide/approvals/overview) của bạn. Agent chạy CLI `vault` chính thức trong sandbox do CloudThinker quản lý và đăng nhập bằng **token** hoặc **AppRole** (một role ID cùng một secret ID mà Vault đổi lấy token ngắn hạn).
 
 ## Điều kiện tiên quyết
 
-1. **Địa chỉ Vault có thể tiếp cận** — sandbox kết nối tới `VAULT_ADDR` qua mạng, không phải máy tính của bạn. Sử dụng tên DNS công khai hoặc endpoint HCP, không dùng `localhost` hoặc địa chỉ riêng tư mà sandbox không thể định tuyến.
-2. **Thông tin xác thực** — Vault token, hoặc AppRole (`role_id` + `secret_id`), được gắn với policy cấp quyền đọc tới các path mà bạn muốn agent truy vấn.
-3. **(Chỉ Enterprise / HCP)** **Namespace** chứa secrets.
+- Một địa chỉ Vault mà CloudThinker truy cập được qua mạng, chẳng hạn tên DNS công khai hoặc endpoint của HCP Vault Dedicated. `localhost` và địa chỉ riêng được phân giải tại nơi CloudThinker chạy lệnh, không phải trên mạng của bạn. Với Vault nằm sau firewall, xem [Reaching private services](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ).
+- Quyền ghi policy và tạo token hoặc AppRole.
+- Vai trò **Admin** trong workspace CloudThinker, cần để thêm kết nối. Xem [Vai trò](/vi/guide/security/roles).
+- Với Vault Enterprise hoặc HCP Vault Dedicated: namespace chứa các secret của bạn. HCP mặc định dùng `admin`.
+
+<Info>
+Mỗi workspace có một kết nối Vault. Agent truy cập được đúng những gì policy trên token hoặc AppRole của bạn cho phép. Mọi thứ khác Vault đều từ chối theo mặc định.
+</Info>
+
+## Chọn phương thức xác thực
+
+| Phương thức | Dùng khi | Đánh đổi |
+|--------|-------------|-----------|
+| **AppRole** | Cụm production | Xoay vòng secret ID mà không cần cấp lại token. Mỗi phiên đăng nhập và nhận một token ngắn hạn mới |
+| **Token** | Cụm dùng thử và dev | Thiết lập nhanh nhất. Token tồn tại cho tới khi hết TTL, nên bạn phải thay token theo chu kỳ đó |
 
 ## Thiết lập
 
-Chọn phương thức xác thực phù hợp với triển khai của bạn. AppRole được khuyến nghị cho môi trường production vì `secret_id` có thể xoay vòng mà không cần thay thế token dài hạn.
+<Steps>
+  <Step title="Viết policy quyền tối thiểu">
+    Bắt đầu với quyền read và list trên các path mà agent cần thấy. Thay `secret` bằng tên KV mount của bạn và thu hẹp path theo đúng nhu cầu. Ví dụ này giả định KV v2 mount:
 
-<Tabs>
-  <Tab title="Token">
+    ```bash
+    vault policy write cloudthinker-read - <<EOF
+    path "secret/data/*" {
+      capabilities = ["read"]
+    }
+    path "secret/metadata/*" {
+      capabilities = ["read", "list"]
+    }
+    path "sys/mounts" {
+      capabilities = ["read"]
+    }
+    path "sys/auth" {
+      capabilities = ["read"]
+    }
+    EOF
+    ```
 
-    <Steps>
-      <Step title="Tạo read policy">
-        Cấp quyền đọc chỉ đến các path mà CloudThinker cần tiếp cận:
+    `read` trên `secret/data/*` cho phép token đọc giá trị secret. CloudThinker chỉ hiển thị tên key trừ khi bạn yêu cầu giá trị, nhưng đó là hành vi của CloudThinker, không phải giới hạn của Vault. Để Vault thực thi giới hạn này, hãy bỏ khối `secret/data/*`: agent vẫn liệt kê được path và đọc metadata, nhưng không liệt kê được các key bên trong một secret.
+
+    Với KV v1 mount, thay hai khối `secret/` bằng một khối: `path "secret/*" { capabilities = ["read", "list"] }`.
+
+    Xem [Quyền yêu cầu](#quyền-yêu-cầu) để thêm quyền kiểm toán policy hoặc dynamic credential.
+  </Step>
+  <Step title="Tạo thông tin xác thực">
+    <Tabs>
+      <Tab title="AppRole">
+        Bật AppRole (bỏ qua nếu đã bật), gắn một role với policy, rồi lấy role ID và một secret ID:
 
         ```bash
-        vault policy write cloudthinker-read - <<EOF
-        path "kv/data/*" {
-          capabilities = ["read", "list"]
-        }
-        path "kv/metadata/*" {
-          capabilities = ["list"]
-        }
-        EOF
+        vault auth enable approle
+
+        vault write auth/approle/role/cloudthinker \
+          token_policies=cloudthinker-read \
+          token_ttl=1h \
+          token_max_ttl=4h \
+          secret_id_ttl=720h
+
+        vault read auth/approle/role/cloudthinker/role-id
+        vault write -f auth/approle/role/cloudthinker/secret-id
         ```
-      </Step>
-      <Step title="Tạo token">
-        Gắn token với policy đó:
+
+        Sao chép `role_id` và `secret_id` từ kết quả.
+      </Tab>
+      <Tab title="Token">
+        Tạo một token gắn với policy:
 
         ```bash
         vault token create \
@@ -54,168 +85,145 @@ Chọn phương thức xác thực phù hợp với triển khai của bạn. Ap
           -display-name=cloudthinker
         ```
 
-        Sao chép giá trị `token` từ output.
-      </Step>
-      <Step title="Thêm kết nối trong CloudThinker">
-        Điều hướng đến **Connections → HashiCorp Vault** và nhập:
+        Sao chép giá trị `token` từ kết quả.
+      </Tab>
+    </Tabs>
 
-        - **VAULT_ADDR**: URL Vault của bạn bao gồm scheme và port, ví dụ: `https://vault.example.com:8200`
-        - **VAULT_NAMESPACE**: để trống cho Vault open-source; đặt cho HCP (`admin`) hoặc namespace Enterprise
-        - **VAULT_AUTH_METHOD**: **Token**
-        - **VAULT_TOKEN**: token từ bước trước
+    <Warning>
+    Cả hai ví dụ đều hết hạn sau 30 ngày (`720h`): secret ID của AppRole hoặc token ngừng hoạt động và kết nối thất bại. Hãy đặt lời nhắc, rồi cấp thông tin xác thực mới và cập nhật kết nối như mô tả trong phần [Bảo mật](#bảo-mật).
+    </Warning>
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Trên thanh bên, nhấn **More → Workspace settings → Connections** và chọn **HashiCorp Vault**. Nhập **VAULT_ADDR**, đặt **VAULT_NAMESPACE** nếu bạn dùng Enterprise hoặc HCP, chọn **AppRole** hoặc **Token** trong **VAULT_AUTH_METHOD**, rồi điền các trường thông tin xác thực hiện ra. Nhấn **Connect**.
 
-        Nhấn **Connect**. CloudThinker xác minh token bằng `vault token lookup` và hiển thị trạng thái **Connected**.
-      </Step>
-    </Steps>
-
-  </Tab>
-
-  <Tab title="AppRole">
-
-    <Steps>
-      <Step title="Bật AppRole và tạo policy">
-        Bật phương thức xác thực AppRole (bỏ qua nếu đã bật) và cấp quyền đọc tới các path của bạn:
-
-        ```bash
-        vault auth enable approle
-
-        vault policy write cloudthinker-read - <<EOF
-        path "kv/data/*" {
-          capabilities = ["read", "list"]
-        }
-        path "kv/metadata/*" {
-          capabilities = ["list"]
-        }
-        EOF
-        ```
-      </Step>
-      <Step title="Tạo AppRole">
-        Gắn AppRole với policy:
-
-        ```bash
-        vault write auth/approle/role/cloudthinker \
-          token_policies=cloudthinker-read \
-          token_ttl=1h \
-          token_max_ttl=4h \
-          secret_id_ttl=720h
-        ```
-      </Step>
-      <Step title="Lấy role ID và secret ID">
-        ```bash
-        vault read auth/approle/role/cloudthinker/role-id
-        vault write -f auth/approle/role/cloudthinker/secret-id
-        ```
-
-        Sao chép `role_id` và `secret_id` được tạo ra.
-      </Step>
-      <Step title="Thêm kết nối trong CloudThinker">
-        Điều hướng đến **Connections → HashiCorp Vault** và nhập:
-
-        - **VAULT_ADDR**: URL Vault của bạn bao gồm scheme và port, ví dụ: `https://vault.example.com:8200`
-        - **VAULT_NAMESPACE**: để trống cho Vault open-source; đặt cho HCP (`admin`) hoặc namespace Enterprise
-        - **VAULT_AUTH_METHOD**: **AppRole**
-        - **VAULT_ROLE_ID**: `role_id`
-        - **VAULT_SECRET_ID**: `secret_id`
-
-        Nhấn **Connect**. CloudThinker thực hiện `auth/approle/login`, xác nhận client token được trả về và hiển thị trạng thái **Connected**.
-      </Step>
-    </Steps>
-
-  </Tab>
-</Tabs>
-
-Token và secret ID bị ẩn khỏi mọi thông báo lỗi mà CloudThinker hiển thị trong quá trình kiểm tra sức khỏe.
+    **Trạng thái thành công:** kết nối hiển thị **Connecting** và **Verifying**, rồi **Connected**. Với token, CloudThinker chạy `vault token lookup`. Với AppRole, CloudThinker đăng nhập qua `auth/approle/login` và kiểm tra Vault có trả về token hay không.
+  </Step>
+</Steps>
 
 ## Chi tiết kết nối
 
-| Trường | Bắt buộc | Ghi chú |
-|-------|----------|-------|
-| **VAULT_ADDR** | Có | URL đầy đủ bao gồm scheme, ví dụ: `https://vault.example.com:8200` |
-| **VAULT_NAMESPACE** | Không | Chỉ dành cho HCP Vault Dedicated (`admin`) và triển khai namespace Vault Enterprise |
-| **VAULT_AUTH_METHOD** | Có | `token` hoặc `approle` |
-| **VAULT_TOKEN** | Xác thực Token | Hiển thị khi phương thức xác thực là Token |
-| **VAULT_ROLE_ID** | AppRole | Hiển thị khi phương thức xác thực là AppRole |
-| **VAULT_SECRET_ID** | AppRole | Hiển thị khi phương thức xác thực là AppRole |
+| Trường | Bắt buộc | Mô tả | Ví dụ |
+|-------|----------|-------------|---------|
+| **VAULT_ADDR** | Có | URL Vault đầy đủ, gồm scheme và cổng | `https://vault.example.com:8200` |
+| **VAULT_NAMESPACE** | Không | Namespace của Enterprise hoặc HCP. Để trống với Vault open-source | `admin` |
+| **VAULT_AUTH_METHOD** | Có | **Token** (mặc định) hoặc **AppRole** | **AppRole** |
+| **VAULT_TOKEN** | Chỉ Token | Token lấy từ `vault token create` | |
+| **VAULT_ROLE_ID** | Chỉ AppRole | `role_id` của AppRole | |
+| **VAULT_SECRET_ID** | Chỉ AppRole | `secret_id` của AppRole | |
 
-## Quyền bắt buộc
+## Quyền yêu cầu
 
-Gắn policy vào token hoặc AppRole cấp quyền `read` và `list` trên các secret path mà CloudThinker cần truy vấn. Chính sách mặc định từ chối của Vault đảm bảo CloudThinker không bao giờ vượt quá policy gắn với thông tin xác thực của bạn.
+Chỉ cấp những dòng bạn cần. Mỗi dòng thêm path vào policy ở bước thiết lập.
+
+| Bạn muốn agent | Thêm vào policy |
+|--------------------|-------------------|
+| Liệt kê key và đọc metadata của secret KV v2 | `read` trên `<mount>/data/*`, `read` và `list` trên `<mount>/metadata/*` |
+| Liệt kê secret engine và auth method | `read` trên `sys/mounts` và `sys/auth` |
+| Kiểm toán policy | `read` và `list` trên `sys/policies/acl` và `sys/policies/acl/*` |
+| Liệt kê role của AppRole | `list` trên `auth/approle/role` |
+| Liệt kê audit device | `read` và `sudo` trên `sys/audit` |
+| Cấp dynamic credential | `read` trên `<engine>/creds/<role>`, chẳng hạn `database/creds/readonly` |
+| Thu hồi hoặc gia hạn lease | `update` trên `sys/leases/revoke` và `sys/leases/renew` |
+| Ghi hoặc xóa secret KV v2 | Xem ví dụ bên dưới |
+
+Để ghi KV v2 dưới `secret/myapp/`, thêm:
+
+```hcl
+path "secret/data/myapp/*" {
+  capabilities = ["create", "update", "delete"]
+}
+path "secret/destroy/myapp/*" {
+  capabilities = ["update"]
+}
+```
+
+Kiểm tra sức khỏe (`sys/health`) và `vault token lookup` trên chính token của bên gọi đã chạy được với policy `default` có sẵn của Vault, nên bạn không cần thêm chúng.
 
 <Tip>
-Bắt đầu với các path đọc tối thiểu và chỉ thêm khả năng `create`/`update` nếu bạn muốn CloudThinker thực hiện các luồng ghi.
+Hãy bắt đầu ở chế độ chỉ đọc. Chỉ thêm các dòng quyền ghi khi bạn có quy trình thật sự cần đến. Kể cả khi đó, mọi thao tác ghi đều đi qua [Approvals](/vi/guide/approvals/overview) trước. Chọn **Manual** để mọi thay đổi đều do người duyệt. Khi CloudThinker bật [Rule enforcement](/vi/guide/approvals/rules#khắc-phục-sự-cố) cho workspace của bạn, Rule **Ask first** có thể thu hẹp phạm vi đó vào riêng kết nối Vault.
 </Tip>
 
 ## Khả năng của agent
 
-Các hành động của CloudThinker bị giới hạn bởi policy trên token hoặc AppRole. Các thao tác đọc chạy tự động; bất kỳ hành động nào thay đổi Vault hoặc cấp phát lease đều cần phê duyệt trong CloudThinker.
+| Khả năng | Agent có thể làm gì | Phê duyệt |
+|------------|--------------------|----------|
+| **Sức khỏe** | Kiểm tra trạng thái seal, phiên bản, các secret engine đã mount và auth method | Không |
+| **Khám phá secret** | Liệt kê path và các key trong một secret, phân biệt KV v1 với KV v2 | Không |
+| **Kiểm toán policy** | Đọc policy và TTL của token hiện tại, liệt kê và đọc policy, liệt kê audit device và role của AppRole | Không |
+| **Dynamic credential** | Cấp credential ngắn hạn cho database hoặc cloud từ một secrets engine | Có |
+| **Quản lý lease** | Thu hồi hoặc gia hạn lease của credential | Có |
+| **Thay đổi secret và cấu hình** | Ghi, xóa hoặc destroy phiên bản KV, ghi policy, bật hoặc tắt mount, auth method và audit device | Có |
 
-| Khả năng | Mô tả |
-|------------|-------------|
-| **Đọc secret** | Đọc và liệt kê các path và giá trị secret KV v1/v2 |
-| **Kiểm tra sức khỏe** | Kiểm tra trạng thái seal, các secret engine đã mount và phương thức xác thực |
-| **Kiểm toán policy** | Liệt kê và đọc policy, audit device và metadata token |
-| **Dynamic credentials** | Tạo credentials database và cloud ngắn hạn — cần phê duyệt |
-| **Ghi secret** | Tạo, cập nhật và xóa KV secrets và phiên bản — cần phê duyệt |
-| **Quản lý lease** | Thu hồi hoặc gia hạn credential lease — cần phê duyệt |
+Agent báo cáo key và metadata, không báo cáo giá trị secret trừ khi bạn yêu cầu, và không bao giờ in token hay secret ID của bạn. Trong Vault, cấp dynamic credential trông giống thao tác đọc, nhưng thao tác này tạo ra lease, nên CloudThinker xem đó là thao tác ghi. Thao tác ghi đi qua [Approvals](/vi/guide/approvals/overview) trước khi chạy.
 
 ### Xác minh kết nối
 
 ```text
-List all mounted auth methods and check Vault health
+Check Vault health and seal status, and list the mounted secret engines and auth methods
 ```
+
+Kết quả mong đợi gồm trạng thái seal, phiên bản Vault, danh sách mount như `secret/` (KV v2) và auth method như `approle/`.
 
 ### Ví dụ prompt
 
 ```text
-List all secrets under the kv mount and summarize what's there
-Show Vault health, seal status, and version
-Audit the current token — what policies and TTL does it have
+Which keys does secret/myapp/config hold, and when was it last updated?
+What policies and TTL does the current Vault token have?
+Issue a database credential from the readonly role and tell me when the lease expires
 ```
 
 ## Khắc phục sự cố
 
-<Accordion title="VAULT_ADDR không thể tiếp cận từ sandbox">
-CLI `vault` chạy bên trong sandbox của CloudThinker, không phải trên máy của bạn. `localhost`, `127.0.0.1` và `host.docker.internal` phân giải về chính sandbox và thất bại với lỗi `dial tcp ... no such host` hoặc connection refused. Trỏ `VAULT_ADDR` tới tên DNS công khai hoặc endpoint HCP Vault Dedicated. Vault đằng sau firewall hoặc VPN phải được expose qua endpoint công khai, egress được cho phép hoặc network bridge trước.
+<Accordion title="Connection fails with &quot;no such host&quot; or connection refused">
+**VAULT_ADDR** trỏ tới một địa chỉ CloudThinker không truy cập được. `localhost`, `127.0.0.1` và hostname riêng được phân giải tại nơi CloudThinker chạy lệnh. Hãy dùng tên DNS công khai hoặc endpoint HCP của bạn. Vault nằm sau firewall hoặc VPN cần có endpoint truy cập được hoặc được đưa vào allowlist trước.
 </Accordion>
 
-<Accordion title="Scheme VAULT_ADDR sai">
-`vault` cần URL đầy đủ bao gồm scheme. `vault.example.com:8200` (không có scheme) gây lỗi kết nối. Sử dụng `https://vault.example.com:8200`, hoặc `http://...` cho máy chủ ở chế độ dev.
+<Accordion title="unsupported protocol scheme">
+Địa chỉ thiếu scheme. Hãy dùng `https://vault.example.com:8200`, không phải `vault.example.com:8200`.
+</Accordion>
+
+<Accordion title="Invalid Vault token configuration, or Invalid Vault AppRole configuration">
+Một trường thông tin xác thực của phương thức đã chọn đang để trống. Điền **VAULT_TOKEN** với **Token**, hoặc cả **VAULT_ROLE_ID** và **VAULT_SECRET_ID** với **AppRole**.
 </Accordion>
 
 <Accordion title="403 permission denied">
-Policy của token hoặc AppRole không cấp quyền truy cập tới path được yêu cầu. Kiểm tra policy bằng `vault token lookup` và đảm bảo policy bao gồm các path mà agent truy vấn. Ví dụ, để đọc `kv/data/production/*`, policy cần `capabilities = ["read", "list"]` trên path đó.
+Vault trả về 403 cả khi policy không bao phủ path lẫn khi path không tồn tại, nên lỗi 403 không bao giờ chứng minh được secret không tồn tại. Hãy hỏi agent token đang có những policy nào, rồi thêm `read` hoặc `list` trên path đó. Với KV v2, đọc `secret/myapp` cần policy trên `secret/data/myapp`.
+
+Nếu các request từng chạy được nay đều trả về 403, nhiều khả năng token đã hết hạn. Hãy cấp token mới và cập nhật **VAULT_TOKEN**.
 </Accordion>
 
-<Accordion title="Namespace bắt buộc trên HCP / Enterprise">
-HCP Vault Dedicated và các triển khai multi-namespace Enterprise yêu cầu `VAULT_NAMESPACE`. Với HCP, mặc định là `admin`. Nếu bạn thấy `no handler for route` hoặc `permission denied` trên HCP hoặc Enterprise, hãy xác nhận namespace đã được đặt.
+<Accordion title="&quot;no handler for route&quot; on HCP or Enterprise">
+**VAULT_NAMESPACE** đang trống hoặc sai. Đặt trường này thành namespace chứa các secret của bạn. HCP Vault Dedicated mặc định dùng `admin`.
 </Accordion>
 
-<Accordion title="AppRole secret_id hết hạn">
-`secret_id` có TTL (`secret_id_ttl`). Khi hết hạn, xác thực thất bại với lỗi `invalid secret_id`. Tạo một cái mới, cập nhật **VAULT_SECRET_ID** và kết nối lại:
+<Accordion title="invalid secret_id">
+Secret ID của AppRole đã quá `secret_id_ttl`. Hãy tạo secret ID mới và dán vào **VAULT_SECRET_ID** như mô tả trong phần [Bảo mật](#bảo-mật):
 
 ```bash
 vault write -f auth/approle/role/cloudthinker/secret-id
 ```
 </Accordion>
 
-<Accordion title="Vault đang bị sealed">
-`vault status` hiển thị `Sealed: true` và không có thao tác nào thành công. Quản trị viên Vault phải unseal cluster (`vault operator unseal`) trước khi agent có thể đọc hoặc ghi.
+<Accordion title="Every request fails and health shows sealed: true">
+Cụm đang bị seal, nên không thao tác đọc hay ghi nào thành công được. Operator của Vault cần unseal cụm bằng `vault operator unseal`.
 </Accordion>
 
 ## Bảo mật
 
 <ConnectionSecurity />
 
-- **Ưu tiên AppRole trong production** — xoay vòng `secret_id` mà không cần thay thế token dài hạn.
-- **Kiểm soát thao tác ghi** — giữ các path ghi yêu cầu phê duyệt để việc cấp phát credentials và các thay đổi luôn cần xác nhận từ người dùng.
+- **Thay thông tin xác thực**: mở **More → Workspace settings → Connections**, chọn **HashiCorp Vault**, nhấn biểu tượng bút chì (**Edit**) trên kết nối, dán token hoặc secret ID mới, rồi nhấn **Save and test**. Nếu kiểm tra thất bại, kết nối giữ thông tin xác thực trước đó.
+- **Ưu tiên AppRole cho production**: mỗi phiên nhận một token hết hạn theo TTL bạn đặt, và bạn xoay vòng secret ID mà không phải đụng tới role.
+- **Giữ giá trị secret ngoài cuộc chat**: theo mặc định agent chỉ liệt kê key. Nếu bạn yêu cầu một giá trị, giá trị đó xuất hiện trong cuộc hội thoại, nên chỉ yêu cầu khi thật sự cần.
+- **Thu hồi lease không còn dùng**: hãy yêu cầu agent thu hồi dynamic credential khi đã xong việc, thay vì chờ credential hết hạn.
 
 ## Liên quan
 
 <CardGroup cols={2}>
-  <Card title="Agent" icon="shield-halved" href="/vi/guide/agents/overview">
-    Agent bảo mật và tuân thủ
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Quyết định thao tác ghi nào lên Vault được chạy, thao tác nào chờ người duyệt hoặc bị từ chối.
   </Card>
-  <Card title="Kiểm soát phê duyệt" icon="circle-check" href="/guide/approvals/overview">
-    Yêu cầu phê duyệt cho các thao tác ghi
+  <Card title="Connections" icon="plug" href="/vi/guide/connections/overview">
+    Xem mọi dịch vụ bạn có thể kết nối và cách trạng thái kết nối hoạt động.
   </Card>
 </CardGroup>

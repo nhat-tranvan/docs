@@ -1,79 +1,405 @@
 ---
-title: API
-description: "Truy cập CloudThinker theo lập trình để quản lý workspace, agent, đề xuất và sự cố thông qua các endpoint HTTPS được xác thực"
+title: Tích hợp cho nhà phát triển
+description: "Chọn cách hệ thống và công cụ của bạn giao tiếp với CloudThinker hiện nay: A2A, webhook, Claude connector, SCIM và CLI"
 icon: code
 ---
 
+CloudThinker không có REST API tổng quát để đọc tài nguyên hay đề xuất; nếu bạn cần, hãy email support@cloudthinker.io kèm trường hợp sử dụng. CloudThinker hỗ trợ năm cách để mã bên ngoài truy cập workspace của bạn, mỗi cách cho một mục đích khác nhau, liệt kê bên dưới.
+
+## Chọn cách tích hợp
+
+| Bạn muốn | Dùng | Ai thiết lập |
+| --- | --- | --- |
+| Cho một hệ thống bên ngoài (ví dụ ServiceNow) hỏi agent CloudThinker và đọc câu trả lời | [A2A API cho bên gọi ngoài](#a2a-api-cho-bên-gọi-ngoài) | **Developer** hoặc **Admin** của workspace, trên gói Scale, Scale Plus hoặc Enterprise |
+| Cho hệ thống bên ngoài chạy một Automation, hoặc gửi cảnh báo tới Resolve để có thể mở sự cố, chỉ bằng một lệnh POST | [Webhook](/vi/guide/webhooks/overview) | **Admin** của workspace (cả hai loại) |
+| Đọc sự cố, chi phí, code review và phát hiện bảo mật từ cuộc trò chuyện Claude, và bắt đầu lượt chạy agent ngay tại đó (bắt đầu lượt chạy cần vai trò Developer hoặc Admin; xem [Claude làm được gì](/vi/guide/mcp/overview#claude-làm-được-gì)) | [Claude connector](/vi/guide/mcp/overview) | Từng người dùng, sau khi chủ sở hữu tổ chức Claude thêm connector trên gói Team hoặc Enterprise |
+| Thêm, tạm ngưng và gỡ thành viên CloudThinker từ Okta hoặc Microsoft Entra ID | [Cấp phát SCIM](/vi/guide/security/scim) | **Owner** của tổ chức, trên gói Scale, Scale Plus hoặc Enterprise |
+| Chạy CloudThinker từ terminal, shell script hoặc CI pipeline | [CLI](/vi/guide/cli/overview) | Bất kỳ người dùng nào có tài khoản đăng nhập CloudThinker |
+
 <Note>
-**Xem trước** — CloudThinker REST API đang trong giai đoạn truy cập sớm. Endpoint, payload và luồng xác thực có thể thay đổi trước khi phát hành chính thức. [Liên hệ chúng tôi](https://cloudthinker.io/contact) để tham gia xem trước.
+Webhook chỉ nhận vào. CloudThinker không POST sự kiện tới endpoint của bạn. Để gửi kết quả ra ngoài, hãy dùng [thông báo](/vi/guide/notifications), [Slack](/vi/guide/slack-integration) hoặc [Microsoft Teams](/vi/guide/teams-integration).
 </Note>
 
-CloudThinker API cung cấp các thao tác tương tự như trên giao diện web console dưới dạng endpoint HTTPS được xác thực. Sử dụng để nhúng các thao tác cloud vào sản phẩm của riêng bạn, tự động hóa quy trình làm việc hoặc tích hợp CloudThinker với công cụ nội bộ.
+## A2A API cho bên gọi ngoài
 
----
+A2A API cho phép một hệ thống bên ngoài CloudThinker hỏi một agent qua [giao thức Agent2Agent (A2A)](https://a2a-protocol.org). Bên gọi xác thực bằng OAuth 2.0 client credentials grant, nên không cần ai đăng nhập.
 
-## Bạn có thể làm gì
+Ví dụ điển hình: đội platform muốn ServiceNow hỏi CloudThinker về một sự cố. Bạn đăng ký ServiceNow làm bên gọi ngoài, chọn agent trả lời, rồi ServiceNow gửi câu hỏi tới agent URL.
 
-| Khả năng | Mô tả |
-| --- | --- |
-| Kích hoạt cuộc hội thoại | Bắt đầu các cuộc hội thoại với agent theo lập trình bằng prompt `@agent #connection` và phát trực tiếp phản hồi về ứng dụng của bạn |
-| Truy vấn tài nguyên | Lấy kho tài nguyên đám mây thống nhất, chi phí và cấu trúc liên kết trên AWS, GCP và Azure |
-| Quản lý đề xuất | Liệt kê, chấp nhận, bác bỏ hoặc bình luận về các đề xuất chi phí, bảo mật và độ tin cậy |
-| Điều phối sự cố | Tạo sự cố, đính kèm tín hiệu, yêu cầu phân tích nguyên nhân gốc rễ và đọc kết quả điều tra |
+### Trước khi bắt đầu
 
----
+- Tổ chức đang dùng gói **Scale**, **Scale Plus** hoặc **Enterprise**. Xem [Bảng giá](/vi/guide/billing/pricing).
+- Bạn có vai trò workspace **Developer** hoặc **Admin**, là vai trò được sửa agent. Xem [Người dùng workspace](/vi/guide/workspace-users).
+- Bạn biết agent nào sẽ trả lời: chính CloudThinker hoặc một Custom Agent của bạn. Mỗi bên gọi ngoài gắn với một agent trong một workspace.
 
-## Xác thực
+### Đăng ký bên gọi ngoài
 
-API sử dụng API key theo phạm vi workspace được truyền qua header bearer token.
+<Steps>
+  <Step title="Mở cài đặt chia sẻ">
+    Vào **Agents → Sharing → Outside callers**.
+  </Step>
+  <Step title="Thêm bên gọi">
+    Nhấn **Add an outside caller**. Nhập **Name** mà đội bạn dễ nhận ra (ví dụ "ServiceNow"), chọn **Agent that answers**, và có thể đặt **Monthly credit limit**. Để trống nếu không giới hạn. Nhấn **Create client**.
+  </Step>
+  <Step title="Sao chép thông tin xác thực">
+    CloudThinker hiển thị bốn giá trị: **Client ID**, **Client secret**, **Token URL** và **Agent URL**. Sao chép secret ngay. Secret chỉ hiển thị một lần, và CloudThinker chỉ lưu bản hash của secret.
 
-```bash
-curl https://api.cloudthinker.io/v1/workspaces/{workspace_id}/resources \
-  -H "Authorization: Bearer $CLOUDTHINKER_API_KEY"
+    Hai URL có dạng như sau:
+
+    ```text
+    Token URL: https://app.cloudthinker.io/api/a2a/oauth/token
+    Agent URL: https://app.cloudthinker.io/api/a2a
+    ```
+
+    Mọi bên gọi dùng chung một agent URL. Token quyết định workspace và agent nào trả lời.
+  </Step>
+  <Step title="Lưu vào hệ thống gọi">
+    Đặt client ID và secret vào kho secret của hệ thống bên ngoài, cùng với token URL và agent URL.
+  </Step>
+</Steps>
+
+### Lấy token và đặt câu hỏi
+
+Luồng gồm ba lệnh gọi:
+
+```text
+Caller ── POST /api/a2a/oauth/token (Basic client_id:secret) ──► access token, valid 1 hour
+Caller ── SendMessage (Bearer token) ──► agent URL ──► agent run starts
+Caller ◄── GetTask (Bearer token) ── task state and the answer
 ```
 
-| Trường | Mô tả |
-|-------|-------------|
-| **Phạm vi** | Mỗi key được gắn với một workspace duy nhất |
-| **Quyền** | Kế thừa vai trò của thành viên phát hành |
-| **Xoay vòng** | Key có thể thu hồi bất kỳ lúc nào từ cài đặt workspace |
+<Steps>
+  <Step title="Yêu cầu token">
+    POST tới token URL bằng HTTP Basic auth (client ID làm user, secret làm password) với grant `client_credentials`.
 
----
+    ```bash
+    curl -X POST "$TOKEN_URL" \
+      -u "$CLIENT_ID:$CLIENT_SECRET" \
+      -d grant_type=client_credentials
+    ```
 
-## Bề mặt endpoint
+    Phản hồi thành công:
 
-| Tài nguyên | Mục đích |
-|----------|---------|
-| `/v1/workspaces` | Metadata và thành viên workspace |
-| `/v1/conversations` | Bắt đầu, liệt kê và tiếp tục các cuộc hội thoại với agent |
-| `/v1/resources` | Kho tài nguyên đám mây đã khám phá |
-| `/v1/recommendations` | Đề xuất về chi phí, bảo mật và độ tin cậy |
-| `/v1/incidents` | Vòng đời sự cố và kết quả phân tích nguyên nhân gốc rễ |
-| `/v1/dashboards` | Dữ liệu dashboard tích hợp sẵn và tùy chỉnh |
-| `/v1/skills` | Skills workspace và thực thi |
-| `/v1/connections` | [Kết nối](/vi/guide/connections/overview) cloud và SaaS |
+    ```json
+    {"access_token": "eyJ...", "token_type": "Bearer", "expires_in": 3600}
+    ```
 
----
+    Token có hiệu lực 1 giờ. Khi hết hạn, hãy yêu cầu token mới. Lỗi dùng định dạng OAuth 2.0 (RFC 6749), ví dụ `{"error": "invalid_client", "error_description": "..."}`.
+  </Step>
+  <Step title="Gửi câu hỏi">
+    POST một request JSON-RPC 2.0 `SendMessage` tới agent URL, kèm token dạng Bearer. Mỗi câu hỏi cần một `messageId` duy nhất. Gửi lại cùng `messageId` sẽ trả về task đầu tiên thay vì bắt đầu lượt chạy mới, nên thử lại luôn an toàn.
 
-## Phiên bản
+    ```bash
+    curl -X POST "$AGENT_URL" \
+      -H "Authorization: Bearer $ACCESS_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "SendMessage",
+        "params": {
+          "message": {
+            "messageId": "snow-INC0012345-1",
+            "role": "ROLE_USER",
+            "parts": [{"text": "What caused the checkout-api errors in the last hour?"}]
+          }
+        }
+      }'
+    ```
 
-API được phiên bản hóa trong đường dẫn URL (`/v1/`). Các thay đổi có thể gây lỗi được phát hành dưới phiên bản mới; các thay đổi bổ sung được phát hành tại chỗ. Các phiên bản đã lỗi thời vẫn khả dụng ít nhất 12 tháng sau khi phiên bản kế tiếp được phát hành.
+    CloudThinker trả về task ngay lập tức. Hãy giữ lại `id` của task:
 
----
+    ```json
+    {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "task": {
+          "id": "<task-id>",
+          "contextId": "<context-id>",
+          "status": {"state": "TASK_STATE_SUBMITTED"}
+        }
+      }
+    }
+    ```
+  </Step>
+  <Step title="Poll để lấy câu trả lời">
+    Gọi `GetTask` với task ID cho tới khi trạng thái là trạng thái cuối. CloudThinker không bao giờ đẩy kết quả tới bên gọi ngoài, nên poll là cách duy nhất để nhận kết quả. Một lượt chạy agent mất vài phút, vì vậy hãy poll mỗi 10 đến 30 giây.
+
+    ```bash
+    curl -X POST "$AGENT_URL" \
+      -H "Authorization: Bearer $ACCESS_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{"jsonrpc": "2.0", "id": 2, "method": "GetTask", "params": {"id": "<task-id>"}}'
+    ```
+
+    Dừng poll khi `status.state` là `TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, `TASK_STATE_REJECTED` hoặc `TASK_STATE_CANCELED`. Với `TASK_STATE_COMPLETED`, câu trả lời là `text` trong `result.artifacts[].parts[]`. Xem [Các trường của task](#các-trường-của-task) để biết mọi trạng thái.
+  </Step>
+</Steps>
+
+### Kết quả mong đợi
+
+| Hành vi | Chi tiết |
+| --- | --- |
+| Quyền truy cập | Chỉ đọc. Agent trả lời câu hỏi nhưng không thực hiện thay đổi cho bên gọi ngoài. |
+| Danh tính | Lượt chạy dùng System user của workspace. Cuộc hội thoại hiển thị "Asked by: &lt;client name&gt;" và đánh dấu đây là bên gọi ngoài. |
+| Thanh toán | Credit được trừ vào workspace sở hữu bên gọi. |
+| Giới hạn | Mỗi bên gọi chạy tối đa 3 câu hỏi cùng lúc. **Monthly credit limit** được đặt khi bạn thêm bên gọi, và mặc định để trống (không giới hạn). Xem [Lỗi A2A](#lỗi-a2a) để biết yêu cầu bị từ chối trả về gì. |
+| Khám phá | Agent Card của agent liệt kê scheme OAuth `workspaceClient`, nhờ đó client A2A tìm được phương thức xác thực. |
+
+### Xoay vòng, tạm dừng hoặc thu hồi
+
+Trong **Agents → Sharing → Outside callers**, dòng của mỗi bên gọi có các điều khiển sau:
+
+| Điều khiển | Điều gì xảy ra |
+| --- | --- |
+| **New secret** | Secret cũ ngừng hoạt động ngay lập tức. Token đã cấp vẫn dùng được cho tới khi hết hạn, tối đa 1 giờ. Hãy cập nhật secret trong hệ thống gọi ngay. |
+| Tắt công tắc **Let &lt;name&gt; ask** | Tạm dừng bên gọi. Câu hỏi mới bị từ chối với `client_inactive`. Bật lại để tiếp tục. |
+| **Revoke** | Secret, mọi token và các câu hỏi đang chạy đều dừng. Không thể hoàn tác. |
+
+<Warning>
+Thu hồi bên gọi là vĩnh viễn. Để chặn lưu lượng mà không mất bên gọi, hãy tạm dừng thay vì thu hồi.
+</Warning>
+
+## Tham chiếu A2A
+
+Mọi thứ bên gọi ngoài có thể gửi và nhận về. Mọi lệnh gọi đều tới `https://app.cloudthinker.io`.
+
+### Endpoint
+
+| Phương thức và đường dẫn | Xác thực | Chức năng |
+| --- | --- | --- |
+| `POST /api/a2a/oauth/token` | Client ID và secret | Cấp access token |
+| `POST /api/a2a` | `Authorization: Bearer <access token>` | Endpoint JSON-RPC 2.0 cho `SendMessage`, `GetTask` và `CancelTask` |
+| `GET /api/a2a/card` | Không | Agent Card công khai: agent URL, token URL và các scheme xác thực được hỗ trợ |
+| `GET /api/a2a/.well-known/agent-card.json` | `Authorization: Bearer <access token>` | Agent Card mở rộng cho bên gọi của bạn: tên agent trả lời, workspace của agent, và một skill `ask` liệt kê các loại kết nối của workspace |
+
+Bạn có thể gửi header `A2A-Version` (không bắt buộc) trong các lệnh gọi tới `/api/a2a`. CloudThinker dùng A2A `1.0` và cũng chấp nhận `1` và `1.0.0`. Mọi giá trị khác đều thất bại với lỗi JSON-RPC `-32009`.
+
+### Yêu cầu token
+
+`POST /api/a2a/oauth/token` với `Content-Type: application/x-www-form-urlencoded`.
+
+| Trường | Bắt buộc | Giá trị |
+| --- | --- | --- |
+| `grant_type` | Có | `client_credentials` |
+| Client ID và secret | Có | HTTP Basic auth (client ID làm user, secret làm password), hoặc các trường form `client_id` và `client_secret`. Nếu gửi cả hai, Basic auth được ưu tiên. |
+
+Client ID bắt đầu bằng `cta_`. Khi thành công, phản hồi trả về `200` với `Cache-Control: no-store`:
+
+```json
+{"access_token": "eyJ...", "token_type": "Bearer", "expires_in": 3600}
+```
+
+Lỗi trả về body OAuth 2.0, `{"error": "...", "error_description": "..."}`:
+
+| HTTP | `error` | Nguyên nhân |
+| --- | --- | --- |
+| 400 | `invalid_request` | Body không phải `application/x-www-form-urlencoded` |
+| 400 | `unsupported_grant_type` | `grant_type` không phải `client_credentials` |
+| 401 | `invalid_client` | ID hoặc secret bị thiếu hay sai, hoặc bên gọi đã bị thu hồi. Nếu bạn dùng Basic auth, phản hồi kèm `WWW-Authenticate: Basic realm="a2a"`. |
+
+Bên gọi đang tạm dừng vẫn lấy được token. Các lệnh `SendMessage` của bên gọi đó thất bại với `client_inactive` cho tới khi bạn bật lại.
+
+### Envelope JSON-RPC
+
+Mọi lệnh gọi tới `POST /api/a2a` là một request JSON-RPC 2.0:
+
+```json
+{"jsonrpc": "2.0", "id": 1, "method": "SendMessage", "params": {}}
+```
+
+`id` có thể là chuỗi, số hoặc `null`, và được trả về nguyên vẹn. Phản hồi thành công có `result`; phản hồi lỗi có `error` (xem [Lỗi A2A](#lỗi-a2a)).
+
+### SendMessage
+
+Bắt đầu một lượt chạy agent, hoặc trả về task hiện có nếu `messageId` đã được gửi trước đó.
+
+| Trường trong `params` | Bắt buộc | Ghi chú |
+| --- | --- | --- |
+| `message.messageId` | Có | 1 đến 128 ký tự. Duy nhất cho mỗi câu hỏi. Gửi lại cùng ID sẽ trả về task đầu tiên và không bắt đầu lượt chạy mới. |
+| `message.parts` | Có | Danh sách các part. CloudThinker nối `text` của mọi part thành câu hỏi. Các trường khác của part bị bỏ qua. |
+| `message.role` | Không | Mặc định là `ROLE_USER` |
+| `message.contextId` | Không | `contextId` của một task trước đó từ bên gọi này. Câu hỏi sẽ tiếp nối cuộc hội thoại đó. `contextId` không tồn tại hoặc thuộc bên khác sẽ thất bại với `task_not_found`. |
+| `message.metadata`, `metadata` | Không | Được chấp nhận và bị bỏ qua với bên gọi ngoài |
+| `configuration` | Không | Được chấp nhận. Cài đặt push notification bị bỏ qua với bên gọi ngoài, nên hãy poll `GetTask`. |
+
+Câu hỏi giới hạn 8.000 ký tự; phần dài hơn bị cắt. Câu hỏi không có text, hoặc chứa secret như access key, bị từ chối với `blocked_by_guardrail`.
+
+`result` bọc task trong trường `task`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "task": {
+      "id": "<task-id>",
+      "contextId": "<context-id>",
+      "status": {"state": "TASK_STATE_SUBMITTED", "timestamp": "2026-10-25T09:00:00Z"},
+      "artifacts": [],
+      "metadata": {"workspaceId": "<workspace-id>", "failureKind": ""}
+    }
+  }
+}
+```
+
+### GetTask
+
+| Trường trong `params` | Bắt buộc | Ghi chú |
+| --- | --- | --- |
+| `id` | Có | `id` của task từ `SendMessage`. 1 đến 128 ký tự. |
+
+`result` chính là task, không có lớp bọc `task`. Khi trạng thái là `TASK_STATE_COMPLETED`, câu trả lời nằm trong một artifact:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "id": "<task-id>",
+    "contextId": "<context-id>",
+    "status": {"state": "TASK_STATE_COMPLETED", "timestamp": "2026-10-25T09:03:12Z"},
+    "artifacts": [
+      {
+        "artifactId": "<task-id>:answer",
+        "name": "answer",
+        "parts": [{"text": "The checkout-api errors started after ..."}]
+      }
+    ],
+    "metadata": {"workspaceId": "<workspace-id>", "failureKind": ""}
+  }
+}
+```
+
+CloudThinker che secret khỏi câu trả lời trước khi trả về. Khi lượt chạy thất bại, bị từ chối hoặc bị hủy, `status.message.parts[].text` cho biết lý do, và `metadata.failureKind` chứa một mã ngắn.
+
+### CancelTask
+
+Dừng một task chưa hoàn tất. `CancelTask` nhận cùng `params` như `GetTask` và trả về task theo cùng cấu trúc. Hủy task đã ở trạng thái cuối sẽ thất bại với `task_not_cancelable`.
+
+### Các trường của task
+
+| Trường | Ý nghĩa |
+| --- | --- |
+| `id` | Task ID. Dùng với `GetTask` và `CancelTask`. |
+| `contextId` | Cuộc hội thoại chứa task. Gửi giá trị này trong `message.contextId` để hỏi tiếp. |
+| `status.state` | Một trong các trạng thái bên dưới |
+| `status.timestamp` | Thời điểm trạng thái thay đổi gần nhất |
+| `status.message` | Có khi lượt chạy thất bại, bị từ chối hoặc bị hủy. Part `text` giải thích lý do. |
+| `artifacts` | Rỗng cho tới khi trạng thái là `TASK_STATE_COMPLETED`, sau đó có một artifact tên `answer` |
+| `metadata.workspaceId` | Workspace đã trả lời |
+| `metadata.failureKind` | Rỗng khi thành công. Là một mã ngắn khi lượt chạy không hoàn tất. |
+
+| `status.state` | Trạng thái cuối | Ý nghĩa |
+| --- | --- | --- |
+| `TASK_STATE_SUBMITTED` | Không | Đang xếp hàng. Poll tiếp. |
+| `TASK_STATE_WORKING` | Không | Agent đang xử lý. Poll tiếp. |
+| `TASK_STATE_INPUT_REQUIRED` | Không | Không trả về cho bên gọi ngoài. Lượt chạy của họ không bao giờ chờ người: bước cần phê duyệt sẽ bị từ chối, và agent trả lời mà không có bước đó. |
+| `TASK_STATE_COMPLETED` | Có | Hoàn tất. Đọc artifact `answer`. |
+| `TASK_STATE_FAILED` | Có | Lượt chạy thất bại. Hỏi lại hoặc kiểm tra cuộc hội thoại trong CloudThinker. |
+| `TASK_STATE_REJECTED` | Có | CloudThinker từ chối lượt chạy, ví dụ vì workspace đã chạm giới hạn credit. |
+| `TASK_STATE_CANCELED` | Có | Lượt chạy bị dừng bởi `CancelTask`, hoặc vì bên gọi đã bị thu hồi. |
+
+### Lỗi A2A
+
+Lệnh gọi JSON-RPC thất bại trả về một đối tượng `error`. Lý do nằm trong `error.data.reason`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32600,
+    "message": "...",
+    "data": {"reason": "busy", "retry_after": 30}
+  }
+}
+```
+
+| Phương thức | HTTP | `error.code` | `error.data.reason` | Ý nghĩa |
+| --- | --- | --- | --- | --- |
+| Bất kỳ | 401 | `-32600` | `invalid_token` | Token bị thiếu, hết hạn hoặc đã thu hồi. Phản hồi kèm `WWW-Authenticate: Bearer realm="a2a"`. |
+| `SendMessage` | 403 | `-32600` | `client_inactive` | Bên gọi đang tạm dừng |
+| `SendMessage` | 403 | `-32600` | `client_budget_reached` | Bên gọi đã chạm giới hạn credit hằng tháng |
+| `SendMessage` | 403 | `-32600` | `plan_required` | Tổ chức không dùng gói Scale, Scale Plus hoặc Enterprise |
+| `SendMessage` | 400 | `-32600` | `blocked_by_guardrail` | Câu hỏi không có text, hoặc chứa secret |
+| `SendMessage` | 429 | `-32600` | `busy` | Đã có 3 câu hỏi đang chạy. Thử lại sau thời gian trong header `Retry-After` (30 giây), cũng có trong `error.data.retry_after`. |
+| `SendMessage`, `GetTask`, `CancelTask` | 404 | `-32001` | `task_not_found` | Bên gọi này không có task hay context nào với ID này |
+| `CancelTask` | 409 | `-32002` | `task_not_cancelable` | Task đã ở trạng thái cuối |
+
+Bản thân envelope có thể lỗi trước khi CloudThinker đọc tới phương thức:
+
+| HTTP | `error.code` | Nguyên nhân |
+| --- | --- | --- |
+| 400 | `-32700` | Body không phải JSON hợp lệ |
+| 400 | `-32600` | Body không phải request JSON-RPC 2.0 |
+| 400 | `-32602` | `params` không khớp với phương thức, ví dụ thiếu `messageId` |
+| 400 | `-32009` | Header `A2A-Version` không được hỗ trợ |
+| 404 | `-32601` | Phương thức không tồn tại |
+| 500 | `-32603` | Lỗi nội bộ. Thử lại với cùng `messageId`. |
+
+### Giới hạn
+
+| Mục | Giới hạn |
+| --- | --- |
+| Access token | 1 giờ |
+| Số câu hỏi chạy đồng thời, mỗi bên gọi | 3 |
+| Giới hạn credit hằng tháng | Đặt riêng cho mỗi bên gọi, mặc định không có |
+| Độ dài câu hỏi | 8.000 ký tự, phần dài hơn bị cắt |
+| `messageId`, `contextId`, `id` của task | 128 ký tự |
+| Streaming và push notification | Không khả dụng cho bên gọi ngoài. Hãy poll `GetTask`. |
+| Quyền truy cập | Câu trả lời chỉ đọc |
+
+## Webhook
+
+Một lệnh POST JSON tới webhook URL sẽ chạy một [Automation](/vi/guide/automation/automations), hoặc gửi cảnh báo tới [Resolve](/vi/guide/incident/overview) để có thể mở sự cố và bắt đầu phân tích nguyên nhân gốc. Tạo loại nào cũng cần vai trò workspace **Admin**. Dùng webhook khi bạn chỉ cần kích hoạt công việc rồi đi tiếp; dùng A2A API khi bên gọi cần nhận câu trả lời. Xem [Webhook](/vi/guide/webhooks/overview).
+
+## Claude connector
+
+Claude connector là một máy chủ [Model Context Protocol](https://modelcontextprotocol.io) (MCP) từ xa tại:
+
+```text
+https://app.cloudthinker.io/api/mcp
+```
+
+Thêm connector trong claude.ai, ứng dụng Claude desktop hoặc Claude Code. Hiện chỉ client Claude kết nối được. Trên gói Claude Team hoặc Enterprise, chủ sở hữu tổ chức Claude thêm connector trước, sau đó từng thành viên kết nối. Xem [Claude connector](/vi/guide/mcp/overview).
+
+## Cấp phát SCIM
+
+SCIM 2.0 cho phép Okta hoặc Microsoft Entra ID thêm, tạm ngưng và gỡ thành viên CloudThinker. Bạn cần gói **Scale**, **Scale Plus** hoặc **Enterprise**, một [kết nối SSO](/vi/guide/security/sso) đang hoạt động với domain đã xác minh, và vai trò **Owner** của tổ chức. Khi SCIM bật, CloudThinker tắt tính năng mời thành viên. Xem [Cấp phát SCIM](/vi/guide/security/scim).
+
+## CLI
+
+CLI `cloudthinker` chạy trên macOS và Linux. Chưa có bản build Windows gốc. Cài đặt và đăng nhập:
+
+```bash
+curl -fsSL https://cloudthinker.io/install.sh | sh
+cloudthinker login
+```
+
+Nếu không muốn pipe script vào `sh`, hãy tải archive từ [trang releases](https://github.com/cloudthinker-ai/cloudthinker-cli/releases). Mỗi archive có checksum SHA-256 đi kèm.
+
+Với script và CI, `cloudthinker chat -p "Check production health"` in một câu trả lời ra stdout và dùng được trên mọi gói, kể cả Free. Agent tương tác (`cloudthinker`) cần gói Team, Scale, Scale Plus hoặc Enterprise. CLI đang ở giai đoạn preview, nên tên lệnh và flag có thể thay đổi. Xem [CLI](/vi/guide/cli/overview).
+
+## Khắc phục sự cố
+
+| Triệu chứng | Nguyên nhân có thể | Cách xử lý |
+| --- | --- | --- |
+| **Add an outside caller** bị thiếu hoặc bị mờ | Tổ chức không dùng gói Scale trở lên, hoặc bạn là Viewer | Kiểm tra gói trong [Bảng giá](/vi/guide/billing/pricing), hoặc nhờ Admin của workspace cấp vai trò Developer |
+| Yêu cầu token trả về `invalid_client` | Sai client ID hoặc secret, hoặc secret đã bị thay bằng **New secret** | Dùng secret hiện tại. Nếu đã mất, nhấn **New secret** và cập nhật hệ thống gọi. |
+| Lệnh gọi thất bại với `invalid_token` sau khi chạy được một giờ | Token đã hết hạn | Yêu cầu token mới bằng client credentials grant |
+| `SendMessage` trả về `client_inactive` | Bên gọi đang tạm dừng | Bật lại công tắc của bên gọi trong **Agents → Sharing → Outside callers** |
+| `SendMessage` trả về `busy` hoặc `client_budget_reached` | Đang có 3 câu hỏi chạy, hoặc đã dùng hết giới hạn credit hằng tháng | Với `busy`, thử lại sau `Retry-After`. Với giới hạn credit, chờ sang tháng sau, hoặc thêm một bên gọi có giới hạn cao hơn. |
+| Bạn đang chờ CloudThinker gọi lại | Bên gọi ngoài không bao giờ nhận push | Poll `GetTask` để lấy kết quả |
 
 ## Liên quan
 
 <CardGroup cols={2}>
-  <Card title="MCP Server" icon="plug" href="/vi/guide/mcp/overview">
-    Sử dụng các công cụ CloudThinker từ các AI client tương thích MCP
+  <Card title="Webhook" icon="webhook" href="/vi/guide/webhooks/overview">
+    Chạy một Automation hoặc gửi cảnh báo tới Resolve bằng một lệnh POST
   </Card>
-  <Card title="CLI" icon="terminal" href="/vi/guide/cli/overview">
-    Chạy các thao tác CloudThinker từ terminal của bạn
-  </Card>
-  <Card title="Webhooks" icon="webhook" href="/vi/guide/webhooks/overview">
-    Nhận thông báo theo sự kiện thay vì polling
-  </Card>
-  <Card title="Kết nối" icon="link" href="/vi/guide/connections/overview">
-    Kết nối nhà cung cấp đám mây và hệ thống SaaS
+  <Card title="Claude Connector" icon="plug" href="/vi/guide/mcp/overview">
+    Dùng CloudThinker từ Claude qua MCP từ xa
   </Card>
 </CardGroup>

@@ -1,0 +1,191 @@
+---
+title: Backstage
+description: "Kết nối Backstage để agent đọc Software Catalog về quyền sở hữu, phụ thuộc và thiếu sót metadata, và quản lý location qua Approvals"
+icon: "/images/icons/backstage.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
+
+Kết nối Backstage để agent CloudThinker đọc Software Catalog của bạn: những service nào đang tồn tại, ai sở hữu chúng, chúng phụ thuộc vào gì, và mục nào thiếu owner, lifecycle, liên kết repository hoặc liên kết tài liệu. Kết nối dùng **static external access token**, một token cố định bạn thêm vào cấu hình Backstage cho một bên gọi. Thay đổi duy nhất agent có thể thực hiện là trên một **location** của catalog (URL của file YAML mà Backstage nạp entity từ đó), và mọi thay đổi đều đi qua Approvals của workspace.
+
+## Điều kiện tiên quyết
+
+- Một instance Backstage mà CloudThinker truy cập được qua `https`. Với instance nằm sau firewall, xem [Truy cập dịch vụ nội bộ](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ).
+- Quyền truy cập cấu hình ứng dụng Backstage và quyền khởi động lại Backstage.
+- Vai trò **Admin** trong workspace CloudThinker, cần thiết để thêm kết nối. Xem [Vai trò](/vi/guide/security/roles).
+
+<Info>
+Mỗi workspace có một kết nối Backstage. CloudThinker chỉ chấp nhận địa chỉ `http` trên [bản triển khai self-hosted](/vi/guide/deployment/overview).
+</Info>
+
+## Thiết lập
+
+<Steps>
+  <Step title="Tạo token">
+    Token có thể là bất kỳ chuỗi nào không chứa khoảng trắng và đủ dài để không bị đoán ra. Một cách tạo token:
+
+    ```bash
+    node -p 'require("crypto").randomBytes(24).toString("base64")'
+    ```
+
+    Lưu token trong secret manager hoặc biến môi trường, và chỉ dùng cho CloudThinker để bạn có thể thu hồi riêng.
+  </Step>
+  <Step title="Thêm token vào cấu hình Backstage">
+    Thêm một mục `static` dưới `backend.auth.externalAccess`, giới hạn cho plugin catalog:
+
+    ```yaml
+    backend:
+      auth:
+        externalAccess:
+          - type: static
+            options:
+              token: ${CLOUDTHINKER_TOKEN}
+              subject: cloudthinker
+            accessRestrictions:
+              - plugin: catalog
+    ```
+
+    Đặt `CLOUDTHINKER_TOKEN` trong môi trường của backend Backstage, ví dụ từ một Kubernetes secret, trước khi khởi động lại.
+
+    `subject` đặt tên bên gọi trong log của Backstage. `plugin: catalog` từ chối các lệnh gọi đến plugin khác. Không có `accessRestrictions`, token truy cập được mọi plugin bạn đang chạy. Xem [hướng dẫn service-to-service auth của Backstage](https://backstage.io/docs/auth/service-to-service-auth) để biết đầy đủ các tùy chọn.
+  </Step>
+  <Step title="Khởi động lại Backstage">
+    Backstage đọc external access token khi khởi động, nên token chỉ hoạt động sau khi khởi động lại. Sau đó kiểm tra token và tìm URL cần nhập:
+
+    ```bash
+    curl -H "Authorization: Bearer $CLOUDTHINKER_TOKEN" \
+      "https://backstage.example.com/api/catalog/entities/by-query?limit=1"
+    ```
+
+    Nếu frontend và backend chạy trên host hoặc port khác nhau, chẳng hạn `:7007`, hãy thử địa chỉ backend. Địa chỉ trả về JSON, không kèm `/api/...`, chính là **Backstage URL** của bạn.
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Mở **More → Workspace settings → Connections**, chọn **Backstage** và nhập:
+    - **Backstage URL**: gốc của backend, ví dụ `https://backstage.example.com`
+    - **Service token**: token bạn đã tạo
+
+    Nhấn **Connect**.
+
+    **Trạng thái thành công:** kết nối hiển thị **Connecting** và **Verifying**, rồi **Connected**. CloudThinker đọc một entity trong catalog để chứng minh URL và token hoạt động.
+  </Step>
+</Steps>
+
+<Note>
+Chỉ nhập phần gốc. Không thêm `/api/catalog`, bất kỳ path nào khác, query string, fragment hoặc thông tin xác thực. CloudThinker tự thêm path catalog và từ chối URL chứa bất cứ thứ gì khác. CloudThinker cũng không theo redirect, nên hãy dùng đúng địa chỉ Backstage trả lời trực tiếp.
+</Note>
+
+## Chi tiết kết nối
+
+| Trường | Mô tả | Ví dụ |
+|-------|-------------|---------|
+| **Backstage URL** | Gốc backend Backstage qua `https`, không có path, query, fragment hoặc thông tin xác thực | `https://backstage.example.com` |
+| **Service token** | Static external access token từ cấu hình Backstage, trên một dòng | |
+
+## Quyền yêu cầu
+
+Với `plugin: catalog`, token có thể đọc toàn bộ catalog, đồng thời đăng ký và xóa location. Trên instance Backstage mặc định, chỉ có phê duyệt của CloudThinker chặn các thao tác ghi đó, trừ khi bạn bật permissions framework của Backstage.
+
+| Giới hạn trên token | Tác dụng |
+|--------------------------|--------|
+| **`plugin: catalog`** | Chỉ truy cập Software Catalog. Hãy đặt giá trị này |
+| **Không giới hạn** | Truy cập mọi plugin trong instance Backstage. Tránh dùng |
+
+Agent cần quyền đọc catalog cho mọi thứ trừ thay đổi location. Đăng ký, cập nhật hoặc xóa location còn cần quyền create, update và delete của catalog trên location.
+
+<Warning>
+Các giới hạn `permission` và `permissionAttribute` của Backstage chỉ hoạt động khi permissions framework được bật, và framework này mặc định tắt. Cho đến lúc đó, giới hạn `plugin` là giới hạn duy nhất chính Backstage thực thi.
+</Warning>
+
+## Khả năng của agent
+
+| Khả năng | Agent có thể làm gì | Phê duyệt |
+|------------|--------------------|----------|
+| **Catalog overview** | Tóm tắt entity theo kind, type, owner, namespace, system và domain. Mặc định đọc 15 entity, tối đa 50 | Không |
+| **Metadata gaps** | Đếm entity thiếu owner, lifecycle, liên kết source repository hoặc liên kết tài liệu, trong cùng phạm vi 15 đến 50 entity | Không |
+| **Service context** | Với một entity được nêu tên: owner, lifecycle, system, domain, source repository, tài liệu, API, phụ thuộc và quan hệ | Không |
+| **Location lookup** | Đọc một catalog location đã đăng ký theo ID | Không |
+| **Location changes** | Đăng ký location, trỏ location hiện có sang target mới, hoặc xóa location | Có |
+
+Câu trả lời có giới hạn, nên agent nói "đã trả về 15" thay vì "có 15". Với catalog lớn, hãy hỏi về một entity cụ thể, khi đó agent đọc toàn bộ ngữ cảnh của entity đó. Thiếu owner nghĩa là chưa ai điền trường đó trong Backstage, không phải service không có owner, và agent báo cáo đúng như vậy.
+
+### Xác minh kết nối
+
+```text
+Summarize our Backstage catalog: which kinds of entities it has and who owns them
+```
+
+Kết quả mong đợi là bảng phân loại theo kind và owner, số mục thiếu metadata quan trọng, và ghi chú về số entity mà câu trả lời bao quát.
+
+### Ví dụ prompt
+
+```text
+Which components in Backstage have no owner set?
+What are the owner, system, and dependencies of the payments-api component?
+Which Backstage entries are missing a documentation link, and which should we fix first?
+```
+
+## Thay đổi location
+
+Agent không thể tạo, sửa hoặc xóa entity trong catalog. Entity đến từ các location mà Backstage nạp, nên bạn sửa chúng tại nguồn. Thao tác ghi duy nhất của kết nối này là trên location, và mỗi thao tác đều đi qua [Approvals](/vi/guide/approvals/overview).
+
+<ApprovalDefault />
+
+Để được hỏi về mọi thay đổi location, chọn **Manual**, hoặc tắt **Allow writes** trên bảng chi tiết của kết nối để chặn hoàn toàn. Khi CloudThinker bật [Rule enforcement](/vi/guide/approvals/rules#khắc-phục-sự-cố) cho workspace của bạn, một [Rule](/vi/guide/approvals/rules) **Ask first** có thể áp dụng riêng cho kết nối Backstage.
+
+Trước khi yêu cầu phê duyệt, agent nêu rõ hành động, ID location hoặc URL target, và tiền tố URL mà agent coi là của bạn, ví dụ `https://github.com/acme/catalog/`. Không có cài đặt nào cho tiền tố này: agent lấy tiền tố từ yêu cầu của bạn, nên hãy nêu rõ tiền tố trong prompt và kiểm tra lại khi phê duyệt. Hai quy tắc giới hạn những gì một phê duyệt có thể làm:
+
+- Target mới phải là URL `https` nằm dưới tiền tố đã phê duyệt. Mọi thứ khác bị từ chối trước khi gửi yêu cầu.
+- Cập nhật hoặc xóa location sẽ đọc target hiện tại trước và kiểm tra target đó nằm dưới cùng tiền tố, nên một phê duyệt không thể chạm vào location của nhóm khác.
+
+<Warning>
+Xóa một location sẽ xóa khỏi catalog các entity do location đó tạo ra. Đọc target trong yêu cầu trước khi phê duyệt.
+</Warning>
+
+## Khắc phục sự cố
+
+<Accordion title="Failed to connect to Backstage">
+CloudThinker hiển thị cùng một thông báo này cho mọi lỗi kết nối. Kiểm tra theo thứ tự:
+- URL là gốc của backend và không redirect.
+- Token nằm trong `backend.auth.externalAccess`, khớp chính xác, và Backstage đã được khởi động lại sau khi bạn thêm.
+- `accessRestrictions` có `plugin: catalog`.
+- CloudThinker truy cập được Backstage.
+</Accordion>
+
+<Accordion title="Invalid Backstage URL, or Invalid Backstage connection configuration">
+URL có path, query, fragment hoặc thông tin xác thực, hoặc token trống hay chứa ký tự xuống dòng. Nhập phần gốc thuần và dán token trên một dòng, không có dấu ngoặc kép.
+</Accordion>
+
+<Accordion title="Backstage URL must use HTTPS outside local development">
+URL bắt đầu bằng `http://`. Dù thông báo nói vậy, `http` cũng được chấp nhận trên [bản triển khai self-hosted](/vi/guide/deployment/overview) của CloudThinker. Trên CloudThinker Cloud, hãy phục vụ Backstage qua `https`.
+</Accordion>
+
+<Accordion title="Agent báo cáo ít entity hơn số Backstage hiển thị">
+Bản tổng quan chỉ đọc tối đa 50 entity. Hãy hỏi về một entity cụ thể thay vì toàn bộ catalog.
+</Accordion>
+
+<Accordion title="Agent nói không thể sửa entity trong catalog">
+Đây là hành vi mong đợi, và không quyền nào thay đổi được điều này. Sửa YAML của entity tại nguồn. Agent có thể đăng ký, trỏ lại hoặc xóa location giúp bạn, thông qua Approvals.
+</Accordion>
+
+<Accordion title="Cập nhật location thất bại">
+Phiên bản Backstage của bạn không thể cập nhật catalog location tại chỗ. Hãy yêu cầu agent xóa location và đăng ký target mới thay thế.
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Giới hạn token trong catalog**: một dòng `plugin: catalog` ngăn token truy cập mọi plugin khác bạn đang chạy.
+- **Xoay vòng bằng cách thay mục cấu hình**: static token không bao giờ tự hết hạn. Thay token trong cấu hình Backstage và khởi động lại. Mỗi workspace có một kết nối Backstage, nên không có biểu tượng bút chì để sửa. Mở **More → Workspace settings → Connections**, chọn **Backstage**, nhấn **Disconnect**, rồi kết nối lại với **Service token** mới. Quá trình discovery chạy lại và **Allow writes** trở về trạng thái bật. Xem [Xoay vòng thông tin xác thực](/vi/guide/connections/overview#xoay-vòng-thông-tin-xác-thực).
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Quyết định thay đổi location nào được chạy, chờ người duyệt hoặc bị từ chối.
+  </Card>
+  <Card title="Kết nối" icon="plug" href="/vi/guide/connections/overview">
+    Xem mọi dịch vụ bạn có thể kết nối và cách trạng thái kết nối hoạt động.
+  </Card>
+</CardGroup>

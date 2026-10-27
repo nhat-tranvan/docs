@@ -1,0 +1,127 @@
+---
+title: Bảo vệ dữ liệu
+description: "Xử lý secret bị phát hiện trong chat, đọc các placeholder mà agent hiển thị thay cho secret, và biết model nhìn thấy những gì."
+icon: user-shield
+---
+
+CloudThinker phát hiện secret ở chiều vào, khi bạn dán chúng vào chat, và ở chiều ra, khi công cụ của agent trả về chúng. Trang này cho biết bạn sẽ thấy gì trong từng trường hợp và cần làm gì.
+
+## Điều kiện tiên quyết
+
+- Quét nội dung dán và che các secret mà CloudThinker nắm giữ (theo khớp chính xác) luôn bật cho mọi người dùng được chat. Không cần bật gì.
+- Che các định dạng secret bạn chưa từng lưu phụ thuộc vào các dòng **API keys** và **Cloud credentials** trong [Guardrails](/vi/guide/security/custom-guardrails#agent-thấy-gì). Cả hai mặc định bật, nhưng Admin của workspace có thể đặt chúng thành **Off** trừ khi Admin của tổ chức khóa lại.
+- Để lưu một secret bị phát hiện thành [credential](/vi/guide/credentials): vai trò workspace **Admin**. Developer vẫn có thể che hoặc giữ nguyên văn bản.
+
+## Những gì được bảo vệ, và ở đâu
+
+| Thời điểm | CloudThinker làm gì | Những gì bạn thấy |
+|---|---|---|
+| Bạn gửi tin nhắn, hoặc dán văn bản dài | Quét để tìm các giá trị có dạng thông tin xác thực như API key, token, mật khẩu và chuỗi kết nối | Hộp thoại **Review detected secrets**, trước khi bất cứ thứ gì được gửi |
+| Công cụ của agent trả về một secret | Thay thế giá trị trước khi model, chat hoặc đầu ra được lưu nhận được nó. CloudThinker kiểm tra theo hai cách: khớp chính xác với các secret mà CloudThinker nắm giữ cho lượt chạy (secret của kết nối, và credential của workspace được lưu dưới tên có vẻ là secret như `API_KEY`, `TOKEN` hoặc `PASSWORD`), và các rule mẫu **API keys** và **Cloud credentials** trong [Guardrails](/vi/guide/security/custom-guardrails#agent-thấy-gì). Hai dòng này mặc định bật nhưng không bị khóa, nên Admin của workspace có thể tắt chúng. Khi chúng bật, một AWS secret key trong tệp cấu hình mà agent in ra sẽ bị ẩn kể cả khi bạn chưa từng lưu nó. | Placeholder như `ct:secret:v3:openai-api-key:2d9c4e7a0b16` |
+| Công cụ của agent trả về một định danh được bảo vệ, chẳng hạn địa chỉ email | Thay thế theo cùng cách, dùng thiết lập [Guardrails](/vi/guide/security/custom-guardrails) của bạn | Placeholder như `ct:pii:v3:email:4c1f0a9e27b3 [op***@ma***.com]` |
+
+## Model nhìn thấy gì
+
+Model nhận tin nhắn của bạn sau khi quét nội dung dán, và nhận đầu ra công cụ của agent sau khi placeholder đã thay thế secret và định danh được bảo vệ. Model không bao giờ nhận giá trị thật đằng sau placeholder.
+
+## Xử lý secret bạn đã dán
+
+Giả sử bạn dán một tin nhắn có chứa key đang hoạt động:
+
+```text
+Check why this key gets 401s from the billing API: sk-live-...
+```
+
+<Steps>
+  <Step title="Gửi tin nhắn">
+    Nhấn Enter như bình thường. Tin nhắn không được gửi. Hộp thoại **Review detected secrets** mở ra và liệt kê từng giá trị tìm thấy.
+  </Step>
+  <Step title="Kiểm tra từng mục">
+    Với trường hợp nhận nhầm, chẳng hạn một chuỗi ví dụ, nhấn **Mark as not a secret** trên dòng của nó. Văn bản đó được giữ nguyên như bạn viết và được gửi đúng như đã nhập, nên chỉ đánh dấu văn bản mà bạn chắc chắn không phải secret thật. Nếu bạn là Admin, mỗi dòng còn hiển thị tên khóa credential mà giá trị sẽ được lưu dưới đó. Sửa nếu cần.
+  </Step>
+  <Step title="Chọn điều gì xảy ra với phần còn lại">
+    | Nút | Kết quả |
+    |---|---|
+    | **Save secrets** (chỉ Admin) | Lưu từng giá trị thành credential của workspace dưới tên khóa của nó, và đặt tên khóa vào tin nhắn tại vị trí của giá trị |
+    | **Redact from message** | Thay mỗi giá trị bằng `[sensitive data removed]` |
+    | **Keep in message** | Hiển thị thay cho **Save secrets** khi bạn đã đánh dấu mọi mục là không phải secret. Gửi văn bản không thay đổi, dù có phải secret thật hay không. |
+    | Đóng hộp thoại (Esc) | Không gì được gửi. Tin nhắn đã nhập vẫn ở trong ô với giá trị vẫn bị đánh dấu, để bạn có thể sửa. Nội dung dán dài sẽ bị loại bỏ. |
+
+    Với **Save secrets**, tin nhắn ví dụ được gửi thành:
+
+    ```text
+    Check why this key gets 401s from the billing API: $BILLING_API_KEY
+    ```
+
+    Lệnh dùng `$BILLING_API_KEY` sẽ nhận giá trị thật khi chạy. Model và chat chỉ thấy tên.
+
+    **Trạng thái thành công:** tin nhắn được gửi với tên `$KEY` hoặc `[sensitive data removed]` tại vị trí của mỗi giá trị bị đánh dấu. Mục bạn để nguyên trạng thái bị đánh dấu chỉ có thể được lưu hoặc che. Mục bạn đánh dấu là không phải secret được gửi đúng như đã nhập, nên nếu đánh dấu một secret thật theo cách đó, secret sẽ nằm lại trong cuộc hội thoại.
+  </Step>
+</Steps>
+
+Bước quét bao gồm văn bản bạn nhập và văn bản bạn dán, kể cả nội dung dán dài trở thành tệp đính kèm. Lần sau, hãy bỏ qua hộp thoại bằng cách tham chiếu một khóa đã lưu. Admin của workspace có thể gõ `$` trong ô chat và chọn từ danh sách. Các thành viên khác gõ đầy đủ tên, chẳng hạn `$BILLING_API_KEY`. Xem [Dùng credential trong chat](/vi/guide/credentials#dùng-credential-trong-chat).
+
+## Đọc placeholder trong đầu ra của agent
+
+Khi công việc của agent có thể hiển thị một secret (secret mà CloudThinker nắm giữ, hoặc khớp với rule credential của Guardrails) hoặc một định danh được bảo vệ, bạn sẽ thấy placeholder thay vào đó.
+
+- **Cùng một giá trị nhận cùng một placeholder** trong một cuộc hội thoại, nên bạn và agent vẫn biết được hai tham chiếu cùng trỏ đến một secret. Ở cuộc hội thoại khác, cùng giá trị đó nhận placeholder khác.
+- **Placeholder không thể chuyển ngược lại thành giá trị**, dù là bạn hay agent. Không có nút hiển thị.
+- **Các phần của placeholder:** `ct`, rồi `secret` hoặc `pii`, phiên bản định dạng (`v3`), danh mục (chẳng hạn `openai-api-key`), và một ID. ID là giá trị HMAC-SHA256 có khóa, trộn thêm cuộc hội thoại, nên không thể brute-force ngược lại thành một mật khẩu ngắn nếu không có khóa của CloudThinker.
+- **Placeholder của định danh có thể mang gợi ý** trong ngoặc vuông, chẳng hạn `[***-***-**89]` cho số điện thoại, để đầu ra vẫn dễ đọc.
+
+Để thay đổi chính secret, hãy cập nhật trong [Kết nối](/vi/guide/connections/overview) hoặc [Credentials](/vi/guide/credentials). Để chọn định danh nào bị ẩn, dùng [Custom Guardrails](/vi/guide/security/custom-guardrails).
+
+<Note>
+Nếu bạn mở một bản phát lại demo của CloudThinker, secret và định danh hiển thị thành `***REDACTED***`. Workspace của khách hàng chưa thể tạo liên kết phát lại. Xem [Chia sẻ](/vi/guide/sharing).
+</Note>
+
+## Bản nháp chưa gửi
+
+Văn bản bạn đã nhập nhưng chưa gửi được lưu trong trình duyệt của bạn, không phải trên máy chủ của CloudThinker, nên tải lại trang không làm mất bản nháp. Bản nháp của cuộc hội thoại được giữ tối đa 24 giờ. Đăng xuất sẽ xóa mọi bản nháp đã lưu.
+
+<Note>
+Bước quét secret chạy khi bạn gửi, không phải khi bạn nhập. Trên máy tính dùng chung, hãy đăng xuất thay vì đóng tab nếu bản nháp có thể chứa secret.
+</Note>
+
+## Khắc phục sự cố
+
+<AccordionGroup>
+  <Accordion title="Hộp thoại đánh dấu một thứ không phải secret">
+    **Nguyên nhân:** giá trị trông giống một key, ví dụ một chuỗi kiểm thử ngẫu nhiên dài.
+
+    **Cách khắc phục:** nhấn **Mark as not a secret** trên mục đó. Khi mọi mục đã được đánh dấu, nhấn **Keep in message** và tin nhắn được gửi không thay đổi.
+  </Accordion>
+  <Accordion title="Tôi không thấy Save secrets">
+    **Nguyên nhân:** thao tác lưu tạo ra một credential dùng chung của workspace, cần vai trò workspace **Admin**.
+
+    **Cách khắc phục:** chọn **Redact from message**, rồi nhờ Admin của workspace thêm key trong **More → Workspace settings → Credentials**. Xem [Credentials](/vi/guide/credentials).
+  </Accordion>
+  <Accordion title="Agent hiển thị placeholder ở chỗ tôi cần giá trị thật">
+    **Nguyên nhân:** giá trị khớp với một secret đã lưu hoặc một định danh được bảo vệ.
+
+    **Cách khắc phục:** với secret, hãy tham chiếu dưới dạng `$KEY` để lệnh nhận được giá trị mà không hiển thị trong chat. Với định danh, Admin của workspace có thể đặt mục bảo vệ đó thành **Off** trong **Admin Settings → Guardrails**, trừ khi Admin của tổ chức đã khóa nó.
+  </Accordion>
+  <Accordion title="Một secret đã lọt qua bước quét">
+    **Nguyên nhân:** bước quét tìm các định dạng thông tin xác thực đã biết, nên có thể bỏ sót định dạng lạ.
+
+    **Cách khắc phục:**
+
+    1. Xoay vòng secret tại nhà cung cấp. Hãy giả định model đã thấy secret đó.
+    2. Nhờ Admin của workspace xóa cuộc hội thoại (**Delete Conversation** trong menu tiêu đề của cuộc hội thoại), để giá trị gốc không được giữ trong lịch sử.
+    3. Lưu giá trị mới thành credential và tham chiếu dưới dạng `$KEY`.
+
+    Để bắt định dạng đó lần sau, Admin của workspace có thể thêm một [mẫu tùy chỉnh](/vi/guide/security/custom-guardrails#thêm-mẫu-tùy-chỉnh). Mẫu này che các kết quả khớp trong đầu ra công cụ (dưới dạng placeholder `ct:pii`), không phải trong bước quét nội dung dán. Với một định dạng secret mà bước quét nên nhận biết, hãy báo cho bộ phận hỗ trợ CloudThinker.
+  </Accordion>
+</AccordionGroup>
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="Custom Guardrails" icon="eye-slash" href="/vi/guide/security/custom-guardrails">
+    Chọn những định danh mà agent thấy dưới dạng placeholder
+  </Card>
+  <Card title="Credentials" icon="vault" href="/vi/guide/credentials">
+    Lưu secret một lần và tham chiếu dưới dạng $KEY
+  </Card>
+</CardGroup>

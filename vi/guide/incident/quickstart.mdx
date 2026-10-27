@@ -1,0 +1,179 @@
+---
+title: Bắt đầu nhanh với Resolve
+description: "Gửi một cảnh báo thử đến Resolve, xem Pulse nhóm cảnh báo thành cluster, rồi mở sự cố cùng phân tích nguyên nhân gốc."
+icon: rocket
+---
+
+Trong khoảng 10 phút, bạn tạo một endpoint nhận cảnh báo, gửi cảnh báo thử bằng `curl`, và theo dõi cảnh báo đó từ Pulse đến sự cố và phân tích nguyên nhân gốc (RCA). Bạn không cần công cụ giám sát nào: một Custom source nhận bất kỳ JSON nào bạn POST đến.
+
+## Điều kiện tiên quyết
+
+- Vai trò workspace **Admin**. Developer và Viewer thấy được **Resolve → Integrations** nhưng không thể thêm signal. Xem [Vai trò](/vi/guide/security/roles).
+- Một terminal có `curl`.
+- Tùy chọn, để có RCA có ý nghĩa: ít nhất một [kết nối](/vi/guide/connections/overview) cloud hoặc observability, để CloudThinker có thứ để điều tra.
+
+## Tạo endpoint nhận cảnh báo
+
+<Steps>
+  <Step title="Mở Resolve">
+    Nhấn **Resolve** trong thanh bên. Trên workspace chưa có nguồn nào, bạn thấy **Connect your first alert source**. Nhấn **Skip for now**. Trình hướng dẫn sau **Connect a source** yêu cầu bạn gõ đường dẫn trường, còn **Custom source** trong Integrations ghi lại payload thử để bạn nhấn chọn trường.
+  </Step>
+  <Step title="Thêm Custom source">
+    Vào **Resolve → Integrations** và chọn **Custom source**. Trong bảng của Custom source, ở **Signals to Resolve**, nhấn **Add signal**.
+
+    <Frame caption="Resolve Integrations: các nền tảng được nhóm theo mức sẵn sàng, Needs attention trước">
+      <img src="/images/v2/resolve-integrations.webp" alt="Trang Resolve Integrations với các nền tảng được nhóm theo mức sẵn sàng và ô tìm kiếm" />
+    </Frame>
+  </Step>
+  <Step title="Đặt tên">
+    Nhập **Source name**, ví dụ `quickstart-test`, và nhấn **Create endpoint**.
+
+    **Trạng thái thành công:** hộp thoại hiển thị **Webhook URL** và **Secret Key**, rồi báo **Waiting for the first payload**.
+  </Step>
+  <Step title="Sao chép URL và Secret Key">
+    Sao chép cả hai vào một tệp nháp. **Secret Key** chỉ hiển thị tại đây. Nếu làm mất key, xem [Khắc phục sự cố](#khắc-phục-sự-cố).
+  </Step>
+</Steps>
+
+## Gửi cảnh báo thử
+
+Giữ hộp thoại mở và chạy lệnh sau từ terminal. Thay hai placeholder bằng giá trị bạn đã sao chép.
+
+```bash
+curl -X POST "<your-webhook-url>" \
+  -H "Authorization: Bearer <your-secret-key>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Checkout API 5xx rate above 5%",
+    "severity": "critical",
+    "service": "checkout-api",
+    "resource": "checkout-api-prod",
+    "description": "Test alert from the Resolve quickstart"
+  }'
+```
+
+**Trạng thái thành công:** `curl` trả về trạng thái `2xx` với body JSON có `"success": true`. Hộp thoại tự kiểm tra payload và chuyển sang **Payload received**. Nếu không, nhấn **Check again** cạnh thông báo đang chờ.
+
+`severity` nhận `critical`, `high`, `medium`, `low` hoặc `info`, không phân biệt hoa thường, nên `Critical` cũng được. Mọi giá trị khác sẽ thành `medium` trừ khi bạn thêm [ánh xạ mức độ nghiêm trọng](/vi/guide/incident/webhook-integrations/custom-source).
+
+<Steps>
+  <Step title="Ánh xạ trường">
+    Khi hộp thoại hiển thị **Payload received**, nhấn **Map the fields**. Với mỗi đích, nhấn vào trường tương ứng trong JSON đã ghi lại:
+
+    | Đích | Chọn |
+    |---|---|
+    | **Incident title** (bắt buộc) | `title` |
+    | **Severity** | `severity` |
+    | **Service** | `service` |
+    | **Resource** | `resource` |
+    | **Description** | `description` |
+
+    Nhấn **Save mapping**.
+  </Step>
+  <Step title="Gửi cảnh báo thêm hai lần, cách nhau một phút">
+    Chạy lại lệnh `curl`, chờ ít nhất một phút, rồi chạy lần thứ ba. Các lần gửi lặp lại sẽ gia nhập cluster của signal đầu tiên thay vì tạo việc mới, vì có cùng tiêu đề và service. Payload không có `resource_id`, nên tiêu đề và service là yếu tố nhóm chúng ở đây. [Cluster](/vi/guide/pulse/clusters#tín-hiệu-gia-nhập-cluster-như-thế-nào) có quy tắc đầy đủ.
+
+    Mỗi lần gửi vượt qua bộ lọc trở thành một signal, kể cả lần đầu. Payload không có trường `timestamp` ở cấp cao nhất, nên Pulse dùng thời điểm nhận mỗi lần gửi. Lần gửi giống hệt lần trước trong cùng một phút sẽ bị loại vì trùng lặp, đó là lý do bạn phải chờ. Bạn sẽ thấy hai hoặc ba signal, tùy hai lần gửi đầu có rơi vào cùng phút hay không.
+  </Step>
+</Steps>
+
+## Xem Pulse nhóm cảnh báo thành cluster
+
+Pulse là lớp phát hiện của Resolve. **Signal** là một event đã vượt qua bộ lọc nhiễu, còn **cluster** là một nhóm signal liên quan mà Pulse coi là một vấn đề.
+
+<Steps>
+  <Step title="Mở Pulse">
+    Vào **Resolve → Pulse**.
+
+    **Trạng thái thành công:** một cluster tiêu đề `Checkout API 5xx rate above 5%` với ít nhất hai signal, trong làn **Active**. Nếu cluster nằm ở **Forming** với một signal, các lần lặp quá sát nhau: chờ một phút và gửi lại.
+
+    Đã ở **Routed**? **On duty** được bật trên workspace mới, nên phân loại đã tự nhận cluster. Chuyển đến [Mở cuộc điều tra](#mở-cuộc-điều-tra-và-nguyên-nhân-gốc).
+  </Step>
+  <Step title="Chuyển cho phân loại">
+    Nhấn vào cluster, rồi **Escalate** → **Send to triage**. CloudThinker đọc cluster rồi khớp cluster với một sự cố đang mở, mở sự cố mới, hoặc quyết định không cần sự cố.
+
+    **Trạng thái thành công:** phân loại chạy và xử lý cluster. Cluster chuyển sang làn **Routed** khi phân loại liên kết cluster với một sự cố đang mở. Nếu phân loại quyết định cluster không cần sự cố, cluster vẫn ở **Active** (xem ghi chú bên dưới).
+  </Step>
+</Steps>
+
+<Note>
+Với một cảnh báo giả lập, cả hai kết quả phân loại đều bình thường. Cảnh báo thử về một service mà CloudThinker không tìm thấy trong các kết nối của bạn có thể bị đánh giá là không cần hành động, nên không có sự cố nào được mở và cluster không chuyển sang **Routed**. Đó không phải lỗi của bạn: hãy ghi nhận sự cố thủ công ở bước tiếp theo. Để tăng khả năng mở sự cố, thay `checkout-api` bằng tên một service thực từ tài khoản đã kết nối.
+</Note>
+
+## Mở cuộc điều tra và nguyên nhân gốc
+
+<Steps>
+  <Step title="Tìm sự cố">
+    Vào **Resolve → Investigation**. Nếu phân loại đã mở sự cố, sự cố nằm trong hàng đợi, ở **AI is handling** khi RCA đang chạy. Hàng hiển thị **Investigating** cho đến khi có kết quả.
+
+    Không có sự cố? Nhấn **Log Incident**. Nhập tiêu đề cảnh báo vào **What's happening?**, đặt **Severity** là **Critical** và lưu. Sự cố được ghi nhận thủ công bắt đầu điều tra ngay khi bạn lưu, kể cả khi **On duty** đang **Paused**. Xem [Ghi nhận sự cố](/vi/guide/incident/manual-logging) để biết các trường khác.
+  </Step>
+  <Step title="Bắt đầu RCA nếu chưa bắt đầu">
+    RCA tự bắt đầu khi phân loại mở sự cố từ Pulse, và sự cố ghi nhận thủ công bắt đầu RCA ngay khi bạn lưu. Nếu sự cố nằm ở **Not started**, mở sự cố và nhấn **Investigate**. [Điều gì bắt đầu một cuộc điều tra](/vi/guide/incident/settings#điều-gì-khởi-động-một-cuộc-điều-tra) có quy tắc đầy đủ.
+  </Step>
+  <Step title="Đọc kết quả">
+    Mở sự cố. CloudThinker hiển thị kết luận, độ tin cậy, bằng chứng đã đọc, dòng thời gian và đề xuất khắc phục.
+
+    **Trạng thái thành công:** sự cố rời **AI is handling**. Với một kết nối bao phủ cảnh báo, sự cố chuyển đến **Needs your decision** và hàng thường hiển thị **Cause found**. Khi không có kết nối, bạn sẽ thấy một trong hai kết quả:
+
+    - Sự cố chuyển đến **Needs your decision** với **Investigation complete**, và kết quả cho biết CloudThinker không xác minh được nguyên nhân.
+    - Trạng thái trở thành **Not Found**, vì bằng chứng không hỗ trợ một nguyên nhân gốc. Sự cố **Not Found** rời khỏi hàng đợi, nên hãy sao chép URL của sự cố từ trình duyệt trước khi rời trang. Xem [Kết quả điều tra](/vi/guide/incident/root-cause-analysis#kết-quả-điều-tra).
+  </Step>
+</Steps>
+
+Kết quả không có nguyên nhân được xác minh là câu trả lời trung thực cho một cảnh báo giả lập. Kết nối hệ thống mà cảnh báo đề cập, và cùng quy trình này sẽ cho ra nguyên nhân gốc thực sự.
+
+## Dọn dẹp
+
+Nguồn thử tiếp tục nhận cảnh báo cho đến khi bạn xóa nguồn.
+
+1. Đóng sự cố thử để sự cố không nằm mãi trong hàng đợi. Mở sự cố từ **Resolve → Investigation**, nhấn huy hiệu trạng thái trong header của sự cố, chọn **False Alarm** và nhấn **Change Status**.
+2. Trong **Resolve → Pulse**, mở cluster thử và nhấn **Resolve**. Nút hiển thị khi không còn sự cố đang mở nào giữ cluster. Nếu để nguyên, cluster tự đóng sau 12 giờ không có signal mới.
+3. Vào **Resolve → Integrations** → **Custom source**, mở menu **⋯** của hàng `quickstart-test` và nhấn **Delete**.
+
+## Khắc phục sự cố
+
+<AccordionGroup>
+  <Accordion title="Hộp thoại cứ chờ payload đầu tiên">
+    Kiểm tra trạng thái mà `curl` trả về, rồi nhấn **Check again**.
+
+    | Trạng thái | Nguyên nhân thường gặp |
+    |---|---|
+    | `401` | Thiếu header `Authorization`, hoặc URL không phải **Webhook URL** hiện tại (gõ sai, bị cắt ngắn, hoặc đã bị thay bởi **Regenerate credentials**). Kiểm tra header và dán lại toàn bộ URL. |
+    | `403` | **Secret Key** sai, hoặc header không có dạng `Bearer <secret-key>`. Dán lại key. |
+    | `422` | Body không phải đối tượng JSON: JSON không hợp lệ, một mảng hoặc một giá trị đơn. |
+    | `429` | Quá nhiều yêu cầu, hoặc quá nhiều lần xác thực thất bại trong thời gian ngắn. Chờ rồi thử lại. |
+
+    Nếu hộp thoại báo đã có event đến nhưng không đọc được trường nào từ body, lần gửi đã được chấp nhận nhưng các trường vẫn chưa ánh xạ được. Gửi lại payload mẫu ở trên, rồi nhấn **Check again**.
+  </Accordion>
+  <Accordion title="Tôi làm mất Secret Key">
+    Key không hiển thị lại. Trên thẻ **Custom source**, mở menu **⋯** của hàng nguồn và nhấn **Regenerate credentials**. Thao tác này thay cả **Webhook URL** và **Secret Key**, và cặp cũ ngừng hoạt động ngay lập tức, nên hãy cập nhật URL và key ở mọi nơi đang gửi đến.
+  </Accordion>
+  <Accordion title="Không có gì hiển thị trong Pulse">
+    Chuyển sang làn **All** và mở rộng khoảng thời gian. Sau đó kiểm tra phễu ở đầu **Resolve → Pulse**: nếu số event thô tăng nhưng không có cluster nào xuất hiện, bộ lọc đã loại event, thường nhất là bản trùng lặp gửi trong cùng phút. Đổi `title` và gửi lại.
+  </Accordion>
+  <Accordion title="Không thấy Escalate">
+    Escalate chỉ hiển thị trên cluster **Forming** hoặc **Active** chưa được định tuyến. Nếu cluster đã ở **Routed**, phân loại đã nhận cluster: mở sự cố từ **Resolve → Investigation**.
+  </Accordion>
+</AccordionGroup>
+
+## Bước tiếp theo
+
+**Công cụ của bạn:** [Kết nối nguồn cảnh báo](/vi/guide/incident/connect-alert-sources) đối chiếu công cụ đang gửi cảnh báo của bạn với webhook, nguồn polling hoặc kênh chat.
+
+**Hướng dẫn chi tiết:** xem cùng quy trình này trên một sự cố production thực trong [Điều tra sự cố checkout từ đầu đến cuối](/vi/guide/use-cases/resolve-checkout-incident).
+
+<CardGroup cols={2}>
+  <Card title="Kết nối nguồn thực" icon="plug" href="/vi/guide/incident/integrations">
+    Trỏ cảnh báo Datadog, Grafana, PagerDuty hoặc CloudWatch đến Resolve, và theo dõi các kênh Slack nơi mọi người báo cáo sự cố.
+  </Card>
+  <Card title="Đọc một cuộc điều tra" icon="magnifying-glass" href="/vi/guide/incident/root-cause-analysis">
+    Ý nghĩa của kết luận, độ tin cậy và hàng đợi khắc phục.
+  </Card>
+  <Card title="Thiết lập On-call" icon="users" href="/vi/guide/incident/oncall">
+    Đưa người phản hồi vào Incident Room khi sự cố cần con người.
+  </Card>
+  <Card title="Tham chiếu Custom source" icon="code" href="/vi/guide/incident/webhook-integrations/custom-source">
+    Đường dẫn trường, xác thực và thay đổi ánh xạ sau này.
+  </Card>
+</CardGroup>

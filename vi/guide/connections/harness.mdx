@@ -1,0 +1,150 @@
+---
+title: Harness
+description: "Kết nối Harness để agent kiểm tra tình trạng delivery, chẩn đoán execution lỗi, xem dữ liệu chi phí cloud và sửa tài nguyên qua Approvals"
+icon: "/images/icons/harness.svg"
+---
+
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối tài khoản Harness để các agent CloudThinker kiểm kê pipeline, service và environment, tìm execution lỗi hoặc bị kẹt, đọc log của step lỗi và xem dữ liệu Cloud Cost Management. Kết nối đăng nhập bằng một **API key** của Harness, là personal access token (PAT) hoặc service account token (SAT).
+
+## Điều kiện tiên quyết
+
+- Tài khoản Harness có các organization, project và dữ liệu chi phí mà bạn muốn agent đọc.
+- Quyền tạo service account và gán role binding. Để thử nghiệm nhanh cho cá nhân, có thể dùng API key của chính bạn.
+- Identifier (không phải tên hiển thị) của organization hoặc project mặc định bạn muốn đặt.
+- Vai trò **Admin** trong workspace CloudThinker, có quyền thêm và sửa kết nối. Xem [Vai trò](/vi/guide/security/roles).
+
+## Thiết lập
+
+<Steps>
+  <Step title="Tạo service account">
+    Trong Harness, mở **Account Settings → Access Control → Service Accounts** và tạo một service account tên `cloudthinker`. Sau đó thêm role binding cho quyền chỉ đọc:
+
+    | Role | Resource group | Lý do |
+    |------|----------------|-----|
+    | **Account Viewer** | **All Resources Including Child Scopes** | Đọc organization, project, pipeline và execution |
+    | **CCM Viewer** | **All Resources Including Child Scopes** | Đọc dữ liệu Cloud Cost Management. Bỏ qua nếu bạn không dùng CCM. |
+
+    Service account cấp account bao quát cả dữ liệu delivery của project lẫn dữ liệu chi phí cấp account.
+  </Step>
+  <Step title="Tạo token">
+    Mở service account, chọn **API Keys → API Key** và lưu một key mới. Trong key đó, chọn **Token**, đặt ngày hết hạn và nhấn **Generate Token**.
+
+    Sao chép token ngay. Token bắt đầu bằng `sat.` và Harness chỉ hiển thị một lần. Key cá nhân từ **My API Keys** trong hồ sơ của bạn tạo token `pat.` theo cách tương tự.
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Trên thanh bên, nhấn **More → Workspace settings → Connections**, giữ ở tab **Builtin Connections** và chọn **Harness**. Điền:
+
+    - **API key**: token bạn đã tạo
+    - **Harness URL**: giữ `https://app.harness.io` trừ khi bạn dùng cluster khác hoặc bản cài tự quản lý. Để tìm URL của bạn, đăng nhập Harness và sao chép scheme và host từ thanh địa chỉ trình duyệt, ví dụ `https://<your-host>`.
+    - **Default organization** và **Default project**: tùy chọn. Đặt cả hai hoặc để trống cả hai.
+
+    Nhấn **Connect**.
+
+    **Trạng thái thành công:** Harness hiển thị **Connected** trong danh sách Connections. Điều đó nghĩa là CloudThinker đã tải các công cụ Harness. Chạy [prompt xác minh](#xác-minh-kết-nối) để xác nhận token đọc được các project của bạn.
+  </Step>
+</Steps>
+
+<Warning>
+Harness chỉ hiển thị token đã tạo một lần. Nếu bạn làm mất, hãy tạo token mới trên cùng key và cập nhật kết nối.
+</Warning>
+
+## Chi tiết kết nối
+
+| Trường | Mô tả | Mặc định |
+|-------|-------------|---------|
+| **API key** | PAT hoặc SAT, dạng `pat.<accountId>.<tokenId>.<secret>` hoặc `sat.<accountId>.<tokenId>.<secret>`. CloudThinker đọc account từ token, nên không có trường account. | không có |
+| **Harness URL** | URL gốc. Chỉ đổi khi dùng cluster không mặc định hoặc bản cài tự quản lý. | `https://app.harness.io` |
+| **Default organization** | Identifier của organization được thêm vào mọi yêu cầu có phạm vi. Để trống để agent tự chọn theo từng câu hỏi. | trống |
+| **Default project** | Identifier của project. Chỉ được dùng cùng **Default organization**, nên hãy đặt cả hai. | trống |
+
+Sao chép identifier chính xác như hiển thị trong cài đặt của tài nguyên trong Harness. Tên hiển thị như "Payments Team" sẽ không khớp.
+
+## Quyền yêu cầu
+
+Token kế thừa quyền của service account hoặc user của nó. Cấp quyền xem cho mọi thứ agent cần kiểm tra:
+
+| Quyền truy cập | Cho phép |
+|--------|---------|
+| Xem organization và project | Khám phá toàn bộ cấu trúc Harness của bạn |
+| Xem pipeline, service, environment và execution | Kiểm kê, tình trạng delivery và chẩn đoán lỗi |
+| Xem Cloud Cost Management | Chi tiêu, khuyến nghị, bất thường và ngân sách |
+| Tạo, sửa hoặc xóa trên các resource group được chọn, ví dụ một custom role có quyền tạo và sửa pipeline, gắn với resource group chỉ chứa project mục tiêu | Thay đổi tài nguyên qua CloudThinker, theo Approvals của bạn |
+
+<Tip>
+Bắt đầu chỉ với quyền xem. Thêm quyền tạo, sửa hoặc xóa cho các resource group cụ thể khi bạn muốn agent đề xuất thay đổi ở đó.
+</Tip>
+
+## Khả năng của agent
+
+| Khả năng | Agent có thể làm gì | Phê duyệt |
+|------------|--------------------|----------|
+| **Khám phá** | Liệt kê organization, project, pipeline, service, environment, connector và trigger | Không |
+| **Tình trạng delivery** | Tóm tắt các execution gần đây của một project và tìm lượt chạy lỗi hoặc bị kẹt | Không |
+| **Chẩn đoán lỗi** | Đọc chi tiết lỗi của một execution và log của step lỗi | Không |
+| **Chi phí cloud** | Xem chi tiêu của account, khuyến nghị, bất thường và ngân sách | Không |
+| **Thay đổi tài nguyên** | Tạo, cập nhật hoặc xóa một tài nguyên Harness, chẳng hạn định nghĩa pipeline | Qua Approvals |
+
+Mọi thao tác tạo, cập nhật hoặc xóa đều đi qua [Approvals](/vi/guide/approvals/overview).
+
+<ApprovalDefault />
+
+Kết nối này không có công tắc **Allow writes**, nên để giữ chỉ đọc, chỉ cấp role xem cho token. Agent không thể chạy, chạy lại hoặc ngắt một pipeline execution, bật/tắt feature flag, sync GitOps application hay phê duyệt một Harness approval step. Các điều khiển đó không thuộc kết nối này.
+
+### Xác minh kết nối
+
+```text
+List my Harness organizations and projects, then summarize delivery health for one project
+```
+
+Kết quả mong đợi là identifier của organization và project cùng bản tóm tắt ngắn về tình trạng các execution gần đây. Lỗi 403 trên một project nghĩa là role binding của token không bao gồm project đó.
+
+### Ví dụ prompt
+
+```text
+Show failed and stuck Harness executions in project payments_prod this week
+Diagnose the latest failed Harness execution and name the step that broke
+Rank Harness Cloud Cost Management recommendations by monthly savings
+```
+
+## Khắc phục sự cố
+
+<Accordion title="Yêu cầu trả về 401 Unauthorized">
+Token sai, đã hết hạn hoặc bị thu hồi. Tạo token mới, sửa kết nối và dán vào **API key**.
+</Accordion>
+
+<Accordion title="Yêu cầu trả về 403 hoặc not authorized">
+Service account hoặc user không có role binding cho phạm vi đó. Kiểm tra role và resource group trong Harness và cấp quyền xem còn thiếu.
+</Accordion>
+
+<Accordion title="Yêu cầu báo cần phạm vi project">
+Tài nguyên cần cả identifier của organization và project. Đặt **Default organization** và **Default project**, hoặc yêu cầu agent liệt kê organization và project trước, rồi lặp lại yêu cầu với các identifier đó.
+</Accordion>
+
+<Accordion title="Không tìm thấy organization hoặc project">
+Bạn đã dùng tên hiển thị thay vì identifier. Sao chép identifier từ cài đặt của tài nguyên trong Harness.
+</Accordion>
+
+<Accordion title="Agent từ chối chạy hoặc chạy lại pipeline">
+Đây là thiết kế có chủ đích. Hãy chạy, chạy lại hoặc ngắt pipeline trong Harness. Agent vẫn có thể kiểm tra execution và chẩn đoán lý do lỗi.
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Ưu tiên service account thay vì key cá nhân**: kết nối vẫn hoạt động khi quyền truy cập của một người thay đổi hoặc họ rời đi.
+- **Token có hạn**: đặt ngày hết hạn cho token và thay thế trước khi hết hạn.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Kết nối CircleCI" icon="/images/icons/circleci.svg" href="/vi/guide/connections/circleci">
+    Kiểm tra trạng thái pipeline và phân tích workflow lỗi.
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Kiểm soát thay đổi Harness nào phải chờ người duyệt.
+  </Card>
+</CardGroup>

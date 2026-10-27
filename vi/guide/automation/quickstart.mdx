@@ -1,0 +1,154 @@
+---
+title: Bắt đầu nhanh với Automation
+description: "Tạo một kiểm tra bất thường chi phí hằng ngày gửi cảnh báo đến kênh Slack, thử nghiệm bằng Run now và giữ mọi thao tác ghi sau bước phê duyệt."
+icon: rocket
+---
+
+Trong khoảng 10 phút, bạn sẽ có một automation kiểm tra chi phí cloud của ngày hôm qua vào mỗi sáng và gửi cảnh báo đến kênh Slack khi một dịch vụ tăng đột biến. Automation chỉ đọc dữ liệu thanh toán, và mọi thao tác ghi mà automation thử thực hiện về sau vẫn phải qua bước phê duyệt của bạn.
+
+## Điều kiện tiên quyết
+
+- Gói Team trở lên. Cả Automation và gửi thông báo qua Slack đều cần gói này. Xem [Bảng giá](/vi/guide/billing/pricing).
+- Vai trò Admin của workspace. Chỉ admin mới có thể tạo và chỉnh sửa automation.
+- Kết nối cloud đọc được dữ liệu thanh toán, có ít nhất 14 ngày lịch sử:
+  - [AWS](/vi/guide/connections/aws#quyền-yêu-cầu): đã bật Cost Explorer và có `ce:GetCostAndUsage` (nằm trong `ReadOnlyAccess`)
+  - [Google Cloud](/vi/guide/connections/gcp#quyền-yêu-cầu): một billing export **Standard usage cost** sang BigQuery, nằm cùng project với service account của kết nối, kèm các vai trò BigQuery Data Viewer và BigQuery Job User. Bạn sẽ ghi tên dataset trong phần hướng dẫn ở bước 2.
+  - [Azure](/vi/guide/connections/azure#quyền-yêu-cầu): vai trò Cost Management Reader trên subscription
+- Slack đã kết nối với CloudThinker. Nếu workspace Slack của bạn yêu cầu phê duyệt ứng dụng, một Slack Workspace Owner hoặc người quản lý ứng dụng phải phê duyệt CloudThinker trước. Xem [Tích hợp Slack](/vi/guide/slack-integration).
+
+## Gửi cảnh báo của agent đến Slack
+
+Agent có thể phát cảnh báo kèm mức độ nghiêm trọng như một hành động có sẵn, và automation này báo cáo qua hành động đó. CloudThinker gửi các cảnh báo này đến những kênh trên dòng **Agent alerts** của [Notifications](/vi/guide/notifications). Hãy định tuyến chúng đến một kênh trước để lần thử đầu tiên đến được với bạn.
+
+<Steps>
+  <Step title="Chọn kênh Slack">
+    Vào **More → Workspace settings → Notifications**. Ở **Delivery channels**, tìm thẻ Slack (thẻ hiển thị **Pick a channel** cho đến khi bạn chọn kênh). Nhấn biểu tượng cài đặt (**Change Slack channel**), rồi tìm và chọn kênh mà nhóm bạn theo dõi trong **Slack Notification Channel**.
+
+    Với kênh riêng tư, hãy chạy `/invite @CloudThinker` trong kênh đó trước, nếu không kênh sẽ không xuất hiện trong danh sách.
+  </Step>
+  <Step title="Bật cảnh báo agent cho Slack">
+    Ở **What to notify me about**, mở **Alerts** và bật Slack cho **Agent alerts**. Đặt ngưỡng mức độ nghiêm trọng là **High** hoặc thấp hơn. Automation này phát cảnh báo High.
+
+    **Trạng thái thành công:** công tắc Slack trên dòng **Agent alerts** đang bật, với ngưỡng **Low**, **Medium** hoặc **High**.
+  </Step>
+</Steps>
+
+## Tạo automation
+
+<Steps>
+  <Step title="Mở template">
+    Mở **Automations** trên thanh bên và chọn **New automation**. Ở **Or start from a template**, chọn **Daily cost anomaly alert**.
+
+    Biểu mẫu mở ra với tên, phần hướng dẫn và trigger **Schedule** chạy mỗi ngày lúc 08:00 đã được điền sẵn.
+
+    <Frame caption="New automation: mô tả công việc bằng lời thường, hoặc bắt đầu từ template">
+      <img src="/images/v2/automation-new.webp" alt="Trang New automation với ô chat và lưới template, bao gồm Daily cost anomaly alert" />
+    </Frame>
+  </Step>
+  <Step title="Yêu cầu automation phát cảnh báo">
+    **What should the agent do?** đã có sẵn nội dung:
+
+    ```text
+    Compare yesterday's spend per service against its trailing 14-day average. Report only the services more than 20% above it, with the most likely cause for each.
+    ```
+
+    Thêm câu này vào cuối, để một lần tăng đột biến trở thành cảnh báo Slack:
+
+    ```text
+    If any service is more than 20% above its average, raise a high-severity alert that names the service, the increase, and the likely cause.
+    ```
+
+    Với Google Cloud, thêm cả câu này, thay bằng project và dataset của bạn:
+
+    ```text
+    The billing export is in dataset <project>.<dataset>.
+    ```
+
+    Nếu workspace có nhiều hơn một kết nối cloud, gõ `#` để chọn kết nối cần kiểm tra. Nếu không có mention `#`, agent tự chọn trong các kết nối của workspace.
+  </Step>
+  <Step title="Kiểm tra lịch chạy">
+    Trên thẻ **Schedule**, xác nhận **Daily** lúc 08:00, hoặc đổi giờ. Giờ được tính theo múi giờ địa phương của bạn. Ở múi giờ có giờ mùa hè, lượt chạy sẽ lệch một giờ trong một phần của năm ([lý do](/vi/guide/automation/automations#schedule)).
+  </Step>
+  <Step title="Giữ nguyên bộ chọn phê duyệt ở mặc định">
+    Giữ **Approval** (bên cạnh bộ chọn model) ở tùy chọn **Default**. Automation này chỉ đọc, nên bước phê duyệt không được dùng đến ([xem bên dưới](#điều-gì-xảy-ra-nếu-agent-thử-một-thao-tác-ghi)).
+  </Step>
+  <Step title="Tạo automation">
+    Chọn **Create automation**.
+
+    **Trạng thái thành công:** automation mở ra trên trang riêng. Trường **Next run** hiển thị lần 08:00 kế tiếp, theo giờ địa phương của bạn kèm tên múi giờ.
+  </Step>
+</Steps>
+
+## Thử ngay
+
+Đừng chờ đến 08:00. Chọn **Run now** ở đầu trang của automation.
+
+**Trạng thái thành công:** một lượt chạy xuất hiện trong **Past runs** trên trang của automation với trạng thái **Running**, rồi **Succeeded**. Mở lượt chạy để đọc phần so sánh của agent trong cuộc hội thoại của lượt chạy. Nếu có dịch vụ cao hơn mức trung bình quá 20%, một cảnh báo cũng được đăng trong kênh Slack của bạn. Để xem số credit lượt chạy đã dùng, mở [Usage](/vi/guide/billing/usage).
+
+<Note>
+Dữ liệu thanh toán cloud của ngày hôm qua có thể vẫn chưa đầy đủ vào sáng sớm, nên lần thử ngay sau khi thiết lập có thể báo chi phí thấp hơn hóa đơn cuối cùng. Nếu số liệu có vẻ sai, hãy chạy lại vào cuối ngày.
+</Note>
+
+Ngày yên ắng sẽ không có tin nhắn Slack nào, và đó đúng là điều bạn muốn. Để kiểm tra đường gửi Slack mà không đụng đến automation thật:
+
+1. Mở menu **…** của automation trong danh sách **Automations** và chọn **Duplicate**. Biểu mẫu mở ra với một bản sao, bao gồm cả lịch 08:00. Bản sao được tính vào giới hạn automation của gói cho đến khi bạn xóa bản sao.
+2. Đổi hướng dẫn của bản sao thành "Raise a high-severity test alert with yesterday's total spend". Xóa lịch bằng biểu tượng thùng rác trên thẻ **Schedule**, rồi chọn **Create automation**. Khi không có trigger, bản sao chỉ chạy khi bạn nhấn **Run now**.
+3. Chọn **Run now** trên bản sao.
+4. Xóa bản sao khi cảnh báo đã đến.
+
+## Điều gì xảy ra nếu agent thử một thao tác ghi
+
+Automation này chỉ đọc, nên không có thao tác ghi nào đến bước phê duyệt. Nếu sau này bạn mở rộng automation, chẳng hạn "tag the resource that caused the spike", bước phê duyệt sẽ quyết định từng thao tác ghi trước khi chạy. Để kiểm tra automation dùng chế độ nào, mở **Approvals** > **Approval mode** và tìm **Automations** ở **Run types**. Các lựa chọn phổ biến ([danh sách đầy đủ](/vi/guide/automation/autonomous-agents#cách-quyết-định-một-thao-tác-ghi) có năm lựa chọn):
+
+| Lựa chọn phê duyệt cho automation này | Hành động ghi không có Rule nào bao phủ |
+|--------------------------------------|------------------------|
+| **Auto · Rules + AI · Refuse** (mặc định) | [Đánh giá của AI](/vi/guide/approvals/approval-mode#hai-chế-độ) có thể cho phép thao tác ghi khớp với yêu cầu của bạn và nằm trong phạm vi. Hành động phá hủy, hoặc có tác động không rõ ràng, bị từ chối, và lượt chạy tiếp tục. |
+| **Auto · Rules + AI · Ask me** | Tương tự, nhưng các hành động còn lại phải chờ. Lượt chạy hiển thị **Required Approval** cho đến khi có người chọn **Approve** hoặc **Decline** trong cuộc hội thoại của lượt chạy. |
+| **Manual** | Chờ người duyệt |
+
+Ở các lựa chọn Auto, Rule khớp sẽ quyết định trước tất cả những điều trên, nhưng chỉ khi CloudThinker bật Rule enforcement cho workspace của bạn ([chi tiết](/vi/guide/approvals/rules#khắc-phục-sự-cố)). Ở **Manual**, mọi thao tác ghi đều chờ người duyệt, kể cả hành động đã có Rule Allow bao phủ.
+
+Với thao tác ghi mà automation thực hiện hằng ngày, hãy thêm một [Rule](/vi/guide/approvals/rules) **Allow** trong **Approvals** > **Rules**, giới hạn cho **Automations** ở **Runs from**. Khi bước **Rules** hiển thị **In preview**, Rule đó chỉ được ghi lại, nên đánh giá của AI vẫn quyết định thao tác ghi. Khi CloudThinker bật Rule enforcement cho workspace của bạn, Rule sẽ chạy thao tác ghi và lượt chạy không còn phụ thuộc vào đánh giá của AI hay vào chuyện có người đang trực tuyến. Để tự viết một Rule, gõ `/create-policy` trong chat (lệnh này đề xuất một Rule để Admin chấp nhận) và mô tả thao tác ghi. Xem [các bước](/vi/guide/approvals/rules#yêu-cầu-một-rule-trong-chat).
+
+## Khắc phục sự cố
+
+<AccordionGroup>
+  <Accordion title="Lượt chạy thành công nhưng không có gì được đăng trên Slack">
+    Hoặc không có dịch vụ nào vượt 20%, hoặc cảnh báo chưa được định tuyến. Hãy đọc cuộc hội thoại của lượt chạy trước. Nếu agent nói đã phát cảnh báo, kiểm tra rằng Slack đang bật cho **Agent alerts** trong **More → Workspace settings → Notifications**, ngưỡng là **High** hoặc thấp hơn, và bot CloudThinker có trong kênh.
+  </Accordion>
+  <Accordion title="Quá nhiều cảnh báo">
+    Dịch vụ hay biến động vượt 20% gần như mỗi ngày. Sửa phần hướng dẫn: tăng tỷ lệ phần trăm, thêm mức tăng tối thiểu theo đô la (ví dụ "and at least $50 above its average"), hoặc nêu tên các dịch vụ cần bỏ qua.
+  </Accordion>
+  <Accordion title="Lượt chạy thất bại hoặc báo không có dữ liệu chi phí">
+    Mở cuộc hội thoại của lượt chạy để xem lỗi. Thường gặp nhất là kết nối cloud thiếu quyền thanh toán. Kiểm tra các quyền cần thiết trên trang của kết nối, chẳng hạn [AWS](/vi/guide/connections/aws).
+  </Accordion>
+  <Accordion title="Lượt chạy hiển thị Required Approval">
+    Agent đã thử một thao tác ghi và lựa chọn phê duyệt của bạn yêu cầu hỏi ý kiến người duyệt. Mở cuộc hội thoại của lượt chạy và chọn **Approve** hoặc **Decline**. Nếu bạn không mong đợi thao tác ghi, hãy siết chặt phần hướng dẫn.
+  </Accordion>
+  <Accordion title="Lượt chạy cứ ở trạng thái Pending">
+    Lượt chạy đang trong hàng đợi, hoặc cuộc hội thoại đang bận với lượt khác. Lượt chạy bắt đầu khi cuộc hội thoại rảnh. Nếu **Run now** báo "A run is already in progress for this task", hãy chờ lượt chạy đó kết thúc.
+  </Accordion>
+  <Accordion title="Bạn không thể dùng Run now hoặc New automation">
+    Chỉ Admin của workspace mới có thể tạo, chỉnh sửa và chạy automation. Developer và Viewer có thể xem automation và các lượt chạy. Hãy nhờ một Admin, hoặc xin vai trò Admin.
+  </Accordion>
+  <Accordion title="Automation tự tắt">
+    Mười lượt chạy liên tiếp đã thất bại. Khắc phục nguyên nhân bằng **Run now** (vẫn hoạt động), rồi bật lại automation.
+  </Accordion>
+</AccordionGroup>
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="Automations" icon="calendar-check" href="/vi/guide/automation/automations">
+    Thêm trigger webhook, repository và probe vào cùng automation
+  </Card>
+  <Card title="Vận hành tự động" icon="robot" href="/vi/guide/automation/autonomous-agents">
+    Đặt giới hạn cho mọi thứ chạy mà không cần prompt trực tiếp
+  </Card>
+  <Card title="Bất thường chi phí" icon="chart-line" href="/vi/guide/cost-optimization/anomalies">
+    Xem các bất thường mà Optimize đã phát hiện cho bạn
+  </Card>
+  <Card title="Approval Rules" icon="list-check" href="/vi/guide/approvals/rules">
+    Nêu từng thao tác ghi thường lệ và phán quyết dành cho thao tác đó
+  </Card>
+</CardGroup>

@@ -1,0 +1,201 @@
+---
+title: OpenStack
+description: "Kết nối một project OpenStack để agent có thể kiểm kê server, volume, network và quota, phát hiện lãng phí và sai lệch cấu hình, và chạy các thay đổi đã được phê duyệt"
+icon: "/images/icons/openstack.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
+
+Kết nối cloud OpenStack của bạn để các agent CloudThinker có thể kiểm kê server, volume, network, image, flavor và quota, phát hiện lãng phí và security group mở, và thực hiện thay đổi thông qua Approvals của bạn. Kết nối đăng nhập vào Keystone (dịch vụ Identity của OpenStack) bằng **tên người dùng và mật khẩu**, giới hạn trong một project ở một region.
+
+## Điều kiện tiên quyết
+
+- Địa chỉ Keystone v3 và các endpoint trong catalog (Nova, Neutron, Cinder, Glance, Placement) với hostname công khai truy cập được từ internet, vì các lệnh chạy trên cloud của CloudThinker. Dùng `https`: `http` vẫn hoạt động nhưng gửi mật khẩu không mã hóa. Nếu đứng sau firewall, hãy cho phép các egress IP của CloudThinker. Tài liệu này không công bố danh sách egress IP của CloudThinker: hãy hỏi đầu mối liên hệ CloudThinker của bạn, hoặc [liên hệ chúng tôi](https://cloudthinker.io/contact). Nếu catalog liệt kê hostname nội bộ, xem các trường ghi đè endpoint trong [Chi tiết kết nối](#chi-tiết-kết-nối).
+- Người dùng Keystone đăng nhập **chỉ bằng mật khẩu**. Application credential và đăng nhập liên kết (federated) không được hỗ trợ, và Keystone không được áp quy tắc đa yếu tố cho người dùng này.
+- **Người dùng Keystone riêng** có role trên project bạn muốn kiểm tra. Xem [Quyền yêu cầu](#quyền-yêu-cầu).
+- Tên project, tên domain của người dùng và của project, và region.
+- Quyền admin của cloud, hoặc một admin có thể tạo người dùng và gán role cho người dùng đó.
+
+<Info>
+Mỗi workspace chứa một kết nối OpenStack, và kết nối đó bao phủ một project trong một region. Với nhiều project hoặc region hơn, hãy [tạo một workspace cho mỗi project](/vi/guide/workspaces#tạo-workspace). Dùng một người dùng riêng với mật khẩu ngẫu nhiên dài.
+</Info>
+
+## Thiết lập
+
+<Steps>
+  <Step title="Tìm các giá trị đăng nhập">
+    Trong dashboard OpenStack (Horizon), mở **Project → API Access** và nhấn **Download OpenStack RC File** (Identity API v3). Hoặc hỏi quản trị viên cloud của bạn. File này liệt kê auth URL, tên project, tên người dùng, tên domain và region, dùng cùng các tên `OS_*` như form của CloudThinker. File RC hỏi mật khẩu khi bạn source file và không lưu mật khẩu. Nếu bạn dùng `clouds.yaml`, các giá trị tương tự nằm trong `auth:`, và region là `region_name`.
+  </Step>
+  <Step title="Tạo hoặc chọn người dùng Keystone">
+    Dùng một người dùng riêng cho CloudThinker và gán role `reader` trên project. Với tư cách admin của cloud, thay `<domain>` và `<project>` bằng giá trị của bạn (`Default` là domain trên hầu hết các cloud):
+
+    ```bash
+    openstack user create --domain <domain> --password-prompt cloudthinker
+    openstack role add --user cloudthinker --user-domain <domain> \
+      --project <project> --project-domain <domain> reader
+    ```
+
+    **Trạng thái thành công:** `openstack role assignment list --user cloudthinker --names` hiển thị `reader` trên project của bạn. Bạn có thể mở rộng role sau nếu muốn agent thực hiện thay đổi.
+  </Step>
+  <Step title="Kiểm tra truy cập từ bên ngoài mạng của bạn">
+    File RC từ bước 1 đăng nhập bằng tài khoản của bạn. Sao chép file, đổi `OS_USERNAME` thành `cloudthinker` (và `OS_USER_DOMAIN_NAME` nếu người dùng đó ở domain khác), rồi trên một máy bên ngoài mạng của bạn, source bản sao, nhập mật khẩu của `cloudthinker` khi được hỏi và chạy:
+
+    ```bash
+    source cloudthinker-openrc.sh
+    openstack token issue
+    openstack server list
+    ```
+
+    **Trạng thái thành công:** `token issue` in ra một token có thời điểm `expires`, và `server list` in ra các server của bạn (hoặc một bảng trống) mà không bị timeout. CloudThinker chạy cùng lệnh `openstack token issue` để kiểm tra kết nối, nên nếu lệnh thất bại ở đây, lệnh cũng sẽ thất bại trong CloudThinker.
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Trên thanh bên, nhấn **More → Workspace settings → Connections**, rồi ở tab **Builtin Connections** chọn **OpenStack** và điền các trường trong [Chi tiết kết nối](#chi-tiết-kết-nối). Để trống năm trường ghi đè endpoint trừ khi service catalog của bạn không đầy đủ. Nhấn **Connect**.
+
+    **Trạng thái thành công:** kết nối hiển thị **Connecting** và **Verifying**, rồi trạng thái **Connected**. CloudThinker yêu cầu một token từ Keystone để chứng minh thông tin xác thực hoạt động.
+  </Step>
+</Steps>
+
+## Chi tiết kết nối
+
+| Trường | Bắt buộc | Mô tả | Ví dụ |
+|-------|----------|-------------|---------|
+| **OS_AUTH_URL** | Có | Địa chỉ Keystone v3. Đường dẫn kết thúc bằng `/v3` | `https://openstack.example.com:5000/v3` |
+| **OS_USERNAME** | Có | Tên người dùng Keystone | `cloudthinker` |
+| **OS_PASSWORD** | Có | Mật khẩu của người dùng đó | `********` |
+| **OS_PROJECT_NAME** | Có | Project mà mọi yêu cầu được giới hạn trong đó | `production` |
+| **OS_USER_DOMAIN_NAME** | Có, điền sẵn | Domain chứa người dùng. Mặc định là `Default` | `Default` |
+| **OS_PROJECT_DOMAIN_NAME** | Có, điền sẵn | Domain chứa project. Mặc định là `Default` | `Default` |
+| **OS_REGION_NAME** | Có, điền sẵn | Region trong service catalog của bạn. Chữ cái, chữ số, `_` và `-`, tối đa 64 ký tự. Mặc định là `RegionOne` | `RegionOne` |
+| **OS_INTERFACE** | Có, điền sẵn | **Public endpoint** (mặc định), **Internal endpoint** hoặc **Admin endpoint**. Giữ **Public endpoint**. Chỉ chọn **Internal endpoint** hoặc **Admin endpoint** nếu các URL đó trong catalog truy cập được từ internet qua allowlist của bạn; nếu không kết nối sẽ bị timeout | **Public endpoint** |
+| **OS_VERIFY_SSL** | Có, điền sẵn | **Verify SSL certificate** (mặc định) hoặc **Skip SSL verification** | **Verify SSL certificate** |
+
+Năm trường tùy chọn bỏ qua Keystone catalog cho từng dịch vụ: **OS_IMAGE_ENDPOINT_OVERRIDE** (Glance), **OS_COMPUTE_ENDPOINT_OVERRIDE** (Nova), **OS_NETWORK_ENDPOINT_OVERRIDE** (Neutron), **OS_VOLUMEV3_ENDPOINT_OVERRIDE** (Cinder) và **OS_PLACEMENT_ENDPOINT_OVERRIDE** (Placement). Mỗi trường nhận một URL `http` hoặc `https` đầy đủ.
+
+Để kiểm tra bạn có cần chúng không, chạy `openstack catalog list` và xác nhận mọi URL `public` đều phân giải được từ bên ngoài mạng của bạn. Chỉ đặt ghi đè cho dịch vụ có URL không phân giải được.
+
+<Warning>
+Không có trường nào cho certificate authority tùy chỉnh. Với cloud dùng chứng chỉ tự ký, **Skip SSL verification** là cách duy nhất để kết nối, và tùy chọn này loại bỏ khả năng bảo vệ trước việc ai đó mạo danh cloud của bạn. Chỉ dùng cho cloud thử nghiệm.
+</Warning>
+
+## Quyền yêu cầu
+
+Keystone có sẵn ba role mặc định: `admin`, `member` và `reader`. OpenStack mô tả `reader` là quyền chỉ đọc trong một project, và `member` bao gồm `reader`.
+
+| Bạn muốn agent | Role trên project |
+|--------------------|---------------------|
+| Kiểm kê và rà soát project | `reader` |
+| Dừng, khởi động lại, đổi kích thước hoặc xóa tài nguyên | Một role tùy chỉnh mà policy file của cloud cho phép với từng hành động (khuyến nghị), hoặc `member`. Xem bảng bên dưới |
+| Trả lời câu hỏi trên tất cả project | Không được hỗ trợ: giữ một project cho mỗi workspace. Lệnh gọi liên project thường cần `admin`, quyền mà kết nối này không nên có (xem cảnh báo bên dưới) |
+
+`member` cũng cho phép agent tạo server, network và volume, vượt quá các thay đổi mà agent thực hiện. Để áp dụng quyền tối thiểu, hãy tạo một role tùy chỉnh và chỉ cho phép các policy sau:
+
+| Thay đổi được phê duyệt | Policy |
+|-----------------|--------|
+| Dừng, khởi động lại, đổi kích thước, xóa server (Nova) | `os_compute_api:servers:stop`, `os_compute_api:servers:reboot`, `os_compute_api:servers:resize`, `os_compute_api:servers:delete` |
+| Xóa volume (Cinder) | `volume:delete` |
+| Xóa image (Glance) | `delete_image` |
+| Xóa network (Neutron) | `delete_network` |
+
+Đơn vị vận hành cloud của bạn đưa role vào policy file của từng dịch vụ (Nova, Cinder, Glance, Neutron) và triển khai ở đó. Một mục trong policy của Nova có dạng như sau:
+
+```yaml
+"os_compute_api:servers:stop": "role:cloudthinker-ops"
+```
+
+Xem [tài liệu tham khảo policy của Nova](https://docs.openstack.org/nova/latest/configuration/policy.html). Dù theo cách nào, agent chỉ có thể xóa tài nguyên do project sở hữu, không phải image dùng chung hoặc công khai hay network dùng chung.
+
+<Warning>
+Trong hầu hết các bản triển khai, role `admin` mặc định thực chất có hiệu lực trên toàn cloud, kể cả khi bạn chỉ gán role đó trên một project. Đừng cấp role này cho kết nối. Hãy để các câu hỏi liên project cho người có quyền admin.
+</Warning>
+
+<Tip>
+Bắt đầu với `reader`. Policy mặc định ẩn một số chi tiết chỉ dành cho admin khỏi role này, chẳng hạn hypervisor và host mà server chạy trên đó. Kiểm tra những gì cloud của bạn trả về trước khi dựa vào kết quả để rà soát.
+</Tip>
+
+## Khả năng của agent
+
+| Khả năng | Agent có thể làm gì |
+|------------|--------------------|
+| **Kiểm kê** | Liệt kê server, volume, network, subnet, image, flavor, project và service catalog, và xem chi tiết từng mục. Liệt kê mọi project thường cần `admin` |
+| **Nhàn rỗi và không dùng** | Đánh dấu các ứng viên điều chỉnh kích thước dựa trên kích thước flavor, trạng thái nguồn và thời điểm khởi chạy, và tìm volume chưa gắn được tạo hơn 30 ngày trước (theo `created_at` của volume). Số liệu CPU chỉ được dùng nếu cloud của bạn chạy Telemetry (Ceilometer hoặc Gnocchi). Nếu không, ứng viên chỉ dựa trên flavor, trạng thái nguồn và thời điểm khởi chạy |
+| **Quota** | Hiển thị mức sử dụng quota cho instance, core, RAM, volume, gigabyte và network, và đánh dấu mục nào trên 80% |
+| **Dung lượng** | Xem xét flavor và, với `admin` theo policy mặc định, hypervisor |
+| **Sai lệch network** | Đánh dấu các rule security group mở cho `0.0.0.0/0` |
+| **Thay đổi được phê duyệt** | Dừng, khởi động lại, đổi kích thước hoặc xóa server, và xóa volume, image hoặc network |
+
+Ngưỡng 30 ngày và 80% là mặc định. Nêu một con số khác trong câu hỏi, chẳng hạn `volumes unattached and older than 90 days`.
+
+Thao tác đọc chạy mà không cần hỏi. Mọi thay đổi đều đi qua [Approvals](/vi/guide/approvals/overview) trước.
+
+<ApprovalDefault />
+
+### Xác minh kết nối
+
+```text
+Summarize my OpenStack project: servers, volumes, networks, images, and quota use
+```
+
+Kết quả gồm số lượng từng loại tài nguyên và mức sử dụng quota của project, với các quota trên 80% được nêu rõ.
+
+### Ví dụ prompt
+
+```text
+Which volumes are unattached, and how large is each one?
+Which security group rules allow traffic from 0.0.0.0/0?
+Which quotas in my project are above 80% used?
+```
+
+## Khắc phục sự cố
+
+<Accordion title="Failed to connect to OpenStack">
+Keystone không cấp token. Thông báo không nói lý do, nên hãy chạy `openstack token issue` với cùng các giá trị từ bên ngoài mạng của bạn, như ở [bước 3](#thiết-lập), và đọc lỗi:
+
+- `401` hoặc `The request you have made requires authentication`: kiểm tra tên người dùng, mật khẩu, tên project, cả hai tên domain, và người dùng có role trên project.
+- Timeout hoặc `Unable to establish connection`: địa chỉ không truy cập được từ internet.
+- Lỗi SSL hoặc chứng chỉ: chứng chỉ không được tin cậy. Chỉ chọn **Skip SSL verification** cho cloud thử nghiệm.
+</Accordion>
+
+<Accordion title="OS_AUTH_URL must be a Keystone v3 URL">
+Địa chỉ không kết thúc bằng `/v3`, hoặc chứa thông tin xác thực, query string hay fragment. Sao chép `OS_AUTH_URL` từ file openrc của bạn.
+</Accordion>
+
+<Accordion title="OS_REGION_NAME must contain only letters, digits, '_', '-' (max 64 chars)">
+Region chứa dấu cách hoặc ký tự khác. Sao chép tên region đúng như trong service catalog của bạn.
+</Accordion>
+
+<Accordion title="An endpoint override must be an http(s) URL with a host">
+Trường ghi đè tùy chọn chứa giá trị không phải URL đầy đủ. Thông báo nêu tên trường. Nhập một URL như `https://image.example.com`, hoặc xóa trường đó.
+</Accordion>
+
+<Accordion title="Invalid OpenStack connection configuration">
+**OS_AUTH_URL** đang trống. Nhập địa chỉ Keystone v3 và kết nối lại.
+</Accordion>
+
+<Accordion title="Connection 'openstack' already exists. Only one instance is allowed.">
+Workspace này đã có một kết nối OpenStack. Chỉnh sửa kết nối đó, hoặc ngắt kết nối trước.
+</Accordion>
+
+<Accordion title="403 Forbidden với câu hỏi liên project">
+Câu hỏi liên project thường cần role `admin`. Thay vào đó hãy hỏi về project của bạn. Xem cảnh báo trong [Quyền yêu cầu](#quyền-yêu-cầu) trước khi cấp `admin`.
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Dùng địa chỉ https**: CloudThinker chấp nhận địa chỉ Keystone `http`, nhưng khi đó mật khẩu được truyền đi không mã hóa.
+- **Giữ kiểm tra chứng chỉ**: chỉ dùng **Skip SSL verification** cho cloud thử nghiệm có chứng chỉ tự ký.
+- **Thu hồi tại nguồn**: vô hiệu hóa người dùng Keystone, hoặc gỡ role được gán trên project.
+- **Lên kế hoạch đổi mật khẩu**: mật khẩu mới làm hỏng kết nối cho đến khi bạn nhập mật khẩu đó vào CloudThinker. Mỗi workspace chỉ chứa một kết nối OpenStack, nên không thể thay tại chỗ khi kết nối còn hoạt động bình thường: khi kết nối hiển thị **Error**, hãy nhập mật khẩu mới bằng **Replace credentials**. Để đổi trước thời điểm đó, hãy ngắt kết nối rồi kết nối lại, thao tác này chạy lại Discovery, đặt **Allow writes** về bật, và bạn cần kiểm tra Rule vẫn trỏ tới kết nối. Xem [Xoay vòng thông tin xác thực](/vi/guide/connections/overview#xoay-vòng-thông-tin-xác-thực). Nếu Keystone của bạn áp dụng hết hạn mật khẩu, hãy miễn trừ cho người dùng này.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Kết nối" icon="plug" href="/vi/guide/connections/overview">
+    Xem mọi dịch vụ bạn có thể kết nối và cách trạng thái kết nối hoạt động.
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Quyết định thay đổi OpenStack nào được chạy, chờ người duyệt hay bị từ chối.
+  </Card>
+</CardGroup>

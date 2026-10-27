@@ -1,78 +1,81 @@
 ---
-title: Cách Pulse hoạt động
-description: "Tìm hiểu cách Pulse biến sự kiện giám sát thô thành các cluster có thứ tự ưu tiên qua pipeline tám giai đoạn gồm dedup, suppression, và AI triage"
+title: Tổng quan về Pulse
+description: "Tìm hiểu cách Pulse lọc bỏ cảnh báo nhiễu, gom các sự kiện liên quan thành cluster và chỉ chuyển những vấn đề cần xử lý sang bước phân loại sự cố."
 icon: wave-pulse
 ---
 
-Pulse nhận sự kiện từ mọi nguồn đã kết nối — CloudTrail, GuardDuty, Datadog, và nhiều hơn — loại bỏ nhiễu, và chỉ hiển thị các cluster xứng đáng với sự chú ý của bạn. Mỗi cluster được xếp hạng theo mức độ nghiêm trọng và leo thang thành sự cố chỉ với một cú nhấp.
-
-<Frame>
-  <img src="/images/pulse/01-pulse-main-feed.jpg" alt="Feed chính của Pulse hiển thị bảng điều khiển pipeline với 13K sự kiện thô giảm xuống 510 tín hiệu và 40 cluster, cùng danh sách cluster active được xếp hạng theo mức độ nghiêm trọng" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Pulse giảm 13K sự kiện thô xuống 40 cluster có thể hành động — trực tiếp, trong một giao diện</p>
-
-Stack giám sát của bạn đã phát hiện bất thường. Vấn đề là khối lượng: kỹ sư tốn nhiều thời gian phân loại luồng cảnh báo hơn là sửa các vấn đề thực sự. Pulse đứng trước mọi nguồn và quyết định điều gì xứng đáng với sự chú ý của bạn, để bạn mở một danh sách cluster có thứ tự ưu tiên thay vì sáu dashboard.
+Pulse là lớp phát hiện của [Resolve](/vi/guide/incident/overview), module ứng phó sự cố của CloudThinker. Pulse nhận mọi cảnh báo từ các công cụ của bạn, lọc bỏ nhiễu, gom phần còn lại thành cluster và chỉ chuyển những cluster cần xử lý sang bước phân loại, nhờ vậy một sự cố ngừng dịch vụ chỉ hiện thành một mục thay vì hàng trăm lần gọi người trực.
 
 ## Cách hoạt động
 
-Mỗi sự kiện đến Pulse đều trải qua cùng một pipeline tám giai đoạn trước khi trở thành thứ bạn nhìn thấy.
+**Raw event** là một thông báo từ một nguồn, chẳng hạn một CloudWatch alarm hoặc một Datadog monitor. **Signal** là sự kiện đã vượt qua bước lọc nhiễu. **Cluster** là nhóm các signal liên quan mà Pulse coi là một vấn đề.
 
 ```mermaid
-flowchart TD
-    A[Raw Event] --> B[Normalize]
-    B --> C[Deduplicate]
-    C --> D{Suppress?}
-    D -- yes --> E[Stored · hidden]
-    D -- no --> F[Persist]
-    F --> G[Correlate into Cluster]
-    G --> H[AI Classify]
-    H --> I{Actionable?}
-    I -- Critical / High --> J[Incident + RCA]
-    I -- no --> K[Notification only]
+flowchart LR
+    A["Sự kiện thô"] --> B["Lọc nhiễu"]
+    B -->|bị loại| X["Được đếm, không hiện thành việc cần làm"]
+    B --> C["Cluster"]
+    C --> D["Phân loại từng signal"]
+    D -->|cluster có signal cần xử lý| E["Phân loại sự cố"]
+    E --> F["Sự cố"]
 ```
 
-1. **Nhận** — Một sự kiện đến từ bất kỳ nguồn nào đã kết nối: một AWS poller nhận phát hiện GuardDuty, một tin nhắn Slack kích hoạt từ kênh cảnh báo, hoặc Datadog webhook đăng cảnh báo.
-2. **Chuẩn hóa** — Một collector theo nguồn dịch sự kiện thô thành dạng tín hiệu chung, trích xuất tiêu đề, mức độ nghiêm trọng, danh mục, ID tài nguyên, và dấu thời gian bất kể nguồn gốc.
-3. **Loại bỏ trùng lặp** — Một fingerprint SHA-256 được tính từ nguồn, loại, tài nguyên, và phút timestamp của tín hiệu. Nếu một sự kiện giống hệt đã đến trong giờ qua, số đếm dedup của tín hiệu hiện tại tăng lên thay vì tạo hàng mới.
-4. **Suppression** — Tín hiệu đi qua các lớp suppression theo thứ tự ưu tiên; nếu bất kỳ lớp nào kích hoạt, tín hiệu được lưu dưới dạng suppressed và ẩn khỏi feed. Xem [Clusters & Suppression](/vi/guide/pulse/clusters) để biết từng lớp hoạt động như thế nào.
-5. **Lưu trữ** — Tín hiệu được ghi với trạng thái suppressed cuối cùng, mức độ nghiêm trọng, và các trường đã trích xuất. Tín hiệu suppressed được giữ trong 90 ngày — bật **Show suppressed** để xem những gì đã bị lọc.
-6. **Tương quan** — Trong cửa sổ 15 phút, Pulse nhóm các tín hiệu cùng tài nguyên, dịch vụ, hoặc mô hình tiêu đề vào một cluster. Chín cảnh báo EC2 trở thành một cluster với chín thành viên.
-7. **Phân loại** — Một mô hình AI gán danh mục, mức độ nghiêm trọng chuẩn, tóm tắt một dòng, và phán quyết khả năng hành động — liệu điều này có đáng tạo sự cố không.
-8. **Định tuyến** — Tín hiệu mức độ Nghiêm trọng và Cao, cộng với bất kỳ tín hiệu nào được đánh dấu có thể hành động, tự động leo thang: một sự cố liên kết được tạo và phân tích nguyên nhân gốc rễ bắt đầu. Mọi thứ khác được gửi dưới dạng thông báo.
+1. **Tiếp nhận.** Sự kiện đến từ webhook, từ các dịch vụ AWS được thăm dò định kỳ, và từ các kênh Slack hoặc Microsoft Teams bạn chọn. Webhook đến ngay khi được gửi. Dịch vụ AWS được thăm dò theo lịch; [Kết nối nguồn Pulse](/vi/guide/pulse/setup) liệt kê các chu kỳ.
+2. **Lọc nhiễu.** Bốn bước kiểm tra chạy theo thứ tự, và bước đầu tiên khớp sẽ loại bỏ sự kiện. Xem [lọc nhiễu](/vi/guide/pulse/clusters#lọc-nhiễu).
+3. **Gom cluster.** Pulse gắn signal vào một cluster đang mở gần đây có signal cùng resource ID hoặc tiêu đề, hoặc nếu không có thì cùng service. [Cách signal được gắn vào cluster](/vi/guide/pulse/clusters#tín-hiệu-gia-nhập-cluster-như-thế-nào) trình bày đầy đủ quy tắc.
+4. **Phân loại.** Sau khi signal vào cluster, CloudThinker phân loại signal đó: một nhóm (compute, network, security, deploy, communication, cost hoặc data, trùng với các giá trị của bộ lọc nhóm), một mức độ nghiêm trọng, và signal có cần xử lý hay không.
+5. **Phân loại sự cố.** Cluster có signal cần xử lý sẽ được chuyển sang bước phân loại sự cố. CloudThinker khớp cluster với một sự cố đang mở, mở lại sự cố đã đóng khi cùng lỗi quay lại, hoặc mở sự cố mới.
 
-## Những gì bạn có thể làm
+Bản thân Pulse chỉ tiếp nhận, lọc nhiễu và gom nhóm. Mọi thứ từ bước phân loại sự cố trở đi thuộc về [Resolve](/vi/guide/incident/overview).
 
-| Tính năng | Mô tả | Tìm hiểu thêm |
+Pulse vẫn tiếp tục phát hiện và gom nhóm cảnh báo dù công tắc **On duty** ở đầu trang **Resolve → Investigation** đang bật hay ở trạng thái **Paused**. Khi **Paused**, cluster cần xử lý vẫn được ghi nhận thành sự cố với trạng thái **Open**, nhưng CloudThinker không tự phân loại hay điều tra sự cố đó. **Send to triage** vẫn chạy khi có người nhấn. [Điều gì bắt đầu một cuộc điều tra](/vi/guide/incident/settings#điều-gì-khởi-động-một-cuộc-điều-tra) trình bày đầy đủ các quy tắc.
+
+## Làm việc trên trang Pulse
+
+Mở **Resolve → Pulse**. Phần đầu trang hiển thị phễu trực tiếp từ sự kiện thô đến cluster, cùng bộ chọn khoảng thời gian (**Last 1 hour** đến **Last 30 days**). Khoảng thời gian áp dụng cho mọi làn, kể cả **Needs you**: cluster chỉ hiện nếu có signal nằm trong khoảng đó, nên hãy mở rộng khoảng thời gian để tìm cluster cũ chưa ai xử lý. Một hàng làn cho phép chọn cluster bạn muốn xem:
+
+| Làn | Hiển thị gì | Dùng để |
 |---|---|---|
-| Kết nối nguồn tín hiệu | Kết nối AWS poller, kênh Slack và Teams, và webhook bên thứ ba vào Pulse | [Pulse Setup](/vi/guide/pulse/setup) |
-| Xem xét cluster và suppression | Xem cách các tín hiệu liên quan được nhóm và kiểm tra những gì đã bị tắt | [Clusters & Suppression](/vi/guide/pulse/clusters) |
-| Leo thang thành sự cố | Đề bạt bất kỳ cluster nào thành sự cố đầy đủ với phân tích nguyên nhân gốc rễ tự động | [Resolve](/vi/guide/incident/overview) |
-| Đo lường giảm nhiễu | Theo dõi tỷ lệ suppression, thời gian giải quyết cluster, và chuyển đổi tín hiệu | [Pulse Analytics](/vi/guide/pulse/analytics) |
+| **Needs you** | Cluster mức critical hoặc high đang chờ người xử lý (xem bên dưới). | Bắt đầu ca trực tại đây. |
+| **Active** (mặc định) | Cluster ở trạng thái **Active**: có nhiều hơn một signal. | Xem mọi thứ đang diễn ra. |
+| **Forming** | Cluster ở trạng thái **Forming**: hiện mới có một signal. | Phát hiện sớm vấn đề mới. |
+| **Routed** | Cluster thuộc một sự cố đang mở, bất kể trạng thái. | Kiểm tra những gì một sự cố đã nắm. |
+| **Resolved** | Cluster đã đóng. | Xem lại những gì đã xong. |
+| **All** | Mọi cluster trong khoảng thời gian. | Tìm kiếm lịch sử. |
 
-## Khái niệm chính
+Cluster mức critical hoặc high nằm trong **Needs you** khi thỏa một trong hai điều kiện:
 
-Bảng điều khiển pipeline trong thanh bên trái hiển thị tất cả bốn giai đoạn dưới dạng phễu trực tiếp:
+- Cluster ở trạng thái **Forming**, chưa ai xác nhận hay nhận xử lý, và không thuộc sự cố đang mở nào.
+- Bước phân loại sự cố của cluster thất bại và đang chờ **Retry**.
 
-| Giai đoạn | Ý nghĩa của số đếm |
-|---|---|
-| **Raw events** | Mọi sự kiện được nhận — trước bất kỳ lọc nào |
-| **Signals** | Sự kiện đã loại bỏ trùng lặp, chuẩn hóa. Phân tích mức độ nghiêm trọng cho thấy những gì đang active |
-| **Clusters** | Các nhóm tương quan. "grouped from 510 · 189 suppressed" cho thấy bao nhiêu đã bị tắt |
-| **Incidents** | Cluster đã được leo thang — liên kết trực tiếp đến danh sách sự cố |
+Các làn có phần trùng nhau. Cluster đã routed cũng hiện trong **Active** hoặc **Forming** theo trạng thái, và cluster nằm trong **Needs you** vì chưa ai nhận cũng hiện trong **Forming**. Cluster nằm ở đó vì bước phân loại thất bại thì có thể ở trạng thái **Active**.
+
+Thu hẹp bất kỳ làn nào bằng bộ lọc mức độ nghiêm trọng, nguồn và nhóm, hoặc bằng **Search signals...**. Nhấn vào một cluster để mở bảng chi tiết, nơi bạn có thể **Acknowledge**, giao cho người khác, **Escalate**, **Attach to incident...** hoặc **Resolve**. [Cluster](/vi/guide/pulse/clusters) giải thích từng thao tác.
+
+Để kiểm tra một nguồn mới có hoạt động không, hãy làm theo [Gửi cảnh báo thử nghiệm](/vi/guide/pulse/setup#kết-nối-một-nguồn) trên trang thiết lập.
+
+## Khi Pulse trống hoặc yên ắng
+
+| Bạn thấy gì | Ý nghĩa | Cách làm |
+|---|---|---|
+| **No signals yet** kèm nút **Connect a source** | Chưa có gì đến workspace này. | Làm theo [Kết nối nguồn Pulse](/vi/guide/pulse/setup). |
+| **No signals yet** kèm nút **Manage sources** | Đã có webhook nhưng chưa có sự kiện nào đến. | Gửi một cảnh báo thử nghiệm từ công cụ nguồn. |
+| Một banner như **No new signals in 2h**, cho biết nguồn có thể đang ngừng | Không có gì đến trong hơn một giờ. Banner hiển thị đã bao lâu. | Nhấn **Check sources** và tìm nền tảng được đánh dấu **Needs attention**. |
+| **Nothing needs you** | Không có cluster mức critical hoặc high nào chờ người xử lý. | Chuyển sang **Active**. Nguồn chủ yếu gửi cảnh báo mức low hoặc info sẽ không bao giờ lấp đầy **Needs you**. |
 
 ## Bước tiếp theo
 
 <CardGroup cols={2}>
-  <Card title="Clusters & Suppression" icon="layer-group" href="/vi/guide/pulse/clusters">
-    Hiểu cách tín hiệu được nhóm và cách nhiễu được lọc
+  <Card title="Kết nối nguồn Pulse" icon="plug" href="/vi/guide/pulse/setup">
+    Gửi những cảnh báo đầu tiên vào Pulse và xác nhận chúng đã đến.
   </Card>
-  <Card title="Setup" icon="gear" href="/vi/guide/pulse/setup">
-    Kết nối AWS, Slack, Teams, và nguồn webhook bên thứ ba
+  <Card title="Làm việc với cluster" icon="layer-group" href="/vi/guide/pulse/clusters">
+    Tìm hiểu vòng đời cluster, cách lọc nhiễu và mọi thao tác trên cluster.
   </Card>
-  <Card title="Analytics" icon="chart-bar" href="/vi/guide/pulse/analytics">
-    Đo lường giảm nhiễu, thời gian giải quyết cluster, và tỷ lệ chuyển đổi
+  <Card title="Pulse Analytics" icon="chart-line" href="/vi/guide/pulse/analytics">
+    Đo lượng nhiễu Pulse loại bỏ và tốc độ đóng cluster.
   </Card>
-  <Card title="Resolve" icon="arrow-right" href="/vi/guide/incident/overview">
-    Xem cách Pulse cung cấp cho sự cố, RCA, runbooks, và memory
+  <Card title="Phân tích nguyên nhân gốc" icon="magnifying-glass" href="/vi/guide/incident/root-cause-analysis">
+    Xem điều gì xảy ra sau khi bước phân loại mở sự cố.
   </Card>
 </CardGroup>

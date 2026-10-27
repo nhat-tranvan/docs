@@ -1,108 +1,149 @@
 ---
-title: Xử lý CAPTCHA khi đăng nhập
-description: "Cấu hình CAPTCHA cho tài khoản Pentest dùng mật khẩu và kiểm tra phạm vi đã kiểm thử khi thử thách chặn đăng nhập."
-tag: "Beta"
+title: Xử lý đăng nhập có CAPTCHA
+description: "Cấu hình tùy chọn CAPTCHA để pentest đăng nhập được bằng mật khẩu, rồi xác nhận lượt chạy thực sự kiểm thử phía sau trang đăng nhập."
 icon: key
 ---
 
-Cấu hình CAPTCHA khi tài khoản [Pentest](/vi/guide/security/pentest) cần vượt qua thử thách để đăng nhập. Lưu tài khoản không chứng minh rằng lần chạy đã truy cập được các trang bảo vệ.
+Nếu trang đăng nhập của ứng dụng hiện CAPTCHA (reCAPTCHA, hCaptcha hoặc Cloudflare Turnstile), lượt chạy [pentest](/vi/guide/security/pentest) không đăng nhập được bằng mật khẩu đã lưu cho đến khi bạn cho CloudThinker biết cách vượt qua, và khi không có test key, bypass hay fallback tự động, lượt đăng nhập thất bại và lượt chạy kết thúc ở trạng thái **Failed**. Trang này trình bày bốn cách xử lý và cách kiểm tra lượt đăng nhập đã thực sự thành công.
 
-## Điều kiện cần
+## Chọn cách xử lý
 
-- Ứng dụng Pentest đã đăng ký và quyền chỉnh sửa người dùng thử nghiệm.
-- Tài khoản thử nghiệm riêng dùng phương thức **Password**.
-- Quyền cấu hình CAPTCHA của ứng dụng thử nghiệm nếu dùng test keys.
-- Quản trị viên đã bật CAPTCHA fallback và cấu hình công cụ giải cần thiết nếu dùng fallback tự động.
+| Cách xử lý | Dùng khi | Đặt trong biểu mẫu | Bạn cần gì |
+| --- | --- | --- | --- |
+| **Target test keys** | Bạn kiểm thử môi trường staging hoặc test do bạn kiểm soát | **Customer bypass** = **Target test keys** | Test key của nhà cung cấp CAPTCHA đã cài cả trong widget đăng nhập lẫn bộ xác minh phía máy chủ |
+| **Bypass header** | Ứng dụng của bạn đã bỏ qua CAPTCHA khi có một header và secret cụ thể | **Customer bypass** = **None** trong biểu mẫu, rồi đặt header qua chat | Tên header, và một Admin của workspace để lưu secret dưới dạng thông tin xác thực `CAPTCHA_BYPASS_` |
+| **Automated fallback** (không thay đổi mục tiêu) | Bạn không thay đổi được mục tiêu | **Customer bypass** = **None**, **Automated fallback** = **Allow for this identity** | **CAPTCHA solver enabled** được bật cho toàn bộ CloudThinker của bạn. Cách này vẫn có thể thất bại |
+| **[Session token](/vi/guide/security/pentest#thêm-người-dùng-thử-nghiệm)** thay cho mật khẩu | Không cách nào ở trên dùng được, đăng nhập cần MFA, hoặc trang đăng nhập nằm ở domain khác | Một test user **Session token** riêng, không dùng biểu mẫu mật khẩu | Một request `GET` đã đăng nhập, sao chép dưới dạng cURL từ tab Network của trình duyệt |
+
+Target test keys là cách đáng tin cậy nhất. Automated fallback chỉ là nỗ lực tốt nhất và được đặt theo từng test user, nên bạn có thể cho phép fallback song song với bypass để làm phương án dự phòng.
+
+### Automated fallback xử lý được gì
+
+Fallback không dùng dịch vụ giải CAPTCHA nào. Fallback chạy trong cùng phiên trình duyệt với lượt đăng nhập, trong một hạn chót giải nằm trong hạn chót đăng nhập.
+
+| Nhà cung cấp | Fallback |
+| --- | --- |
+| **reCAPTCHA v2**, **hCaptcha** | Nỗ lực tốt nhất. Thử thách chọn ô ảnh và kéo thả được gửi tới AI vision model mà CloudThinker được cấu hình |
+| **reCAPTCHA v3** | Nỗ lực tốt nhất, trong trình duyệt, chỉ khi trang cung cấp reCAPTCHA action. Nếu không thì không hỗ trợ |
+| **Cloudflare Turnstile** | Nỗ lực tốt nhất, trong trình duyệt. Không gửi ảnh nào |
+
+Fallback tắt cho đến khi **CAPTCHA solver enabled** được bật. Thiết lập này áp dụng cho cả một CloudThinker, không phải một workspace hay organization, nên hãy hỏi bộ phận hỗ trợ CloudThinker, hoặc người vận hành CloudThinker cho công ty bạn. Target test keys và bypass header không gửi ảnh thử thách đi đâu cả.
+
+## Trước khi bắt đầu
+
+- Một ứng dụng pentest đã đăng ký và quyền sửa test user của ứng dụng đó. Xem [Chạy pentest](/vi/guide/security/pentest).
+- Một **test user**: tài khoản dành riêng trong ứng dụng của bạn để pentest đăng nhập, bằng username và mật khẩu. Hãy dùng tài khoản tạo riêng cho kiểm thử, không bao giờ dùng tài khoản của người dùng thật. Tên nút thêm test user tùy theo vị trí bạn đang đứng: xem [Thêm test user](/vi/guide/security/pentest#thêm-người-dùng-thử-nghiệm).
+- Với test key hoặc bypass header: quyền truy cập cấu hình CAPTCHA của ứng dụng mục tiêu.
+- Với bypass header: một Admin của workspace có thể thêm [thông tin xác thực](/vi/guide/credentials) có key bắt đầu bằng `CAPTCHA_BYPASS_`, ví dụ `CAPTCHA_BYPASS_STAGING`, với giá trị là secret bypass.
 
 ## Cấu hình đăng nhập
 
 <Steps>
-  <Step title="Mở tài khoản dùng mật khẩu">
-    Mở **Settings → Test users** của ứng dụng, rồi chọn **Add test user** hoặc **Add authentication**. Chọn **Password** và nhập thông tin tài khoản.
+  <Step title="Mở biểu mẫu mật khẩu">
+    Mở **Cyber**, chọn ứng dụng trong **Apps**, vào **Settings** và tìm **Test identities**. Nhấn **Add authentication** và chọn **Password**.
 
-    Nhập **Login URL (optional)** nếu cần. Trang đăng nhập phải nằm trong mục tiêu và phạm vi đã lưu. Mở **CAPTCHA options (optional)**.
-  </Step>
-  <Step title="Chọn tùy chọn CAPTCHA">
-    Đặt **Customer bypass** là **None** nếu chưa có ngoại lệ trên ứng dụng. Với môi trường thử nghiệm đã cài test keys, chọn **Target test keys**.
+    Nhập username và mật khẩu. Đặt **Login URL (optional)** là trang có biểu mẫu đăng nhập nếu đó không phải trang khởi đầu của ứng dụng. URL phải cùng origin với mục tiêu của ứng dụng và nằm trong [phạm vi](/vi/guide/security/pentest#thiết-lập-phạm-vi-và-ngữ-cảnh). Trang đăng nhập đặt trên domain SSO hoặc identity provider riêng sẽ bị từ chối, nên với những ứng dụng đó hãy dùng **Session token**. Ví dụ, với mục tiêu `https://staging.shop.com`, `https://staging.shop.com/login` dùng được còn `https://auth.shop.com/login` bị từ chối.
 
-    Chọn **CAPTCHA provider** và nhập sitekey công khai đã cài ở mục **Installed test sitekey**. Giữ secret dùng để xác minh trên máy chủ ứng dụng.
-
-    Ở **Automated fallback**, chọn **Allow for this identity** hoặc **Disable for this identity**. Cho phép ở đây không bật fallback nếu cài đặt CloudThinker đã tắt tính năng này.
+    Mở rộng **CAPTCHA options (optional)**.
 
     <Frame>
-      <img src="/images/security/cyber/14-captcha-options.png" alt="Tùy chọn bypass và fallback cho tài khoản dùng mật khẩu." />
+      <img src="/images/security/cyber/14-captcha-options.png" alt="Tùy chọn Customer bypass và Automated fallback cho test user dùng mật khẩu." />
     </Frame>
-    <p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Tùy chọn CAPTCHA cho tài khoản dùng mật khẩu.</p>
   </Step>
-  <Step title="Lưu và kiểm tra lần chạy">
-    Nhấn **Save login**, rồi chạy pentest theo yêu cầu. Đọc kết quả đăng nhập trước khi coi các trang bảo vệ là đã kiểm thử.
+  <Step title="Đặt Customer bypass">
+    Chọn một giá trị trong **Customer bypass**:
 
-    **Kết quả:** lần chạy chứng minh quyền truy cập sau đăng nhập và xác nhận truy cập ẩn danh bị từ chối. Chỉ lưu tài khoản hoặc hoàn thành CAPTCHA chưa đủ.
+    - **None**: không có ngoại lệ phía mục tiêu. Lượt chạy dựa vào automated fallback nếu được phép.
+    - **Target test keys**: chọn **CAPTCHA provider** (reCAPTCHA v2, reCAPTCHA v3, hCaptcha hoặc Cloudflare Turnstile) và dán sitekey công khai từ widget đăng nhập vào **Installed test sitekey**. Test secret tương ứng ở lại trên máy chủ của bạn. CloudThinker không bao giờ cần đến secret đó. reCAPTCHA v3 không có test key luôn vượt qua, nên với v3 hãy nhập sitekey staging và hạ ngưỡng điểm trong bộ xác minh staging, hoặc dùng **Bypass header**.
 
-    CAPTCHA chưa giải được sẽ chặn kiểm thử sau đăng nhập. Sửa cấu hình hoặc gắn **Session token** đã xác minh trước lần chạy tiếp theo.
+    <Frame>
+      <img src="/images/security/cyber/15-captcha-test-keys.png" alt="Tùy chọn CAPTCHA với Target test keys được chọn, hiện trường provider và installed test sitekey." />
+    </Frame>
+
+    - **Bypass header**: biểu mẫu hiện các trường **Header name** và **Bypass secret**, nhưng lưu header bypass từ biểu mẫu luôn bị từ chối. Thay vào đó, lưu test user với **None**, đảm bảo thông tin xác thực `CAPTCHA_BYPASS_` trong [Trước khi bắt đầu](#trước-khi-bắt-đầu) đã tồn tại, rồi nhờ CloudThinker đặt qua chat, ví dụ: "Set a header bypass for the qa-member test user on the Shop staging app, header `X-QA-Bypass`, using credential CAPTCHA_BYPASS_STAGING." Bạn phải là Admin của workspace. CloudThinker trả lời bằng chính sách CAPTCHA đã cập nhật của test user đó, cho biết loại bypass nhưng không bao giờ hiện secret. Mục tiêu của bạn phải chấp nhận header này từ trước, và mật khẩu vẫn phải đăng nhập được.
+  </Step>
+  <Step title="Đặt Automated fallback">
+    Chọn **Allow for this identity** hoặc **Disable for this identity** trong **Automated fallback**. Mặc định: **Allow for this identity**.
+
+    Allow chỉ có hiệu lực khi **CAPTCHA solver enabled** đang bật cho CloudThinker của bạn. Allow không bật được bộ giải. Chọn **Disable for this identity** nếu bạn không muốn ảnh thử thách của user này bị gửi tới AI model.
+  </Step>
+  <Step title="Lưu và chạy">
+    Nhấn **Save login**. CloudThinker lưu test user dùng mật khẩu mà không đăng nhập, nên việc lưu không chứng minh được lượt đăng nhập hoạt động.
+
+    Không có bài kiểm tra riêng cho đăng nhập của test user dùng mật khẩu. Việc kiểm tra diễn ra ở đầu lượt chạy pentest: nhấn **Run pentest** và bắt đầu một lượt chạy. Bước đăng nhập mặc định có hạn chót 60 giây, nên trong khoảng một phút bạn biết được kết quả. Bộ phận hỗ trợ CloudThinker, hoặc người vận hành CloudThinker cho công ty bạn, có thể đổi hạn chót này trong khoảng từ 20 đến 120 giây.
+
+    **Trạng thái thành công:** lượt chạy chứng minh được nó tải được một trang bảo vệ khi đã đăng nhập, rồi tiếp tục kiểm thử trong run workbench. Nếu không chứng minh được lượt đăng nhập, lượt chạy dừng sớm và kết thúc ở **Failed**, nên lượt đăng nhập thất bại không bao giờ bị coi là bài kiểm thử chỉ ẩn danh. Chỉ coi các route bảo vệ là đã kiểm thử khi lượt chạy đã vượt qua bước đăng nhập.
   </Step>
 </Steps>
 
-## Chọn ngoại lệ trên ứng dụng
+## Test key của nhà cung cấp
 
-| Customer bypass | Điều kiện |
-| --- | --- |
-| **None** | Không có ngoại lệ trên ứng dụng; fallback đã bật có thể thử hoàn thành CAPTCHA |
-| **Bypass header** | Ứng dụng đã xác thực header và secret riêng để bỏ qua CAPTCHA; mật khẩu vẫn phải đăng nhập được. Nhờ quản trị viên thiết lập chính sách thông qua cấu hình thông tin xác thực được bảo vệ |
-| **Target test keys** | Widget và máy chủ xác minh dùng test keys khớp nhau; CloudThinker nhận sitekey công khai đã cài |
+reCAPTCHA v2, hCaptcha và Turnstile công bố test key luôn vượt qua. Cài sitekey vào widget đăng nhập và test secret tương ứng vào phần xác minh phía máy chủ, rồi nhập sitekey vào **Installed test sitekey**.
 
-Form hiển thị **Header name** và **Bypass secret** khi chọn Bypass header. Nếu không lưu được, nhờ quản trị viên cấu hình theo cách được bảo vệ hoặc dùng phiên đăng nhập đã xác minh.
-
-### Test keys theo nhà cung cấp
-
-| Nhà cung cấp | Hướng dẫn |
-| --- | --- |
-| **reCAPTCHA v2** | Cặp test keys của Google bỏ qua thử thách và cho phép xác minh; xem [FAQ về kiểm thử reCAPTCHA](https://developers.google.com/recaptcha/docs/faq) |
-| **reCAPTCHA v3** | Dùng key riêng cho thử nghiệm; điểm có thể khác lưu lượng thật. Key thử nghiệm không bảo đảm đăng nhập thành công; xem [Google FAQ](https://developers.google.com/recaptcha/docs/faq) |
-| **hCaptcha** | Phản hồi từ test sitekey cần test secret tương ứng; xem [hCaptcha test keys](https://docs.hcaptcha.com/#integration-testing-test-keys) |
-| **Cloudflare Turnstile** | Dùng dummy sitekey và test secret tương ứng; secret production từ chối phản hồi thử nghiệm. Xem [kiểm thử Turnstile](https://developers.cloudflare.com/turnstile/troubleshooting/testing/) |
+| Nhà cung cấp | Điều cần biết | Tham khảo |
+| --- | --- | --- |
+| **reCAPTCHA v2** | Cặp test key của Google bỏ qua thử thách và vượt qua bước xác minh | [reCAPTCHA FAQ](https://developers.google.com/recaptcha/docs/faq#id-like-to-run-automated-tests-with-recaptcha.-what-should-i-do) |
+| **reCAPTCHA v3** | Google không công bố test key luôn vượt qua cho v3, chỉ khuyến nghị dùng key riêng để kiểm thử. Điểm có thể khác lưu lượng thật, nên máy chủ của bạn vẫn có thể từ chối lượt đăng nhập. Với v3, nên dùng **Bypass header** hoặc ngưỡng điểm thấp trong bộ xác minh staging | [reCAPTCHA FAQ](https://developers.google.com/recaptcha/docs/faq) |
+| **hCaptcha** | Test sitekey chỉ hoạt động với test secret tương ứng | [hCaptcha test keys](https://docs.hcaptcha.com/#integration-testing-test-keys) |
+| **Cloudflare Turnstile** | Dummy sitekey cần dummy secret tương ứng. Secret production từ chối dummy response | [Turnstile testing](https://developers.cloudflare.com/turnstile/troubleshooting/testing/) |
 
 <Warning>
-  Chỉ dùng test keys trong môi trường thử nghiệm. Chúng có thể loại bỏ khả năng chống bot; đừng thay bảo vệ production để chạy pentest.
+  Test key gỡ bỏ lớp bảo vệ chống bot. Chỉ dùng trong môi trường test, không bao giờ dùng trên production.
 </Warning>
 
-<Frame>
-  <img src="/images/security/cyber/15-captcha-test-keys.png" alt="Chọn nhà cung cấp CAPTCHA và nhập test sitekey công khai đã cài." />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Cấu hình test keys; secret xác minh được giữ trên máy chủ ứng dụng.</p>
+## Lượt chạy đăng nhập xử lý CAPTCHA thế nào
 
-## Hiểu fallback tự động
+1. Lượt chạy mở trang đăng nhập và nhập username và mật khẩu đã lưu.
+2. Nếu bạn đặt customer bypass, lượt chạy áp dụng bypass trước.
+3. Nếu CAPTCHA vẫn xuất hiện và fallback được phép cả cho CloudThinker của bạn lẫn cho test user đó, lượt chạy thử giải trong cùng phiên trình duyệt.
+4. Lượt chạy kiểm tra một trang bảo vệ tải được khi đã đăng nhập. Nếu không chứng minh được, lượt chạy kết thúc ở **Failed** thay vì kiểm thử như khách ẩn danh.
 
-CloudThinker thử bypass đã cấu hình trước. Khi fallback được bật, CloudThinker có thể thử các luồng đăng nhập reCAPTCHA v2, reCAPTCHA v3, hCaptcha và Turnstile được hỗ trợ trong cùng phiên trình duyệt.
+Fallback có thể thất bại với thử thách hình ảnh hoặc bước kiểm tra của nhà cung cấp, và chọn nhà cung cấp không bảo đảm sẽ vượt qua. Nếu đăng nhập cần MFA hoặc một bước khác sau mật khẩu, tùy chọn CAPTCHA không giúp được. Hãy dùng **Session token**.
 
-Thử thách và kiểm tra của nhà cung cấp vẫn có thể từ chối lần thử. Chọn nhà cung cấp không bảo đảm vượt qua mọi thử thách. Fallback có thể tiêu thụ credit của công cụ giải đã cấu hình.
+## Khắc phục sự cố
 
-Các tùy chọn này dành cho đăng nhập bằng mật khẩu. Với luồng khác, chọn phương thức trong [Chạy Pentest](/vi/guide/security/pentest).
+Để xem mọi vấn đề của Cyber ở một chỗ, xem [Khắc phục sự cố Cyber](/vi/guide/security/cyber-troubleshooting).
 
-## Xử lý sự cố
+Lưu test user dùng mật khẩu không bao giờ đăng nhập, nên chỉ lỗi của biểu mẫu (tên header hoặc header bypass bị từ chối, Login URL nằm ngoài mục tiêu) mới hiện khi bạn nhấn **Save login**. Các thông báo về CAPTCHA, timeout và MFA đến từ bước đăng nhập của lượt chạy pentest.
 
 <AccordionGroup>
-  <Accordion title="CAPTCHA chặn đăng nhập">
-    Kiểm tra test keys hoặc bypass trên ứng dụng và khả năng dùng fallback. Dùng phiên đăng nhập đã xác minh nếu không hoàn thành được thử thách.
+  <Accordion title="CAPTCHA blocked this login">
+    Thử thách chưa được giải. Kiểm tra test key hoặc bypass header đã được cài trên mục tiêu, hoặc cho phép automated fallback nếu bộ giải đang bật cho CloudThinker của bạn. Nếu không cách nào hiệu quả, gắn một **Session token**.
   </Accordion>
-  <Accordion title="Fallback không khả dụng">
-    Nhờ quản trị viên kiểm tra cài đặt và công cụ giải cần thiết. **Allow for this identity** không ghi đè cài đặt đã tắt.
+  <Accordion title="CAPTCHA fallback is unavailable">
+    **CAPTCHA solver enabled** đang tắt cho CloudThinker của bạn, hoặc không có AI vision model nào để gọi. **Allow for this identity** không ghi đè được điều đó. Nhờ bộ phận hỗ trợ CloudThinker, hoặc người vận hành CloudThinker cho công ty bạn, bật thiết lập này, hoặc chuyển sang **Target test keys** hay **Bypass header**.
+  </Accordion>
+  <Accordion title="This CAPTCHA flow is not supported">
+    Loại thử thách này lượt chạy không xử lý được. Dùng bypass phía mục tiêu hoặc **Session token**.
+  </Accordion>
+  <Accordion title="Login could not stay within its safety boundary">
+    Lượt đăng nhập chuyển hướng ra ngoài mục tiêu hoặc phạm vi của ứng dụng. Kiểm tra **Login URL (optional)** và thiết lập mục tiêu của ứng dụng.
   </Accordion>
   <Accordion title="Test sitekey không hoạt động">
-    Xác nhận widget và máy chủ dùng test keys khớp nhau cho đúng nhà cung cấp. Nhập sitekey vào CloudThinker không thay đổi cách ứng dụng xác minh.
+    Widget và máy chủ phải dùng test key khớp nhau cho nhà cung cấp bạn đã chọn. Nhập sitekey vào CloudThinker không làm thay đổi bộ xác minh trên máy chủ của bạn, và test sitekey không vượt qua được bước xác minh production.
   </Accordion>
-  <Accordion title="Không lưu được Bypass header">
-    Chính sách header cần cấu hình thông tin xác thực được bảo vệ. Nhờ quản trị viên thiết lập hoặc dùng phiên đăng nhập đã xác minh.
+  <Accordion title="Use a dedicated CAPTCHA bypass header">
+    Tên header là tên dành riêng hoặc không phải tên header hợp lệ. `Authorization`, `Proxy-Authorization`, `Cookie`, `Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `Upgrade`, `TE`, `Trailer`, `Origin` và `Referer` đều bị từ chối, cả trong biểu mẫu lẫn trong chat. Chọn một tên chỉ bypass của bạn dùng, chẳng hạn `X-QA-Bypass`.
+
+    Kể cả với tên hợp lệ, biểu mẫu đăng nhập vẫn từ chối header bypass. Lưu với **None** và đặt header qua chat, như ở bước **Đặt Customer bypass** trong [Cấu hình đăng nhập](#cấu-hình-đăng-nhập).
+  </Accordion>
+  <Accordion title="Login did not finish in time">
+    Lượt đăng nhập, kể cả mọi lần thử giải CAPTCHA, đã vượt hạn chót đăng nhập. Thử lại, hoặc nhờ bộ phận hỗ trợ CloudThinker, hoặc người vận hành CloudThinker cho công ty bạn, nâng hạn chót. Test key hoặc bypass header loại bỏ hoàn toàn thời gian chờ bộ giải.
+  </Accordion>
+  <Accordion title="This login requires MFA or another authentication step">
+    Biểu mẫu mật khẩu không phải bước cuối. Gắn một **Session token** sao chép từ trình duyệt đã đăng nhập.
   </Accordion>
 </AccordionGroup>
 
 ## Bước tiếp theo
 
+Khi một lượt chạy đã chứng minh quyền truy cập sau đăng nhập, hãy xem những gì lượt chạy tìm thấy phía sau trang đăng nhập.
+
 <CardGroup cols={2}>
-  <Card title="Chạy Pentest" icon="crosshairs" href="/vi/guide/security/pentest">
-    Kiểm tra phạm vi, quyền truy cập và cường độ trước khi chạy
+  <Card title="Chạy pentest" icon="crosshairs" href="/vi/guide/security/pentest">
+    Đặt phạm vi, gắn các phương thức đăng nhập khác và chọn cường độ
   </Card>
-  <Card title="Tạo báo cáo Cyber" icon="file-lines" href="/vi/guide/security/cyber-reports">
-    Chia sẻ bằng chứng cùng giới hạn kiểm thử
+  <Card title="Phân loại phát hiện" icon="list-check" href="/vi/guide/security/cyber-findings">
+    Đọc bằng chứng và các khoảng trống trong phạm vi kiểm thử trước khi ưu tiên bản sửa
   </Card>
 </CardGroup>

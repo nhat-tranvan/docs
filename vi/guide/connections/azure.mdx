@@ -1,28 +1,24 @@
 ---
-title: Azure
-description: "Kết nối Microsoft Azure với CloudThinker để vận hành đa cloud, phân tích chi phí, và giám sát tuân thủ"
+title: Microsoft Azure
+description: "Kết nối Microsoft Azure bằng service principal để CloudThinker đọc tài nguyên, rà soát quyền truy cập và báo cáo chi phí trong Optimize."
 icon: "/images/icons/azure.svg"
 ---
 
 import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
 
-Kết nối subscription Azure của bạn để cho phép các agent CloudThinker phân tích chi phí, kiểm tra tuân thủ và quản lý hạ tầng trên Microsoft Azure.
+Kết nối Azure để CloudThinker kiểm kê máy ảo, cluster AKS, cơ sở dữ liệu, storage và mạng, rà soát danh tính và role assignment, đồng thời đọc chi phí từ Azure Cost Management. Azure xác thực bằng **service principal** (một danh tính ứng dụng trong Microsoft Entra ID, kèm client secret), và các role assignment của service principal quyết định CloudThinker xem được những gì.
 
-Azure xác thực bằng **service principal** (đăng ký ứng dụng + client secret + tenant ID); các role assignment của principal xác định những gì mỗi agent có thể đọc.
+## Điều kiện tiên quyết
 
----
+- Một subscription Azure mà bạn có vai trò **Owner** hoặc **User Access Administrator**, để có thể gán role.
+- Quyền tạo app registration trong Microsoft Entra ID: vai trò **Application Developer**, hoặc thiết lập **Users can register applications** đặt là **Yes** trong user settings của Entra ID.
+- Tài khoản của bạn đã đăng ký xác thực đa yếu tố. Security defaults chặn đăng ký ứng dụng nếu chưa có.
 
-## Yêu cầu trước
+### Giới hạn cần biết trước
 
-- Một subscription Azure với quyền Owner hoặc User Access Administrator.
-- Quyền tạo app registration trong Microsoft Entra ID.
-- Đã đăng ký xác thực đa yếu tố cho tài khoản. Security defaults chặn việc đăng ký ứng dụng nếu chưa có.
-
-<Info>
-Reader cộng Cost Management Reader là đủ cho mọi agent chỉ đọc. Chỉ thêm role ghi khi bạn muốn agent thay đổi tài nguyên Azure.
-</Info>
-
----
+- **Chỉ dùng client secret.** Hộp thoại nhận client secret. Không có trường cho certificate hay federated credential.
+- **Mỗi workspace một tenant.** Mỗi workspace có một kết nối Azure, bao phủ mọi subscription mà service principal đọc được trong một tenant. Tenant thứ hai, ví dụ một tenant dev riêng, cần workspace riêng với Rules và cuộc trò chuyện riêng.
+- **Một bộ quy tắc.** Azure là dịch vụ chỉ cho một kết nối, nên **Environment** của nó luôn là **Not set**. Dù sao [Rules phê duyệt](/vi/guide/approvals/rules) cũng không đọc environment. Để xử lý thao tác ghi trên Azure theo cách khác, hãy viết [Rule nêu tên kết nối này](/vi/guide/approvals/rules#rule-gồm-những-gì).
 
 ## Thiết lập
 
@@ -35,14 +31,18 @@ Reader cộng Cost Management Reader là đủ cho mọi agent chỉ đọc. Ch�
         az account set --subscription <subscription-id>
         ```
       </Step>
-      <Step title="Tạo service principal">
+      <Step title="Tạo service principal với Reader">
+        <Warning>
+        Nếu đã có app tên `cloudthinker`, `create-for-rbac` sẽ dùng lại app đó và đặt lại thông tin xác thực của nó, làm hỏng kết nối đang chạy dùng app này. Kiểm tra trước bằng `az ad sp list --display-name cloudthinker`. Nếu lệnh trả về kết quả, hãy chọn tên khác, hoặc thêm secret cho app hiện có bằng `az ad sp credential reset --id <appId> --append`.
+        </Warning>
+
         ```bash
         az ad sp create-for-rbac --name cloudthinker \
           --role Reader \
           --scopes /subscriptions/<subscription-id>
         ```
 
-        Sao chép kết quả. `password` chỉ hiển thị một lần.
+        Sao chép kết quả ngay. Azure chỉ hiển thị `password` một lần. Mặc định secret hết hạn sau một năm. Thêm `--years 2` (hoặc giá trị khác) để thay đổi, và đặt nhắc nhở để [xoay vòng secret](#xoay-vòng-client-secret).
 
         ```json
         {
@@ -60,149 +60,224 @@ Reader cộng Cost Management Reader là đủ cho mọi agent chỉ đọc. Ch�
           --scope /subscriptions/<subscription-id>
         ```
       </Step>
-      <Step title="Thêm kết nối trong CloudThinker">
-        Vào **Connections → Azure** và nhập `appId` vào **APP_ID**, `password` vào **CLIENT_SECRET**, `tenant` vào **TENANT_ID**. Chọn **AZURE_DEFAULT_REGION**, rồi nhấn **Connect**.
+      <Step title="Tùy chọn: bao phủ thêm subscription">
+        Để gán cả hai role cho service principal trên mọi subscription bạn thấy được, hãy lặp qua chúng. Đây là cách được khuyến nghị, vì bạn có danh sách tường minh:
 
-        **Trạng thái thành công:** kết nối hiển thị trạng thái **Connected**.
+        ```bash
+        for SUB in $(az account list --query "[].id" -o tsv); do
+          for ROLE in Reader "Cost Management Reader"; do
+            az role assignment create --assignee <appId> --role "$ROLE" --scope /subscriptions/$SUB
+          done
+        done
+        ```
+
+        Gán ở cấp management group là phương án đánh đổi: tự động bao phủ subscription mới, nhưng cũng bao phủ cả những subscription bạn có thể không muốn CloudThinker đọc. Chỉ dùng khi đó đúng là điều bạn muốn:
+
+        ```bash
+        for ROLE in Reader "Cost Management Reader"; do
+          az role assignment create --assignee <appId> --role "$ROLE" \
+            --scope /providers/Microsoft.Management/managementGroups/<management-group-id>
+        done
+        ```
+      </Step>
+      <Step title="Thêm kết nối trong CloudThinker">
+        Trên thanh bên, nhấn **More → Workspace settings → Connections**, chọn **Microsoft Azure** rồi nhấn **Connect**. Hộp thoại có bốn trường và không có **Alias** hay **Description**, vì Azure chỉ cho phép một kết nối mỗi workspace. Điền như sau, rồi nhấn **Connect**:
+
+        | Kết quả CLI | Giá trị trên portal | Trường trong hộp thoại |
+        |---|---|---|
+        | `appId` | Application (client) ID | **APP_ID** |
+        | `password` | **Value** của client secret | **CLIENT_SECRET** |
+        | `tenant` | Directory (tenant) ID | **TENANT_ID** |
+        | n/a | Region chính của bạn | **AZURE_DEFAULT_REGION** (chọn từ danh sách) |
+
+        **Trạng thái thành công:** kết nối hiển thị **Connecting** và **Verifying**, rồi chuyển sang trạng thái **Connected**. Discovery chạy một lần ở chế độ nền và tiêu tốn credit. Kiểm tra mục **Discovery** trên bảng chi tiết trước khi gửi prompt đầu tiên. Xem [Điều gì xảy ra sau khi bạn kết nối](/vi/guide/connections/overview#điều-gì-xảy-ra-sau-khi-kết-nối).
       </Step>
     </Steps>
   </Tab>
   <Tab title="Azure portal">
     <Steps>
       <Step title="Đăng ký ứng dụng">
-        Vào [Azure Portal](https://portal.azure.com/) → **Microsoft Entra ID → App registrations → New registration**. Đặt tên `cloudthinker`, giữ nguyên loại tài khoản mặc định, rồi nhấn **Register**.
+        Trong [Azure portal](https://portal.azure.com/), vào **Microsoft Entra ID → App registrations → New registration**. Đặt tên `cloudthinker`, giữ loại tài khoản mặc định rồi nhấn **Register**.
       </Step>
-      <Step title="Sao chép các định danh">
-        Ở trang tổng quan của ứng dụng, sao chép **Application (client) ID** và **Directory (tenant) ID**.
+      <Step title="Sao chép các mã định danh">
+        Trên trang tổng quan của app, sao chép **Application (client) ID** và **Directory (tenant) ID**.
       </Step>
       <Step title="Tạo client secret">
-        Vào **Certificates & secrets → New client secret**. Đặt thời hạn 12 tháng rồi nhấn **Add**. Sao chép **Value** của secret ngay lập tức.
+        Vào **Certificates & secrets → New client secret**, đặt thời hạn (180 hoặc 365 ngày là mức cân bằng hợp lý) rồi nhấn **Add**. Sao chép ngay cột **Value**, không phải **Secret ID**. Azure không bao giờ hiển thị lại giá trị này. Đặt nhắc nhở để [xoay vòng secret](#xoay-vòng-client-secret) trước khi hết hạn.
       </Step>
-      <Step title="Gán các role">
-        Vào **Subscriptions → subscription của bạn → Access control (IAM) → Add role assignment**. Gán **Reader** cho app registration, rồi lặp lại với **Cost Management Reader**.
+      <Step title="Gán role">
+        Vào **Subscriptions → subscription của bạn → Access control (IAM) → Add → Add role assignment**. Chọn **Reader** rồi nhấn **Next**. Ở **Members**, chọn **User, group, or service principal**, nhấn **Select members**, tìm `cloudthinker`, chọn nó rồi nhấn **Review + assign**. Lặp lại với **Cost Management Reader**.
       </Step>
       <Step title="Thêm kết nối trong CloudThinker">
-        Vào **Connections → Azure** và nhập client ID vào **APP_ID**, giá trị secret vào **CLIENT_SECRET**, directory ID vào **TENANT_ID**. Chọn **AZURE_DEFAULT_REGION**, rồi nhấn **Connect**.
+        Trên thanh bên, nhấn **More → Workspace settings → Connections**, chọn **Microsoft Azure** rồi nhấn **Connect**. Điền các trường như sau, rồi nhấn **Connect**:
 
-        **Trạng thái thành công:** kết nối hiển thị trạng thái **Connected**.
+        | Giá trị trên portal | Trường trong hộp thoại |
+        |---|---|
+        | Application (client) ID | **APP_ID** |
+        | **Value** của client secret | **CLIENT_SECRET** |
+        | Directory (tenant) ID | **TENANT_ID** |
+        | Region chính của bạn | **AZURE_DEFAULT_REGION** (chọn từ danh sách) |
+
+        **Trạng thái thành công:** kết nối hiển thị **Connecting** và **Verifying**, rồi chuyển sang trạng thái **Connected**. Discovery chạy một lần ở chế độ nền và tiêu tốn credit. Kiểm tra mục **Discovery** trên bảng chi tiết trước khi gửi prompt đầu tiên. Xem [Điều gì xảy ra sau khi bạn kết nối](/vi/guide/connections/overview#điều-gì-xảy-ra-sau-khi-kết-nối).
       </Step>
     </Steps>
   </Tab>
 </Tabs>
 
-<Warning>
-Sao chép client secret ngay sau khi tạo. Azure không hiển thị lại. Chạy `az ad sp credential reset --id <appId>` để cấp secret mới.
-</Warning>
-
 ### Thanh toán theo Microsoft Customer Agreement
 
-Subscription pay-as-you-go mua trực tuyến dùng Microsoft Customer Agreement (MCA). Cost Management trả về `Given subscription doesn't have valid WebDirect/AIRS offer type` cho subscription MCA, nên Optimize đọc chi phí ở scope billing profile.
+Chỉ cần cho Optimize trên subscription theo Microsoft Customer Agreement. Subscription pay-as-you-go mua trực tuyến thường thuộc Microsoft Customer Agreement (MCA). Cost Management từ chối truy vấn ở cấp subscription với các subscription này, kèm lỗi `Given subscription doesn't have valid WebDirect/AIRS offer type`, nên [Optimize](/vi/guide/cost-optimization/overview) đọc chi phí ở cấp billing profile.
 
-Cấp quyền cho service principal ở scope đó: vào **Cost Management + Billing → billing account của bạn → Billing profiles → profile của bạn → Access control (IAM) → Add**, rồi gán **Billing profile reader** cho app registration. Role assignment ở subscription không bao gồm scope thanh toán.
+Để kiểm tra bạn có dùng MCA không, chạy lệnh sau. MCA hiển thị `MicrosoftCustomerAgreement`:
 
----
+```bash
+az billing account list --query "[].{name:displayName, type:agreementType}" -o table
+```
+
+Để cho phép đọc ở cấp billing profile, vào **Cost Management + Billing → billing account của bạn → Billing profiles → profile của bạn → Access control (IAM) → Add** và gán **Billing profile reader** cho app `cloudthinker`. Role assignment ở cấp subscription không áp dụng cho phạm vi billing. Để xác nhận, mở Optimize và kiểm tra chi phí Azure đã tải lên.
 
 ## Chi tiết kết nối
 
-| Trường | Mô tả | Ví dụ |
-|-------|-------------|---------|
+| Trường | Nhập gì | Ví dụ |
+|-------|---------------|---------|
 | **APP_ID** | Application (client) ID của app registration | `00000000-0000-0000-0000-000000000000` |
-| **CLIENT_SECRET** | Giá trị secret từ Certificates & secrets | — |
+| **CLIENT_SECRET** | Giá trị secret từ **Certificates & secrets** | n/a |
 | **TENANT_ID** | Directory (tenant) ID của Microsoft Entra ID | `00000000-0000-0000-0000-000000000000` |
-| **AZURE_DEFAULT_REGION** | Region mặc định cho các lệnh Azure CLI | `East US` |
+| **AZURE_DEFAULT_REGION** | Region mặc định cho các lệnh Azure CLI, chọn từ danh sách tên hiển thị. Mặc định là **East US**, Azure CLI gọi là `eastus`. | `East US` |
 
-Subscription không phải là một trường của kết nối. CloudThinker tự phát hiện mọi subscription mà service principal đọc được.
+Không có trường subscription. CloudThinker làm việc với mọi subscription mà service principal đọc được. Nếu đọc được nhiều hơn một, Optimize sẽ yêu cầu bạn **Choose an Azure billing scope** ở lần mở đầu tiên.
 
----
+## Quyền yêu cầu
 
-## Quyền cần thiết
+| Role | Phạm vi | Mở khóa |
+|------|-------|-----------------|
+| **Reader** | Subscription | Kiểm kê tài nguyên, rà soát role và policy, kiểm tra tình trạng, và metric Azure Monitor |
+| **Cost Management Reader** | Subscription | Chi phí, dự báo và phát hiện về chi phí trong Optimize |
+| **Billing profile reader** | Billing profile MCA | Optimize trên subscription theo Microsoft Customer Agreement |
+| **Contributor** | Subscription hoặc resource group | Tùy chọn. Cho phép CloudThinker thay đổi tài nguyên. Xem [Quyền ghi](#quyền-ghi). |
 
-| Role | Scope | Cho phép |
-|------|-------|--------|
-| **Reader** | Subscription | Kiểm kê tài nguyên, kiểm tra bảo mật, phân tích hiệu năng |
-| **Cost Management Reader** | Subscription | Chi tiêu, dự báo và khuyến nghị chi phí của Optimize |
-| **Billing profile reader** | Billing profile MCA | Optimize cho subscription Microsoft Customer Agreement |
-| **Contributor** | Subscription | Tùy chọn. Thao tác ghi tài nguyên có cổng phê duyệt |
-
-Chỉ Reader thì không có dữ liệu chi phí. Reader cấp `*/read`, còn truy vấn Cost Management là một POST action không khớp với `*/read`.
+Chỉ có Reader thì không trả về dữ liệu chi phí. Reader cấp `*/read`, còn truy vấn Cost Management là thao tác POST mà `*/read` không bao gồm.
 
 <Tip>
-Chỉ gán Contributor khi bạn muốn agent thay đổi tài nguyên. Mọi lệnh ghi vẫn chờ bạn phê duyệt trong chat.
+Bắt đầu với Reader và Cost Management Reader. Khi cần thay đổi, hãy ưu tiên role dựng sẵn hẹp như **Virtual Machine Contributor**, giới hạn trong một resource group, thay vì Contributor trên toàn subscription.
 </Tip>
-
----
 
 ## Khả năng của agent
 
-Sau khi kết nối, [CloudThinker](/vi/guide/agents/overview) có thể phân tích và tối ưu tài nguyên Azure của bạn.
+CloudThinker chạy các lệnh Azure CLI chỉ đọc mà không cần hỏi. Thay đổi tuân theo mô hình [Quyền ghi](#quyền-ghi).
 
-| Lĩnh vực | Khả năng trên Azure |
-|-------|-------------------|
-| **Chi phí** | Phân tích chi phí, right-sizing VM, khuyến nghị Reserved Instance, tối ưu tài nguyên |
-| **Bảo mật** | Phát hiện từ Security Center, kiểm tra Microsoft Entra ID, kiểm tra tuân thủ, vi phạm chính sách |
-| **Cơ sở dữ liệu** | Hiệu năng SQL Database, tối ưu Cosmos DB, tinh chỉnh PostgreSQL |
-| **Kubernetes** | Quản lý cụm AKS, tối ưu container, phân tích workload |
+| Lĩnh vực | CloudThinker làm gì |
+|------|------------------------|
+| **Chi phí** | Đọc chi phí từ Cost Management (trước thuế, kèm đơn vị tiền tệ), tìm tài nguyên không dùng và VM dùng dưới mức |
+| **Danh tính và quản trị** | Rà soát role assignment Azure RBAC và Azure Policy. Reader không bao gồm user, group hay app registration của Microsoft Entra. |
+| **Compute và container** | Kiểm tra VM, App Service và cluster AKS |
+| **Dữ liệu và storage** | Kiểm tra SQL và các cơ sở dữ liệu khác, storage account và bản sao lưu |
+| **Mạng** | Rà soát ranh giới mạng, DNS zone và các Log Analytics workspace được kết nối |
+| **Giám sát** | Đọc metric Azure Monitor, ví dụ CPU của VM, để giải thích đột biến hoặc chọn kích thước tài nguyên |
+| **Thay đổi** | Chỉ chạy lệnh ghi Azure CLI khi **Allow writes** đang bật, role của service principal cho phép, và thiết lập phê duyệt của bạn chấp nhận |
 
-### Kiểm tra kết nối
-
-```text
-Run an Azure account check and list the connected subscriptions and resource groups
-```
-
-### Prompt ví dụ
+### Xác minh kết nối
 
 ```text
-Analyze Azure VM costs over the last 30 days and recommend right-sizing opportunities
-Audit Azure Security Center findings and flag high-severity policy violations
-Check AKS cluster health and report any failing pods or resource pressure
+List the Azure subscriptions and resource groups you can access
 ```
 
----
+Câu trả lời liệt kê tên và ID thật của các subscription.
+
+### Ví dụ prompt
+
+```text
+Which Azure resources look unused, and what did each cost last month?
+Show VMs with low CPU over the last 14 days and suggest a smaller size for each
+List role assignments with Owner or Contributor on the production subscription
+```
+
+## Quyền ghi
+
+**Allow writes** trên bảng chi tiết của kết nối quyết định agent có được thay đổi gì trong Azure hay không. Mặc định switch này bật, nhưng Reader và Cost Management Reader không thay đổi được gì, nên Azure từ chối mọi thao tác ghi cho đến khi bạn cấp thêm quyền.
+
+| Role Azure | Allow writes | Kết quả |
+|---|---|---|
+| Chỉ có role đọc | Bật hoặc tắt | Chỉ đọc. Azure từ chối mọi thay đổi. |
+| Đã cấp role ghi | Tắt | Chỉ đọc. CloudThinker từ chối mọi thay đổi trước khi đến Azure. |
+| Đã cấp role ghi | Bật | Agent có thể đề xuất thay đổi. [Rules và Approval mode](/vi/guide/approvals/overview) quyết định từng thay đổi. |
+
+Để khóa thao tác ghi cả ở phía CloudThinker, mở **Microsoft Azure** trong **More → Workspace settings → Connections** và tắt switch **Allow writes** trên bảng chi tiết.
+
+## Xoay vòng client secret
+
+Azure là dịch vụ chỉ cho một kết nối, nên khi kết nối đang ổn định thì không có biểu tượng bút chì hay hộp thoại **Edit Instance**.
+
+| Khi nào | Cách làm |
+|---|---|
+| Trước khi secret hết hạn | Tạo secret mới, rồi nhấn **Disconnect** trên bảng chi tiết **Microsoft Azure** và kết nối lại bằng giá trị mới. Sau đó xóa secret cũ. |
+| Sau khi hết hạn (kết nối hiển thị **Error**) | Tạo secret mới, rồi nhấn **Replace credentials** trên bảng chi tiết và lưu giá trị mới. |
+
+Xoay vòng sớm tốn công hơn thay một secret đã hết hạn, nhưng đừng để secret hết hạn chỉ để đỡ việc: secret hết hạn đồng nghĩa với gián đoạn cho đến khi bạn thay. Hãy xoay vòng sớm vào lúc ít hoạt động. Kết nối lại sẽ tạo một kết nối mới:
+
+- Agent, automation và Optimize không dùng được Azure trong khoảng giữa lúc ngắt và lúc kết nối lại.
+- Discovery chạy lại và tiêu tốn credit.
+- **Allow writes** trở về trạng thái bật. Tắt lại nếu trước đó bạn đã tắt.
+- Kiểm tra các [Rules](/vi/guide/approvals/rules) nêu tên kết nối Azure vẫn còn liệt kê kết nối.
+
+Để tạo secret mới, chạy `az ad sp credential reset --id <appId> --append`, hoặc dùng **Microsoft Entra ID → App registrations → app của bạn → Certificates & secrets**. Nếu thiếu `--append`, lệnh reset sẽ xóa các secret hiện có và làm hỏng kết nối ngay lập tức.
 
 ## Khắc phục sự cố
 
-<Accordion title="Đăng nhập bị chặn bởi security defaults">
-`az login` hoặc portal trả về `AADSTS530035: Access has been blocked by security defaults`. Security defaults yêu cầu xác thực đa yếu tố trước khi bạn đăng ký ứng dụng. Đăng ký một phương thức tại [aka.ms/mfasetup](https://aka.ms/mfasetup) rồi đăng nhập lại. Cờ `--use-device-code` và `--allow-no-subscriptions` không vượt qua được điều này.
+<Accordion title="Đăng nhập bị security defaults chặn">
+`az login` hoặc portal trả về `AADSTS530035: Access has been blocked by security defaults`. Security defaults yêu cầu xác thực đa yếu tố trước khi bạn đăng ký ứng dụng. Đăng ký một phương thức tại [aka.ms/mfasetup](https://aka.ms/mfasetup) rồi đăng nhập lại. Các cờ `--use-device-code` và `--allow-no-subscriptions` không giúp vượt qua lỗi này.
 </Accordion>
 
 <Accordion title="Xác thực thất bại">
-Kiểm tra APP_ID, CLIENT_SECRET và TENANT_ID. Xác nhận secret chưa hết hạn và app registration nằm trong tenant bạn đã nhập. Kiểm tra không có chính sách conditional access nào chặn service principal đăng nhập.
+**Nguyên nhân:** APP_ID, CLIENT_SECRET hoặc TENANT_ID sai, secret đã hết hạn, hoặc bị conditional access policy chặn. Mã lỗi Microsoft Entra cho biết trường hợp nào:
+
+| Mã | Ý nghĩa | Cách sửa |
+|---|---|---|
+| `AADSTS7000215` | Client secret không hợp lệ | Dán **Value** của secret, không phải **Secret ID**, hoặc tạo secret mới |
+| `AADSTS700016` | Không tìm thấy app trong tenant | Kiểm tra **APP_ID**, và app đã được đăng ký trong tenant bạn nhập |
+| `AADSTS90002` | Không tìm thấy tenant | Kiểm tra **TENANT_ID** |
+
+**Cách sửa:** nếu các giá trị đều đúng, xác nhận không có conditional access policy nào chặn service principal đăng nhập.
 </Accordion>
 
-<Accordion title="Client secret hết hạn">
-Chạy `az ad sp credential reset --id <appId>`, hoặc vào **Microsoft Entra ID → App registrations → ứng dụng của bạn → Certificates & secrets** để tạo secret mới. Cập nhật CLIENT_SECRET trong kết nối.
+<Accordion title="Client secret đã hết hạn">
+**Nguyên nhân:** secret đã đến ngày hết hạn (mặc định một năm khi tạo từ CLI).
+
+**Cách sửa:** tạo secret mới, rồi nhấn **Replace credentials** trên bảng chi tiết **Microsoft Azure** và lưu lại. Xem [Xoay vòng client secret](#xoay-vòng-client-secret).
 </Accordion>
 
-<Accordion title="Optimize không có dữ liệu chi phí">
-Optimize báo **Azure Cost Management is not readable**. Gán **Cost Management Reader** trên subscription. Nếu subscription dùng Microsoft Customer Agreement, gán thêm **Billing profile reader** trên billing profile. Role assignment cần vài phút để lan truyền.
+<Accordion title="Optimize báo Azure Cost Management is not readable">
+**Nguyên nhân:** service principal thiếu quyền đọc chi phí.
+
+**Cách sửa:** gán **Cost Management Reader** trên subscription. Với subscription theo Microsoft Customer Agreement, gán thêm **Billing profile reader** trên billing profile. Role assignment mất vài phút để có hiệu lực, nên hãy thử lại sau đó.
 </Accordion>
 
 <Accordion title="Cost Management trả về 429">
-Subscription mới bị Cost Management giới hạn tần suất rất chặt, và truy vấn trả về `429 Too many requests`. Đây không phải lỗi cấu hình. Chờ vài phút rồi tải lại Optimize.
+**Nguyên nhân:** Cost Management giới hạn tần suất rất chặt với subscription mới, nên truy vấn trả về `429 Too many requests`. Không có gì bị cấu hình sai.
+
+**Cách sửa:** đợi vài phút rồi tải lại Optimize.
 </Accordion>
 
-<Accordion title="Thiếu tài nguyên">
-Kiểm tra role **Reader** đã được gán trên mọi subscription bạn muốn thấy. Tài nguyên trong subscription mà service principal không đọc được sẽ không xuất hiện.
-</Accordion>
+<Accordion title="Thiếu tài nguyên hoặc subscription">
+**Nguyên nhân:** service principal không đọc được subscription đó.
 
----
+**Cách sửa:** gán **Reader** trên mọi subscription bạn muốn thấy. Bước vòng lặp tùy chọn trong tab Azure CLI làm việc này một lần cho tất cả. Role assignment có thể mất khoảng 10 phút để áp dụng, nên hãy chờ trước khi hỏi lại.
+</Accordion>
 
 ## Bảo mật
 
 <ConnectionSecurity />
 
-- **Đặt thời hạn secret** — luôn đặt thời hạn cho client secret và xoay vòng trước khi hết hạn.
-- **Giới hạn scope của role** — gán Reader và Cost Management Reader trên các subscription CloudThinker cần, không mặc định gán ở cấp management group.
-
----
+- **Đặt hạn và xoay vòng secret**: luôn đặt thời hạn cho client secret và [xoay vòng secret](#xoay-vòng-client-secret) trước khi hết hạn.
+- **Giới hạn phạm vi role**: chỉ gán role trên các subscription CloudThinker cần. Xem phần đánh đổi ở bước [bao phủ thêm subscription](#thiết-lập).
 
 ## Liên quan
 
 <CardGroup cols={2}>
-  <Card title="Kết nối AWS" icon="/images/icons/aws.svg" href="/vi/guide/connections/aws">
-    Kết nối Amazon Web Services
+  <Card title="Bắt đầu nhanh với Optimize" icon="chart-line" href="/vi/guide/cost-optimization/quickstart">
+    Xem chi phí Azure và các phát hiện chi phí đầu tiên.
   </Card>
-  <Card title="Agent" icon="shield-check" href="/vi/guide/agents/overview">
-    Agent tập trung vào bảo mật cho tuân thủ Azure
+  <Card title="Tổng quan kết nối" icon="plug" href="/vi/guide/connections/overview">
+    Cách kết nối, kiểm thử và discovery hoạt động.
   </Card>
 </CardGroup>

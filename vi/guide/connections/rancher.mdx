@@ -1,0 +1,176 @@
+---
+title: Rancher
+description: "Kết nối Rancher bằng API key để agent có thể liệt kê cluster, project và node được quản lý, kiểm tra tình trạng và rà soát ai có quyền truy cập"
+icon: "/images/icons/rancher.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối Rancher server để CloudThinker có thể liệt kê các cluster, project và node mà Rancher quản lý, báo cáo tình trạng cluster và mức sẵn sàng của node, và cho biết ai có quyền truy cập Rancher vào một cluster hoặc project. Kết nối dùng một **Rancher API key** (bạn dán **Bearer Token** của nó vào trường **API token**) và **chỉ đọc theo thiết kế**: agent có thể mô tả những gì Rancher quản lý và không thể thay đổi bất cứ thứ gì trong đó.
+
+## Điều kiện tiên quyết
+
+- Rancher 2.8 trở lên, có thể truy cập từ internet qua **HTTPS**. Các lệnh chạy trong CloudThinker cloud. Với Rancher nội bộ, xem [Truy cập dịch vụ riêng tư](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ). Tài liệu này không công bố danh sách egress IP của CloudThinker: hãy hỏi đầu mối liên hệ CloudThinker của bạn, hoặc [liên hệ với chúng tôi](https://cloudthinker.io/contact).
+- Quyền trong Rancher để tạo người dùng và gán cluster role và project role.
+- Tùy chọn: **chứng chỉ PEM** của certificate authority riêng, nếu chứng chỉ của Rancher không được tin cậy công khai.
+
+<Info>
+Mỗi workspace chỉ chứa **một** kết nối Rancher. Để kiểm tra workload, pod và Kubernetes RBAC bên trong một cluster, hãy thêm cả [kết nối Kubernetes](/vi/guide/connections/kubernetes).
+</Info>
+
+## Thiết lập
+
+<Steps>
+  <Step title="Tạo người dùng Rancher chuyên dụng">
+    Thêm một người dùng cho CloudThinker thay vì dùng lại tài khoản của một người. API key bạn tạo ở bước tiếp theo kế thừa quyền truy cập của người dùng này, nên dùng người dùng chuyên dụng sẽ giúp phạm vi luôn rõ ràng và dễ thu hồi.
+
+    1. Mở **☰ → Users & Authentication → Users** và nhấn **Create**. Nhập **Username** như `cloudthinker` và **New Password**. Trong **Global Permissions**, chọn **User-Base** thay vì **Standard User** mặc định, vốn có thể tạo cluster. User-Base chỉ cho phép tài khoản đăng nhập và không gì hơn. Nhấn **Create**.
+    2. Trong mỗi cluster bạn muốn kiểm tra, mở **☰**, chọn cluster trong **Explore Cluster**, rồi mở **Cluster → Cluster and Project Members** ở menu bên trái.
+    3. Trên tab **Cluster Membership**, thêm người dùng với **Cluster Member** (hoặc custom role của bạn).
+    4. Trên tab **Project Membership**, thêm người dùng vào từng project với **Read Only**.
+  </Step>
+  <Step title="Tạo API key">
+    Trong một cửa sổ trình duyệt riêng tư, để phiên admin của bạn vẫn đăng nhập, hãy đăng nhập bằng người dùng đó với mật khẩu từ bước 1. Nếu Rancher yêu cầu mật khẩu mới, hãy đặt một mật khẩu. Mở **user avatar → Account & API Keys** ở góc trên bên phải, và nhấn **Create API Key**.
+
+    - **Expiry**: chọn một ngày phù hợp với lịch xoay vòng của bạn, chẳng hạn 90 ngày. Rancher giới hạn thời hạn này theo cài đặt `auth-token-max-ttl-minutes` của server, bạn có thể kiểm tra trong **☰ → Global Settings → Settings**, và áp dụng giới hạn đó mà không cảnh báo nếu bạn yêu cầu dài hơn. Khi key hết hạn, kết nối chuyển sang **Error**. Tạo key mới và nhập nó bằng **Replace credentials** trên bảng chi tiết, nút này xuất hiện khi kết nối hiển thị **Error**. Xem [Xoay vòng thông tin xác thực](/vi/guide/connections/overview#xoay-vòng-thông-tin-xác-thực).
+    - **Scope**: để là **No Scope**. Key có scope chỉ hoạt động với Kubernetes API của một cluster, mà kết nối này không sử dụng.
+
+    Sao chép **Bearer Token**. Rancher chỉ hiển thị token một lần.
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Trong thanh bên, nhấn **More → Workspace settings → Connections**, rồi trên tab **Builtin Connections** chọn **Rancher**, và điền các trường theo [Chi tiết kết nối](#chi-tiết-kết-nối). Nhấn **Connect**.
+
+    **Trạng thái thành công:** kết nối hiển thị **Connecting** và **Verifying**, rồi trạng thái **Connected**. CloudThinker đọc một cluster từ Rancher để chứng minh API key hoạt động.
+  </Step>
+</Steps>
+
+## Chi tiết kết nối
+
+| Trường | Bắt buộc | Mô tả | Ví dụ |
+|-------|----------|-------------|---------|
+| **Rancher URL** | Có | Địa chỉ HTTPS bạn dùng để đăng nhập. Không có API path, query string, fragment hay thông tin xác thực | `https://rancher.example.com` |
+| **API token** | Có | Bearer Token của API key, không có dấu ngoặc kép, dấu cách hay xuống dòng | `token-abc12:xxxxxxxx` |
+| **CA certificate bundle** | Không | Chứng chỉ PEM của certificate authority riêng, dưới 256 KB, không có private key | `-----BEGIN CERTIFICATE-----...` |
+
+Xác minh TLS luôn bật, vì key đi kèm mọi request. Nếu Rancher dùng CA riêng, hãy dán chuỗi chứng chỉ của CA đó vào **CA certificate bundle**. CloudThinker cũng từ chối chuyển hướng, nên URL phải là địa chỉ mà Rancher trả lời trực tiếp.
+
+## Quyền yêu cầu
+
+Người dùng của API key cần quyền **đọc** cluster, node, project, cùng cluster role binding và project role binding. Chọn một cách:
+
+- **Role tích hợp sẵn:** **Cluster Member** trên mỗi cluster, cộng **Read Only** trên mỗi project (bước 1 của Thiết lập, mục 3 và 4).
+- **Custom role:** custom cluster role bên dưới trên mỗi cluster, thay cho Cluster Member. Rule của role này bao gồm project và project role binding. Chạy kiểm tra bên dưới, và chỉ thêm **Read Only** trên một project nếu kiểm tra đó báo lỗi quyền cho project đó.
+
+Các role:
+
+| Role | Ở đâu | Cấp gì |
+|------|-------|---------------|
+| **Cluster Member** | Mỗi cluster cần kiểm tra | Xem hầu hết tài nguyên cấp cluster. Cũng cho phép người dùng tạo project. Kết nối không bao giờ dùng quyền đó, vì kết nối chỉ gửi thao tác đọc, nhưng một key bị lộ thì có thể. Dùng custom role để có quyền tối thiểu nghiêm ngặt |
+| **Read Only** | Mỗi project cần kiểm tra | Xem mọi thứ trong project, không có tạo, cập nhật hay xóa |
+| **Custom role** | Thay cho Cluster Member | Chỉ các thao tác đọc mà kết nối thực hiện. Tạo nó trong **☰ → Users & Authentication → Role Templates**, trên tab **Cluster** |
+
+Custom role cần một rule:
+
+```yaml
+- apiGroups: ["management.cattle.io"]
+  resources: ["clusters", "nodes", "projects", "clusterroletemplatebindings", "projectroletemplatebindings"]
+  verbs: ["get", "list"]
+```
+
+Để kiểm tra role trước khi dựa vào nó, hãy kết nối, rồi hỏi `Who holds Rancher access to the <project> project on <cluster>?`. Câu trả lời phải liệt kê các binding. Nếu câu trả lời báo lỗi quyền, role không truy cập được project đó.
+
+<Tip>
+Rancher API key không có công tắc chỉ đọc, nên key thấy đúng những gì người dùng của key thấy. Hãy thu hẹp quyền truy cập qua các role của người dùng. Quyền ghi không bao giờ có ích, vì kết nối không có cách nào gửi thay đổi.
+</Tip>
+
+## Những gì kết nối này không thể truy cập
+
+Kết nối chỉ gửi request đọc đến tài nguyên quản lý của Rancher. Những thứ sau vẫn nằm ngoài tầm với ngay cả khi người dùng của API key có thể đọc chúng:
+
+- Secret, kubeconfig, API token và cluster registration token
+- Cloud credential, cài đặt xác thực và cài đặt toàn cục
+- Mọi thay đổi đối với Rancher: tạo, cập nhật, xóa hoặc scale
+- Rancher API `v3` cũ
+
+Nếu bạn yêu cầu agent thay đổi điều gì đó trong Rancher, agent sẽ cho biết kết nối không làm được và không có gì thay đổi.
+
+## Khả năng của agent
+
+| Khả năng | Agent làm gì |
+|------------|----------------|
+| **Kiểm kê cluster** | Liệt kê các cluster mà Rancher quản lý, project và node của chúng |
+| **Tình trạng cluster** | Báo cáo các điều kiện hiện tại của một cluster và mức sẵn sàng của các node |
+| **Ai có quyền truy cập** | Cho biết người dùng, group và service account nào giữ role trên một cluster hoặc project |
+| **Phạm vi project** | Cho biết một project thuộc cluster nào |
+
+Mỗi lần tra cứu trả về một trang tối đa 50 hàng, và agent không thể lấy trang tiếp theo. Khi Rancher không báo tổng số, agent nói "returned 12" thay vì "12 exist", và cho biết khi còn hàng khác. Với số lượng cluster lớn, hãy hỏi theo từng cluster, chẳng hạn `Show node readiness for the prod-sea cluster`. Mỗi khi tin nhắn nhắc đến Rancher, agent truy vấn trực tiếp thay vì dùng lại kết quả từ tin nhắn trước.
+
+### Xác minh kết nối
+
+```text
+Summarize the clusters Rancher manages, their projects, and node health
+```
+
+Bạn nhận được danh sách cluster cùng project của chúng và số node sẵn sàng và chưa sẵn sàng.
+
+### Ví dụ prompt
+
+```text
+Show the health conditions and node readiness of the prod-sea cluster
+Who holds Rancher access to the prod-sea cluster, and is anything broader than it needs to be?
+List the projects on staging-cluster and any nodes that are not ready
+```
+
+## Khắc phục sự cố
+
+<Accordion title="Rancher rejected the API token">
+API key đã hết hạn, bị xóa, hoặc được sao chép không đầy đủ. Rancher chỉ hiển thị Bearer Token một lần, nên hãy tạo key mới trong **Account & API Keys** và cập nhật kết nối.
+</Accordion>
+
+<Accordion title="Rancher accepted the token but it lacks read access to managed clusters">
+API key đăng nhập được, nhưng người dùng của nó không thể đọc cluster. Cấp cho người dùng đó **Cluster Member** (hoặc một custom read role) trên các cluster bạn muốn kiểm tra, rồi kiểm tra lại kết nối.
+</Accordion>
+
+<Accordion title="The Rancher server did not expose the management.cattle.io RK-API">
+RK-API là API quản lý theo kiểu Kubernetes của Rancher, được phục vụ tại `/apis/management.cattle.io/v3`. URL trỏ đến nơi khác thay vì gốc của Rancher server, hoặc phiên bản Rancher cũ hơn 2.8. Kết nối lại với địa chỉ Rancher thuần và kiểm tra phiên bản của bạn.
+</Accordion>
+
+<Accordion title="Could not reach the Rancher server">
+Không có gì trả lời, hoặc địa chỉ chuyển hướng sang nơi khác. Kiểm tra host có thể truy cập từ internet, URL là địa chỉ mà Rancher trả lời trực tiếp, và với CA riêng, bundle chứa CA đã cấp chứng chỉ cho Rancher.
+</Accordion>
+
+<Accordion title="Rancher URL must use HTTPS outside local development">
+Địa chỉ bắt đầu bằng `http://`, nghĩa là API key sẽ bị gửi dưới dạng văn bản thuần. Trên cloud của CloudThinker, `http://` bị từ chối với mọi host, kể cả `localhost`. Phục vụ Rancher qua HTTPS và kết nối lại với URL `https://`.
+</Accordion>
+
+<Accordion title="Invalid Rancher CA certificate bundle or connection configuration">
+Bundle không phải chứng chỉ PEM thuần, hoặc Bearer Token có dấu ngoặc kép, dấu cách hoặc xuống dòng xung quanh. Chỉ dán chuỗi chứng chỉ CA, không bao giờ dán private key, và sao chép lại Bearer Token thành một dòng.
+</Accordion>
+
+<Accordion title="Connection 'rancher' already exists. Only one instance is allowed.">
+Workspace này đã có một kết nối Rancher. Sửa kết nối đó, hoặc ngắt kết nối trước.
+</Accordion>
+
+<Accordion title="Agent báo cáo ít cluster hơn những gì Rancher hiển thị">
+Người dùng của API key không thể thấy phần còn lại, hoặc câu trả lời đến từ một trang kết quả duy nhất. Kiểm tra cluster role của người dùng trước, rồi hỏi về cluster hoặc project cụ thể.
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Thu hẹp qua role.** API key thấy đúng những gì người dùng của nó thấy, nên role của người dùng là cách kiểm soát phạm vi duy nhất của bạn.
+- **Chỉ đọc theo cấu trúc.** Kết nối chỉ có thể gửi request đọc, nên không quyền nào bạn cấp cho phép agent thay đổi Rancher.
+- **Lên kế hoạch cho việc hết hạn.** Mỗi workspace chỉ chứa một kết nối Rancher, nên không thể thay thế tại chỗ khi kết nối đang hoạt động tốt. Hoặc chờ đến **Error** và dùng **Replace credentials**, hoặc xoay vòng sớm bằng cách ngắt kết nối và kết nối lại với key mới. Kết nối lại sẽ chạy lại Discovery và cần kiểm tra rằng Rules vẫn nêu tên kết nối. Xem [Xoay vòng thông tin xác thực](/vi/guide/connections/overview#xoay-vòng-thông-tin-xác-thực).
+- **Thu hồi tại nguồn.** Xóa API key trong **Account & API Keys**, hoặc vô hiệu hóa người dùng, để dừng mọi quyền truy cập qua kết nối này.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Kubernetes" icon="/images/icons/kubernetes.svg" href="/vi/guide/connections/kubernetes">
+    Kiểm tra pod, log, node và RBAC bên trong một cluster
+  </Card>
+  <Card title="Tổng quan kết nối" icon="plug" href="/vi/guide/connections/overview">
+    Cách trạng thái kết nối, kiểm tra và discovery hoạt động
+  </Card>
+</CardGroup>

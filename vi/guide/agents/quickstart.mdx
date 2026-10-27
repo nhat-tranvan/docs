@@ -1,0 +1,188 @@
+---
+title: Bắt đầu nhanh với agent tùy chỉnh
+description: "Xây dựng agent tùy chỉnh trong khoảng 10 phút sau khi đã kết nối AWS: thêm skill runbook, tạo agent, gắn kết nối, thiết lập phê duyệt và kiểm thử."
+icon: rocket
+---
+
+Agent tùy chỉnh là một agent có tên do bạn tạo trong workspace, bên cạnh trợ lý tích hợp sẵn [CloudThinker](/vi/guide/agents/overview), với hướng dẫn và kết nối riêng, và bạn trò chuyện với agent qua `@mention` của nó. Khi đã kết nối AWS, trong khoảng 10 phút bạn sẽ xây dựng một agent, `@ec2-triage`, điều tra tình trạng CPU cao trên các instance EC2 theo runbook của nhóm bạn và hỏi bạn trước khi thay đổi bất cứ thứ gì.
+
+<Info>
+**Bạn cần chuẩn bị**
+
+- Vai trò **Admin** của workspace để làm bước 1 như mô tả (nút **+** trong Skills). Developer có thể làm mọi bước còn lại. Nếu bạn là Developer, hãy tạo cùng skill đó bằng cách gõ `/create-skill` trong chat và cung cấp tên, mô tả và hướng dẫn bên dưới. Xem [skill tùy chỉnh](/vi/guide/skills/custom-skills#tạo-skill).
+- [Kết nối AWS](/vi/guide/connections/aws) đang hiển thị **Connected**. Nếu chưa có, hãy thiết lập trước: 10 phút này không bao gồm bước đó. Role của kết nối cần mô tả được instance và đọc số liệu CloudWatch; policy `ReadOnlyAccess` mà script thiết lập gắn vào đáp ứng cả hai (xem [quyền yêu cầu](/vi/guide/connections/aws#quyền-yêu-cầu)). Bất kỳ kết nối nào khác cũng dùng được: chỉ cần thay tên trong các ví dụ.
+- Gói của bạn còn trống một slot agent tùy chỉnh (Free có 1). Xem [Customize](/vi/guide/agents/customize#tóm-tắt-về-agent-tùy-chỉnh). Trên gói Free, chọn **Light** làm **Model Tier** của agent ở bước 2: Free chỉ chạy Light. Trò chuyện với agent tùy chỉnh trong web chat được tính là chat trực tiếp, nên bài kiểm thử ở bước 5 chạy được trên Free.
+</Info>
+
+<Steps>
+  <Step title="Thêm runbook dưới dạng skill">
+    Skill là một tập hướng dẫn mà agent tuân theo khi tác vụ phù hợp. Mở **More → Workspace settings → Skills**, nhấn nút **+** cạnh **Search skills** (hoặc **New Skill** nếu danh sách trống), rồi chọn **Write skill instructions**. Điền:
+
+    - **Skill name:** `ec2-high-cpu-runbook`
+    - **Description:** `Steps to investigate an EC2 instance with high CPU`
+    - **Instructions:**
+
+    ```markdown
+    # EC2 high CPU runbook
+
+    Use this when someone reports a slow EC2 instance or high CPU.
+
+    1. Check CPUUtilization for the last hour. Above 90% for 15 minutes or more counts as sustained.
+    2. If the instance is a burstable type (t2, t3, t4g), check its credit specification. In standard mode, check CPUCreditBalance: a balance near zero means the instance is throttled.
+    3. Check NetworkIn and DiskReadOps for a traffic spike that started at the same time.
+    4. Recommend one fix, in this order of preference: wait out a short spike, move a burstable instance in standard mode to unlimited mode, then resize. Recommend only; don't apply it. Unlimited mode and resizing both change cost.
+    5. Never reboot an instance tagged env=prod without a person approving it.
+    ```
+
+    Skill định hướng những gì agent làm; skill không chặn bất cứ thứ gì. Quy tắc 5 chỉ là hướng dẫn. Thứ thực sự chặn thao tác ghi là chế độ **Manual** bạn đặt ở bước 4, cùng với các [Rule](/vi/guide/approvals/rules) phê duyệt.
+
+    Nhấn **Create**. Skill mới được bật sẵn và khả dụng trong **Chat**, nơi bạn kiểm thử ở bước 5.
+
+    Skill áp dụng cho mọi agent trong workspace, không chỉ agent `@ec2-triage` bạn tạo tiếp theo, nên CloudThinker cũng tuân theo runbook này khi một cuộc chat hỏi về CPU cao. Xem [Customize](/vi/guide/agents/customize#cách-hoạt-động).
+
+    **Trạng thái thành công:** `ec2-high-cpu-runbook` xuất hiện trong danh sách skill với công tắc bật và **Chat** được chọn trong **Available in**.
+  </Step>
+  <Step title="Tạo agent">
+    Mở **More → Workspace settings → Agents**, nhấn **Create agent** và chọn **Build with form**. Ở bước **Identity**, điền cả bốn trường (trường nào cũng bắt buộc):
+
+    | Trường | Giá trị | Giới hạn |
+    |-------|-------|-------|
+    | **Name** | `EC2 Triage` | 255 ký tự |
+    | **@mention** | `ec2-triage` (đặt một lần, không thể đổi sau) | 63 ký tự |
+    | **Role** | `AWS Compute Specialist` | 255 ký tự |
+    | **Goal** | `Find why an EC2 instance is slow and recommend the safest fix` | 2.048 ký tự |
+
+    **Role** và **Goal** được đặt ở đầu prompt của agent, trước phần **Instructions** bạn thêm tiếp theo, nên agent đọc chúng ở mọi yêu cầu. Hãy giữ chúng ngắn gọn và cụ thể.
+
+    <Frame>
+      <img src="/images/agents/create-custom-agent-dialog-1.png" alt="Hộp thoại Create Custom Agent, bước Identity, với các trường Avatar, Name, @mention, Role và Goal" style={{ maxWidth: '400px' }} />
+    </Frame>
+
+    Nhấn **Next**. Hộp thoại chuyển sang bước **Configuration**. Tại đây, giữ **Model Tier** ở **Pro** (trên Free, chọn **Light**), để **Language** ở **Match the user** (agent trả lời bằng ngôn ngữ trong tin nhắn của bạn), đặt **Learning Mode** thành **Offer** và dán **Instructions** sau:
+
+    <Frame>
+      <img src="/images/agents/create-custom-agent-dialog-2.png" alt="Hộp thoại Create Custom Agent, bước Configuration, với Model Tier, Instructions, Language và Learning Mode" style={{ maxWidth: '400px' }} />
+    </Frame>
+
+    ```text
+    You investigate EC2 performance problems in our AWS account.
+    Always start read-only: describe the instance, then check CloudWatch metrics for the last hour.
+    Report findings as a short table: metric, value, what it means.
+    Never stop, reboot, or resize an instance without saying why first.
+    Use the ec2-high-cpu-runbook skill for high CPU or slow instance questions.
+    ```
+
+    Nêu tên skill trong phần hướng dẫn giúp agent chọn đúng skill. Cách này không ngăn các agent khác dùng skill đó.
+
+    **Offer** hỏi bạn trong chat trước khi lưu một quy trình lặp lại thành skill. Tùy chọn mặc định **Auto** lưu mà không hỏi. Nếu agent đề nghị lưu một quy trình thành skill trong lúc kiểm thử, hãy trả lời không. Xem [Learning Mode](/vi/guide/agents/customize#learning-mode). Nhấn **Next**.
+
+    **Trạng thái thành công:** hộp thoại chuyển sang bước **Connect**.
+  </Step>
+  <Step title="Gắn kết nối cho agent">
+    Ở bước **Connect**, mở tab **Builtin** và nhấn **Add** cạnh kết nối AWS của bạn. **Builtin** liệt kê các kết nối đang hiển thị **Connected** trong **More → Workspace settings → Connections**; **MCP** liệt kê các [MCP server](/vi/guide/connections/mcp) bạn đã thêm. Nhấn **Create Agent**.
+
+    <Frame>
+      <img src="/images/agents/create-custom-agent-dialog-3.png" alt="Hộp thoại Create Custom Agent, bước Connect, với tab Builtin và MCP cùng danh sách kết nối để gắn" style={{ maxWidth: '500px' }} />
+    </Frame>
+
+    Agent chỉ tiếp cận được các kết nối bạn gắn, nên chỉ gắn những gì công việc của agent cần. Bạn có thể thêm sau trong tab **Connections** của agent.
+
+    **Trạng thái thành công:** `EC2 Triage` xuất hiện trong **Custom** tại **More → Workspace settings → Agents**, hiển thị 1 kết nối.
+
+    <Frame caption="Agents: mỗi agent tùy chỉnh có tên, @mention, vai trò, mục tiêu và model tier">
+      <img src="/images/v2/agents-custom.webp" alt="Trang Settings, Agents liệt kê các agent tùy chỉnh với tên, @mention, vai trò, mục tiêu và model tier" />
+    </Frame>
+  </Step>
+  <Step title="Buộc agent hỏi trước mọi thay đổi">
+    Approvals quyết định thao tác ghi (bất kỳ lệnh gọi nào thay đổi thứ gì đó) được chạy, chờ người duyệt hay bị từ chối. Thao tác đọc luôn chạy. Trong bài kiểm thử này, hãy để mọi thao tác ghi chờ bạn.
+
+    <Warning>
+    Workspace mới mặc định ở **Auto**, nơi đánh giá của AI có thể cho thao tác ghi an toàn chạy mà không hỏi. Allow Rule cũng có thể làm vậy khi CloudThinker bật Rule enforcement cho workspace của bạn, vốn tắt theo mặc định. Hãy chuyển chat này sang **Manual** trước khi kiểm thử.
+    </Warning>
+
+    Bắt đầu một chat mới. Điều khiển phê duyệt nằm bên phải ô nhập prompt, cạnh bộ chọn model, và hiển thị chế độ hiện tại của chat, **Manual** hoặc **Auto**. Chat mới bắt đầu theo chế độ của workspace. Mở điều khiển này, hoặc gõ `/` và chọn **Approval**, rồi chọn **Manual**.
+
+    **Trạng thái thành công:** điều khiển phê duyệt hiển thị **Manual**. Thiết lập này chỉ áp dụng cho chat này; chế độ của workspace không đổi. Developer cũng có thể làm bước này.
+
+    Chat mới lại bắt đầu theo chế độ của workspace. Automation dùng chế độ riêng: theo mặc định Rule quyết định trước, AI đánh giá phần còn lại, còn thao tác ghi vẫn cần người duyệt sẽ bị từ chối thay vì chờ. Rule chỉ quyết định khi CloudThinker bật Rule enforcement cho workspace của bạn; trước đó Rule chỉ ghi lại phán quyết mà Rule sẽ đưa ra, và chỉ riêng chế độ Approval quyết định. Xem [Rule ở chế độ preview](/vi/guide/approvals/rules#khắc-phục-sự-cố). Xem [Approvals](/vi/guide/approvals/overview#cấu-hình-mặc-định). Để các thay đổi trên prod luôn chờ người duyệt, hãy thêm một [Rule](/vi/guide/approvals/rules) **Ask first**.
+  </Step>
+  <Step title="Kiểm thử agent">
+    Trong cùng chat đó, mention agent. Gửi một trong các prompt sau.
+
+    Nếu bạn có ID instance, hãy thay ID ví dụ:
+
+    ```text
+    @ec2-triage Instance i-0abc1234def567890 feels slow. Investigate it.
+    ```
+
+    Nếu không có:
+
+    ```text
+    @ec2-triage List my running EC2 instances, pick the one with the highest CPU, and investigate it.
+    ```
+
+    Agent mô tả instance, đọc số liệu CloudWatch của instance, rồi trả lời bằng một bảng số liệu và một cách khắc phục được đề xuất, theo thứ tự runbook của bạn quy định. Câu trả lời tốt có dạng như sau (giá trị của bạn sẽ khác):
+
+    | Số liệu | Giá trị | Ý nghĩa |
+    |---|---|---|
+    | CPUUtilization | Trên 90% trong 40 phút gần nhất | CPU cao kéo dài |
+    | CPUCreditBalance | Gần bằng 0 | Instance burstable đang bị giới hạn hiệu năng |
+
+    Tiếp theo là một đề xuất, chẳng hạn chuyển instance sang unlimited mode, kèm lý do và không áp dụng thay đổi nào.
+
+    Nếu agent muốn thay đổi instance, chat hiển thị thẻ phê duyệt với **Approve** và **Decline**. Nhấn **Decline** nếu bạn chỉ muốn chẩn đoán. Với `ReadOnlyAccess`, agent không thể thay đổi gì ngay cả khi bạn phê duyệt: thẻ cho thấy cơ chế phê duyệt hoạt động, nhưng bản thân thao tác ghi sẽ thất bại trong AWS.
+
+    Nếu CPU hóa ra bình thường, bạn sẽ nhận được một bảng thể hiện điều đó và một đề xuất chờ thêm hoặc tìm ở chỗ khác. Kết quả đó vẫn tính là thành công.
+
+    Với Pro, lượt chạy trừ vào credit thưởng, rồi đến credit premium: credit miễn phí hằng ngày chỉ dành cho chat Light. Trên Free với agent Light, lượt chạy trừ vào credit hằng ngày. Xem [mức sử dụng](/vi/guide/billing/usage#điều-gì-khiến-một-lượt-chạy-tốn-nhiều-hơn).
+
+    **Trạng thái thành công:** câu trả lời của agent hiển thị một dòng tóm tắt hoạt động đã thu gọn có chứa "read 1 skill". Nhấn vào để mở rộng các bước và tìm bước **Load Skill**. Câu trả lời tuân theo các bước trong runbook mà bạn không cần nhắc lại, và không có gì thay đổi trong AWS khi chưa có phê duyệt của bạn.
+  </Step>
+</Steps>
+
+## Dọn dẹp
+
+Nếu đây chỉ là thử nghiệm, hãy xóa agent trong **More → Workspace settings → Agents** (slot được giải phóng ngay; Free có một slot) và xóa skill trong **More → Workspace settings → Skills**. Cho đến khi bạn xóa skill, mọi agent, kể cả CloudThinker, đều tuân theo skill này cho các câu hỏi về CPU cao.
+
+## Khắc phục sự cố
+
+<AccordionGroup>
+  <Accordion title="Nút Create agent bị mờ">
+    Workspace của bạn đã đạt giới hạn agent tùy chỉnh. Di chuột lên nút: tooltip hiển thị **Custom agent limit reached.** kèm liên kết **Upgrade plan**. Xóa một agent không dùng trong **More → Workspace settings → Agents**, hoặc xem [các gói](/vi/guide/billing/pricing).
+  </Accordion>
+  <Accordion title="@mention bị từ chối">
+    @mention phải bắt đầu bằng chữ thường và chỉ dùng chữ thường, số, dấu chấm, dấu gạch dưới và dấu gạch ngang, tối đa 63 ký tự. @mention cũng không được trùng với tên đang được dùng hoặc tên CloudThinker giữ riêng.
+  </Accordion>
+  <Accordion title="@mention không tự động gợi ý">
+    Kiểm tra `EC2 Triage` có xuất hiện trong **Custom** tại **More → Workspace settings → Agents** không. Nếu bạn tạo agent ở tab khác, hãy làm mới trang chat rồi gõ lại `@`.
+  </Accordion>
+  <Accordion title="Thay đổi đã chạy mà không có thẻ phê duyệt">
+    Kiểm tra điều khiển phê duyệt của chat có hiển thị **Manual** không. Ở chế độ Manual, mọi thao tác ghi đều hỏi người duyệt, kể cả thao tác đã có Allow Rule bao phủ, nên thiếu thẻ thường có nghĩa là chat đang ở **Auto**. Allow Rule chỉ quyết định khi CloudThinker bật [Rule enforcement](/vi/guide/approvals/rules#khắc-phục-sự-cố) cho workspace của bạn; hiện nay, **Manual** là cách giữ lại mọi thao tác ghi. Thao tác đọc (describe, list, số liệu) không bao giờ hiển thị thẻ. Xem [Approvals](/vi/guide/approvals/overview).
+  </Accordion>
+  <Accordion title="Agent báo không thể truy cập AWS">
+    Mở agent trong **More → Workspace settings → Agents**, vào tab **Connections** và kiểm tra kết nối AWS đã được gắn. Sau đó kiểm tra bản thân kết nối hiển thị **Connected** trên trang [Connections](/vi/guide/connections/overview).
+  </Accordion>
+  <Accordion title="Câu trả lời bỏ qua runbook">
+    Mở **More → Workspace settings → Skills** và kiểm tra công tắc của skill đang bật và **Chat** được chọn. Sau đó làm cho yêu cầu khớp với mô tả của skill, ví dụ nói "high CPU". Agent chỉ áp dụng skill khi skill phù hợp với tác vụ.
+  </Accordion>
+  <Accordion title="Tôi không thấy nút + hoặc New Skill">
+    Nút **+** và **New Skill** cần vai trò **Admin** của workspace. Với vai trò Developer, hãy gõ `/create-skill` trong chat để tạo skill runbook, hoặc nhờ admin của workspace thêm giúp.
+  </Accordion>
+</AccordionGroup>
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="Skill tùy chỉnh" icon="wand-magic-sparkles" href="/vi/guide/skills/custom-skills">
+    Gắn skill vào Review và Incident, chỉnh sửa bằng AI hoặc tải lên một gói
+  </Card>
+  <Card title="Approval Rules" icon="list-check" href="/vi/guide/approvals/rules">
+    Chỉ định từng thao tác ghi agent được tự chạy và từng thao tác phải chờ người duyệt
+  </Card>
+  <Card title="Automations" icon="calendar-check" href="/vi/guide/automation/automations">
+    Chạy agent theo lịch, webhook hoặc sự kiện repository
+  </Card>
+  <Card title="Customize" icon="sliders" href="/vi/guide/agents/customize">
+    Xem mọi cài đặt bạn có thể thay đổi và vị trí của chúng
+  </Card>
+</CardGroup>

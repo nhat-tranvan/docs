@@ -1,0 +1,147 @@
+---
+title: Chương 4 · Điều phối và kinh tế học hai động cơ
+description: "Thiết kế bàn giao giữa các agent, trạng thái sự cố dùng chung và mô hình chi phí hai động cơ mà bạn đo được ở lưu lượng signal của chính mình."
+icon: diagram-project
+---
+
+*Thiết kế đa agent là một tập các đánh đổi kỹ thuật về ngữ cảnh, credential, độ trễ và chi phí. Chương này đưa ra cơ chế đằng sau kiến trúc tham chiếu và ba con số cho biết việc agent trực 24/7 có tự bù được chi phí hay không.*
+
+## 4.1 Bộ điều phối thực sự làm gì
+
+**Bộ điều phối** (orchestrator) là agent nhận công việc, chia nhỏ và chịu trách nhiệm về kết quả. Bỏ đi ẩn dụ sơ đồ tổ chức, bộ điều phối có năm việc:
+
+| Việc | Ý nghĩa trên thực tế |
+|---|---|
+| **Tiếp nhận** | Biến mục tiêu, sự cố và event thành tác vụ có câu hỏi rõ ràng |
+| **Phân rã và định tuyến** | Quyết định tác vụ cần gì và helper nào xử lý từng phần |
+| **Quản lý ngữ cảnh** | Chỉ cho mỗi helper ngữ cảnh mà tác vụ con của nó cần. Đây là đòn bẩy lớn nhất về chi phí và chất lượng mà bạn có (Chương 2). |
+| **Tích hợp** | Dung hòa những gì các helper tìm thấy thành một kết luận có bằng chứng, kể cả khi chúng bất đồng |
+| **Leo thang** | Chịu trách nhiệm giao tiếp với con người: phê duyệt, thông báo và hồ sơ sự cố |
+
+Helper mở rộng bộ điều phối, không bao giờ cạnh tranh với bộ điều phối. Điều đó cho bạn một dấu vết audit, một bề mặt phê duyệt và một nơi có thể trả lời "hệ thống đang làm gì ngay lúc này?"
+
+Bằng chứng đã công bố cho thấy cả hai chiều (nguồn trong [Phụ lục D](/vi/learn/aio-engineer/appendix-d-sources)). Anthropic báo cáo rằng một hệ thống đa agent (Claude Opus 4 dẫn dắt cùng các helper Claude Sonnet 4) vượt trội một agent Claude Opus 4 đơn lẻ 90,2% trong bài đánh giá nghiên cứu nội bộ, trong khi hệ thống đa agent dùng khoảng 15 lần nhiều token hơn chat. Nhóm Azure SRE Agent của Microsoft đi theo hướng ngược lại, gộp nhiều micro-agent và hơn một trăm công cụ thành một vài agent tổng quát với các công cụ cốt lõi.
+
+Áp dụng cả hai bài học:
+
+- **Chia theo ranh giới credential và lĩnh vực** như cloud, bảo mật, cơ sở dữ liệu và Kubernetes. Những cách chia này tự bù đắp nhờ quyền tối thiểu và độ sâu chuyên môn.
+- **Đừng chia nhỏ hơn nữa.** Mỗi agent thêm vào đều thêm chi phí điều phối, ngữ cảnh trùng lặp và thêm một thứ cần đánh giá.
+
+## 4.2 Bàn giao là hợp đồng
+
+Hệ thống đa agent hiếm khi thất bại vì một helper làm kém. Hệ thống thất bại ở khâu bàn giao. Hãy coi bàn giao là một hợp đồng có kiểu dữ liệu, không phải một tin nhắn chat:
+
+| Trường | Nội dung |
+|---|---|
+| **Mục tiêu** | Câu hỏi cần trả lời hoặc kết quả cần đạt |
+| **Ngữ cảnh có phạm vi** | Những gì helper được thấy, và không gì hơn |
+| **Ngân sách** | Giới hạn về số bước, token và thời gian |
+| **Schema trả về** | Phát hiện kèm con trỏ bằng chứng, mức độ tin cậy và danh sách rõ ràng những gì chưa kiểm tra |
+
+Với kết quả trả về có cấu trúc, bước tích hợp có thứ cụ thể để dung hòa, và dấu vết audit ghi lại ai kết luận gì từ bằng chứng nào. Một chuỗi suy luận dài duy nhất sẽ che mất những thông tin đó.
+
+Từ đó, song song hóa đến một cách tự nhiên. Các tác vụ con độc lập có thể chạy đồng thời để giảm độ trễ, nhưng chỉ khi chúng không thể ghi vào cùng một thứ. Hai helper cùng thay đổi một hệ thống là một race condition.
+
+<Info>
+**TRONG THỰC TẾ: SUBAGENT TRONG CLOUDTHINKER**
+
+CloudThinker dùng một trợ lý tích hợp sẵn, cũng tên là CloudThinker, làm bộ điều phối. Với công việc tập trung, CloudThinker tạo các **subagent tạm thời**: helper ngắn hạn, mỗi helper nhận một mục tiêu có giới hạn và không bao giờ nói chuyện trực tiếp với bạn. Xem [Agent](/vi/guide/agents/overview).
+
+- Trong một cuộc điều tra sự cố, CloudThinker giao các kiểm tra tập trung (log, metric, trace, thay đổi gần đây, dependency) cho subagent và hợp nhất kết quả thành một kết luận. Xem [Điều tra và RCA](/vi/guide/incident/root-cause-analysis).
+- Mặc định, subagent bị từ chối mọi công cụ làm thay đổi hệ thống của bạn. Thay đổi thuộc về bộ điều phối, nơi [Approvals](/vi/guide/approvals/overview) áp dụng.
+- Khi một subagent thất bại, agent cha nhận một mã lỗi cố định, một thông báo ngắn đã được ẩn thông tin nhạy cảm và một hành động tiếp theo được đề xuất, để agent cha có thể phục hồi thay vì đoán:
+
+| Mã | Ý nghĩa | Hành động tiếp theo đề xuất |
+|---|---|---|
+| `CHILD_START_REFUSED` | Subagent không thể bắt đầu với đầu vào này | Đừng thử lại cùng yêu cầu |
+| `CHILD_TIMED_OUT` | Subagent hết thời gian | Thử lại một lần với tác vụ nhỏ hơn |
+| `CHILD_STORE_UNAVAILABLE` | Một dependency lưu trữ thất bại | Thử lại cùng yêu cầu một lần |
+| `CHILD_RUN_FAILED` | Lượt chạy thất bại với một lỗi đã biết | Báo cáo, hoặc thử lại một lần khi lỗi có thể thử lại |
+| `CHILD_INTERNAL_ERROR` | Một lỗi không mong đợi | Đừng thử lại; hãy báo cáo |
+</Info>
+
+## 4.3 Kinh tế học hai động cơ, định lượng
+
+[Leadership Edition](/vi/learn/aio/introduction) đã mô tả mô hình bằng lời: một **động cơ cảm biến** rẻ, luôn bật và một **động cơ xử lý** đắt, chạy theo yêu cầu. Ở đây bạn sẽ tính toán cụ thể.
+
+Thiết kế đơn giản nhất chạy suy luận bằng model tiên tiến nhất trên mọi signal. Với hàng nghìn signal mỗi ngày, mỗi signal một lượt suy luận nhiều bước, hóa đơn model xóa sạch lợi nhuận trước cả lần gia hạn đầu tiên. Chi tiêu model không giới hạn là một trong những nguyên nhân đã được ghi nhận khiến các dự án agent bị hủy. Hai động cơ thay đổi hình dạng của chi phí:
+
+|  | Động cơ cảm biến | Động cơ xử lý |
+|---|---|---|
+| **Chạy** | Liên tục, trên mọi signal | Theo yêu cầu, khi động cơ cảm biến nâng cấp một event |
+| **Công việc** | Tiếp nhận, khử trùng lặp, tương quan, lọc theo chính sách, làm giàu, chấm điểm | Toàn bộ cuộc điều tra: giả thuyết, lệnh gọi công cụ, kế hoạch, xác minh |
+| **Tính toán** | Stream, quy tắc và model nhỏ, rẻ | Model tiên tiến nhất hoặc model fine-tune qua hàng chục bước |
+| **Dạng chi phí** | Gần như phẳng khi lưu lượng signal tăng | Chỉ tăng theo số sự cố được nâng cấp |
+| **Kiểu thất bại** | Bỏ sót vấn đề thật hoặc nâng cấp quá nhiều (tinh chỉnh bằng eval, Chương 7) | Lan man tốn kém (giới hạn bằng ngân sách, Chương 1) |
+
+### Đo tại điểm nối
+
+Ba con số là kinh tế đơn vị của bạn. Đưa chúng lên dashboard ở Chương 8:
+
+| Chỉ số | Công thức | Cho biết điều gì |
+|---|---|---|
+| **Tỷ lệ nâng cấp** | Event được nâng cấp ÷ tổng signal | Động cơ đắt tiền thức dậy thường xuyên đến đâu |
+| **Chi phí mỗi cuộc điều tra** | Chi tiêu động cơ xử lý ÷ số cuộc điều tra | Ngân sách và kỷ luật ngữ cảnh có hiệu quả không |
+| **Chi phí mỗi sự cố được giải quyết** | Tổng chi tiêu (cả hai động cơ) ÷ số sự cố được giải quyết | Việc trực 24/7 có khả thi ở quy mô của bạn không |
+
+Một ví dụ với số tròn giả định (không phải giá của CloudThinker):
+
+| Đầu vào | Giá trị |
+|---|---|
+| Signal mỗi ngày | 20.000 |
+| Tỷ lệ nâng cấp | 0,5%, tức 100 cuộc điều tra mỗi ngày |
+| Chi phí cảm biến | $200 mỗi ngày, cố định |
+| Chi phí mỗi cuộc điều tra | $2, tức $200 mỗi ngày chi cho động cơ xử lý |
+| Sự cố được giải quyết | 80 mỗi ngày |
+| **Chi phí mỗi sự cố được giải quyết** | ($200 + $200) ÷ 80 = **$5** |
+
+Giảm một nửa tỷ lệ nâng cấp xuống 0,25% và chi tiêu động cơ xử lý giảm còn $100, nên chi phí mỗi sự cố được giải quyết giảm về gần $3,75 nếu vẫn bắt được đúng những sự cố thật như trước. Tăng lưu lượng signal lên mười lần ở cùng tỷ lệ nâng cấp và hóa đơn cảm biến gần như không đổi, nhưng chi tiêu động cơ xử lý tăng lên $2.000 mỗi ngày. Đó là lý do tỷ lệ nâng cấp là núm điều chỉnh cần theo dõi.
+
+Đòn bẩy thứ hai trên cùng điểm nối, như một mô hình chung: công việc hằng ngày thường lệ, đã hiểu rõ không cần suy luận tiên tiến nhất. Model nhỏ được fine-tune có thể xử lý các trường hợp có lưu lượng lớn, còn model tiên tiến nhất dành cho các cuộc điều tra mới lạ. Các nhóm trong ngành có quy định thường kết hợp điều này với triển khai tự host để kiểm soát hoàn toàn model. Trong CloudThinker, các đòn bẩy gần nhất là model tier (giữ công việc thường lệ ở **Light**, xem [Mức sử dụng và credit](/vi/guide/billing/usage)) và triển khai tự host hoặc air-gapped, hiện đang ở giai đoạn truy cập sớm qua chương trình đối tác thiết kế ([Tùy chọn triển khai](/vi/guide/deployment/overview)).
+
+<Info>
+**TRONG THỰC TẾ: PULSE VÀ ĐIỀU TRA TRONG RESOLVE**
+
+[Resolve](/vi/guide/incident/overview), module ứng phó sự cố của CloudThinker, cung cấp sẵn cách chia này.
+
+- **Cảm biến: [Pulse](/vi/guide/pulse/overview).** Pulse nhận mọi cảnh báo mà công cụ của bạn gửi, loại nhiễu bằng bốn kiểm tra theo thứ tự (khử trùng lặp, giới hạn tốc độ, snooze và phán quyết nhiễu đã học; xem [lọc nhiễu](/vi/guide/pulse/clusters#lọc-nhiễu)), nhóm các signal liên quan thành cluster, phân loại từng cluster, và ghi nhận cluster cần xử lý thành sự cố với trạng thái **Open**. Pulse dừng ở đó: Pulse không bao giờ phân loại hay điều tra.
+- **Xử lý: [điều tra](/vi/guide/incident/root-cause-analysis).** Điều tra chỉ chạy trên sự cố. Bạn kiểm soát điều gì đánh thức động cơ xử lý bằng **Auto-investigate** và **Only from a minimum severity** trên mỗi webhook trong **Resolve → Integrations**, và công tắc **On duty** trong **Resolve → Investigation**. Xem [Cài đặt Resolve](/vi/guide/incident/settings).
+- **Đo lường.** Mở **Resolve → Insights** và tab **Pulse analysis** ([Phân tích Pulse](/vi/guide/pulse/analytics)). **Signals ingested** là mẫu số của bạn. **Correlation yield** (số signal có cluster được liên kết với sự cố hoặc đã giải quyết, chia cho tổng signal) là con số tích hợp sẵn gần nhất với tỷ lệ nâng cấp; con số này cũng tính cả cluster được giải quyết mà không có sự cố. **Noise suppressed** cho thấy những gì động cơ cảm biến đã lọc bỏ.
+- **Tính chi phí.** Credit không hiển thị theo từng cuộc điều tra. **Admin Settings → Usage**, trong **By Feature**, cho thấy tính năng nào đã dùng credit trong một khoảng thời gian; chia cho số cuộc điều tra trong khoảng đó để có chi phí trung bình mỗi cuộc điều tra ([Mức sử dụng và credit](/vi/guide/billing/usage)).
+- **Giới hạn chi tiêu.** [Giới hạn credit](/vi/guide/billing/credit-limits) đặt ngân sách hằng tháng cho mỗi workspace, với **Throttle** hoặc **Notify only** khi đạt ngưỡng.
+
+Dù đánh giá nền tảng nào, hãy hỏi tỷ lệ nâng cấp và chi phí mỗi sự cố được giải quyết ở một quy mô tham chiếu. Nếu nền tảng không trả lời được, nền tảng đó chưa từng chạy ở quy mô lớn.
+</Info>
+
+## 4.4 Trạng thái: hồ sơ sự cố là sự thật dùng chung
+
+Hệ thống đa agent cần một bản ghi bền vững, chỉ ghi thêm cho mỗi tác vụ. Bản ghi chứa dòng thời gian của signal, giả thuyết, lệnh gọi công cụ, bằng chứng, quyết định, phê duyệt, hành động và xác minh. Mọi agent đọc từ và ghi vào đó. Một người tham gia giữa chừng thấy cùng sự thật mà các agent thấy.
+
+Hãy xây dựng hồ sơ này dưới dạng event log, không phải trạng thái chat có thể thay đổi. Điều đó mang lại ba thứ:
+
+- **Phát lại để đánh giá** (Chương 7): chạy lại một sự cố cũ với model hoặc prompt mới và so sánh.
+- **Tài liệu audit miễn phí** (Chương 6): ai làm gì, dựa trên bằng chứng nào, với sự phê duyệt của ai.
+- **Tiếp tục an toàn sau khi bị sập:** agent bị dừng giữa cuộc điều tra sẽ tiếp tục từ bản ghi thay vì bắt đầu lại.
+
+<Info>
+**TRONG THỰC TẾ: MỘT HỒ SƠ CHO MỖI SỰ CỐ**
+
+Trong Resolve, mỗi sự cố có một hồ sơ điều tra. Mỗi phiên mới, do một người hoặc tự động bắt đầu, thêm các bước của phiên đó vào cùng **Investigation timeline** dưới một dấu mốc phiên. Nếu kết luận thay đổi, dòng thời gian ghi lại một lần sửa đổi nguyên nhân gốc thay vì tạo báo cáo thứ hai, và các phiên trước nằm trong **More actions → Earlier sessions**. Nhấn **Watch live** để theo dõi cuộc hội thoại nơi CloudThinker đang làm việc. Xem [Điều tra và RCA](/vi/guide/incident/root-cause-analysis).
+</Info>
+
+<Tip>
+**ĐIỀU CẦN NHỚ**
+
+Điều phối gồm năm việc: tiếp nhận, định tuyến, phân bổ ngữ cảnh, tích hợp và leo thang. Biến bàn giao thành hợp đồng có kiểu dữ liệu và giữ một hồ sơ sự cố chỉ ghi thêm làm sự thật dùng chung. Coi kinh tế học là đầu vào thiết kế: hai động cơ, đo tại điểm nối, với chi phí mỗi sự cố được giải quyết là con số quyết định việc agent trực 24/7 có hiệu quả ở quy mô của bạn hay không.
+</Tip>
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="Chương 5 · Mô hình mối đe dọa" icon="shield-virus" href="/vi/learn/aio-engineer/chapter-5-threat-model">
+    Vì sao agent vận hành là một bề mặt tấn công, và các lớp phòng thủ kiềm chế rủi ro đó.
+  </Card>
+  <Card title="Tổng quan Pulse" icon="wave-pulse" href="/vi/guide/pulse/overview">
+    Xem cách Resolve lọc cảnh báo trước khi bất kỳ cuộc điều tra nào bắt đầu.
+  </Card>
+</CardGroup>

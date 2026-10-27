@@ -1,0 +1,195 @@
+---
+title: Khắc phục sự cố Review
+description: "Khắc phục các sự cố Review thường gặp: PR không được review, review bị bỏ qua, lỗi xác thực Git provider, review lại và lệnh mention không được phản hồi."
+icon: life-ring
+---
+
+Tìm triệu chứng của bạn bên dưới, rồi làm theo bước kiểm tra và cách khắc phục. Hầu hết sự cố đến từ bốn nơi: chính pull request (PR) hoặc merge request (MR), cài đặt của repository trong CloudThinker, webhook, hoặc thông tin xác thực của Git provider.
+
+## Bắt đầu: PR đang hiển thị gì?
+
+| Bạn thấy gì trên PR | Đi tới |
+|---|---|
+| Hoàn toàn không có gì từ CloudThinker | [Không có bình luận trên PR mới](#không-có-bình-luận-trên-pr-mới) |
+| **CloudThinker Code Review Skipped** | [Review bị bỏ qua](#review-bị-bỏ-qua) |
+| **CloudThinker Is Setting Up This Repository** hoặc **Is Syncing This Repository Again** | Chờ. Review tự bắt đầu khi thiết lập hoàn tất |
+| **CloudThinker Review Did Not Finish** hoặc **Code Review Did Not Start** | [Review dừng hoặc thất bại](#review-dừng-hoặc-thất-bại) |
+| **CloudThinker Review Stopped** | PR đã được merge hoặc đóng trước khi review hoàn tất. Các phát hiện đã đăng vẫn có hiệu lực |
+| Bình luận `@cloudthinker-ai` không được phản hồi | [Lệnh mention không được phản hồi](#lệnh-mention-không-được-phản-hồi) |
+
+Và trong CloudThinker:
+
+| Bạn thấy gì trong CloudThinker | Đi tới |
+|---|---|
+| Header của trang **Review**, trên bất kỳ tab Review nào, hiển thị **Reconnect your Git provider** | [Lỗi xác thực provider](#lỗi-xác-thực-provider) |
+| Repository hiển thị **No access** hoặc **Setup failed** trong **Review → Settings → Repositories** | [Sự cố repository](#sự-cố-repository) |
+
+## Không có bình luận trên PR mới
+
+CloudThinker đăng một bình luận tiến độ ngay khi PR được mở, rồi thay bằng bản tóm tắt. Nếu không có gì xuất hiện, thì hoặc CloudThinker chưa hề nhận được thông tin về PR, hoặc đã chủ động im lặng.
+
+<Steps>
+  <Step title="Kiểm tra PR không phải bản nháp">
+    PR và MR ở dạng nháp không được review. Đánh dấu PR sẵn sàng để review và CloudThinker sẽ xử lý. (AWS CodeCommit không có bản nháp, nên điều này không áp dụng ở đó.)
+  </Step>
+  <Step title="Kiểm tra repository đã được chọn">
+    Mở **Review → Settings → Repositories** và tìm repository. Công tắc **Review** phải bật. Nếu repository không có trong danh sách, hãy thêm vào. Nếu repository hiển thị **Cloning**, lần clone đầu tiên vẫn đang chạy.
+  </Step>
+  <Step title="Kiểm tra webhook (GitLab, Azure DevOps, AWS CodeCommit)">
+    GitHub và Bitbucket tự đăng ký webhook cho bạn. Ba provider còn lại cần webhook do bạn thêm thủ công, và webhook bị thiếu hoặc sai là nguyên nhân phổ biến nhất khiến không có phản hồi.
+
+    Mở lịch sử gửi của webhook trong provider:
+
+    | Provider | Nơi kiểm tra |
+    |---|---|
+    | GitLab | **Settings → Webhooks** của project, rồi **Edit** trên webhook CloudThinker và **Recent events** |
+    | Azure DevOps | **Project settings → Service hooks**, rồi **History** của hook |
+    | AWS CodeCommit | Amazon EventBridge trong region của repository: kiểm tra các rule có tên `CloudThinker-CodeCommit-*` có tồn tại |
+
+    Lịch sử cho bạn biết:
+
+    - **Không có lần gửi nào:** webhook bị thiếu hoặc thiếu trigger. Thêm lại với URL, secret token và trigger từ [Cấu hình webhook](/vi/guide/code-review/provider-auth#cấu-hình-webhook).
+    - **Thất bại với 403 "Repository is not enabled for Review":** bật công tắc **Review** của repository trong **Review → Settings → Repositories**.
+    - **Các lỗi 4xx khác:** URL hoặc secret token không khớp. Sao chép lại cả hai từ trình hướng dẫn thiết lập và cập nhật webhook.
+    - **Lỗi 5xx:** CloudThinker không thể xử lý sự kiện. Gửi lại từ lịch sử gửi. Nếu vẫn tiếp tục thất bại, hãy liên hệ bộ phận hỗ trợ (xem [Vẫn chưa giải quyết được](#vẫn-chưa-giải-quyết-được)).
+    - **Gửi thành công nhưng vẫn không có gì:** chuyển sang bước tiếp theo.
+  </Step>
+  <Step title="Khởi chạy review thủ công">
+    Bình luận trên PR:
+
+    ```text
+    @cloudthinker-ai review
+    ```
+
+    Trên AWS CodeCommit không có lệnh bình luận `review`, nên hãy push một commit mới lên source branch của PR.
+
+    **Trạng thái thành công:** một bình luận tiến độ của CloudThinker xuất hiện trên PR. Nếu không, hãy kiểm tra [Lỗi xác thực provider](#lỗi-xác-thực-provider).
+  </Step>
+</Steps>
+
+## Review bị bỏ qua
+
+Khi quyết định không review một PR, CloudThinker cho biết điều đó trong bình luận **CloudThinker Code Review Skipped**. Dòng thứ hai cho bạn biết lý do.
+
+| Bình luận ghi | Nguyên nhân | Cách khắc phục |
+|---|---|---|
+| "This merge request was filtered based on your repository configuration." | Bộ lọc repository đã khớp: bộ lọc **Exclude** khớp, hoặc bộ lọc **Include** không khớp | Sửa bộ lọc của repository trong **Review → Settings → Repositories**. Xem [bộ lọc](/vi/guide/code-review/setup#lọc-những-pr-được-review) |
+| "Code review is disabled for this repository." | Review đang tắt cho repository này | Admin của workspace bật lại review trong **Review → Settings → Repositories**. Xem [vai trò](/vi/guide/security/roles) |
+| "Code review skipped: the description turns reviews off." | Mô tả PR chứa `@cloudthinker:ignore` | Xóa marker khỏi mô tả, rồi bình luận `@cloudthinker-ai review`. Trên AWS CodeCommit, hãy push một commit mới lên source branch của PR |
+| "CloudThinker could not sync this repository, so the review did not run." | Clone repository thất bại | Xem [Sự cố repository](#sự-cố-repository) |
+
+<Tip>
+  Marker bỏ qua `@cloudthinker:ignore` phân biệt hoa thường và hoạt động ở bất kỳ đâu trong mô tả. Dùng marker này cho các PR đơn lẻ. Với cả nhóm, chẳng hạn mọi PR từ `dependabot[bot]` hoặc mọi PR vào `release/*`, hãy dùng bộ lọc. Xem [bỏ qua review](/vi/guide/code-review/mention-commands#bỏ-qua-review).
+</Tip>
+
+PR bị bỏ qua vẫn hiển thị trong **Review → Reviews** với kết luận **Ignored**, nên bạn có thể xác nhận điều đã xảy ra mà không cần mở provider.
+
+## Review dừng hoặc thất bại
+
+Các phát hiện đã đăng trước khi dừng vẫn có hiệu lực. Bạn chỉ mất bản tóm tắt.
+
+| Bình luận ghi | Cần làm gì |
+|---|---|
+| **CloudThinker Review Did Not Finish**: "The review stopped before its summary." | Bình luận `@cloudthinker-ai review`. Review tiếp tục từ commit được review gần nhất |
+| **Did Not Finish**: "CloudThinker could not open the source at this commit." | Bình luận `@cloudthinker-ai review` để chạy lại. Nếu lại thất bại, kiểm tra branch vẫn tồn tại và token đọc được branch đó |
+| **Did Not Finish**: "&lt;provider&gt; was unavailable." | Git provider của bạn gặp sự cố ngừng hoạt động. Bình luận `@cloudthinker-ai review` khi provider hoạt động trở lại |
+| **Did Not Finish**: "We will run it again automatically when our service is back" | Không cần làm gì. CloudThinker sẽ chạy lại cho bạn |
+| **CloudThinker Code Review Did Not Start** | Bình luận `@cloudthinker-ai review`, hoặc chạy lại từ **Review → Reviews** như mô tả bên dưới |
+
+Trên AWS CodeCommit, lệnh bình luận `review` không được hỗ trợ, nên hãy push một commit mới lên source branch của PR, hoặc chạy lại từ **Review → Reviews**. Xem [hỗ trợ theo provider](/vi/guide/code-review/mention-commands#hỗ-trợ-theo-provider).
+
+Bạn cũng có thể khởi động lại từ CloudThinker: mở PR trong **Review → Reviews**, rồi nhấn **Re-run review** trong menu **⋯**. Khi lượt chạy vẫn đang diễn ra, menu đó hiển thị **Stop review** ở vị trí này, nên hãy chờ lượt chạy kết thúc hoặc dừng nó trước.
+
+## Review lại một PR
+
+Push commit mới lên một PR đang mở sẽ tự khởi chạy review tăng dần: chỉ các thay đổi mới được đọc. Để review lại mà không cần push, hãy bình luận:
+
+```text
+@cloudthinker-ai review
+```
+
+`@cloudthinker-ai review again`, `@cloudthinker-ai continue` và `@cloudthinker-ai continue review` cũng có tác dụng tương tự. Tất cả đều tiếp tục từ commit được review gần nhất. Không có lệnh nào để review toàn bộ từ commit đầu tiên. Để review sâu hơn commit mới nhất, bình luận `@cloudthinker-ai review ultra` (xem [Ultra review](/vi/guide/code-review/mention-commands#chạy-ultra-review)). Nếu Ultra đang tắt cho bản cài đặt của bạn, bot trả lời **Ultra review is turned off for this installation.**
+
+Trên AWS CodeCommit, lệnh đó không được hỗ trợ: hãy push một commit mới lên source branch của PR để review lại.
+
+<Warning>
+  Lệnh phải là toàn bộ bình luận. `@cloudthinker-ai review this file carefully` được hiểu là một câu hỏi, không phải yêu cầu review lại, nên bạn nhận được câu trả lời thay vì một review mới.
+</Warning>
+
+## Lệnh mention không được phản hồi
+
+| Kiểm tra | Lý do |
+|---|---|
+| Bình luận không nằm trong code block, inline code hoặc phần trả lời trích dẫn | Mention ở đó được coi là văn bản trích dẫn và bị bỏ qua |
+| Tên bot là `@cloudthinker-ai` | Các cách viết khác không được nhận diện |
+| Provider của bạn hỗ trợ lệnh đó | Bitbucket, Azure DevOps và AWS CodeCommit chỉ hỗ trợ một số lệnh và vị trí bình luận. Xem [hỗ trợ theo provider](/vi/guide/code-review/mention-commands#hỗ-trợ-theo-provider) |
+| Azure DevOps: service hook **Pull request commented on** dùng **Resource version** **2.0** | CloudThinker bỏ qua sự kiện bình luận phiên bản 1.0. Sửa hook và đổi sang 2.0 |
+| GitLab: webhook có trigger **Comments** | Thiếu trigger này, CloudThinker không bao giờ thấy bình luận |
+| Không có autofix nào đang chạy trên PR | Mỗi PR chỉ chạy một autofix tại một thời điểm. Chờ autofix đó hoàn tất |
+
+## Lỗi xác thực provider
+
+Khi Git provider từ chối thông tin xác thực của CloudThinker, header của trang **Review** hiển thị **Reconnect your Git provider**, kèm cảnh báo **Authentication Error**. Review dừng cho đến khi bạn khắc phục. Repository và cài đặt của bạn vẫn được giữ lại.
+
+| Cảnh báo ghi | Nút | Cần làm gì |
+|---|---|---|
+| "Your &lt;provider&gt; OAuth connection has expired. Reconnect to continue." (GitLab, Bitbucket) | **Reconnect with &lt;provider&gt;** | Nhấn vào và phê duyệt quyền truy cập lại |
+| "Your &lt;provider&gt; access token is not valid or has expired. Update the token to continue." | **Update Token** | Nút này mở hộp thoại token. Tạo token mới với cùng scope, dán vào và lưu |
+| "Your AWS CodeCommit credentials are invalid or have expired. Update your credentials to continue." | **Update Credentials** | Dán role ARN hoặc access key mới. Script thiết lập trong [AWS CodeCommit](/vi/guide/code-review/provider-auth#aws-codecommit) tạo cả hai với các quyền mà Review cần |
+| "Your git provider connection needs attention. Please reconnect from Settings." | Không có | Mở **Review → Settings** và kết nối lại từ mục **Connection** |
+
+GitHub không có token để cập nhật, vì GitHub dùng CloudThinker GitHub App. Nếu review trên GitHub dừng, app đã bị gỡ cài đặt hoặc mất quyền truy cập repository: cài đặt lại, hoặc thêm repository trong cài đặt của app trên GitHub. Việc cài đặt app trên một GitHub organization do owner của organization đó thực hiện trên GitHub, chứ không phải do vai trò nào trong CloudThinker.
+
+**Trạng thái thành công:** trang **Review** tải bình thường. Bình luận `@cloudthinker-ai review` trên mọi PR được mở khi kết nối bị gián đoạn. Trên AWS CodeCommit, hãy push một commit mới lên source branch của PR đó.
+
+Scope token cho từng provider có trong [Xác thực provider](/vi/guide/code-review/provider-auth). Các lý do thường gặp khiến token mới thất bại:
+
+- **GitLab:** vai trò của token thấp hơn **Developer**, hoặc thiếu scope `api`. Guest và Reporter không thể bình luận trên MR.
+- **Azure DevOps:** personal access token (PAT) đã hết hạn. PAT hết hạn vào ngày đặt khi tạo, nên hãy ghi lại và thay token trước ngày đó.
+
+## Sự cố repository
+
+Trong **Review → Settings → Repositories**, dòng bên dưới tên repository có thể hiển thị:
+
+| Trạng thái | Ý nghĩa | Cách khắc phục |
+|---|---|---|
+| **Cloning** | Lần clone đầu tiên đang chạy. PR được mở bây giờ sẽ được review khi lần clone hoàn tất | Chờ |
+| **Setup failed** | Clone không hoàn tất. Di chuột vào để xem lỗi | Nhấn **Retry**. Cần vai trò Admin của workspace |
+| **Setup cancelled** | Ai đó đã hủy clone | Nhấn **Retry**. Cần vai trò Admin của workspace |
+| **No access** | Thông tin xác thực của CloudThinker không thể đọc repository này | Nhấn **Update token** và dùng token bao phủ repository đó. Trên GitHub, thêm repository trong cài đặt của CloudThinker GitHub App trên GitHub |
+
+Khi không trường hợp nào áp dụng, dòng đó hiển thị branch mặc định. Công tắc **Review** trên cùng hàng bật hoặc tắt review, và cột **Learnings** có thể hiển thị **Paused while Review is off** (xem [Learnings](/vi/guide/code-review/convention-rules#khắc-phục-sự-cố)).
+
+## Phát hiện sai hoặc gây nhiễu
+
+| Bạn muốn | Làm thế này |
+|---|---|
+| Báo cho Review biết một phát hiện sai | Bấm thumbs-down cho phát hiện đó và mô tả lỗi trong ghi chú **Inaccurate finding**. Các lượt review sau trên repository đó nhận các ghi chú gần đây của bạn làm ngữ cảnh, nên sẽ không nêu lại cùng phát hiện trên mã không thay đổi. Xem [bình chọn độ chính xác](/vi/guide/code-review/review-workspace#xử-lý-các-phát-hiện) |
+| Ngăn một quy tắc đã học tiếp tục kích hoạt | Ngừng dùng Learning đó. Xem [ngừng dùng hoặc khôi phục một Learning](/vi/guide/code-review/convention-rules#loại-bỏ-hoặc-khôi-phục-learning) |
+| Dạy một tiêu chuẩn mà Review liên tục bỏ sót | Viết tiêu chuẩn đó vào một file quy ước như `AGENTS.md`. Xem [thêm file quy ước của riêng bạn](/vi/guide/code-review/convention-rules#thêm-file-quy-ước-của-riêng-bạn) |
+| Hiểu vì sao một file đã thay đổi không có phát hiện | Review bỏ qua [một danh sách đường dẫn tích hợp sẵn](/vi/guide/code-review/overview#cách-hoạt-động) và không bao giờ đặt phát hiện vào các đường dẫn đó. Hai trường hợp khiến mọi người bất ngờ: header "generated, do not edit" không được đọc, vì việc khớp chỉ dựa trên đường dẫn, và các contract Solidity của riêng bạn bị bỏ qua nếu nằm trong thư mục `lib/` cấp cao nhất. Review vẫn biết file đó là một phần của thay đổi, nên Review sẽ không báo thiếu test mà PR đã thêm |
+
+## Các tính năng Review khác
+
+| Sự cố với | Xem |
+|---|---|
+| Learnings hoặc file quy ước | [Khắc phục sự cố Learnings](/vi/guide/code-review/convention-rules#khắc-phục-sự-cố) |
+| CI run thất bại và phân tích pipeline | [Khắc phục sự cố Pipelines](/vi/guide/code-review/pipelines#khắc-phục-sự-cố) |
+| Báo cáo release | [Khắc phục sự cố Releases](/vi/guide/code-review/releases#khắc-phục-sự-cố) |
+| Liên kết ticket | [Khắc phục sự cố Extensions](/vi/guide/code-review/extensions#khắc-phục-sự-cố) |
+| Insights và báo cáo | [Khắc phục sự cố Insights](/vi/guide/code-review/analytics#khắc-phục-sự-cố) |
+
+## Vẫn chưa giải quyết được
+
+Thu thập tên workspace, repository, liên kết PR, provider, thời điểm bạn mở PR và nội dung của mọi bình luận CloudThinker. Sau đó gửi email đến [support@cloudthinker.io](mailto:support@cloudthinker.io). Trang [khắc phục sự cố chung](/vi/guide/troubleshooting) đề cập các sự cố ngoài Review.
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="Lệnh mention" icon="at" href="/vi/guide/code-review/mention-commands">
+    Mọi lệnh mà bot review hiểu, và nơi mỗi provider hỗ trợ lệnh đó.
+  </Card>
+  <Card title="Xác thực provider" icon="key" href="/vi/guide/code-review/provider-auth">
+    Scope token và các bước webhook cho từng Git provider.
+  </Card>
+</CardGroup>

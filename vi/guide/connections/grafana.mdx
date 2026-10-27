@@ -1,182 +1,167 @@
 ---
 title: Grafana
-description: "Kết nối Grafana với CloudThinker để tích hợp dashboard, phân tích metric và quan sát hợp nhất"
+description: "Kết nối Grafana bằng service account Viewer để agent tìm dashboard, truy vấn metric và log, và kiểm tra alert rule"
 icon: "/images/icons/grafana.svg"
 ---
 
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
 import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
 
-Kết nối Grafana instance của bạn để cho phép các agent CloudThinker truy cập dashboard, truy vấn metric và tham chiếu trực quan hóa trong quá trình phân tích.
+Kết nối một Grafana instance để [CloudThinker](/vi/guide/agents/overview) làm việc từ chính các dashboard, data source và alert rule mà đội bạn đang có. Agent tìm đúng dashboard, chạy truy vấn Prometheus hoặc Loki qua Grafana, và cho bạn biết cảnh báo nào đang firing, mà bạn không cần sao chép panel vào chat. Kết nối đăng nhập bằng **service account token**, một danh tính Grafana không phải người mà bạn tạo và giới hạn ở role **Viewer**.
 
-Grafana xác thực bằng **service account token** được giới hạn phạm vi theo role Viewer.
-
----
-
-## Nền tảng hỗ trợ
+## Nền tảng được hỗ trợ
 
 | Nền tảng | Hỗ trợ |
-|----------|--------|
-| **Grafana OSS** | 9.x, 10.x |
-| **Grafana Enterprise** | Tất cả phiên bản |
-| **Grafana Cloud** | Tất cả các gói |
-
----
+|----------|-----------|
+| **Grafana OSS** | Có, từ bản 9.1 trở lên (service account chính thức phát hành ở bản 9.1) |
+| **Grafana Enterprise** | Có |
+| **Grafana Cloud** | Có |
 
 ## Điều kiện tiên quyết
 
-- Một **Grafana instance** (OSS, Enterprise, hoặc Cloud) có thể truy cập từ CloudThinker.
-- Quyền admin để tạo service account trong **Administration → Users and access → Service Accounts**.
-- URL của Grafana instance.
-
----
+- Grafana instance truy cập được từ internet công khai qua HTTPS. Kết nối chạy từ CloudThinker Cloud, nên instance riêng tư cần một trong các cách trong [Truy cập dịch vụ riêng tư](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ). Nếu bạn đặt firewall, hãy cho phép IP egress của CloudThinker. Tài liệu này không công bố danh sách IP egress của CloudThinker: hãy hỏi đầu mối CloudThinker của bạn, hoặc [liên hệ chúng tôi](https://cloudthinker.io/contact).
+- Chứng chỉ TLS hợp lệ, được tin cậy công khai. Chứng chỉ self-signed sẽ thất bại.
+- Quyền admin Grafana để tạo service account.
+- Mỗi organization Grafana một kết nối. Service account chỉ thấy organization nơi nó được tạo, nên với nhiều org, hãy tạo service account trong từng org và thêm kết nối cho từng org.
+- Vai trò **Admin** trong workspace CloudThinker, là vai trò được thêm và sửa kết nối. Xem [Vai trò](/vi/guide/security/roles).
 
 ## Thiết lập
 
 <Steps>
-  <Step title="Mở Grafana">
-    Truy cập vào Grafana instance của bạn và đăng nhập với quyền admin.
-  </Step>
-  <Step title="Điều hướng đến service account">
-    Vào **Administration → Users and access → Service Accounts**.
-  </Step>
-  <Step title="Tạo service account">
-    Nhấn **Add service account** và nhập:
-    - **Name**: `cloudthinker-readonly`
-    - **Role**: Chọn **Viewer**
+  <Step title="Tạo service account Viewer">
+    Trong Grafana, vào **Administration → Users and access → Service accounts** và nhấn **Add service account**. Đặt:
 
-    Nhấn **Create** để tạo service account.
+    - **Display name**: `cloudthinker-readonly`
+    - **Role**: **Viewer**
+
+    Nhấn **Create**.
   </Step>
   <Step title="Tạo token">
-    Trên trang service account mới:
-    1. Nhấn **Add service account token**
-    2. Nhập tên token (ví dụ: `cloudthinker-token`)
-    3. Tùy chọn đặt ngày hết hạn
-    4. Nhấn **Generate token**
-    5. **Sao chép ngay token** — sẽ không được hiển thị lại
+    Trên trang của service account mới, nhấn **Add service account token**, đặt tên (ví dụ `cloudthinker`), đặt thời hạn như 90 ngày, rồi nhấn **Generate token**. Khi token hết hạn, kết nối thất bại với lỗi 401 cho tới khi bạn thay token. Xem [Token hết hạn](#khắc-phục-sự-cố).
+
+    Sao chép token ngay. Token bắt đầu bằng `glsa_`, và Grafana sẽ không hiển thị lại.
   </Step>
   <Step title="Thêm kết nối trong CloudThinker">
-    Điều hướng đến **Connections → Grafana** và nhập:
-    - **Grafana URL**: URL instance của bạn (ví dụ: `https://grafana.your-domain.com`)
-    - **Service Account Token**: token bạn vừa sao chép
+    Mở **More → Workspace settings → Connections**, giữ nguyên tab **Builtin Connections**, rồi chọn **Grafana**. Điền:
 
-    Nhấn **Connect**. CloudThinker xác minh thông tin xác thực và hiển thị trạng thái **Connected**.
+    - **GRAFANA_URL**: base URL của instance, ví dụ `https://grafana.example.com` hoặc `https://your-stack.grafana.net`
+    - **GRAFANA_SERVICE_ACCOUNT_TOKEN**: token `glsa_`
+    - **Alias** và **Description**: không bắt buộc. Agent đọc phần mô tả để chọn đúng instance, nên hãy ghi tên org hoặc môi trường nếu bạn thêm nhiều kết nối
+
+    Nhấn **Connect**.
+
+    **Trạng thái thành công:** kết nối hiển thị **Connecting** và **Verifying**, rồi **Connected**. Nếu xác minh thất bại, kết nối hiển thị **Failed** kèm thông báo lỗi. Đối chiếu thông báo với [Khắc phục sự cố](#khắc-phục-sự-cố).
   </Step>
 </Steps>
 
-<Warning>
-Sao chép service account token ngay sau khi tạo. Grafana sẽ không hiển thị lại token này, và bạn sẽ cần tạo token mới nếu bị mất.
-</Warning>
-
----
-
 ## Chi tiết kết nối
 
-| Trường | Mô tả | Ví dụ |
-|--------|-------|-------|
-| **GRAFANA_URL** | URL Grafana instance của bạn | `https://your-instance.grafana.net` |
-| **GRAFANA_SERVICE_ACCOUNT_TOKEN** | Service account token đã tạo | `glsa_xxxxx...` |
-
----
+| Trường | Bắt buộc | Ví dụ | Mô tả |
+|-------|----------|---------|-------------|
+| **GRAFANA_URL** | Có | `https://grafana.example.com` | Base URL của instance, là địa chỉ bạn mở trên trình duyệt |
+| **GRAFANA_SERVICE_ACCOUNT_TOKEN** | Có | `glsa_...` | Token của service account mà agent dùng để hoạt động |
 
 ## Quyền yêu cầu
 
-| Role | Tính năng cấp phép |
-|------|--------------------|
-| **Viewer** | Xem dashboard, truy vấn data source, xem annotation, truy cập nội dung thư mục |
-| **Editor** | Quyền Viewer, cộng thêm tạo annotation và lưu dashboard snapshot |
+| Role | Agent được gì | Dùng khi |
+|------|-----------------|-------------|
+| **Viewer** | Tìm và đọc dashboard và folder, truy vấn data source, đọc alert rule và annotation | Điều tra. Khuyến nghị |
+| **Editor** | Như Viewer, cộng thêm thay đổi dashboard, annotation và alert rule. Mỗi thay đổi đi qua [Approvals](/vi/guide/approvals/overview) | Chỉ khi bạn muốn agent thực hiện các thay đổi đó |
+
+Agent chỉ thấy những gì service account thấy. Nếu một folder dashboard bị giới hạn quyền, hãy thêm service account vào folder đó, nếu không agent sẽ không tìm thấy dashboard bên trong.
 
 <Tip>
-Gán role **Viewer** để điều tra chỉ đọc. Chỉ dùng Editor nếu bạn cần tạo annotation hoặc dashboard snapshot.
+Giữ service account ở role **Viewer**. Khi đó Grafana tự từ chối mọi thay đổi ở phía mình, bất kể agent yêu cầu gì.
 </Tip>
-
----
 
 ## Khả năng của agent
 
-Sau khi kết nối, các agent có thể:
+| Khả năng | Agent làm được gì |
+|------------|--------------------|
+| **Dashboard và folder** | Tìm theo tên hoặc tag, đọc panel và truy vấn của dashboard, và chạy truy vấn của một panel |
+| **Metric** | Chạy PromQL trên data source Prometheus, có khám phá label và metric |
+| **Log** | Chạy LogQL trên data source Loki, và tìm log trên các data source được hỗ trợ |
+| **Data source khác** | Truy vấn data source Elasticsearch, CloudWatch và ClickHouse đã cấu hình trong Grafana |
+| **Alerting** | Liệt kê alert rule và trạng thái, và cho biết rule nào đang firing |
+| **Annotation** | Đọc annotation, như mốc deploy, trong khoảng thời gian quanh một sự cố |
+| **Tính năng Grafana Cloud** | Khi stack của bạn có: Grafana Incident, lịch OnCall, cuộc điều tra Sift và profile Pyroscope |
 
-| Khả năng | Mô tả |
-|----------|-------|
-| **Truy cập dashboard** | Tham chiếu dashboard hiện có trong phân tích |
-| **Truy vấn metric** | Truy vấn data source thông qua Grafana |
-| **Đọc annotation** | Truy cập annotation dashboard để lấy ngữ cảnh |
-| **Trạng thái alert** | Kiểm tra trạng thái quy tắc alerting của Grafana |
+Agent truy vấn qua Grafana, nên data source chỉ dùng được khi đã được cấu hình trong Grafana instance và service account có quyền dùng.
+
+Khi Grafana đã kết nối, [Resolve](/vi/guide/incident/overview) cũng đọc được alert rule và truy vấn khoảng metric trong lúc điều tra sự cố. Gửi cảnh báo Grafana vào Resolve là một thiết lập webhook riêng: xem [Tích hợp webhook](/vi/guide/incident/webhook-integrations/overview).
 
 ### Xác minh kết nối
 
 ```text
-Check Grafana for active alert rules and summarize any that are firing
+List the Grafana alert rules that are firing right now, and the data sources configured in Grafana
 ```
+
+Kết quả mong đợi là tên và trạng thái các rule đang firing (hoặc ghi chú rằng không có rule nào firing), sau đó là từng data source kèm loại, như Prometheus hay Loki.
 
 ### Ví dụ prompt
 
 ```text
-Check the AWS cost dashboard for anomalies
-Reference the Kubernetes cluster dashboard for pod health
-Query database metrics from the Grafana data source
+Find the Grafana dashboard for the checkout service and summarize what its panels show for the last hour
+Using Grafana's Prometheus data source, which pods restarted most in the last 24 hours?
+Search Loki through Grafana for errors from the payments app since 09:00 and group them by message
 ```
 
-### Data source được hỗ trợ
+## Quyền ghi
 
-CloudThinker có thể truy vấn qua các data source đã cấu hình của Grafana:
+Kết nối có thể gọi các công cụ Grafana làm thay đổi, như sửa dashboard, thêm annotation hay đổi alert rule. Mọi lệnh gọi làm thay đổi đều đi qua [Approvals](/vi/guide/approvals/overview), và Grafana chỉ cho phép khi role của service account cho phép. Với **Viewer**, Grafana từ chối tất cả.
 
-| Data source | Hỗ trợ truy vấn |
-|-------------|----------------|
-| Prometheus | Truy vấn PromQL |
-| InfluxDB | InfluxQL / Flux |
-| Elasticsearch | Lucene / KQL |
-| CloudWatch | Metric CloudWatch |
-| Loki | Truy vấn LogQL |
+<ApprovalDefault />
 
----
+Kết nối này không có công tắc **Allow writes**, nên CloudThinker không có cài đặt chỉ đọc riêng ở đây. Role Grafana của service account là thứ chặn thao tác ghi, vì vậy hãy giữ role **Viewer** trừ khi bạn muốn thay đổi.
 
-## Xử lý sự cố
+## Khắc phục sự cố
 
 <Accordion title="Kết nối thất bại">
-- Xác minh Grafana URL có thể truy cập từ CloudThinker.
-- Kiểm tra chứng chỉ SSL hợp lệ.
-- Đảm bảo không có proxy chặn kết nối.
-- Xác nhận Grafana đang chạy và có thể truy cập.
+- Mở **GRAFANA_URL** từ trình duyệt bên ngoài mạng của bạn để kiểm tra URL truy cập được từ internet, hoặc cho phép CloudThinker qua firewall.
+- Kiểm tra chứng chỉ TLS hợp lệ và không phải self-signed.
+- Chỉ dùng base URL, không kèm đường dẫn dashboard.
 </Accordion>
 
-<Accordion title="Xác thực thất bại">
-- Xác minh service account token chính xác.
-- Kiểm tra token chưa hết hạn.
-- Đảm bảo service account đang hoạt động.
-- Xác nhận không có hạn chế IP trên tài khoản.
+<Accordion title="Xác thực thất bại hoặc lỗi 401">
+- Kiểm tra lại token. Sao chép lại nếu bị mất ký tự.
+- Kiểm tra token chưa hết hạn và service account đang được bật trong **Administration → Users and access → Service accounts**.
 </Accordion>
 
 <Accordion title="Token hết hạn">
-- Điều hướng đến **Administration → Service Accounts**.
-- Chọn service account CloudThinker.
-- Tạo token mới.
-- Cập nhật token trong cài đặt kết nối CloudThinker.
+Mở service account trong Grafana, tạo token mới, rồi dán vào **GRAFANA_SERVICE_ACCOUNT_TOKEN** trên kết nối. Xóa token cũ trong Grafana.
 </Accordion>
 
-<Accordion title="Không thể truy cập dashboard">
-- Xác minh service account có role Viewer.
-- Kiểm tra quyền thư mục bao gồm service account.
-- Đảm bảo dashboard không nằm trong thư mục bị hạn chế.
+<Accordion title="Agent không tìm thấy dashboard mà bạn thấy được">
+Dashboard nằm trong folder mà service account không xem được. Cấp cho service account quyền **View** trên folder đó.
 </Accordion>
 
----
+<Accordion title="Truy vấn data source thất bại">
+Việc bạn truy cập được trong Explore không chứng minh service account cũng truy cập được. Kiểm tra hai điều:
+
+- Trên Grafana Enterprise hoặc Cloud, mở tab **Permissions** của data source và xác nhận service account (hoặc một role mà service account có) được phép truy vấn.
+- Kiểm tra dưới danh nghĩa service account: `curl -H "Authorization: Bearer glsa_..." https://<grafana>/api/datasources`. Nếu data source không có trong phản hồi, service account không dùng được data source đó.
+
+Agent chỉ truy vấn được những data source mà chính Grafana truy vấn được.
+</Accordion>
+
+<Accordion title="Request tới Incident, OnCall hoặc Sift thất bại">
+Đây là các tính năng của Grafana Cloud. Chúng chỉ hoạt động khi stack của bạn đã bật. Một số ứng dụng Grafana Cloud có role truy cập riêng, nên nếu **Viewer** không đủ, hãy kiểm tra cài đặt role của ứng dụng đó cho service account trong Grafana.
+</Accordion>
 
 ## Bảo mật
 
 <ConnectionSecurity />
 
-- **Chỉ role Viewer** — không bao giờ cấp role Editor hoặc Admin cho service account CloudThinker
-- **Thời hạn token** — đặt ngày hết hạn và xoay vòng service account token mỗi 90 ngày
-
----
+- **Chỉ Viewer**: cấp cho service account CloudThinker role **Viewer**, không bao giờ **Admin**.
+- **Token có thời hạn**: đặt thời hạn cho mọi token và xoay vòng theo lịch thông thường của bạn.
 
 ## Liên quan
 
 <CardGroup cols={2}>
-  <Card title="Kết nối Elasticsearch" icon="/images/icons/elasticsearch.svg" href="/vi/guide/connections/elasticsearch">
-    Kết nối data source log
+  <Card title="Prometheus" icon="/images/icons/prometheus.svg" href="/vi/guide/connections/prometheus">
+    Truy vấn Prometheus trực tiếp khi không đặt sau Grafana.
   </Card>
-  <Card title="Kết nối AWS" icon="/images/icons/aws.svg" href="/vi/guide/connections/aws">
-    Kết nối metric CloudWatch
+  <Card title="Tích hợp webhook" icon="bell" href="/vi/guide/incident/webhook-integrations/overview">
+    Gửi cảnh báo Grafana vào Resolve để cuộc điều tra tự bắt đầu.
   </Card>
 </CardGroup>

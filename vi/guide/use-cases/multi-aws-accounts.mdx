@@ -1,96 +1,209 @@
 ---
-title: 'Vận hành Nhiều Tài khoản AWS'
-description: 'Vận hành nhiều tài khoản AWS từ một workspace sử dụng phím tắt IAM AssumeRole để chuyển đổi ngữ cảnh tài khoản theo yêu cầu'
+title: Làm việc với nhiều tài khoản AWS
+description: "Kết nối nhiều tài khoản AWS vào một workspace, rồi so sánh chi tiêu và tìm vấn đề chi phí, bảo mật trên các tài khoản bằng prompt đơn giản."
 icon: layer-group
 ---
 
-Một nhóm platform quản lý các tài khoản AWS production, development, và staging có thể truy vấn chi phí, kiểm toán bảo mật, và điều tra sự cố trên cả ba — từ một workspace CloudThinker duy nhất.
+Phần lớn các nhóm chạy nhiều hơn một tài khoản AWS: một cho production, một cho staging, một cho development, đôi khi nhiều hơn. Hướng dẫn này kết nối ba tài khoản vào một workspace CloudThinker, rồi đặt những câu hỏi bao trùm cả ba: tiền đi đâu, tài nguyên nào đang nhàn rỗi, và quyền IAM nào có rủi ro.
 
-## Tình huống
+**Bạn cần:**
 
-Tổ chức của bạn duy trì các tài khoản AWS riêng biệt cho production, development, và staging. Một nhóm platform tập trung cần khả năng hiển thị cross-account mà không cần cấp quyền production cho tất cả mọi người hay liên tục mất ngữ cảnh khi chuyển đổi workspace. Giải pháp: kết nối CloudThinker với tài khoản AWS chính, tạo IAM role trong mỗi tài khoản đích, và định nghĩa các phím tắt hướng dẫn [CloudThinker](/vi/guide/agents/overview) hoạt động trên tài khoản nào — tất cả từ một workspace.
+- Một workspace CloudThinker. Trang [bắt đầu nhanh](/vi/quickstart) sẽ tạo một workspace cho bạn.
+- Quyền tạo IAM role trong từng tài khoản AWS, và quyền truy cập [AWS CloudShell](https://console.aws.amazon.com/cloudshell/home) trong từng tài khoản.
+- Với câu hỏi về chi phí: Cost Explorer đã bật trong từng tài khoản. AWS có thể mất tới 24 giờ để kích hoạt Cost Explorer trên tài khoản mới. Policy `ReadOnlyAccess` của role đã bao gồm các quyền đọc `ce:Get*` mà Optimize dùng. AWS tính phí riêng cho các request tới Cost Explorer API (0,01 USD mỗi request theo giá niêm yết của AWS).
 
-## Hướng dẫn từng bước
+## Cách hoạt động với nhiều tài khoản
+
+Mỗi tài khoản AWS là một kết nối riêng trong CloudThinker. Không cần thiết lập tài khoản hub hay role chaining. Khi bạn kết nối một tài khoản, CloudThinker assume một role chỉ đọc trong tài khoản đó (`CloudThinkerAccessRole`) và nhận thông tin xác thực ngắn hạn cho role.
+
+Agent chọn tài khoản dựa vào hai trường bạn điền khi kết nối:
+
+| Trường | Điền gì | Ví dụ |
+|---|---|---|
+| **Alias** | Tên ngắn bạn sẽ dùng trong prompt | `production` |
+| **Description** | Tài khoản chứa gì. Agent đọc trường này để chọn giữa các tài khoản. | `Production AWS account, customer-facing workloads` |
+
+<Tip>
+Viết mô tả sao cho phân biệt được các tài khoản. Ba lần "AWS account" không cho agent căn cứ nào để chọn. "Staging, mirrors production, reset weekly" thì có.
+</Tip>
+
+## Kết nối các tài khoản
+
+Lặp lại các bước này cho từng tài khoản. Không có cách onboard trên toàn tổ chức hay qua StackSets: mỗi tài khoản cần hộp thoại kết nối riêng, vì mỗi hộp thoại tạo ra một External ID riêng. Nếu bạn muốn tạo role bằng Terraform hoặc CloudFormation, hãy mở rộng **Manual steps** trong từng hộp thoại để lấy trust policy. Tài liệu tham chiếu đầy đủ, kể cả phương thức dùng access key, nằm ở [trang kết nối AWS](/vi/guide/connections/aws).
 
 <Steps>
-  <Step title="Kết nối tài khoản AWS chính">
-    Trong **Connections**, thêm tài khoản AWS chính của bạn bằng [xác thực Role-Based](/vi/guide/connections/aws). Đây là tài khoản hub — tất cả yêu cầu cross-account đều xuất phát từ IAM identity của tài khoản này.
-
-    **Trạng thái thành công:** kết nối hiển thị trạng thái **Connected** trong bảng Connections.
+  <Step title="Mở hộp thoại kết nối">
+    Trong thanh bên, nhấn **More → Workspace settings → Connections**, chọn **Amazon Web Services**, rồi nhấn **Connect**. Giữ lựa chọn **Role-Based (recommended)**.
   </Step>
-
-  <Step title="Tạo IAM role cross-account">
-    Trong mỗi tài khoản AWS đích, tạo một IAM role với trust policy sau. Thay thế `PRIMARY_ACCOUNT_ID` bằng ID tài khoản AWS của hub account.
-
-    ```json
-    {
-      "Version": "2012-10-17",
-      "Statement": [
-        {
-          "Effect": "Allow",
-          "Principal": {
-            "AWS": "arn:aws:iam::PRIMARY_ACCOUNT_ID:root"
-          },
-          "Action": "sts:AssumeRole"
-        }
-      ]
-    }
-    ```
-
-    Gắn `ReadOnlyAccess` (hoặc chính sách chỉ đọc có phạm vi giới hạn) vào role để giữ quyền hạn ở mức tối thiểu.
-
-    **Trạng thái thành công:** bạn có thể xác minh từng role có thể được assume bằng cách chạy `aws sts assume-role` từ tài khoản chính.
+  <Step title="Đặt tên tài khoản">
+    Điền **Alias** và **Description** theo bảng ở trên. **Default AWS region (optional)** chỉ là điểm khởi đầu: agent dùng được mọi region mà role truy cập được.
   </Step>
+  <Step title="Chạy script thiết lập trong tài khoản đó">
+    Nhấn **Open CloudShell** và đăng nhập vào tài khoản AWS bạn đang kết nối. Quay lại hộp thoại, nhấn **Copy Script to Clipboard**, dán vào CloudShell rồi nhấn Enter. Script tạo `CloudThinkerAccessRole` với policy AWS managed `ReadOnlyAccess` và in ra ARN của role.
 
-  <Step title="Định nghĩa phím tắt chuyển tài khoản">
-    Mở bảng **Shortcuts** (góc trên bên phải của bất kỳ workspace nào) và tạo một phím tắt cho mỗi tài khoản đích. Đặt **Init Step** để hướng dẫn agent assume role đích trước khi prompt của bạn chạy.
+    `ReadOnlyAccess` đọc được cả dữ liệu lẫn cấu hình, như object trên S3. Nếu muốn role hẹp hơn, xem [Quyền yêu cầu](/vi/guide/connections/aws#quyền-yêu-cầu) để biết lựa chọn `ViewOnlyAccess` kèm `SecurityAudit` và những gì phải đánh đổi.
 
-    <Frame>
-      <img src="/images/use-cases/01-shortcut-assume-role.png" alt="Bảng Shortcuts của CloudThinker hiển thị phím tắt chuyển đổi tài khoản" />
-    </Frame>
-    <p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Bảng Shortcuts với init step AssumeRole</p>
-
-    | Tên phím tắt | Init step |
-    |---|---|
-    | `/switch-to-prod` | `Please assume arn:aws:iam::111111111111:role/CloudThinkerAccessRole and use the STS token for this session.` |
-    | `/switch-to-dev` | `Please assume arn:aws:iam::222222222222:role/CloudThinkerAccessRole and use the STS token for this session.` |
-    | `/switch-to-staging` | `Please assume arn:aws:iam::333333333333:role/CloudThinkerAccessRole and use the STS token for this session.` |
-
-    **Trạng thái thành công:** mỗi tên phím tắt xuất hiện trong danh sách gợi ý tự động của Shortcuts khi bạn gõ `/`.
+    <Warning>
+    Lần nào cũng sao chép script từ đúng hộp thoại bạn đang hoàn tất. Mỗi hộp thoại tạo ra một **AWS External ID** riêng, và script gắn cố định giá trị đó vào trust policy của role. Script sao chép từ hộp thoại của tài khoản khác sẽ không khớp.
+    </Warning>
   </Step>
+  <Step title="Dán Role ARN và kết nối">
+    Dán ARN vào **AWS Role ARN**, giữ nguyên **AWS External ID**, rồi nhấn **Connect**.
 
-  <Step title="Chạy các thao tác cross-account">
-    Thêm tên phím tắt vào đầu bất kỳ prompt nào. CloudThinker sẽ assume role đích trước khi hành động, do đó mọi kết quả đều được giới hạn trong tài khoản đó.
-
-    ```text
-    /switch-to-prod Build an AWS daily cost report as a dashboard
-    ```
-
-    CloudThinker assume role production, truy vấn Cost Explorer và CloudWatch trong tài khoản đó, và trả về dashboard chi phí có phạm vi là production.
-
-    ```text
-    /switch-to-dev Summarize unused EC2 instances in the dev account
-    ```
-
-    **Trạng thái thành công:** phản hồi của CloudThinker tham chiếu tài nguyên từ tài khoản đích, không phải hub.
+    **Trạng thái thành công:** tài khoản hiển thị trạng thái **Connected**.
+  </Step>
+  <Step title="Sau khi kết nối, đặt môi trường">
+    Hộp thoại kết nối không hỏi môi trường, nên hãy đặt ngay bây giờ. Trên bảng chi tiết **Amazon Web Services**, nhấn biểu tượng bút chì trên dòng của tài khoản và đặt **Environment** là **Production**, **Staging** hoặc **Development** trong **Edit Instance**. Trường này gắn nhãn tài khoản cho người và agent. [Approval Rules](/vi/guide/approvals/rules) không đọc trường này. Rule không có trường Environment, nên Rule chỉ bao quát một tài khoản khi bạn chọn kết nối đó trong **Connections**.
   </Step>
 </Steps>
 
-## Điều gì tạo nên hiệu quả
+Khi xong, **Connections** liệt kê ba kết nối Amazon Web Services, ví dụ `production`, `staging` và `development`, mỗi kết nối đều **Connected**.
 
-- **[Xác thực Role-Based](/vi/guide/connections/aws)** — IAM identity của hub account thực hiện lời gọi `sts:AssumeRole`, do đó không có thông tin xác thực dài hạn nào được chia sẻ hay lưu trữ cho mỗi tài khoản đích.
-- **IAM đặc quyền tối thiểu** — gắn `ReadOnlyAccess` vào mỗi role cross-account giới hạn những gì agent có thể làm, ngay cả khi phím tắt bị sử dụng sai. Dùng ARN principal cụ thể thay vì `:root` khi chính sách bảo mật của bạn cho phép.
-- **Shortcuts** — một init step được chèn vào trước prompt của bạn thiết lập ngữ cảnh tài khoản mà không cần gõ lại ARN role mỗi lần. Shortcuts cũng cho phép bạn giới hạn kiến thức hoặc hướng dẫn theo từng tài khoản.
-- **[CloudThinker](/vi/guide/agents/overview)** — xử lý phân tích chi phí, kiểm toán tài nguyên, và truy vấn hạ tầng trên các tài khoản AWS sau khi ngữ cảnh role được thiết lập.
-- **[Workspaces](/vi/guide/workspaces)** — khi nhóm cần cách ly hoàn toàn (cơ sở kiến thức, nhật ký kiểm toán, hoặc kiểm soát truy cập riêng biệt theo từng tài khoản), hãy tạo một workspace cho mỗi tài khoản thay vì dùng phím tắt.
+## Kiểm tra agent truy cập được những tài khoản nào
 
-## Tự mình thử
+Trước khi so sánh, hãy xác nhận mọi tài khoản đều phản hồi. Trong một cuộc hội thoại mới, hỏi:
+
+```text
+List every AWS account you can reach through my connections. For each one, show the alias, the 12-digit account ID, and the regions you can see.
+```
+
+**Kết quả mong đợi:** mỗi kết nối một dòng, kèm account ID thật. Agent không bị giới hạn trong **Default AWS region**: agent dùng được mọi region mà role truy cập được. Region bị service control policy (SCP) chặn sẽ trả về `AccessDenied` tại region đó. Nếu một tài khoản bị thiếu hoặc báo lỗi, hãy sửa ngay (xem [Khắc phục sự cố](#khắc-phục-sự-cố)) để các lần so sánh sau không âm thầm bỏ qua tài khoản đó.
+
+## So sánh chi tiêu giữa các tài khoản
+
+Bạn có hai cách. Dùng Optimize khi muốn số liệu được lưu và lặp lại được. Dùng prompt trong chat khi có một câu hỏi nhất thời.
+
+| Bạn muốn | Dùng | Ở đâu |
+|---|---|---|
+| Báo cáo tiết kiệm bao quát mọi tài khoản, mỗi tài khoản một mục | [Báo cáo Optimize](/vi/guide/cost-optimization/reports) với phạm vi **All accounts** | **Optimize → Reports** |
+| Chi tiêu của một tài khoản theo service hoặc region | [Cost Explorer](/vi/guide/cost-optimization/analytics) | **Optimize → Cost Explorer**, chọn tài khoản cạnh tiêu đề trang |
+| Câu trả lời so sánh nhanh theo cách diễn đạt của riêng bạn | Một prompt trong chat | Bất kỳ cuộc hội thoại nào |
+
+### Tạo báo cáo cho mọi tài khoản
+
+<Steps>
+  <Step title="Mở Reports">
+    Trong thanh bên, chọn **Optimize → Reports**.
+  </Step>
+  <Step title="Chọn phạm vi">
+    Chọn **All accounts** trong bộ chọn phía trên các thẻ báo cáo.
+  </Step>
+  <Step title="Chọn báo cáo">
+    Chọn **Savings opportunities**.
+
+    **Trạng thái thành công:** một cuộc hội thoại mới mở ra, và báo cáo hoàn chỉnh xuất hiện dưới dạng artifact, mỗi tài khoản một mục.
+  </Step>
+</Steps>
+
+Báo cáo dùng dữ liệu chi phí mà Optimize đã lưu, nên không gọi AWS để lấy dữ liệu mới. Optimize lấy dữ liệu billing mới mỗi ngày một lần. Nút **Updated** ở đầu trang Optimize cho biết lần làm mới gần nhất của từng tài khoản. Dữ liệu thiếu hiển thị là khoảng trống, không bao giờ là 0, và Optimize không bao giờ cộng gộp các loại tiền tệ khác nhau.
+
+Để chạy báo cáo theo chu kỳ, chọn **Add schedule** trong **Scheduled reports**. Lịch giữ nguyên các tài khoản đã ghi nhận lúc bạn tạo, nên hãy tạo lại lịch sau khi kết nối thêm tài khoản. Xem [Đặt lịch báo cáo định kỳ](/vi/guide/cost-optimization/reports#đặt-lịch-báo-cáo-định-kỳ).
+
+### Hỏi trong chat
+
+Gọi tên tài khoản bằng alias để agent không phải đoán:
+
+```text
+Compare last month's AWS spend for production, staging, and development. Show a table with the top five services in each account and flag any service that grew more than 20% from the month before.
+```
+
+**Kết quả mong đợi:** mỗi tài khoản một bảng (hoặc một bảng gộp) với tên service và số tiền, kèm các service tăng quá 20% được nêu riêng.
+
+## Tìm lãng phí chi phí trong từng tài khoản
+
+Tài khoản non-production thường tích tụ tài nguyên bị bỏ quên. Đặt cùng một câu hỏi cho mọi tài khoản một lúc:
+
+```text
+In staging and development, find EC2 instances with average CPU under 10% over the last two weeks, and unattached EBS volumes. Group the results by account and include instance IDs, types, and regions.
+```
+
+**Kết quả mong đợi:** mỗi tài khoản một danh sách, kèm resource ID để bạn tra trong AWS console. Không có gì bị dừng hay xóa: role là chỉ đọc.
+
+Để có danh sách khoản tiết kiệm đã xếp hạng kèm số tiền ước tính, mở **Optimize → Findings** và chọn từng tài khoản ở đầu trang. Xem [Khuyến nghị](/vi/guide/cost-optimization/recommendations).
+
+## Tìm vấn đề bảo mật trên các tài khoản
+
+Role `ReadOnlyAccess` cho phép agent rà soát IAM role, user và policy trong mọi tài khoản đã kết nối. Hai prompt mang lại kết quả nhanh:
+
+```text
+List IAM users and roles that haven't been used in 90 days in production, staging, and development. Group by account and show the last-used date for each.
+```
+
+```text
+Across all my AWS accounts, find IAM users with access keys older than 90 days and any user without MFA. Show one table per account.
+```
+
+**Kết quả mong đợi:** mỗi tài khoản một bảng, kèm tên danh tính và ngày tháng. Hãy dùng làm danh sách dọn dẹp. Agent báo cáo những gì tìm thấy; agent không gỡ bỏ gì cả.
+
+<Note>
+Mọi lệnh gọi agent thực hiện đều là một lệnh gọi AWS API bình thường. Để xem chính xác những gì đã chạy trong một tài khoản, hãy lọc CloudTrail của tài khoản đó theo `CloudThinkerAccessRole`.
+</Note>
+
+## Chỉ cho agent thay đổi ở một số tài khoản
+
+Role của script thiết lập là chỉ đọc, nên AWS từ chối mọi thao tác ghi trong mọi tài khoản cho tới khi bạn cấp thêm quyền. Để agent sửa lỗi được trong, chẳng hạn, development nhưng không bao giờ trong production:
+
+1. Chỉ thêm các hành động ghi bạn cần vào `CloudThinkerAccessRole` trong tài khoản development. Giữ role production ở `ReadOnlyAccess`. Ví dụ, inline policy sau chỉ cho agent stop và start các instance có tag `env=dev`:
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": ["ec2:StopInstances", "ec2:StartInstances"],
+         "Resource": "arn:aws:ec2:*:*:instance/*",
+         "Condition": { "StringEquals": { "aws:ResourceTag/env": "dev" } }
+       }
+     ]
+   }
+   ```
+
+2. Kiểm tra công tắc **Allow writes** trên bảng chi tiết **Amazon Web Services** trong Connections. Với AWS, công tắc này mặc định bật. Hãy tắt trên mọi kết nối cần giữ chỉ đọc, kể cả khi role của kết nối thay đổi về sau.
+3. Thêm một [Rule](/vi/guide/approvals/rules) **Ask first** và chọn các kết nối staging và production trong **Connections**, để một người duyệt trước khi thao tác ghi chạy ở đó. Rule enforcement mặc định tắt và CloudThinker bật theo từng workspace, nên trước đó hãy giữ Approval mode ở **Manual**: đây là cài đặt khiến thao tác ghi phải chờ người duyệt ngay hôm nay.
+
+Xem [Quyền ghi](/vi/guide/connections/aws#quyền-ghi) để biết quyền IAM và **Allow writes** kết hợp với nhau thế nào.
+
+## Khắc phục sự cố
+
+<AccordionGroup>
+  <Accordion title="Một tài khoản bị thiếu trong câu trả lời">
+    **Nguyên nhân:** kết nối chưa ở trạng thái **Connected**, hoặc **Description** quá mơ hồ để agent khớp với prompt của bạn.
+
+    **Cách sửa:** kiểm tra trạng thái của tài khoản trong **More → Workspace settings → Connections**. Sau đó sửa **Description** để nêu rõ tài khoản chứa gì, và gọi tên tài khoản bằng alias trong prompt.
+  </Accordion>
+  <Accordion title="Tài khoản thứ hai thất bại với AccessDenied trên sts:AssumeRole">
+    **Nguyên nhân:** script hoặc trust policy được lấy từ hộp thoại của tài khoản khác, nên External ID không khớp.
+
+    **Cách sửa:** mở một hộp thoại kết nối mới cho tài khoản đó và chạy script mà hộp thoại hiển thị. Nếu `CloudThinkerAccessRole` đã tồn tại ở đó, script sẽ dừng. Nếu không có kết nối CloudThinker nào khác dùng role đó, hãy xóa role trong CloudShell rồi chạy script mới:
+
+    ```bash
+    aws iam detach-role-policy --role-name CloudThinkerAccessRole \
+      --policy-arn arn:aws:iam::aws:policy/ReadOnlyAccess
+    aws iam delete-role --role-name CloudThinkerAccessRole
+    ```
+
+    Nếu có, hãy mở rộng **Manual steps** trong hộp thoại và cập nhật trust policy của role hiện có bằng External ID mà hộp thoại hiển thị.
+  </Accordion>
+  <Accordion title="Câu hỏi về chi phí không trả về dữ liệu cho một tài khoản">
+    **Kiểm tra:** Cost Explorer đã bật trong tài khoản đó và đã đủ 24 giờ để kích hoạt. Tài khoản thành viên trong AWS Organizations có thể bị tài khoản management chặn dùng Cost Explorer.
+
+    **Cách sửa:** bật Cost Explorer, hoặc kết nối tài khoản management để xem chi phí của toàn tổ chức.
+  </Accordion>
+  <Accordion title="Báo cáo theo lịch cho mọi tài khoản bỏ qua một tài khoản mới">
+    **Nguyên nhân:** lịch báo cáo giữ nguyên các tài khoản đã ghi nhận lúc bạn tạo. Tài khoản kết nối sau không được thêm vào.
+
+    **Cách sửa:** tạo lại lịch trên **Optimize → Reports** với **All accounts** được chọn.
+  </Accordion>
+</AccordionGroup>
+
+## Bước tiếp theo
 
 <CardGroup cols={2}>
   <Card title="Kết nối tài khoản AWS" icon="/images/icons/aws.svg" href="/vi/guide/connections/aws">
-    Thiết lập xác thực Role-Based để CloudThinker có thể assume role trên nhiều tài khoản.
+    Mọi trường, quyền và cách sửa lỗi cho một kết nối AWS.
   </Card>
-  <Card title="Workspaces" icon="layer-group" href="/vi/guide/workspaces">
-    Tạo workspace chuyên dụng khi bạn cần cách ly hoàn toàn giữa các tài khoản.
+  <Card title="Báo cáo Optimize" icon="file-lines" href="/vi/guide/cost-optimization/reports">
+    Tạo hoặc đặt lịch báo cáo tiết kiệm cho một tài khoản hoặc tất cả.
   </Card>
 </CardGroup>

@@ -1,376 +1,238 @@
 ---
-title: Kafka
-description: "Kết nối Apache Kafka trên Confluent Cloud với CloudThinker bằng thông tin xác thực theo phạm vi để giám sát và quản lý stream"
+title: Apache Kafka
+description: "Kết nối Confluent Cloud hoặc Kafka tự vận hành để agent xem topic, đọc message, kiểm tra thông lượng và gỡ lỗi Flink SQL"
 icon: "/images/icons/kafka.svg"
 ---
 
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
 import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
 
-Kết nối các cluster Apache Kafka của bạn để cho phép [CloudThinker](/vi/guide/agents/overview) giám sát độ lành mạnh của topic, phân tích consumer lag và tối ưu hiệu suất streaming.
-
-Kết nối Kafka được gửi dưới dạng tệp JSON chứa thông tin xác thực, với cặp API key riêng cho mỗi phạm vi (Confluent Cloud) hoặc địa chỉ bootstrap (self-hosted).
-
----
-
-## Nền tảng hỗ trợ
-
-| Nền tảng | Hỗ trợ |
-|----------|--------|
-| **Confluent Cloud** | Tất cả các gói |
-| **Self-hosted Kafka** | 2.8+ (KRaft mode), 3.x |
-
----
+Kết nối một cluster Confluent Cloud hoặc Apache Kafka tự vận hành để các agent CloudThinker liệt kê topic và cấu hình của topic, lấy mẫu message, truy vấn số liệu thông lượng, rà soát schema và connector, và chẩn đoán câu lệnh Flink SQL. Bạn kết nối bằng cách tải lên một **file JSON chứa thông tin xác thực**: một địa chỉ bootstrap, cùng một cặp API key Confluent cho mỗi scope bạn muốn bật.
 
 ## Điều kiện tiên quyết
 
-- Tài khoản **Confluent Cloud** với ít nhất một Kafka environment và cluster, HOẶC cluster **Kafka 2.8+** (KRaft mode) hoặc **3.x** tự lưu trữ có thể truy cập từ CloudThinker.
-- Với Confluent Cloud: quyền admin để tạo API key tại **confluent.cloud/settings/api-keys**.
-- Quyền truy cập mạng từ CloudThinker đến các bootstrap server và REST endpoint của Kafka cluster.
+- **Confluent Cloud**: một environment có ít nhất một cluster Kafka, và quyền tạo API key, tốt nhất là cho một service account.
+- **Kafka tự vận hành**: một broker có địa chỉ bootstrap mà CloudThinker truy cập được qua mạng, mặc định cổng `9092`. File không có thiết lập nào cho SASL/SCRAM, mTLS, client certificate hay CA tùy chỉnh, nên broker phải chấp nhận kết nối của CloudThinker mà không cần những thứ đó. Đừng mở broker kiểu này ra internet: chỉ cho phép các egress IP của CloudThinker. Tài liệu này không công bố danh sách egress IP của CloudThinker: hãy hỏi đầu mối CloudThinker của bạn, hoặc [liên hệ chúng tôi](https://cloudthinker.io/contact). Xem [Truy cập dịch vụ nội bộ](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ) để biết các lựa chọn khác.
+- Một trình soạn thảo văn bản để viết file JSON.
+- Role **Admin** trong workspace CloudThinker, role có quyền thêm và sửa kết nối. Xem [Roles](/vi/guide/security/roles).
 
----
+## Chọn scope
+
+Trên Confluent Cloud, mỗi cặp API key mở một scope. Hãy bắt đầu với scope Kafka cluster và thêm các scope khác sau bằng cách [tải lên file đã cập nhật](#thay-đổi-file-sau-này). Với Kafka tự vận hành, chỉ `BOOTSTRAP_SERVERS` và `SCHEMA_REGISTRY_ENDPOINT` (tùy chọn) có tác dụng, mọi scope khác chỉ dành cho Confluent Cloud.
+
+| Scope | Agent làm được gì | Trường |
+|-------|----------------------------|--------|
+| **Kafka cluster** (bắt buộc) | Liệt kê topic, đọc cấu hình topic, lấy mẫu và produce message, tạo hoặc xóa topic | `BOOTSTRAP_SERVERS` (cả hai nền tảng). Chỉ Confluent Cloud: `KAFKA_API_KEY`, `KAFKA_API_SECRET`, `KAFKA_REST_ENDPOINT`, `KAFKA_CLUSTER_ID`, `KAFKA_ENV_ID` |
+| **Cloud resource management** | Liệt kê environment và cluster, truy vấn số liệu như received bytes, liệt kê chi phí billing, quản lý connector và tag của topic | `CONFLUENT_CLOUD_API_KEY`, `CONFLUENT_CLOUD_API_SECRET` |
+| **Schema Registry** | Liệt kê schema subject và version, xóa schema | `SCHEMA_REGISTRY_ENDPOINT`, `SCHEMA_REGISTRY_API_KEY`, `SCHEMA_REGISTRY_API_SECRET` |
+| **Flink** | Chạy và xem câu lệnh Flink SQL, duyệt catalog và table, chạy kiểm tra sức khỏe câu lệnh | `FLINK_API_KEY`, `FLINK_API_SECRET`, `FLINK_REST_ENDPOINT`, `FLINK_COMPUTE_POOL_ID`, `FLINK_ENV_ID`, `FLINK_ORG_ID`, tùy chọn `FLINK_ENV_NAME`, `FLINK_DATABASE_NAME` |
+| **Tableflow** | Liệt kê và quản lý topic Tableflow và catalog integration | `TABLEFLOW_API_KEY`, `TABLEFLOW_API_SECRET` |
 
 ## Thiết lập
-
-Chọn nền tảng Kafka của bạn để xem hướng dẫn kết nối cụ thể:
 
 <Tabs>
   <Tab title="Confluent Cloud">
     <Steps>
-      <Step title="Mở Confluent Cloud và chọn environment">
-        Vào [confluent.cloud/home](https://confluent.cloud/home), sau đó mở **Environments**.
-
-        Nhấn vào environment bạn muốn kết nối.
-
-        ID của environment xuất hiện trên URL sau khi bạn chọn (ví dụ: `env-xxxxx`).
-
-        Ví dụ điều hướng:
-        - Danh sách environment: `https://confluent.cloud/environments`
-        - Mẫu URL khi chọn environment: `https://confluent.cloud/environments/<env-id>/overview`
+      <Step title="Thu thập các trường của cluster">
+        Trong [Confluent Cloud](https://confluent.cloud/home), mở **Environments** và chọn environment của bạn. ID của environment (`env-...`) là `KAFKA_ENV_ID`. Mở cluster và sao chép bootstrap server, REST endpoint và cluster ID (`lkc-...`).
       </Step>
+      <Step title="Tạo một cặp API key cho mỗi scope">
+        Vào **Settings → API keys** và nhấn **Add API key**. Với production, chọn **Service account**. Tạo key cho Kafka cluster trước, sau đó mỗi scope tùy chọn bạn đã chọn thì tạo một key. Lưu từng key và secret ngay khi tạo. Chọn tài nguyên tương ứng với từng scope:
 
-      <Step title="Lấy thông tin Kafka cluster">
-        Trong environment đã chọn, mở **Clusters** và nhấn vào cluster mục tiêu (ví dụ: `<cluster-name>`).
-
-        Thu thập:
-        - `BOOTSTRAP_SERVERS`
-        - `KAFKA_REST_ENDPOINT`
-        - `KAFKA_CLUSTER_ID`
-
-        Giữ `KAFKA_ENV_ID` là ID environment đã chọn từ Bước 1.
+        | Scope | Chọn trong wizard | Sau đó chọn |
+        |-------|----------------------|-------------|
+        | Kafka cluster | **Kafka cluster** | Cluster ở bước 1 |
+        | Cloud resource management | **Cloud resource management** | Không cần chọn gì thêm. Key này áp dụng cho cả tổ chức |
+        | Schema Registry | **Schema Registry** | Environment ở bước 1 |
+        | Flink | **Flink region** | Environment, cloud và region của compute pool |
+        | Tableflow | **Tableflow** | Không cần chọn gì thêm |
       </Step>
-
-      <Step title="Tạo API key và secret theo phạm vi">
-        Vào [confluent.cloud/settings/api-keys](https://confluent.cloud/settings/api-keys) và nhấn **+ Add API Key**.
-
-        Chọn **Service Account** cho môi trường production, hoặc **My Account** cho development/testing.
-
-        Chọn phạm vi mong muốn trong quy trình onboarding của Confluent, sau đó lưu cặp API key và API secret được tạo.
-
-        Các phạm vi bạn có thể tạo key:
-        - Kafka cluster
-        - Schema Registry
-        - ksqlDB cluster
-        - Flink region
-        - Cloud resource management
-        - Tableflow
+      <Step title="Thu thập các trường của scope tùy chọn">
+        - **Schema Registry**: trong environment, mở **Stream Governance → Schema Registry** và sao chép endpoint.
+        - **Flink**: mở **Flink → Compute pools**, chọn pool và sao chép ID (`lfcp-...`). REST endpoint có dạng `https://flink.<region>.<provider>.confluent.cloud`, chẳng hạn `https://flink.us-east-1.aws.confluent.cloud`. `FLINK_ENV_ID` là ID `env-...` của environment chứa pool, thường trùng giá trị với `KAFKA_ENV_ID`. Organization ID nằm trong **Settings → Organizations**.
+        - **Giá trị mặc định tùy chọn cho Flink**: `FLINK_ENV_NAME` là tên hiển thị của environment, dùng làm catalog mặc định. `FLINK_DATABASE_NAME` là tên hiển thị của cluster Kafka, dùng làm database mặc định. Đặt hai giá trị này để agent gọi tên table mà không cần đường dẫn đầy đủ `catalog.database.table`.
       </Step>
+      <Step title="Viết file JSON">
+        Lưu một file, chẳng hạn `kafka.json`. Chỉ giữ các scope bạn đã tạo key, và xóa hẳn các dòng còn lại:
 
-      <Step title="Lấy endpoint Schema Registry (tùy chọn)">
-        Trong environment đã chọn, mở **Stream Governance -> Schema Registry**.
+        ```json
+        {
+          "BOOTSTRAP_SERVERS": "pkc-xxxxx.us-east-1.aws.confluent.cloud:9092",
+          "KAFKA_API_KEY": "<kafka-api-key>",
+          "KAFKA_API_SECRET": "<kafka-api-secret>",
+          "KAFKA_REST_ENDPOINT": "https://pkc-xxxxx.us-east-1.aws.confluent.cloud:443",
+          "KAFKA_CLUSTER_ID": "lkc-xxxxx",
+          "KAFKA_ENV_ID": "env-xxxxx",
 
-        Thu thập:
-        - `SCHEMA_REGISTRY_ENDPOINT`
+          "CONFLUENT_CLOUD_API_KEY": "<cloud-api-key>",
+          "CONFLUENT_CLOUD_API_SECRET": "<cloud-api-secret>",
 
-        Ví dụ mẫu URL:
-        `https://confluent.cloud/environments/<env-id>/stream-governance/schema-registry/overview`
+          "SCHEMA_REGISTRY_ENDPOINT": "https://psrc-xxxxx.us-east-1.aws.confluent.cloud",
+          "SCHEMA_REGISTRY_API_KEY": "<schema-registry-api-key>",
+          "SCHEMA_REGISTRY_API_SECRET": "<schema-registry-api-secret>",
+
+          "FLINK_API_KEY": "<flink-api-key>",
+          "FLINK_API_SECRET": "<flink-api-secret>",
+          "FLINK_REST_ENDPOINT": "https://flink.us-east-1.aws.confluent.cloud",
+          "FLINK_COMPUTE_POOL_ID": "lfcp-xxxxx",
+          "FLINK_ENV_ID": "env-xxxxx",
+          "FLINK_ORG_ID": "<org-id>",
+
+          "TABLEFLOW_API_KEY": "<tableflow-api-key>",
+          "TABLEFLOW_API_SECRET": "<tableflow-api-secret>"
+        }
+        ```
       </Step>
+      <Step title="Tải file lên CloudThinker">
+        Mở **More → Workspace settings → Connections** và chọn **Apache Kafka**. Kéo file vào vùng tải lên, hoặc nhấn **choose a JSON file**. Nhấn **Connect**.
 
-      <Step title="Lấy thông tin Flink (tùy chọn)">
-        Trong environment đã chọn, mở **Flink**.
-
-        Mở **Compute pools** và tạo pool mới bằng **+ Add compute pool** nếu cần.
-
-        Nhấn vào compute pool mục tiêu và thu thập:
-        - `FLINK_COMPUTE_POOL_ID`
-        - `FLINK_ENV_ID` (cùng ID environment từ URL)
-
-        Ví dụ mẫu URL:
-        `https://confluent.cloud/environments/<env-id>/flink/pools/<compute-pool-id>/overview`
-
-        Đặt `FLINK_REST_ENDPOINT` theo nhà cung cấp cloud và region của bạn (AWS, Azure, hoặc GCP; ví dụ: `<region-code>`).
-      </Step>
-
-      <Step title="Lấy organization ID (tùy chọn)">
-        Vào [confluent.cloud/settings/organizations/edit](https://confluent.cloud/settings/organizations/edit) và thu thập:
-        - `FLINK_ORG_ID`
-      </Step>
-
-      <Step title="Thêm kết nối trong CloudThinker">
-        Trong CloudThinker, điều hướng đến **Connections → Kafka**.
-
-        Tạo tệp JSON với các trường cho phạm vi bạn đã bật (xem [Mẫu trường kết nối](#connection-field-template) bên dưới). Tải tệp JSON này lên trong biểu mẫu kết nối.
-
-        Các trường bắt buộc phụ thuộc vào profile của bạn — xem [Profiles](#profiles) để biết chi tiết.
-
-        Nhấn **Connect**. CloudThinker xác minh thông tin xác thực và hiển thị trạng thái **Connected**.
+        **Trạng thái thành công:** kết nối hiện trạng thái **Connected**. Chạy prompt xác minh bên dưới để chắc chắn agent thấy được các topic.
       </Step>
     </Steps>
-
-    ### Mô hình thông tin xác thực theo phạm vi
-
-    Confluent Cloud sử dụng thông tin xác thực API theo phạm vi. Mỗi cặp API key và secret cấp quyền truy cập vào một phạm vi tài nguyên cụ thể.
-
-    Bạn có thể bắt đầu chỉ với các trường Kafka, sau đó thêm Schema Registry, Flink, Cloud API, hoặc Tableflow sau.
-
-    | Phạm vi | Tính năng mở khóa | Trường thông thường |
-    |---------|------------------|--------------------|
-    | **Kafka cluster** | Quản lý topic (liệt kê, tạo, xóa, cấu hình), produce/consume message, xem metadata cluster | `BOOTSTRAP_SERVERS`, `KAFKA_API_KEY`, `KAFKA_API_SECRET`, `KAFKA_CLUSTER_ID`, `KAFKA_ENV_ID`, `KAFKA_REST_ENDPOINT` |
-    | **Schema Registry** | Liệt kê, kiểm tra và xóa data schema | `SCHEMA_REGISTRY_ENDPOINT`, `SCHEMA_REGISTRY_API_KEY`, `SCHEMA_REGISTRY_API_SECRET` |
-    | **Flink region** | Tạo và quản lý Flink SQL statement, khám phá catalog/database/table, kiểm tra sức khỏe và chẩn đoán | `FLINK_REST_ENDPOINT`, `FLINK_API_KEY`, `FLINK_API_SECRET`, `FLINK_COMPUTE_POOL_ID`, `FLINK_ENV_ID` |
-    | **Cloud resource management** | Khám phá environment và cluster, truy vấn metric vận hành và chi phí billing | `CONFLUENT_CLOUD_API_KEY`, `CONFLUENT_CLOUD_API_SECRET` |
-    | **Tableflow** | Quản lý topic hỗ trợ Tableflow và tích hợp catalog (ví dụ: AWS Glue) | `TABLEFLOW_API_KEY`, `TABLEFLOW_API_SECRET` |
-    | **Organization metadata** | Ngữ cảnh cấp tổ chức cho quản lý tài nguyên Flink | `FLINK_ORG_ID` |
-
-    ### Profiles
-
-    #### Tối thiểu (chỉ Kafka)
-
-    Bắt buộc:
-    - `BOOTSTRAP_SERVERS`
-    - `KAFKA_API_KEY`
-    - `KAFKA_API_SECRET`
-    - `KAFKA_CLUSTER_ID`
-    - `KAFKA_ENV_ID`
-
-    **Bạn có thể làm gì:** Quản lý topic (liệt kê, tạo, xóa, cấu hình), produce và consume message, xem metadata cluster và cấu hình topic.
-
-    #### Tiêu chuẩn (Kafka + Schema Registry + Cloud Management)
-
-    Thêm:
-    - `SCHEMA_REGISTRY_ENDPOINT`
-    - `SCHEMA_REGISTRY_API_KEY`
-    - `SCHEMA_REGISTRY_API_SECRET`
-    - `CONFLUENT_CLOUD_API_KEY`
-    - `CONFLUENT_CLOUD_API_SECRET`
-
-    **Bạn có thể làm gì:** Tất cả những gì trong Tối thiểu, cộng thêm liệt kê và kiểm tra data schema, khám phá environment và cluster, truy vấn metric vận hành và xem chi phí billing.
-
-    #### Nâng cao (Flink / Tableflow)
-
-    Thêm một hoặc nhiều nhóm phạm vi tùy chọn khi cần:
-    - **Flink:** `FLINK_REST_ENDPOINT`, `FLINK_API_KEY`, `FLINK_API_SECRET`, `FLINK_COMPUTE_POOL_ID`, `FLINK_ENV_ID`
-    - **Tableflow:** `TABLEFLOW_API_KEY`, `TABLEFLOW_API_SECRET`
-
-    **Bạn có thể làm gì:** Tất cả những gì trong Tiêu chuẩn, cộng thêm tạo và quản lý Flink SQL statement, khám phá catalog và database Flink, chạy kiểm tra sức khỏe trên streaming query, và quản lý topic hỗ trợ Tableflow với tích hợp catalog (ví dụ: AWS Glue).
-
-    ### Mẫu trường kết nối
-
-    Sử dụng mẫu này và điền giá trị cho các phạm vi bạn đã bật:
-
-    ```json
-    {
-      "BOOTSTRAP_SERVERS": "pkc-xxxxx.<region>.<provider>.confluent.cloud:9092",
-      "KAFKA_API_KEY": "<kafka-api-key>",
-      "KAFKA_API_SECRET": "<kafka-api-secret>",
-      "KAFKA_REST_ENDPOINT": "https://pkc-xxxxx.<region>.<provider>.confluent.cloud:443",
-      "KAFKA_CLUSTER_ID": "lkc-xxxxx",
-      "KAFKA_ENV_ID": "env-xxxxx",
-
-      "SCHEMA_REGISTRY_ENDPOINT": "https://psrc-xxxxx.<region>.<provider>.confluent.cloud",
-      "SCHEMA_REGISTRY_API_KEY": "<schema-registry-api-key>",
-      "SCHEMA_REGISTRY_API_SECRET": "<schema-registry-api-secret>",
-
-      "FLINK_API_KEY": "<flink-api-key>",
-      "FLINK_API_SECRET": "<flink-api-secret>",
-      "FLINK_COMPUTE_POOL_ID": "lfcp-xxxxx",
-      "FLINK_ENV_ID": "env-xxxxx",
-      "FLINK_REST_ENDPOINT": "https://flink.<region>.<provider>.confluent.cloud",
-      "FLINK_ORG_ID": "<org-id>",
-
-      "CONFLUENT_CLOUD_API_KEY": "<cloud-api-key>",
-      "CONFLUENT_CLOUD_API_SECRET": "<cloud-api-secret>",
-
-      "TABLEFLOW_API_KEY": "<tableflow-api-key>",
-      "TABLEFLOW_API_SECRET": "<tableflow-api-secret>"
-    }
-    ```
   </Tab>
-  <Tab title="Self-hosted Kafka">
+  <Tab title="Kafka tự vận hành">
     <Steps>
-      <Step title="Đảm bảo quyền truy cập mạng">
-        Đảm bảo ứng dụng CloudThinker có thể kết nối đến Kafka broker của bạn tại `<broker-name>.<your-domain>:9092`.
+      <Step title="Mở quyền truy cập mạng">
+        Cho phép CloudThinker truy cập địa chỉ bootstrap của broker, mặc định cổng `9092`. Broker chỉ bind vào `127.0.0.1` thì không truy cập được.
       </Step>
-      <Step title="Thêm kết nối trong CloudThinker">
-        Trong CloudThinker, điều hướng đến **Connections → Kafka**.
+      <Step title="Viết file JSON">
+        Lưu một file, chẳng hạn `kafka.json`, chứa địa chỉ bootstrap, cùng endpoint Schema Registry nếu bạn có chạy (thường ở cổng `8081`):
 
-        Tạo tệp JSON với các trường cho phạm vi bạn đã bật (xem [Mẫu trường kết nối](#connection-field-template-2) bên dưới). Tải tệp JSON này lên trong biểu mẫu kết nối.
+        ```json
+        {
+          "BOOTSTRAP_SERVERS": "kafka-1.example.com:9092",
+          "SCHEMA_REGISTRY_ENDPOINT": "https://schema-registry.example.com:8081"
+        }
+        ```
+      </Step>
+      <Step title="Tải file lên CloudThinker">
+        Mở **More → Workspace settings → Connections** và chọn **Apache Kafka**. Tải file lên và nhấn **Connect**.
 
-        Các trường bắt buộc phụ thuộc vào profile của bạn — xem [Profiles](#profiles-2) bên dưới để biết chi tiết.
-
-        Nhấn **Connect**. CloudThinker xác minh thông tin xác thực và hiển thị trạng thái **Connected**.
+        **Trạng thái thành công:** kết nối hiện trạng thái **Connected**.
       </Step>
     </Steps>
 
-    ### Mô hình thông tin xác thực theo phạm vi
-
-    Self-hosted Kafka sử dụng cấu hình theo phạm vi. Bạn có thể bắt đầu chỉ với các trường Kafka, sau đó thêm trường Schema Registry sau.
-
-    | Phạm vi | Tính năng mở khóa | Trường thông thường |
-    |---------|------------------|--------------------|
-    | **Kafka cluster** | Quản lý topic (liệt kê, tạo, xóa), produce/consume message | `BOOTSTRAP_SERVERS` |
-    | **Schema Registry** | Liệt kê, kiểm tra và xóa data schema | `SCHEMA_REGISTRY_ENDPOINT` |
-
-    ### Profiles
-
-    #### Tối thiểu (chỉ Kafka)
-
-    Bắt buộc:
-    - `BOOTSTRAP_SERVERS`
-
-    **Bạn có thể làm gì:** Quản lý topic (liệt kê, tạo, xóa), produce và consume message.
-
-    #### Tiêu chuẩn (với Schema Registry)
-
-    Thêm:
-    - `SCHEMA_REGISTRY_ENDPOINT` (thường là port 8081)
-
-    **Bạn có thể làm gì:** Tất cả những gì trong Tối thiểu, cộng thêm liệt kê, kiểm tra và xóa data schema.
-
-    ### Mẫu trường kết nối
-
-    Sử dụng mẫu này và điền giá trị cho các phạm vi bạn đã bật:
-
-    ```json
-    {
-      "BOOTSTRAP_SERVERS": "<broker-name>.<your-domain>:9092",
-      "SCHEMA_REGISTRY_ENDPOINT": "http://<schema-registry-host>:8081"
-    }
-    ```
+    Với Kafka tự vận hành, agent làm việc trực tiếp qua broker: liệt kê topic, lấy mẫu hoặc produce message, và cả schema khi bạn đặt endpoint Schema Registry. Số liệu, billing, connector, Flink và Tableflow là API của Confluent Cloud, nên không dùng được.
   </Tab>
 </Tabs>
 
----
-
 ## Chi tiết kết nối
 
-Các trường kết nối được gửi dưới dạng tệp JSON chứa thông tin xác thực. Các trường khác nhau tùy theo nền tảng và phạm vi đã bật — xem mẫu đầy đủ trong phần [Thiết lập](#setup).
+Biểu mẫu chỉ có một trường tải lên. File phải là một JSON object với các giá trị kiểu chuỗi, chỉ dùng các key liệt kê trong [Chọn scope](#chọn-scope). File có key nào khác, hoặc có giá trị không phải chuỗi, sẽ bị từ chối.
 
-<Note>
-CloudThinker hỗ trợ onboarding theo phạm vi một phần — bạn có thể bắt đầu chỉ với các trường Kafka và thêm thông tin xác thực Schema Registry, Flink, Cloud API, hoặc Tableflow sau.
-</Note>
-
-| Trường | Nền tảng | Mô tả |
-|--------|---------|-------|
-| `BOOTSTRAP_SERVERS` | Cả hai | Địa chỉ bootstrap của Kafka cluster (bắt buộc) |
-| `KAFKA_API_KEY` / `KAFKA_API_SECRET` | Confluent Cloud | Thông tin xác thực phạm vi Kafka |
-| `SCHEMA_REGISTRY_ENDPOINT` | Cả hai | URL Schema Registry |
-| `SCHEMA_REGISTRY_API_KEY` / `SCHEMA_REGISTRY_API_SECRET` | Confluent Cloud | Thông tin xác thực Schema Registry |
-| `FLINK_REST_ENDPOINT` | Confluent Cloud | Endpoint vùng Flink |
-| `CONFLUENT_CLOUD_API_KEY` / `CONFLUENT_CLOUD_API_SECRET` | Confluent Cloud | Thông tin xác thực quản lý Cloud |
-| `TABLEFLOW_API_KEY` / `TABLEFLOW_API_SECRET` | Confluent Cloud | Thông tin xác thực Tableflow |
-
----
+| Trường | Bắt buộc | Mô tả |
+|-------|----------|-------------|
+| `BOOTSTRAP_SERVERS` | Có | Địa chỉ bootstrap của broker, dạng `host:port` |
+| `KAFKA_API_KEY` / `KAFKA_API_SECRET` | Confluent Cloud | Cặp key của Kafka cluster |
+| `KAFKA_REST_ENDPOINT`, `KAFKA_CLUSTER_ID`, `KAFKA_ENV_ID` | Confluent Cloud | REST endpoint của cluster, cluster ID và environment ID |
+| `SCHEMA_REGISTRY_ENDPOINT` | Không | URL của Schema Registry, trên cả hai nền tảng |
+| Các key scope khác | Không | Xem [Chọn scope](#chọn-scope) |
 
 ## Quyền yêu cầu
 
+**Confluent Cloud:** tạo key cho một service account, và chỉ cấp cho account đó những gì agent cần.
+
+- **Kafka cluster**: giới hạn ACL vào các topic agent cần đọc. Việc lấy mẫu message đọc qua một consumer group, nên account cũng cần quyền `READ` trên consumer group:
+
+  ```bash
+  confluent kafka acl create --allow --service-account sa-xxxxx \
+    --operations read,describe,describe-configs --topic orders --cluster lkc-xxxxx
+  confluent kafka acl create --allow --service-account sa-xxxxx \
+    --operations read --consumer-group "*" --cluster lkc-xxxxx
+  ```
+
+- **Cloud resource management**: tối thiểu **MetricsViewer** để xem số liệu.
+- **Schema Registry**: **DeveloperRead** trên các subject agent cần liệt kê.
+- **Flink**: **FlinkDeveloper** trong environment chứa compute pool.
+
+**Kafka tự vận hành:** kết nối chỉ cần địa chỉ bootstrap.
+
 <Tip>
-Với Confluent Cloud, sử dụng **Service Account** và chỉ cấp cho mỗi API key phạm vi nó cần. Bắt đầu với thông tin xác thực chỉ Kafka và thêm các phạm vi bổ sung dần dần.
+Hãy bắt đầu với scope Kafka cluster và ACL chỉ đọc. Không cấp ACL ghi cho service account trừ khi bạn muốn agent produce message hoặc tạo topic.
 </Tip>
-
-**Confluent Cloud:** Tạo cặp API key và secret riêng cho từng phạm vi. Hạn chế Kafka ACL chỉ cho các topic mà CloudThinker cần. Thông tin xác thực Cloud Management yêu cầu tối thiểu role MetricsViewer.
-
-**Self-hosted Kafka:** Không cần API key. Đảm bảo địa chỉ bootstrap của broker có thể truy cập từ CloudThinker trên port 9092.
-
----
 
 ## Khả năng của agent
 
-Sau khi kết nối, CloudThinker có thể:
+| Khả năng | Agent làm được gì | Đi qua Approvals |
+|------------|--------------------|------------------------|
+| **Danh mục topic** | Liệt kê topic kèm số partition, đọc cấu hình topic, tìm topic theo tên hoặc tag | Không |
+| **Lấy mẫu message** | Đọc một số lượng giới hạn message gần đây, giải mã bằng Schema Registry khi đã cấu hình | Không |
+| **Số liệu và billing** | Truy vấn số liệu Confluent Cloud như received bytes, và liệt kê chi phí billing | Không |
+| **Schema và connector** | Liệt kê schema subject và version, liệt kê và đọc connector | Không |
+| **Đọc Flink SQL** | Duyệt catalog và table, đọc câu lệnh và exception của chúng, chạy kiểm tra sức khỏe | Không |
+| **Câu lệnh Flink SQL** | Chạy một câu lệnh Flink SQL | Có |
+| **Produce và tạo** | Produce một message, tạo topic | Có |
+| **Thay đổi và xóa** | Xóa topic, schema, connector hoặc câu lệnh Flink; sửa cấu hình topic; tạo connector; xóa tag; thay đổi Tableflow | Có |
 
-| Khả năng | Mô tả |
-|----------|-------|
-| **Giám sát consumer lag** | Theo dõi lag theo consumer group, xác định consumer chậm |
-| **Phân tích sức khỏe topic** | Kiểm tra phân phối partition, replication factor, các partition under-replicated |
-| **Metric throughput** | Giám sát bytes vào/ra, tốc độ message theo topic |
-| **Sức khỏe broker** | Theo dõi tính khả dụng của broker, trạng thái ISR (In-Sync Replicas) |
+Các lệnh gọi đánh dấu **Có** sẽ đi qua [Approvals](/vi/guide/approvals/overview) của workspace trước.
+
+<ApprovalDefault />
+
+<Warning>
+Câu lệnh Flink không chỉ đọc. `INSERT INTO` ghi vào một topic, và câu lệnh chạy liên tục sẽ tiếp tục chạy trên compute pool, tiêu tốn năng lực bạn phải trả tiền, cho đến khi có người xóa nó. Hãy đọc câu lệnh trước khi phê duyệt.
+</Warning>
+
+Số partition không đổi được qua cấu hình topic. Dùng giao diện Confluent Cloud, hoặc xóa rồi tạo lại topic.
 
 ### Xác minh kết nối
 
 ```text
-List all Kafka topics and check consumer group lag for the active consumer groups
+List my Kafka topics with partition counts and replication factor
 ```
+
+Kết quả mong đợi là mọi topic trong cluster, kèm số partition và replication factor. Trên Confluent Cloud có scope cloud, agent cũng nêu được tên environment và cluster.
 
 ### Ví dụ prompt
 
 ```text
-Check consumer lag for the orders-service group
-Analyze message throughput trends for the events topic
-Identify under-replicated partitions and report the affected topics
+Show the last 10 messages on the orders topic, decoded with Schema Registry
+Chart received bytes per 5 minutes for my Kafka cluster over the last 6 hours
+Why is my Flink statement order-enrichment failing?
 ```
 
----
+## Thay đổi file sau này
 
-## Xử lý sự cố
+Để thêm scope hoặc xoay vòng key, viết một file đầy đủ chứa mọi scope bạn muốn giữ. Mở kết nối, nhấn biểu tượng bút chì trên dòng của kết nối, rồi trong **Edit Instance** nhấn **Replace…**. Tải file lên và nhấn **Save and test**. Nếu bước kiểm tra lỗi, CloudThinker giữ lại thông tin xác thực cũ. Xem [Xoay vòng thông tin xác thực](/vi/guide/connections/overview#xoay-vòng-thông-tin-xác-thực).
 
-<Accordion title="Kết nối bị từ chối hoặc timeout">
-- Xác minh tiến trình Kafka broker đang chạy trên `<broker-name>.<your-domain>`.
-- Kiểm tra rằng port của broker (mặc định 9092) đang mở và không bị chặn bởi firewall.
-- Xác minh địa chỉ bootstrap server `<broker-name>.<your-domain>:9092` chính xác và có thể truy cập từ CloudThinker.
-- Đối với development nội bộ, đảm bảo Kafka được bind vào IP có thể truy cập (không chỉ `127.0.0.1`).
+## Khắc phục sự cố
+
+<Accordion title="Connection refused hoặc timeout">
+CloudThinker không truy cập được broker. Kiểm tra broker đang chạy, cổng `9092` đã mở trên firewall, và `BOOTSTRAP_SERVERS` đúng. Broker chỉ bind vào `127.0.0.1` thì không truy cập được từ bên ngoài host của nó.
 </Accordion>
 
-<Accordion title="Trường phạm vi một phần trên Confluent Cloud">
-Khi sử dụng onboarding theo phạm vi một phần, **hãy xóa toàn bộ cặp key-value** cho các phạm vi không dùng. Không để chuỗi rỗng.
-
-**Đúng** (chỉ Kafka, Schema Registry đã xóa hoàn toàn):
-```json
-{
-  "BOOTSTRAP_SERVERS": "pkc-xxxxx.<region>.<provider>.confluent.cloud:9092",
-  "KAFKA_API_KEY": "<kafka-api-key>",
-  "KAFKA_API_SECRET": "<kafka-api-secret>",
-  "KAFKA_REST_ENDPOINT": "https://pkc-xxxxx.<region>.<provider>.confluent.cloud:443",
-  "KAFKA_CLUSTER_ID": "lkc-xxxxx",
-  "KAFKA_ENV_ID": "env-xxxxx"
-}
-```
-
-**Sai** (giá trị chuỗi rỗng gây lỗi validation):
-```json
-{
-  "BOOTSTRAP_SERVERS": "pkc-xxxxx.<region>.<provider>.confluent.cloud:9092",
-  "KAFKA_API_KEY": "<kafka-api-key>",
-  "KAFKA_API_SECRET": "<kafka-api-secret>",
-  "KAFKA_REST_ENDPOINT": "https://pkc-xxxxx.<region>.<provider>.confluent.cloud:443",
-  "KAFKA_CLUSTER_ID": "lkc-xxxxx",
-  "KAFKA_ENV_ID": "env-xxxxx",
-  "SCHEMA_REGISTRY_ENDPOINT": "",
-  "SCHEMA_REGISTRY_API_KEY": ""
-}
-```
+<Accordion title="Lỗi xác thực dữ liệu sau khi tải lên file thiếu">
+Có key scope xuất hiện nhưng giá trị rỗng. Xóa hẳn cả key lẫn giá trị của mọi scope bạn không dùng. `"SCHEMA_REGISTRY_ENDPOINT": ""` sẽ lỗi, còn bỏ hẳn key thì được.
 </Accordion>
 
-<Accordion title="Kết nối Schema Registry thất bại">
-Xác minh URL `SCHEMA_REGISTRY_ENDPOINT` chính xác và có thể truy cập từ CloudThinker. Với self-hosted, đảm bảo port 8081 đang mở. Với Confluent Cloud, xác nhận API key của Schema Registry có đúng quyền cho environment của bạn.
+<Accordion title="401 Unauthorized">
+Có cặp key bị sai, đã hết hạn, hoặc dùng nhầm scope. Mỗi scope cần cặp key riêng: key Kafka cluster không dùng được cho Schema Registry hay Flink. Tạo cặp key mới cho scope đó và [tải lên file đã cập nhật](#thay-đổi-file-sau-này).
 </Accordion>
 
----
+<Accordion title="Câu hỏi về số liệu hoặc billing bị lỗi">
+File không có cặp `CONFLUENT_CLOUD_API_KEY`, hoặc account của key thiếu **MetricsViewer**. Thêm scope cloud và [tải file lên lại](#thay-đổi-file-sau-này). Trên cluster tự vận hành, các API này không dùng được.
+</Accordion>
+
+<Accordion title="Schema Registry bị lỗi">
+Kiểm tra CloudThinker truy cập được `SCHEMA_REGISTRY_ENDPOINT`. Với bản tự vận hành, mở cổng `8081`. Với Confluent Cloud, xác nhận key Schema Registry thuộc cùng environment.
+</Accordion>
 
 ## Bảo mật
 
 <ConnectionSecurity />
 
-- **API key giới hạn phạm vi** — chỉ cấp các phạm vi mà CloudThinker cần; bắt đầu chỉ với Kafka và thêm Schema Registry, Flink, hoặc Cloud Management dần dần
-- **Hạn chế mạng** — giới hạn bootstrap và REST endpoint chỉ cho IP egress của CloudThinker qua security group hoặc quy tắc firewall
-
----
+- **Kafka tự vận hành không dùng thông tin xác thực**: lời khuyên chỉ đọc ở trên chỉ áp dụng cho key Confluent Cloud. Broker tự vận hành chấp nhận mọi thứ cấu hình của chính nó cho phép, nên hãy giới hạn truy cập mạng như bên dưới, và nhớ rằng thao tác produce và tạo vẫn đi qua Approvals.
+- **Mỗi scope một cặp key**: cấp cho mỗi scope một key riêng trên service account, để bạn thu hồi quyền Flink hoặc Tableflow mà không ảnh hưởng tới key Kafka cluster.
+- **Giới hạn truy cập mạng**: dùng firewall rule để chỉ cho lưu lượng của CloudThinker tới bootstrap và REST endpoint, nhất là với broker tự vận hành không có thông tin xác thực.
+- **Xóa file cục bộ**: file JSON chứa mọi secret ở dạng văn bản thường. Xóa file sau khi tải lên, hoặc chỉ lưu trong secrets manager.
+- **Coi message là dữ liệu nhạy cảm**: message được lấy mẫu có thể chứa dữ liệu cá nhân hoặc token mà producer đã ghi. Chỉ cấp quyền `READ` trên topic ở những nơi agent cần xem.
 
 ## Liên quan
 
 <CardGroup cols={2}>
-  <Card title="Agent" icon="server" href="/vi/guide/agents/overview">
-    Agent tối ưu hạ tầng cloud và streaming
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Quyết định thay đổi Kafka nào được chạy, phải chờ một người, hoặc bị từ chối.
   </Card>
-  <Card title="Kết nối AWS" icon="/images/icons/aws.svg" href="/vi/guide/connections/aws">
-    Hướng dẫn thiết lập tài nguyên AWS cloud
+  <Card title="Kết nối RabbitMQ" icon="/images/icons/rabbitmq.svg" href="/vi/guide/connections/rabbitmq">
+    Kết nối một message broker khác.
   </Card>
 </CardGroup>

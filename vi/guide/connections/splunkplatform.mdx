@@ -1,0 +1,157 @@
+---
+title: Splunk Platform
+description: "Kết nối Splunk Cloud Platform hoặc Splunk Enterprise để CloudThinker chạy tìm kiếm SPL chỉ đọc và xem xét index cùng saved search"
+icon: "/images/icons/splunkplatform.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối Splunk để [CloudThinker](/vi/guide/agents/overview) chạy tìm kiếm có giới hạn bằng SPL (ngôn ngữ tìm kiếm của Splunk), liệt kê index cùng số event, và kiểm tra saved search cùng cảnh báo của chúng. Kết nối chỉ đọc và gọi REST API của Splunk trên management port bằng authentication token.
+
+## Nền tảng được hỗ trợ
+
+| Nền tảng | Yêu cầu |
+|----------|---------------|
+| **Splunk Cloud Platform** | Management port được mở cho CloudThinker. Splunk Cloud mặc định đóng port này với mọi người. |
+| **Splunk Enterprise** | Management port truy cập được từ CloudThinker, và TLS được bật (xác thực bằng token yêu cầu TLS) |
+
+<Note>
+Tài khoản dùng thử miễn phí của Splunk Cloud Platform không dùng được REST API, nên kết nối này không truy cập được chúng.
+</Note>
+
+## Điều kiện tiên quyết
+
+- Bản triển khai Splunk Cloud Platform hoặc instance Splunk Enterprise.
+- Admin Splunk, hoặc user có vai trò được phép tạo token cho user khác.
+- User Splunk tạo riêng cho CloudThinker, với vai trò chỉ truy cập các index bạn muốn tìm kiếm. Xem [Quyền yêu cầu](#quyền-yêu-cầu).
+- Vai trò **Admin** trong workspace CloudThinker, cần thiết để thêm kết nối. Xem [Vai trò](/vi/guide/security/roles).
+
+## Thiết lập
+
+<Steps>
+  <Step title="Chỉ Splunk Cloud Platform: cho phép CloudThinker trên management port">
+    Vào **Settings → Server settings → IP allow list**, mở tab **Search head API access** và nhấn **Add IP subnet**. Thêm các địa chỉ IP egress của CloudThinker theo ký hiệu CIDR, rồi nhấn **Save**. Thay đổi có thể mất 15 phút hoặc lâu hơn để áp dụng. Tài liệu này không công bố danh sách IP egress của CloudThinker: hãy hỏi đầu mối CloudThinker của bạn, hoặc [liên hệ chúng tôi](https://cloudthinker.io/contact).
+
+    Bạn cần vai trò có capability `edit_ip_allow_list` (`sc_admin` có capability này). Trên Splunk Enterprise, bỏ qua bước này: chỉ cho phép TCP inbound trên management port (mặc định 8089) từ các IP egress của CloudThinker.
+  </Step>
+  <Step title="Tạo vai trò và user cho CloudThinker">
+    Vào **Settings → Roles** và tạo vai trò có capability **`search`**. Trong phần index của vai trò, chỉ cho phép các index CloudThinker cần tìm kiếm.
+
+    Không sao chép hoặc kế thừa vai trò `user` mặc định của Splunk mà không kiểm tra index của vai trò này. Vai trò này tìm kiếm được mọi index không phải internal, rộng hơn mức bạn có thể muốn. Sau đó vào **Settings → Users**, tạo user cho CloudThinker và chỉ gán vai trò đó.
+  </Step>
+  <Step title="Bật xác thực bằng token">
+    Vào **Settings → Tokens**. Nếu trang hiển thị `Token authentication is currently disabled`, nhấn **Enable Token Authentication**. Thay đổi có hiệu lực ngay, không cần khởi động lại.
+  </Step>
+  <Step title="Tạo token">
+    Trên **Settings → Tokens**, nhấn **New Token**. Đặt **User** là user của CloudThinker, thêm **Audience** ngắn như `CloudThinker`, và đặt **Expiration** là ngày bạn sẽ theo dõi. Đặt nhắc nhở trong lịch để xoay vòng token trước ngày đó. Nếu để trống, Splunk dùng mặc định của bản triển khai (30 ngày trừ khi admin đã thay đổi), và kết nối ngừng hoạt động khi token hết hạn.
+
+    Nhấn **Create** và sao chép toàn bộ giá trị **Token** trước khi đóng hộp thoại. Splunk chỉ hiển thị token một lần.
+  </Step>
+  <Step title="Kết nối trong CloudThinker">
+    Trong thanh bên của CloudThinker, nhấn **More → Workspace settings → Connections**, giữ nguyên tab **Builtin Connections** và chọn **Splunk Platform**. Điền các trường theo bảng bên dưới, giữ **TLS certificate** ở **Verify TLS certificate** và nhấn **Connect**. CloudThinker kiểm tra endpoint có trả về server info của Splunk không.
+
+    **Trạng thái thành công:** kết nối hiển thị trạng thái **Connected**. Nếu kiểm tra thất bại, di chuột lên biểu tượng lỗi trên kết nối để đọc lý do. Chạy prompt xác minh bên dưới để xem sản phẩm và phiên bản mà CloudThinker tìm thấy.
+  </Step>
+</Steps>
+
+## Chi tiết kết nối
+
+| Trường | Nội dung cần nhập | Ví dụ |
+|-------|---------------|---------|
+| **Management host** | Chỉ hostname hoặc IP, không có `https://`, port hay path. Trên Splunk Cloud Platform, dùng management host của stack, không phải lúc nào cũng là host bạn đăng nhập. | `acme.splunkcloud.com` |
+| **Management port** | Management port của Splunk. Mặc định là 8089. | `8089` |
+| **Authentication token** | Token bạn đã tạo cho user CloudThinker | |
+| **TLS certificate** | **Verify TLS certificate** cho Splunk Cloud Platform và mọi instance có chứng chỉ tin cậy. Chỉ chọn **Skip TLS verification** cho instance self-hosted vẫn đang dùng chứng chỉ tự ký mặc định của Splunk. Bỏ qua xác minh nghĩa là CloudThinker không phát hiện được server giả mạo, nên token có thể bị chặn bắt. Giải pháp lâu dài là cài chứng chỉ tin cậy. | Verify TLS certificate |
+
+<Warning>
+Không dùng port 8000. Đó là Splunk Web, port bạn mở bằng trình duyệt. Khi trỏ vào 8000, kết nối nhận về một trang web thay vì API của Splunk, và việc kiểm tra thất bại.
+</Warning>
+
+## Quyền yêu cầu
+
+Token hoạt động với tư cách user Splunk được cấp token, nên vai trò của user đó quyết định CloudThinker tìm kiếm được gì. Cấp token cho một user CloudThinker chuyên dụng, không bao giờ cho tài khoản cá nhân hay admin.
+
+| Cấp quyền | Lý do |
+|-------|-----|
+| Vai trò có capability **`search`** | Cho phép user chạy tìm kiếm SPL. Vai trò `user` mặc định của Splunk có capability này. |
+| **Chỉ các index bạn muốn tìm kiếm** | Các index được phép của vai trò là những gì CloudThinker thấy được. Index nằm ngoài vai trò sẽ không bao giờ xuất hiện. |
+
+<Tip>
+Bắt đầu từ vai trò hẹp nhất có `search` và thêm từng index một. Endpoint tìm kiếm của Splunk chạy mọi SPL mà vai trò cho phép, kể cả SPL ghi dữ liệu. CloudThinker chặn các lệnh đó trước khi gửi, nhưng vai trò mới là ranh giới bạn kiểm soát.
+</Tip>
+
+## Khả năng của agent
+
+| Khả năng | CloudThinker làm gì |
+|------------|------------------------|
+| **Deployment overview** | Báo cáo sản phẩm Splunk, phiên bản, trạng thái license và các vai trò mà token đang dùng |
+| **Index review** | Liệt kê index cùng số event và nêu tên các index trống |
+| **Log search** | Chạy tìm kiếm SPL trong một khoảng thời gian và trả về mẫu kết quả khớp có giới hạn cùng số lượng khớp thực tế |
+| **Aggregation** | Trả lời câu hỏi về phân bố, như số lượng nhóm theo host hoặc sourcetype |
+| **Saved searches** | Liệt kê saved search và lịch chạy, đánh dấu các saved search đã tắt nhưng vẫn được lên lịch, hoặc không gửi cảnh báo nào |
+
+Tìm kiếm mặc định là 24 giờ gần nhất và lùi lại tối đa 90 ngày. Mỗi tìm kiếm có giới hạn số hàng và thời gian. CloudThinker cho bạn biết khoảng thời gian đã dùng, và nói rõ khi một tìm kiếm hết thời gian thay vì báo không có kết quả.
+
+CloudThinker từ chối SPL ghi hoặc gửi dữ liệu, như `| delete`, `| outputlookup`, `| collect`, `| script` và `| sendemail`. CloudThinker cũng từ chối SPL không thể kiểm tra được: macro, `map`, `savedsearch`, dấu ngoặc kép chưa đóng và phép thay thế `$...$`.
+
+## Xác minh kết nối
+
+```text
+Show my Splunk deployment: product and version, the indexes this connection can search with their event counts, and the roles it uses
+```
+
+## Ví dụ prompt
+
+```text
+Find 5xx errors from the api service in Splunk over the last 6 hours
+Which Splunk sourcetypes had the most events in the last 24 hours?
+Which Splunk saved searches are scheduled but disabled?
+```
+
+## Khắc phục sự cố
+
+<Accordion title="Splunk rejected the token (401)">
+Token sai, đã hết hạn, hoặc xác thực bằng token đang tắt. Kiểm tra giá trị, rồi tìm thông báo tắt trên **Settings → Tokens**.
+</Accordion>
+
+<Accordion title="Kiểm tra báo endpoint có phản hồi, nhưng không phải server info của Splunk">
+Bạn đang dùng web port hoặc đứng sau proxy. Đặt **Management port** là 8089 (hoặc management port tùy chỉnh của bạn) và trỏ **Management host** thẳng đến Splunk.
+</Accordion>
+
+<Accordion title="Kiểm tra không truy cập được Splunk">
+Trên Splunk Cloud Platform, CloudThinker chưa có trong allow list **Search head API access**, hoặc thay đổi chưa được áp dụng. Đợi 15 phút sau khi lưu. Trên Splunk Enterprise, kiểm tra host, port và firewall. Nếu instance dùng chứng chỉ tự ký mặc định của Splunk, đặt **TLS certificate** thành **Skip TLS verification**.
+</Accordion>
+
+<Accordion title="Trường host bị từ chối">
+**Management host** chứa scheme, port, path hoặc thông tin xác thực. Chỉ nhập hostname hoặc IP.
+</Accordion>
+
+<Accordion title="Kết nối tự ngừng hoạt động">
+Token đã hết hạn, mặc định sau 30 ngày. Tạo token mới với ngày hết hạn rõ ràng và cập nhật kết nối. Token cũng ngừng hoạt động nếu admin tắt token, xóa user, hoặc tắt xác thực bằng token.
+</Accordion>
+
+<Accordion title="Tìm kiếm bị từ chối trước khi chạy">
+SPL ghi dữ liệu, gửi dữ liệu, hoặc ẩn SPL mà CloudThinker không thể kiểm tra. Hãy tự thực hiện thay đổi trong Splunk. CloudThinker sẽ không viết lại truy vấn để lách qua lệnh chặn.
+</Accordion>
+
+<Accordion title="Thiếu một index, hoặc tìm kiếm không trả về gì">
+Vai trò của token có thể không bao gồm index đó, nên index đó không bao giờ xuất hiện. Kiểm tra các vai trò trong câu trả lời của prompt xác minh. Tìm kiếm bị hết thời gian không cho biết điều gì: hãy rút ngắn khoảng thời gian hoặc nhóm theo trường cụ thể hơn.
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Vai trò là ranh giới thực sự**: giới hạn user của token trong các index cần tìm kiếm. Việc chặn lệnh của CloudThinker là lớp phòng thủ thứ hai.
+- **Đặt ngày hết hạn và xoay vòng**: token hết hạn sẽ làm kết nối ngừng hoạt động mà không có cảnh báo nào khác, nên hãy ghi ngày xoay vòng vào lịch.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Kết nối Splunk Observability" icon="/images/icons/splunkobservability.svg" href="/vi/guide/connections/splunkobservability">
+    Đọc tình trạng dịch vụ APM, trace và metric trong Splunk Observability Cloud
+  </Card>
+  <Card title="Kết nối Graylog" icon="/images/icons/graylog.svg" href="/vi/guide/connections/graylog">
+    Chạy tìm kiếm log chỉ đọc trong Graylog
+  </Card>
+</CardGroup>

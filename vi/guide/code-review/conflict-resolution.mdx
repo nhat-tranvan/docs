@@ -1,0 +1,137 @@
+---
+title: Tự động giải quyết xung đột
+description: Phát hiện xung đột merge trên các MR/PR đang mở và để CloudThinker giải quyết chúng trong một MR/PR tiếp theo để bạn review và merge.
+icon: code-merge
+---
+
+Khi một merge request hoặc pull request (MR/PR) đang mở bị xung đột với nhánh đích, CloudThinker sẽ gắn cờ MR/PR đó. Khi bật **Auto-resolve conflicts**, CloudThinker còn giải quyết xung đột trên một nhánh riêng và mở một MR/PR tiếp theo để bạn review và merge, nên bạn không phải rebase thủ công.
+
+## Điều kiện tiên quyết
+
+- Một repository đã được kết nối trong [thiết lập Review](/vi/guide/code-review/setup) trên GitHub, GitLab, Bitbucket hoặc AWS CodeCommit. Azure DevOps chưa được hỗ trợ.
+- Vai trò Admin của workspace để thay đổi thiết lập (xem [Vai trò](/vi/guide/security/roles)).
+- Một kết nối nhà cung cấp có thể push nhánh mới và mở MR/PR. Trên GitHub, GitLab và Bitbucket, các scope ghi trong [Xác thực nhà cung cấp](/vi/guide/code-review/provider-auth) đã bao gồm điều này. Trên AWS CodeCommit, thêm `codecommit:GitPush` và `codecommit:CreatePullRequest` vào policy của script thiết lập, theo các bước trong **What the script creates** ở [AWS CodeCommit](/vi/guide/code-review/provider-auth#aws-codecommit).
+- Trên GitLab, một webhook có bật **Push events**, bên cạnh các trigger thông thường (xem [Cấu hình webhook](/vi/guide/code-review/provider-auth#cấu-hình-webhook)). GitHub, Bitbucket và CodeCommit gửi các lần push lên nhánh đích với thiết lập webhook bạn đã có.
+
+## Bật tự động giải quyết
+
+<Steps>
+  <Step title="Mở cài đặt Review">
+    Vào **Review → Settings** và tìm mục **Review**. Các thiết lập ở đây áp dụng cho mọi repository trong workspace.
+  </Step>
+  <Step title="Bật Auto-resolve conflicts">
+    Bật **Auto-resolve conflicts**.
+
+    **Trạng thái thành công:** công tắc giữ ở trạng thái bật. Lần tới khi một MR/PR đang mở xung đột với nhánh đích, CloudThinker đăng một bình luận trạng thái trên đó.
+
+    Bật công tắc không quét lại các MR/PR đã xung đột từ trước. CloudThinker chỉ xử lý MR/PR đó vào lần tới khi nhận được sự kiện liên quan (xem bảng bên dưới).
+  </Step>
+</Steps>
+
+Các sự kiện sau khởi động một lần kiểm tra xung đột:
+
+| Sự kiện | CloudThinker kiểm tra gì |
+|---|---|
+| Push lên nhánh nguồn của MR/PR | MR/PR đó, trước khi review các commit mới |
+| Push lên một nhánh đích | Các MR/PR đang mở merge vào nhánh đó. Trên GitLab, chỉ khi webhook bật **Push events** |
+
+Mỗi lần giải quyết là một lượt chạy agent và dùng credit (xem [mức sử dụng và credit](/vi/guide/billing/usage)). Thiết lập này chỉ quyết định CloudThinker có giải quyết xung đột hay không. Tính năng phát hiện luôn bật: dù thiết lập bật hay tắt, MR/PR bị xung đột vẫn có huy hiệu **Conflict** màu đỏ trên **Review → Reviews**.
+
+## Cách giải quyết hoạt động
+
+Xung đột thường xuất hiện sau khi có người push lên nhánh đích (hoặc nhánh nguồn của bạn) và hai nhánh không còn merge sạch được. Khi đó CloudThinker:
+
+1. Đăng bình luận **CloudThinker Conflict Resolution In Progress** trên MR/PR của bạn.
+2. Tạo một nhánh từ nhánh nguồn của MR/PR, đặt tên `cloudthinker/mr-<MR/PR number>-thread-resolve-conflict-<provider>-<project id>-<MR/PR number>`, và **merge** nhánh đích mới nhất vào đó. Với MR !42 trong project GitLab 1234, tên nhánh là `cloudthinker/mr-42-thread-resolve-conflict-gitlab-1234-42`. CloudThinker không bao giờ rebase, nên lịch sử của bạn được giữ nguyên.
+3. Giải quyết từng xung đột văn bản bằng chỉnh sửa của agent, và giữ phía MR/PR của bạn khi tệp bị đổi tên, bị xóa, được thêm ở cả hai phía, hoặc là tệp nhị phân.
+4. Kiểm tra rằng kết quả chứa các commit mới nhất từ cả hai nhánh, rồi push.
+5. Mở một MR/PR tiếp theo có tiêu đề `fix: resolve merge conflicts for <your MR/PR>` nhắm vào nhánh nguồn của bạn, và liên kết đến nó từ bình luận trạng thái và liên kết **Resolution MR** (hoặc **Resolution PR**) trên danh sách Reviews.
+
+CloudThinker không bao giờ merge thay bạn và không bao giờ force-push nhánh của bạn.
+
+<Warning>
+  Với các tệp bị đổi tên, bị xóa, được thêm ở cả hai phía và tệp nhị phân, phiên bản của nhánh đích bị loại bỏ. Mô tả của MR/PR tiếp theo không liệt kê các tệp đó, nên bạn cần tự tìm chúng, kiểm tra từng tệp trong diff của MR/PR tiếp theo, và kiểm thử các phần giải quyết văn bản của agent trước khi merge.
+</Warning>
+
+Để liệt kê mọi tệp xung đột và loại của chúng, hãy chạy thử merge cục bộ rồi hoàn tác:
+
+```bash
+git fetch origin
+git switch <source-branch>
+git merge --no-commit --no-ff origin/<target-branch>
+git status --short   # conflicts show as UU (text), AA (both added), DU or UD (deleted)
+git merge --abort
+```
+
+## Merge MR/PR tiếp theo
+
+<Steps>
+  <Step title="Mở MR/PR tiếp theo">
+    Nhấn liên kết trong bình luận trạng thái, hoặc **Resolution MR** bên cạnh MR/PR trên **Review → Reviews**.
+  </Step>
+  <Step title="Review phần giải quyết">
+    Đọc diff như với bất kỳ thay đổi nào. CloudThinker không chạy code review trên các nhánh tiếp theo do chính nó tạo, nên hãy chờ CI chạy thành công trên MR/PR tiếp theo trước khi merge. MR/PR tiếp theo nhắm vào nhánh nguồn của bạn, không phải nhánh mặc định, nên nếu CI không chạy trên MR/PR vào nhánh tính năng, hãy kiểm thử cục bộ.
+  </Step>
+  <Step title="Merge vào nhánh nguồn">
+    Merge trên nhà cung cấp của bạn.
+
+    **Trạng thái thành công:** MR/PR gốc của bạn lại hiển thị là có thể merge, và huy hiệu **Conflict** biến mất khi nhà cung cấp kiểm tra lại.
+  </Step>
+</Steps>
+
+<Note>
+  Merge MR/PR tiếp theo bằng **merge commit**, trên mọi nhà cung cấp. Squash merge và rebase merge đều làm mất lịch sử merge mà nhà cung cấp cần để coi xung đột ban đầu là đã giải quyết. Nếu quy tắc nhánh chỉ cho phép squash hoặc rebase, hãy merge nhánh tiếp theo vào nhánh nguồn cục bộ bằng `git merge` rồi push.
+</Note>
+
+## Bình luận trạng thái
+
+CloudThinker giữ một bình luận trạng thái duy nhất trên MR/PR của bạn và chỉnh sửa trực tiếp trên đó:
+
+| Bình luận | Ý nghĩa | Việc cần làm |
+|---|---|---|
+| **CloudThinker Conflict Resolution In Progress** | Một lượt chạy đang tạo hoặc cập nhật MR/PR tiếp theo | Chờ |
+| **CloudThinker Conflict Resolution Complete** | MR/PR tiếp theo đã sẵn sàng, và bình luận có liên kết đến nó | Review và merge |
+| **CloudThinker Conflict Resolution: Already Resolved** | Xung đột đã được sửa bên ngoài CloudThinker, ví dụ bằng rebase | Không cần làm gì |
+| **CloudThinker Conflict Resolution: No Changes Needed** | Quá trình giải quyết không tạo ra thay đổi nào, nên MR/PR của bạn thường đã có thể merge | Không cần làm gì |
+| **CloudThinker Conflict Resolution Failed** | Lượt chạy bị gián đoạn trước khi kịp công bố phần giải quyết | CloudThinker thử lại ở [sự kiện kiểm tra xung đột](#bật-tự-động-giải-quyết) tiếp theo. Nếu không nhánh nào thay đổi, hãy giải quyết xung đột trên nhà cung cấp của bạn |
+
+<Frame caption="Bình luận trạng thái trên một MR GitLab khi MR/PR tiếp theo đã sẵn sàng">
+  <img src="/images/code-review/04-conflict-resolution-complete-comment.png" alt="Bình luận CloudThinker Conflict Resolution Complete trên một merge request GitLab, liên kết đến MR tiếp theo" />
+</Frame>
+
+Nếu nhánh đích hoặc nhánh nguồn lại thay đổi trong khi MR/PR tiếp theo vẫn đang mở, CloudThinker cập nhật trực tiếp chính MR/PR tiếp theo đó. Nếu bạn đã merge MR/PR tiếp theo trước đó, CloudThinker mở một cái mới.
+
+Tự động giải quyết không phải lệnh mention. `@cloudthinker-ai autofix` sửa các phát hiện của review, không phải xung đột (xem [Lệnh mention](/vi/guide/code-review/mention-commands)).
+
+## Khắc phục sự cố
+
+<AccordionGroup>
+  <Accordion title="Tôi không thấy Auto-resolve conflicts trong cài đặt">
+    **Nguyên nhân:** công tắc bị ẩn trong hai trường hợp: repository của bạn nằm trên Azure DevOps (chưa được hỗ trợ), hoặc tính năng tự động giải quyết chưa được bật cho phiên bản CloudThinker của bạn. Vai trò của bạn không làm ẩn công tắc. **Cách khắc phục:** trên Azure DevOps, hãy giải quyết xung đột trên nhà cung cấp như bình thường. Nếu không, hãy liên hệ bộ phận hỗ trợ CloudThinker.
+  </Accordion>
+  <Accordion title="Tôi thấy On hoặc Off thay vì công tắc">
+    **Nguyên nhân:** vai trò workspace của bạn không phải Admin, nên dòng này hiển thị **On** hoặc **Off** thay cho công tắc. **Cách khắc phục:** nhờ một Admin của workspace bật tính năng.
+  </Accordion>
+  <Accordion title="Một MR/PR bị xung đột không nhận được bình luận trạng thái">
+    **Kiểm tra:** tính năng tự động giải quyết đang bật và MR/PR đang mở. CloudThinker chỉ xử lý các MR/PR đã theo dõi, nên CloudThinker phải từng nhận được webhook cho MR/PR đó.
+
+    **Cách khắc phục:** push một commit lên nhánh nguồn của MR/PR. Thao tác này gửi cho CloudThinker một sự kiện mới, và CloudThinker kiểm tra xung đột trước khi review.
+  </Accordion>
+  <Accordion title="Bình luận báo Failed">
+    **Nguyên nhân:** có điều gì đó làm gián đoạn lượt chạy trước khi kịp push, chẳng hạn lỗi mạng. **Cách khắc phục:** lần push tiếp theo lên nhánh nguồn hoặc nhánh đích sẽ thử lại, và cùng bình luận đó chuyển lại thành **In Progress**. Nếu không thể chờ, hãy giải quyết xung đột trên nhà cung cấp của bạn.
+  </Accordion>
+  <Accordion title="MR/PR gốc vẫn báo xung đột sau khi merge MR/PR tiếp theo">
+    **Nguyên nhân:** MR/PR tiếp theo đã được merge bằng squash hoặc rebase. **Cách khắc phục:** giải quyết phần xung đột còn lại trên nhà cung cấp, và lần sau hãy merge MR/PR tiếp theo bằng merge commit.
+  </Accordion>
+</AccordionGroup>
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="Không gian Review" icon="list-check" href="/vi/guide/code-review/review-workspace">
+    Phát hiện các MR/PR bị xung đột và mở MR/PR tiếp theo từ danh sách Reviews.
+  </Card>
+  <Card title="Lệnh mention" icon="at" href="/vi/guide/code-review/mention-commands">
+    Sửa các phát hiện của review từ bình luận MR/PR bằng autofix.
+  </Card>
+</CardGroup>

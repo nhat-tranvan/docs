@@ -1,298 +1,154 @@
 ---
-title: "Bảo Mật & Xác Thực"
-description: "Bảo vệ quyền truy cập CloudThinker bằng MFA, SSO và kiểm soát truy cập dựa trên vai trò"
+title: Bảo mật và tin cậy
+description: "Trả lời bản đánh giá bảo mật nhà cung cấp: CloudThinker lưu gì, agent chạy ở đâu, ai được hành động, thao tác ghi được phê duyệt ra sao và những gì được ghi log."
 icon: shield-halved
 ---
 
-CloudThinker triển khai bảo mật cấp doanh nghiệp để bảo vệ dữ liệu hạ tầng cloud và đảm bảo chỉ người dùng được ủy quyền mới có thể truy cập các thao tác nhạy cảm.
+Agent CloudThinker đọc tài khoản cloud, cluster và công cụ của bạn thông qua các kết nối bạn thêm vào, và chỉ thay đổi được chúng khi Approvals cho phép. Trang này tập hợp các thông tin mà người đánh giá bảo mật thường hỏi, kèm liên kết tới trang mô tả chi tiết từng biện pháp kiểm soát.
 
----
+## Tổng quan nhanh
 
-## Tại sao bảo mật quan trọng với nền tảng vận hành AI
+| Câu hỏi | Trả lời | Chi tiết |
+|---|---|---|
+| CloudThinker chạy ở đâu? | Mặc định là một dịch vụ cloud do CloudThinker quản lý tại `app.cloudthinker.io`. Các hình thức triển khai dedicated, tự host và air-gapped đang ở giai đoạn truy cập sớm. | [Triển khai](/vi/guide/deployment/overview) |
+| Lệnh của agent chạy ở đâu? | Trong một sandbox do CloudThinker quản lý, hoặc trên một máy bạn kiểm soát (Worker, đang beta). | [Worker](/vi/guide/workers) |
+| Agent truy cập hệ thống của tôi bằng cách nào? | Chỉ qua các [kết nối](/vi/guide/connections/overview) do Admin của workspace thêm vào, với thông tin xác thực và quyền bạn cấp. | [Kết nối](/vi/guide/connections/overview) |
+| Agent có tự thay đổi mọi thứ được không? | Thao tác đọc luôn chạy. Mọi thao tác ghi đều đi qua Approvals, và có thể phải chờ người duyệt hoặc bị từ chối. Hiện tại Approval mode là biện pháp kiểm soát đưa ra quyết định; Rules chỉ quyết định khi CloudThinker bật Rule enforcement cho workspace của bạn. Thông tin xác thực chỉ đọc thì hoàn toàn không ghi được. | [Approvals](/vi/guide/approvals/overview), [Rules ở giai đoạn preview](/vi/guide/approvals/rules#khắc-phục-sự-cố) |
+| Ai đăng nhập được, và bằng cách nào? | Google, GitHub, SSO (SAML 2.0 hoặc OIDC), hoặc mã gửi qua email công việc. Ứng dụng xác thực bổ sung yếu tố thứ hai. | [Đăng nhập một lần](/vi/guide/security/sso) |
+| Ai được làm gì? | Vai trò tổ chức và vai trò workspace: Admin, Developer, Viewer, cùng Owner của tổ chức. | [Vai trò](/vi/guide/security/roles) |
+| Thông tin bí mật có được giữ ngoài chat và lệnh gọi model không? | Giá trị được dán vào thuộc các định dạng thông tin xác thực đã biết sẽ bị chặn trước khi tin nhắn được gửi, dù định dạng lạ vẫn có thể lọt qua ([cách xử lý](/vi/guide/security/data-protection#khắc-phục-sự-cố)). Trong đầu ra của công cụ, thông tin bí mật của kết nối, thông tin xác thực đã lưu dưới tên nghe như bí mật (chứa `KEY`, `TOKEN`, `SECRET` hoặc `PASSWORD`) có giá trị từ 6 ký tự trở lên, các định dạng thông tin xác thực phổ biến và định danh được bảo vệ đều được thay bằng placeholder trước khi model hoặc màn hình nhìn thấy. Thông tin xác thực lưu dưới tên thông thường, hoặc ngắn hơn 6 ký tự, chỉ bị che khi khớp với một định dạng đã biết. | [Bảo vệ dữ liệu](/vi/guide/security/data-protection) |
+| Có nhật ký kiểm toán không? | Có, trên các gói [Scale, Scale Plus và Enterprise](/vi/guide/billing/pricing). Hành động của người dùng, agent và hệ thống trên toàn tổ chức, lưu 90 ngày, xuất được ra CSV. | [Nhật ký kiểm toán](/vi/guide/security/audit-logs) |
+| Chúng tôi có dùng tài khoản LLM riêng được không? | Có, bằng BYOK trên các gói [Scale, Scale Plus và Enterprise](/vi/guide/billing/pricing). | [BYOK](/vi/guide/byok) |
+| Báo cáo tuân thủ, region lưu trữ, bên xử lý phụ, điều khoản dữ liệu của nhà cung cấp model? | Tài liệu này không đề cập. Hãy yêu cầu khi bạn bắt đầu đánh giá nhà cung cấp. | [Liên hệ với chúng tôi](https://cloudthinker.io/contact) |
 
-Agent của CloudThinker có quyền đọc (và tùy chọn ghi) vào hạ tầng cloud của bạn. Điều này rất mạnh mẽ — nó cho phép phân tích và tối ưu hóa tự chủ trên toàn bộ tài khoản cloud. Nhưng điều đó cũng có nghĩa là bản thân nền tảng cần được tăng cường bảo mật chống lại truy cập trái phép, rò rỉ thông tin xác thực và tấn công prompt injection.
+## Dữ liệu CloudThinker xử lý
 
-Mô hình bảo mật được thiết kế xung quanh các nguyên tắc sau:
-- **Đặc quyền tối thiểu theo mặc định**: agent sử dụng thông tin xác thực chỉ đọc trừ khi quyền ghi được cấu hình và phê duyệt rõ ràng
-- **Không tồn lưu**: không có hành động agent nào sửa đổi hạ tầng mà không qua [quy trình phê duyệt](/guide/approvals/overview)
-- **Phòng thủ theo chiều sâu**: MFA, SSO, RBAC, ghi nhật ký kiểm tra và cách ly sandbox kết hợp để bảo vệ chống cả tấn công bên ngoài lẫn lạm dụng nội bộ
-- **Minh bạch**: mọi hành động agent đều được ghi lại kèm người dùng đã khởi tạo, chuỗi phê duyệt và lệnh chính xác được thực thi
+| Dữ liệu | Lý do CloudThinker giữ | Cách bảo vệ |
+|---|---|---|
+| Thông tin xác thực của kết nối (cloud key, token, thông tin đăng nhập database) | Để agent truy vấn được các hệ thống bạn đã kết nối | Mã hóa khi lưu trữ. Được đưa vào sandbox được quản lý khi lệnh chạy, không bao giờ gửi tới Worker. |
+| [Thông tin xác thực](/vi/guide/credentials) của workspace (các API key khác mà lệnh cần) | Để lệnh gọi được API của nhà cung cấp mà không ai phải dán key | Mã hóa khi lưu trữ, không bao giờ gửi ngược về trình duyệt. Chat chỉ hiển thị tên key. |
+| Cuộc hội thoại, phát hiện, báo cáo và artifact | Bản ghi những gì agent đã tìm thấy và đã làm | Giới hạn trong workspace và hiển thị theo vai trò. Thông tin bí mật và định danh được bảo vệ trong đầu ra công cụ được thay bằng placeholder trước khi lưu. Admin của workspace có thể xóa một cuộc hội thoại từ menu tiêu đề (**Delete Conversation**). |
 
-## Phương thức xác thực
-
-| Phương thức | Mô tả |
-| --- | --- |
-| Email & Mật khẩu | Xác thực tiêu chuẩn với yêu cầu mật khẩu bảo mật |
-| Xác thực đa yếu tố | MFA dựa trên TOTP để tăng cường bảo mật |
-| Single Sign-On (SSO) | Tích hợp SAML/OIDC với nhà cung cấp danh tính của bạn |
-| Khóa API | Truy cập lập trình an toàn vào API |
-
----
-
-## Xác thực đa yếu tố (MFA)
-
-Thêm một lớp bảo mật bổ sung với MFA dựa trên TOTP:
-
-### Bật MFA
-
-<Steps>
-  <Step title="Điều hướng đến Cài đặt bảo mật">
-    Vào **Profile > Security Settings**
-  </Step>
-  <Step title="Bật MFA">
-    Nhấp **Enable Multi-Factor Authentication**
-  </Step>
-  <Step title="Quét mã QR">
-    Dùng ứng dụng xác thực (Google Authenticator, Authy, 1Password, v.v.) để quét mã QR
-  </Step>
-  <Step title="Xác minh thiết lập">
-    Nhập mã 6 chữ số từ ứng dụng xác thực để xác nhận thiết lập
-  </Step>
-  <Step title="Lưu mã dự phòng">
-    Tải xuống và lưu trữ an toàn các mã dự phòng để khôi phục tài khoản
-  </Step>
-</Steps>
-
-### MFA khi đăng nhập
-
-Khi MFA được bật:
-
-1. Nhập email và mật khẩu của bạn
-2. Nhập mã 6 chữ số hiện tại từ ứng dụng xác thực
-3. Được cấp quyền truy cập
-
-### Tùy chọn khôi phục
-
-Nếu bạn mất quyền truy cập vào ứng dụng xác thực:
-
-- Dùng mã dự phòng (dùng một lần)
-- Liên hệ admin tổ chức để đặt lại MFA
-- Liên hệ hỗ trợ với xác minh danh tính
+Lệnh gọi model đi tới nhà cung cấp LLM của CloudThinker, trừ khi tổ chức của bạn dùng [BYOK](/vi/guide/byok) để định tuyến qua tài khoản AWS Bedrock, Anthropic, FPT Cloud, Claude Code hoặc Codex của chính bạn. Với BYOK, các lệnh gọi đó thuộc phạm vi thỏa thuận riêng giữa bạn và nhà cung cấp, trừ khi một lệnh gọi thất bại chuyển dự phòng sang model của CloudThinker ([chi tiết](/vi/guide/byok#khi-khóa-ngừng-hoạt-động)).
 
 <Warning>
-Lưu trữ mã dự phòng an toàn. Mỗi mã chỉ có thể dùng một lần. Nếu bạn mất tất cả mã dự phòng và ứng dụng xác thực, việc khôi phục tài khoản có thể yêu cầu xác minh danh tính.
+Mọi thứ mà thông tin xác thực của một kết nối đọc được đều có thể tới model, vì đầu ra của lệnh là một phần của cuộc hội thoại. Với AWS `ReadOnlyAccess`, điều đó bao gồm cả nội dung object trên S3. Hãy giới hạn policy của từng thông tin xác thực trong các tài khoản, region và service mà agent cần.
 </Warning>
 
----
+## Agent chạy ở đâu
 
-## Single sign-on (SSO)
+Mỗi cuộc chat và Automation chạy ở một trong hai nơi:
 
-Gói Enterprise hỗ trợ tích hợp [SSO](/vi/guide/security/sso):
+- **CloudThinker Cloud.** Lệnh chạy trong một sandbox biệt lập do CloudThinker quản lý. Thông tin xác thực của kết nối được đưa vào đó cho lệnh và không bị in ngược ra.
+- **Một Worker.** Một máy bạn kiểm soát, như laptop, server hoặc CI runner, chạy công cụ thao tác file và lệnh shell trong một thư mục bạn chỉ định. Lệnh của kết nối vẫn chạy trong sandbox được quản lý, nên thông tin xác thực ở lại trên cloud. Worker đang ở giai đoạn beta.
 
-SSO được cấu hình bởi Chủ sở hữu tổ chức trong **Admin Settings → Identity and access**. Các khả năng chính:
+Lượt chạy không chuyển dự phòng từ Worker sang cloud. Nếu Worker không sẵn sàng, lượt chạy báo lỗi. Xem [Worker](/vi/guide/workers).
 
-- **Xác minh domain** — chứng minh quyền sở hữu domain email của bạn trước khi bật SSO
-- **SAML hoặc OIDC** — chọn giao thức mà nhà cung cấp danh tính của bạn hỗ trợ
-- **Bắt buộc SSO** — tùy chọn yêu cầu tất cả người dùng có domain đã xác minh phải xác thực qua SSO
-- **JIT provisioning** — tự động tạo tài khoản người dùng khi đăng nhập SSO lần đầu
-- **Đồng bộ thư mục SCIM** — tự động hóa cấp phép người dùng và nhóm từ IdP của bạn
+Tài liệu này không liệt kê dải egress IP. Nếu bạn cần đưa CloudThinker vào allowlist của security group hoặc tường lửa, hãy [liên hệ với chúng tôi](https://cloudthinker.io/contact).
 
-### Cấu hình SSO
+## Ai được hành động
 
-<Card title="Hướng dẫn thiết lập SSO" icon="key" href="/vi/guide/security/sso">
-  Thiết lập từng bước cho Google Workspace, Azure AD, AWS IAM Identity Center, Okta, OneLogin và SAML/OIDC chung
-</Card>
+Quyền truy cập hoạt động ở hai cấp. Vai trò tổ chức áp dụng trên mọi workspace. Vai trò workspace quy định thành viên làm được gì trong một workspace.
 
-### Bắt buộc SSO
+| Vai trò workspace | Làm được |
+|---|---|
+| **Admin** | Quản lý kết nối, thông tin xác thực, thành viên, Approvals, Guardrails và cài đặt |
+| **Developer** | Chat với agent và xử lý phát hiện, review và lượt quét |
+| **Viewer** | Xem dashboard, phát hiện và sự cố. Không chat với agent hay thay đổi được gì, trừ một ngoại lệ: mọi thành viên, kể cả Viewer, đều cài được một skill từ [Skills Hub](/vi/guide/skills/overview) vào workspace hiện tại, và skill đó có hiệu lực ngay trong Chat cho mọi agent. |
 
-Admin tổ chức có thể bắt buộc SSO:
+Owner và Admin của tổ chức nắm quyền Admin workspace trong mọi workspace. Ma trận đầy đủ: [Vai trò](/vi/guide/security/roles).
 
-- Yêu cầu tất cả người dùng xác thực qua SSO
-- Tắt đăng nhập bằng mật khẩu
-- Tự động cấp phép người dùng khi đăng nhập SSO lần đầu
-- Tự động hủy cấp phép khi bị xóa khỏi IdP
+**Ai được phê duyệt thao tác ghi:** mặc định là mọi Developer hoặc Admin trong workspace, kể cả người đã bắt đầu lượt chạy. Viewer không bao giờ được. Để ngăn người dùng tự phê duyệt lượt chạy của chính mình, hãy bật quy tắc hai người, hoặc chuyển các yêu cầu hỏi của một Rule tới một nhóm người phê duyệt được chỉ định. Xem [Người phê duyệt](/vi/guide/approvals/approvers).
 
----
+**Admin Settings** là console của tổ chức, dành cho Owner và Admin của tổ chức. Admin Settings không có trong menu của Admin workspace, nhưng họ mở được một trang ở đó qua liên kết trực tiếp: **Guardrails**, trang hiển thị cài đặt của workspace đó.
 
-## Kiểm soát truy cập dựa trên vai trò (RBAC)
+### Kiểm soát đăng nhập
 
-Kiểm soát những gì người dùng có thể làm với quyền chi tiết:
+| Biện pháp kiểm soát | Vị trí | Gói |
+|---|---|---|
+| Ứng dụng xác thực (TOTP) kèm mã dự phòng dùng một lần. Mỗi người tự bật cho tài khoản của mình; không có yêu cầu 2FA trên toàn tổ chức. | **Account Settings → 2FA** | Tất cả |
+| SSO bằng SAML 2.0 hoặc OIDC, xác minh domain và bắt buộc SSO | **Admin Settings → Identity and access** | [Scale, Scale Plus, Enterprise](/vi/guide/billing/pricing) |
+| Đồng bộ người dùng và nhóm qua SCIM | **Admin Settings → Identity and access** | [Scale, Scale Plus, Enterprise](/vi/guide/billing/pricing) |
 
-### Vai trò tổ chức
+Xem [Đăng nhập một lần](/vi/guide/security/sso) và [SCIM](/vi/guide/security/scim).
 
-| Vai trò | Mô tả | Quyền |
-|------|-------------|-------------|
-| **Owner** | Kiểm soát tổ chức đầy đủ | Tất cả quyền, thanh toán, quản lý thành viên |
-| **Admin** | Quản trị tổ chức | Quản lý workspace, thành viên, cài đặt (không có thanh toán) |
-| **Developer** | Truy cập tiêu chuẩn | Truy cập workspace được giao, sử dụng agent |
-| **Viewer** | Chỉ đọc | Xem bảng điều khiển và báo cáo |
+## Cách thay đổi của agent được phê duyệt
 
-### Vai trò workspace
+**Thao tác ghi** là mọi lệnh gọi của agent làm thay đổi một hệ thống đã kết nối, như khởi động lại một service. Thao tác đọc luôn chạy. Mỗi thao tác ghi lần lượt đi qua các bước kiểm tra sau:
 
-| Vai trò | Mô tả | Quyền |
-|------|-------------|-------------|
-| **Admin** | Kiểm soát workspace đầy đủ | Tất cả thao tác workspace, quản lý thành viên |
-| **Developer** | Thao tác tiêu chuẩn | Chạy agent, xử lý phát hiện, không thể chỉnh sửa cài đặt |
-| **Viewer** | Chỉ đọc | Xem bảng điều khiển, báo cáo và đề xuất |
+1. **Always blocked**, danh sách tích hợp sẵn gồm các lệnh gọi không bao giờ được chạy, như dừng ghi log CloudTrail, đóng tài khoản AWS hoặc xóa namespace `kube-system`. Không gì ghi đè được danh sách này, dù là Rule, con người hay break-glass (cơ chế ghi đè khẩn cấp phải chủ động bật, cho phép owner hoặc admin chạy một lệnh gọi mà Deny Rule đã từ chối).
+2. **Rules** của bạn, cho phép, hỏi trước hoặc từ chối một loại thao tác ghi cụ thể. Rules chỉ quyết định khi Rule enforcement được bật cho workspace của bạn. Tính năng này mặc định tắt, và CloudThinker bật theo từng workspace; trước đó Rules chỉ ghi lại kết luận mà chúng sẽ đưa ra, còn Approval mode một mình quyết định. Xem [Rules ở giai đoạn preview](/vi/guide/approvals/rules#khắc-phục-sự-cố).
+3. **Approval mode** của lượt chạy, mô tả bên dưới.
+4. Người phê duyệt, người chấp thuận hoặc từ chối.
 
-### Ma trận quyền
+Approval mode là **Manual** hoặc **Auto**. Nhãn Auto, như **Auto · Rules + AI · Ask me**, thêm hai lựa chọn sau chế độ:
 
-| Hành động | Owner | Admin | Developer | Viewer |
-|--------|-------|-------|-----------|--------|
-| Xem bảng điều khiển | Có | Có | Có | Có |
-| Chạy hội thoại agent | Có | Có | Có | Không |
-| Tạo đề xuất | Có | Có | Có | Không |
-| Quản lý quy tắc và chế độ phê duyệt | Có | Có | Không | Không |
-| Quản lý kết nối | Có | Có | Không | Không |
-| Quản lý thành viên | Có | Có | Không | Không |
-| Cài đặt tổ chức | Có | Có | Không | Không |
-| Thanh toán | Có | Không | Không | Không |
+| Thành phần | Lựa chọn | Tác dụng |
+|---|---|---|
+| Chế độ | **Manual** | Hỏi một người với mọi thao tác ghi |
+| | **Auto** | Cho thao tác ghi chạy mà không cần người khi thành phần tiếp theo cho phép |
+| Điều gì cho phép thao tác ghi | **Rules** | Chỉ các Allow Rule của bạn |
+| | **Rules + AI** | Các Allow Rule của bạn, cộng với đánh giá của AI cho các thao tác ghi không Rule nào bao quát |
+| Các thao tác còn lại | **Ask me** | Chờ một người |
+| | **Refuse** | Bị từ chối, không chờ |
 
----
+Workspace mới bắt đầu với **Auto · Rules + AI · Ask me**. Automation mặc định dùng **Auto · Rules + AI · Refuse**, vì có thể không có ai ở đó để trả lời. Đánh giá của AI hoạt động như sau:
 
-## Xác thực API
+| Thao tác ghi | Kết quả |
+|---|---|
+| Khớp với yêu cầu của bạn và nằm trong phạm vi | Chạy, và quyết định được ghi vào [Nhật ký kiểm toán](/vi/guide/security/audit-logs) |
+| Mang tính phá hủy, hoặc tác động chưa rõ ràng | Chuyển sang thành phần cuối của chế độ: **Ask me** chờ một người, **Refuse** từ chối ngay. Thao tác ghi phá hủy còn phát cảnh báo mức nghiêm trọng cao. |
+| Đánh giá của AI không hoàn tất được bước kiểm tra | Áp dụng cùng phương án dự phòng. Đánh giá của AI không bao giờ mặc định cho phép thao tác ghi. |
 
-Truy cập lập trình an toàn vào CloudThinker:
+Thao tác ghi còn cần kết nối cho phép. Nếu **Allow writes** đang tắt trên bảng chi tiết của kết nối trong **More → Workspace settings → Connections**, hoặc thông tin xác thực là chỉ đọc, thao tác ghi bị từ chối bất kể chế độ nói gì. Để yêu cầu người duyệt với mọi thao tác ghi, hãy chuyển workspace sang **Manual**. Xem [Approvals](/vi/guide/approvals/overview) và [Approval mode](/vi/guide/approvals/approval-mode).
 
-### Khóa API
+## Kiểm toán và lưu giữ
 
-Tạo khóa API để tự động hóa:
+**Admin Settings → Audit Logs** hiển thị một dòng thời gian duy nhất gồm hành động của người dùng, agent và hệ thống trên mọi workspace: thay đổi kết nối, quyết định phê duyệt, thay đổi thông tin xác thực, thay đổi thành viên và hoạt động của các module. Mỗi mục ghi lại người thực hiện, workspace và kết quả.
 
-1. Vào **Profile > API Keys**
-2. Nhấp **Create API Key**
-3. Đặt tên khóa và thời hạn hết hạn
-4. Sao chép khóa (chỉ hiển thị một lần)
-5. Dùng trong các yêu cầu API
+| Thông tin | Giá trị |
+|---|---|
+| Ai xem được | Owner và Admin của tổ chức |
+| Gói | [Scale, Scale Plus, Enterprise](/vi/guide/billing/pricing) |
+| Thời gian lưu giữ | 90 ngày, sau đó tự động xóa. Không có cài đặt nào trong ứng dụng để thay đổi. |
+| Xuất dữ liệu | **Export CSV**, theo bộ lọc hiện tại. Không có luồng stream sang SIEM, nên hãy xuất định kỳ nếu muốn giữ bản ghi lâu hơn. |
 
-```bash
-# Ví dụ yêu cầu API
-curl -H "Authorization: Bearer <api_key>" \
-  https://api.cloudthinker.io/v1/workspaces
-```
+Mục liên quan tới thông tin xác thực không bao giờ chứa giá trị hay tên key. Xem [Nhật ký kiểm toán](/vi/guide/security/audit-logs).
 
-### Quản lý khóa
+Với gói Free hoặc Team, hãy kiểm toán những gì agent đã làm trên AWS từ CloudTrail của chính bạn: lọc sự kiện theo role bạn đã tạo cho CloudThinker (`CloudThinkerAccessRole` nếu bạn dùng [template thiết lập](/vi/guide/connections/aws)).
 
-- **Xoay vòng**: Thường xuyên xoay vòng khóa (khuyến nghị: mỗi 90 ngày)
-- **Giới hạn phạm vi**: Giới hạn khóa cho các thao tác cụ thể khi có thể
-- **Giám sát**: Xem xét sử dụng khóa trong nhật ký kiểm tra
-- **Thu hồi**: Ngay lập tức thu hồi các khóa bị xâm phạm
+## Mã hóa và phiên đăng nhập
 
-<Warning>
-Không bao giờ commit khóa API vào kiểm soát phiên bản. Dùng biến môi trường hoặc công cụ quản lý secret.
-</Warning>
+| Lớp | CloudThinker làm gì |
+|---|---|
+| Khi truyền | Ứng dụng và API được phục vụ qua HTTPS |
+| Thông tin bí mật đã lưu | Thông tin xác thực của kết nối, thông tin xác thực của workspace, key BYOK và token tích hợp được mã hóa khi lưu trữ bằng Fernet (AES-128 kèm HMAC-SHA256). CloudThinker quản lý khóa. Không hỗ trợ khóa mã hóa do khách hàng quản lý. [BYOK](/vi/guide/byok) áp dụng cho thông tin xác thực LLM, không phải khóa mã hóa. |
+| Mật khẩu | Mọi mật khẩu tài khoản được lưu dưới dạng hash bcrypt |
+| Phiên đăng nhập | Access token được ký bằng RS256. Refresh token được xoay vòng mỗi lần dùng và lưu dưới dạng hash. |
 
-### Token OAuth
+## Trước khi kết nối production
 
-Đối với các tích hợp dùng OAuth:
+- Bắt đầu mỗi kết nối bằng thông tin xác thực chỉ đọc, giới hạn trong các tài khoản và region agent cần.
+- Giữ workspace production ở **Manual**. Cài đặt này có hiệu lực ngay hôm nay; Ask first Rule chỉ giữ lại thao tác ghi khi CloudThinker bật [Rule enforcement](/vi/guide/approvals/rules#khắc-phục-sự-cố) cho workspace.
+- Yêu cầu mọi Owner và Admin bật 2FA, hoặc bắt buộc SSO để việc đăng nhập tuân theo chính sách MFA của nhà cung cấp danh tính.
+- Cấp cho mỗi thành viên vai trò thấp nhất phù hợp.
+- Kiểm tra các biện pháp bảo vệ tích hợp sẵn trong **Admin Settings → Guardrails**, và thêm pattern cho các định dạng ID riêng của bạn.
 
-- Token được tự động làm mới
-- Thu hồi quyền truy cập từ **Settings > Connected Apps**
-- Giám sát sử dụng token trong nhật ký kiểm tra
+Với bảng câu hỏi bảo mật hoặc triển khai dedicated, hãy [liên hệ với chúng tôi](https://cloudthinker.io/contact).
 
----
-
-## Bảo mật dữ liệu
-
-### Mã hóa
-
-CloudThinker bảo vệ dữ liệu của bạn với:
-
-| Lớp | Bảo vệ |
-|-------|------------|
-| **Truyền tải** | TLS 1.3 cho tất cả kết nối |
-| **Lưu trữ** | Mã hóa AES-256 |
-| **Secret** | Lưu trữ thông tin xác thực mã hóa |
-| **Sao lưu** | Sao lưu cơ sở dữ liệu được mã hóa |
-
-### [Tự cung cấp khóa mã hóa (BYOK)](/vi/guide/byok)
-
-Khách hàng Enterprise có thể dùng khóa mã hóa của riêng họ:
-
-1. Cấu hình AWS KMS hoặc tương tự
-2. Cung cấp ARN khóa cho CloudThinker
-3. Khóa của bạn mã hóa dữ liệu nhạy cảm
-4. Duy trì toàn quyền kiểm soát khóa
-
-<Card title="Cấu hình BYOK" icon="key" href="/vi/guide/byok">
-  Thiết lập mã hóa Bring Your Own Key
-</Card>
-
-### Lưu trú dữ liệu
-
-- Chọn vùng dữ liệu khi tạo workspace
-- Dữ liệu ở trong vùng đã chọn
-- Tùy chọn đa vùng cho dự phòng
-
----
-
-## Ghi nhật ký kiểm tra
-
-Theo dõi tất cả hoạt động trong CloudThinker:
-
-### Sự kiện được ghi lại
-
-- Xác thực người dùng (đăng nhập, đăng xuất, MFA)
-- Truy cập và chỉnh sửa tài nguyên
-- Hội thoại và hành động agent
-- Thay đổi quản trị
-- Truy cập API
-
-### Xem nhật ký kiểm tra
-
-1. Điều hướng đến **Admin Settings → Audit Logs**
-2. Lọc theo:
-   - Người dùng
-   - Loại hành động
-   - Tài nguyên
-   - Khoảng thời gian
-3. Xuất nhật ký để tuân thủ
-
-### Lưu giữ nhật ký
-
-Nhật ký kiểm tra được giữ 90 ngày, sau đó tự động xóa. Không có cài đặt trong ứng dụng để thay đổi thời gian này, và nó không phụ thuộc vào gói của bạn. Nếu bạn cần lưu giữ lâu hơn, hãy xuất CSV theo định kỳ.
-
----
-
-## Thực tiễn bảo mật tốt nhất
-
-<AccordionGroup>
-  <Accordion title="Bật MFA cho tất cả người dùng">
-    Yêu cầu MFA cho tất cả thành viên tổ chức, đặc biệt là những người có quyền admin. Cân nhắc bắt buộc qua chính sách [SSO](/vi/guide/security/sso).
-  </Accordion>
-
-  <Accordion title="Dùng đặc quyền tối thiểu">
-    Giao vai trò tối thiểu cần thiết cho trách nhiệm của mỗi người dùng. Thường xuyên xem xét và điều chỉnh quyền.
-  </Accordion>
-
-  <Accordion title="Thường xuyên xoay vòng thông tin xác thực">
-    Xoay vòng khóa API, token làm mới và thông tin xác thực cloud theo lịch đều đặn.
-  </Accordion>
-
-  <Accordion title="Giám sát nhật ký kiểm tra">
-    Thường xuyên xem xét nhật ký kiểm tra để phát hiện hoạt động đáng ngờ. Thiết lập cảnh báo cho các sự kiện quan trọng.
-  </Accordion>
-
-  <Accordion title="Bảo mật kết nối cloud">
-    Dùng thông tin xác thực chỉ đọc khi có thể. Giới hạn phạm vi cho các dịch vụ và vùng cần thiết.
-  </Accordion>
-
-  <Accordion title="Định kỳ xem xét quyền truy cập">
-    Thực hiện kiểm tra quyền truy cập hàng quý. Xóa người dùng không hoạt động và thu hồi quyền không cần thiết.
-  </Accordion>
-</AccordionGroup>
-
----
-
-## Tuân thủ
-
-CloudThinker duy trì tuân thủ với:
-
-- **SOC 2 Type II**: Bảo mật, tính khả dụng và bảo mật thông tin
-- **GDPR**: Bảo vệ dữ liệu cho người dùng EU
-- **HIPAA**: Xử lý dữ liệu y tế (Enterprise)
-- **ISO 27001**: Quản lý bảo mật thông tin
-
-<Card title="Yêu cầu tài liệu tuân thủ" icon="file-certificate" href="mailto:security@cloudthinker.io">
-  Liên hệ chúng tôi để được hỗ trợ bảng câu hỏi bảo mật và tài liệu tuân thủ
-</Card>
-
-## Liên quan
+## Bước tiếp theo
 
 <CardGroup cols={2}>
-  <Card title="Single sign-on" icon="key" href="/vi/guide/security/sso">
-    Cấu hình SSO SAML hoặc OIDC với Google Workspace, Azure AD, Okta và nhiều hơn nữa
+  <Card title="Bảo vệ dữ liệu" icon="user-shield" href="/vi/guide/security/data-protection">
+    Xem điều gì xảy ra khi một thông tin bí mật bị dán vào hoặc bị in ra
   </Card>
-  <Card title="Cấp phép SCIM" icon="users-gear" href="/vi/guide/security/scim">
-    Tự động hóa đồng bộ người dùng và nhóm từ nhà cung cấp danh tính của bạn
+  <Card title="Custom Guardrails" icon="eye-slash" href="/vi/guide/security/custom-guardrails">
+    Chọn những định danh agent không bao giờ được thấy
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Quyết định thao tác ghi nào được chạy, phải chờ hoặc không bao giờ chạy
+  </Card>
+  <Card title="Đăng nhập một lần" icon="key" href="/vi/guide/security/sso">
+    Kết nối nhà cung cấp danh tính và bắt buộc SSO
   </Card>
 </CardGroup>

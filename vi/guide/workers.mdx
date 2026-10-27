@@ -1,0 +1,231 @@
+---
+title: Workers
+sidebarTitle: Workers
+description: "Chạy một cuộc chat hoặc Automation trong một thư mục trên máy của bạn, kiểm soát những gì agent có thể truy cập, và giữ thông tin xác thực của kết nối trên cloud."
+icon: server
+---
+
+Worker là một thư mục trên máy do bạn vận hành (laptop, server hoặc CI runner), nơi CloudThinker có thể đọc tệp và chạy lệnh. Bạn chọn một Worker trước khi cuộc chat bắt đầu, và agent làm việc ở đó thay vì trong CloudThinker Cloud, môi trường được host mà mọi cuộc chat dùng theo mặc định.
+
+<Note>
+**Beta.** Worker chạy trên [CloudThinker CLI](/vi/guide/cli/overview), cũng đang ở giai đoạn beta. Tên lệnh và flag có thể thay đổi trước khi phát hành chính thức. CLI gọi Worker là **outpost**, nên bạn sẽ thấy `--outpost` trong các lệnh.
+</Note>
+
+## Tại sao dùng Worker
+
+- **Làm việc tại nơi code của bạn nằm.** Agent chỉnh sửa tệp và chạy công cụ của riêng bạn trong một repository riêng tư hoặc trên một host nội bộ, mà không cần mở cổng inbound nào. Worker kết nối ra ngoài qua HTTPS.
+- **Thông tin xác thực của kết nối ở lại trên cloud.** Các lệnh dùng một kết nối workspace, như AWS hoặc Kubernetes, vẫn chạy trong sandbox được CloudThinker quản lý. Thông tin xác thực đó không bao giờ đến máy của bạn. Shell của agent vẫn có thể dùng bất kỳ thông tin xác thực nào đã có sẵn trên máy, như `~/.aws` hoặc `~/.kube/config`, vì vậy hãy chạy Worker dưới một tài khoản không có các thông tin xác thực đó nếu điều này quan trọng.
+- **Quy tắc của thư mục được áp dụng.** Agent tuân theo các tệp hướng dẫn và Skill bạn giữ trong thư mục.
+- **Cá nhân hoặc dùng chung.** Chỉ bạn mới dùng được Worker cá nhân. Worker dùng chung có sẵn cho mọi người trong workspace, kể cả Automation.
+
+## Điều kiện tiên quyết
+
+- CloudThinker CLI được cài trên máy, chạy Linux hoặc macOS. Không có bản build Windows gốc. Xem [CLI](/vi/guide/cli/overview).
+- HTTPS outbound (cổng 443) từ máy đến `app.cloudthinker.io`, trực tiếp hoặc qua `HTTPS_PROXY`. Nếu proxy của bạn ký lại HTTPS, hãy đặt `SSL_CERT_FILE` thành CA bundle của công ty.
+- Một thư mục bạn muốn agent làm việc, chẳng hạn một bản checkout repository. Với **New worktree**, thư mục phải là một git repository và máy cần git 2.38 trở lên.
+- Để tạo Worker dùng chung: vai trò Admin workspace. Xem [Vai trò](/vi/guide/security/roles).
+- **Allow Workers** được bật trong **More → Workspace settings → General** (xem [cài đặt workspace](/vi/guide/workspaces#mở-cài-đặt-workspace)). Tùy chọn này bật sẵn, trừ khi Admin workspace đã tắt.
+
+Thiết lập qua dashboard bên dưới không cần `cloudthinker login` trên máy. Lệnh thiết lập tự đăng ký Worker. Thiết lập chỉ qua terminal thì cần đăng nhập.
+
+## Thiết lập Worker
+
+<Steps>
+  <Step title="Mở hộp thoại thiết lập Worker">
+    Trong một cuộc chat mới, mở menu **+** cạnh ô prompt, chọn **Run in**, rồi chọn **New worker**. Admin cũng có thể vào **Admin Settings → Sandboxes** (Worker là một nơi khác mà cuộc chat có thể chạy, bên cạnh CloudThinker Cloud) và chọn **Create worker** trong mục **Workers**.
+
+    <Frame caption="Admin Settings, Sandboxes: Create worker thêm một thư mục trên máy của bạn để agent làm việc">
+      <img src="/images/v2/workers-create.webp" alt="Mục Workers của trang Sandboxes với nút Create worker" />
+    </Frame>
+  </Step>
+  <Step title="Đặt tên Worker">
+    Nhập **Worker name**, ví dụ `payments-api`. Bật **Share with workspace** nếu đồng đội và Automation cần dùng nó. Chọn **Create worker**.
+
+    **Trạng thái thành công:** hộp thoại hiển thị một lệnh thiết lập. Lệnh chỉ dùng được một lần và hết hạn sau 10 phút (hộp thoại gọi lệnh này là liên kết).
+  </Step>
+  <Step title="Chạy lệnh trong thư mục dự án">
+    Sao chép lệnh, mở terminal trong thư mục bạn muốn phục vụ rồi chạy lệnh. Lệnh trông như sau:
+
+    ```bash
+    cloudthinker --url https://app.cloudthinker.io worker start --register <reference> --workdir "$PWD"
+    ```
+
+    `<reference>` là mã đăng ký dùng một lần từ hộp thoại. `--url` mặc định là địa chỉ của lần `cloudthinker login` gần nhất, nếu không thì là `https://app.cloudthinker.io`, nên thường có thể bỏ flag này.
+
+    Worker lưu thông tin xác thực trong một tệp riêng tư (mode `0600`) trên máy này. Sau đó Worker tự kiểm tra khả năng đọc tệp, chạy lệnh shell, hủy lệnh và tải lên kết quả. Worker tiếp tục chạy ở foreground cho đến khi bạn nhấn Ctrl-C.
+
+    **Trạng thái thành công:** terminal in ra `Waiting for work.` và hộp thoại hiển thị **`<name>` is verified**. Nếu lệnh đã hết hạn, chọn **New command**.
+  </Step>
+  <Step title="Bắt đầu chat trên Worker">
+    Chọn **Start a chat**. Một cuộc chat mới mở ra với Worker đã được chọn.
+  </Step>
+</Steps>
+
+### Thiết lập chỉ qua terminal
+
+Đăng nhập bằng `cloudthinker login` trước và kiểm tra workspace bằng `cloudthinker whoami`. Sau đó:
+
+```bash
+cloudthinker worker outpost create payments-api --shared   # omit --shared for a personal Worker
+cloudthinker worker start --outpost payments-api --workdir "$PWD"
+```
+
+**Trạng thái thành công:** terminal in ra `Waiting for work.`, và Worker hiển thị **Online** trong menu **Run in**.
+
+## Chọn nơi cuộc chat chạy
+
+<Steps>
+  <Step title="Chọn Worker">
+    Trong một cuộc chat mới, mở menu **+** và chọn **Run in**. Chọn **CloudThinker Cloud** hoặc một Worker theo tên.
+
+    <Frame>
+      <img src="/images/workers/01-plus-menu-run-in-row.png" alt="Menu + với dòng Run in hiển thị CloudThinker Cloud" />
+    </Frame>
+
+    **Trạng thái thành công:** một chip mang tên Worker xuất hiện trên thanh công cụ. Tooltip của chip có nội dung như "Files and shell commands run on payments-api. Connections run in the CloudThinker managed sandbox, and credentials stay there. You cannot change this after the first message."
+
+    <Frame>
+      <img src="/images/workers/02-worker-chip-tooltip.png" alt="Chip trên thanh công cụ cho Worker, với tooltip giải thích cái gì chạy ở đâu" />
+    </Frame>
+  </Step>
+  <Step title="Gửi tin nhắn đầu tiên">
+    Yêu cầu một việc có dùng đến thư mục:
+
+    ```text
+    Run the test suite and fix the first failing test. Show me the diff before you commit.
+    ```
+
+    **Trạng thái thành công:** chip bị khóa. Cuộc hội thoại ở lại trên Worker đó trong suốt vòng đời cuộc hội thoại. Để chạy ở nơi khác, hãy bắt đầu một cuộc hội thoại mới.
+  </Step>
+</Steps>
+
+Ô soạn tin nhớ lựa chọn gần nhất của bạn cho workspace, nên cuộc chat mới tiếp theo bắt đầu trên cùng Worker.
+
+### Làm việc trong một worktree riêng
+
+Sau khi bạn chọn một Worker, menu **Run in** vẫn mở và hiển thị **Configure local environment**. Nếu thư mục là một git repository, hãy bật **New worktree** và chọn một **Branch** gốc trước tin nhắn đầu tiên.
+
+Khi đó Worker tạo một nhánh `cloudthinker/<id>` trong worktree riêng, được lưu trong thư mục trạng thái của Worker bên ngoài thư mục bạn phục vụ, nên bản checkout chính của bạn không thay đổi. Worker dùng nhánh cục bộ nếu có, nếu không thì fetch `origin/<base>` một lần.
+
+- **Dọn dẹp:** Worker xóa một worktree sau 14 ngày không dùng, nhưng chỉ khi worktree đó không có thay đổi chưa commit. Nhánh `cloudthinker/<id>` chỉ bị xóa khi đã được merge hoặc push. Liệt kê worktree bằng `cloudthinker worker worktrees ls`, hoặc dọn dẹp ngay bằng `cloudthinker worker worktrees prune`. Các worktree có thay đổi chưa commit sẽ ở lại và hiển thị là `dirty`.
+- **Khi công tắc bị mờ:** gợi ý đi kèm cho biết lý do, ví dụ "This folder is not a git repository." hoặc "Update the worker to use worktrees." Chạy `cloudthinker update`, và `cloudthinker worker doctor` để kiểm tra phiên bản git.
+
+## Worker có thể truy cập những gì
+
+| Agent làm việc này | Phạm vi truy cập |
+|---|---|
+| Đọc, ghi, chỉnh sửa hoặc liệt kê tệp bằng công cụ tệp | Chỉ bên trong `--workdir`. Đường dẫn bên ngoài, kể cả `..`, bị từ chối. |
+| Chạy lệnh shell | Toàn bộ máy, dưới tài khoản OS của bạn, dùng `/bin/bash`. `--workdir` chỉ là thư mục bắt đầu. |
+| Dùng một kết nối workspace (AWS, Kubernetes và nhiều hơn) | Sandbox được CloudThinker quản lý, với thông tin xác thực được chèn vào đó. Thông tin xác thực đã có trên máy là chuyện khác: shell có thể dùng chúng. |
+
+<Warning>
+Lệnh shell trên Worker không chạy trong sandbox. Các lệnh này có thể đọc `~/.ssh`, ghi bên ngoài thư mục và truy cập mạng của bạn. Trên một máy nhạy cảm:
+
+- Chạy Worker dưới một tài khoản riêng, không có quyền admin. Không bao giờ chạy `worker start` dưới quyền root.
+- Giữ SSH key và thông tin xác thực cloud ngoài thư mục home của tài khoản đó.
+- Đừng dựa vào [Approvals](/vi/guide/approvals/overview) để bảo vệ máy. Approvals kiểm tra các lệnh truy cập đến hệ thống của bạn, như cloud CLI, `ssh`, Git push và các request gửi thông tin xác thực đã lưu. Lệnh chỉ tác động lên máy, như `rm` hoặc ghi tệp, có thể chạy mà không cần hỏi.
+</Warning>
+
+Lệnh shell nhận một môi trường thu gọn: `PATH`, `HOME`, `LANG`, `TERM`, `USER` và `TMPDIR`. Để truyền thêm, hãy thêm flag vào `worker start`, ví dụ `cloudthinker worker start --outpost payments-api --workdir "$PWD" --env AWS_PROFILE`. Giá trị lấy từ môi trường của chính Worker, và bạn lặp lại `--env` cho mỗi biến. `--inherit-env` truyền mọi thứ. Thông tin xác thực của chính Worker luôn bị loại ra. `--background` không chấp nhận các flag này.
+
+Mọi lệnh shell, việc bắt đầu hoặc dừng tác vụ nền, và thao tác ghi tệp đều được ghi lại trong **Admin Settings → Audit Logs** dưới bộ lọc **Command**, cho cả Worker cá nhân lẫn dùng chung. Owner và Admin của tổ chức có thể mở mục này. Bản ghi giữ một bản xem trước đã che của lệnh (tối đa 1 KiB), không bao giờ giữ đầu ra. Thao tác đọc không được ghi lại.
+
+### Những gì rời khỏi máy
+
+Worker chạy các công cụ, nhưng model chạy trong CloudThinker Cloud. Những thứ sau được gửi lên đó và trở thành một phần của cuộc hội thoại:
+
+- Nội dung tệp mà agent đọc, tối đa 1.4 MB mỗi tệp.
+- Đầu ra của lệnh.
+- Các tệp agent tải lên làm kết quả, tối đa 64 tệp và 16 MiB mỗi thao tác.
+
+Chỉ phục vụ những thư mục có nội dung bạn chấp nhận gửi cho model. Xem [Bảo vệ dữ liệu](/vi/guide/security/data-protection) để biết cách lưu trữ cuộc hội thoại.
+
+### Công tắc CloudThinker managed sandbox
+
+Công tắc **CloudThinker managed sandbox** xuất hiện trong menu **Run in** sau khi bạn chọn Worker. Công tắc bật sẵn, và người bắt đầu cuộc chat có thể đổi. Công tắc này quyết định lượt chạy có được dùng lệnh kết nối hay không: các lệnh đi qua một kết nối workspace, như `aws` hoặc `kubectl`. Mô tả trong menu là "Connections like AWS or Kubernetes run in the CloudThinker managed sandbox. Credentials stay there." Công tắc này không bao giờ chuyển việc xử lý tệp hay shell ra khỏi Worker.
+
+<Frame>
+  <img src="/images/workers/03-workspace-connections-switch.png" alt="Menu Run in với công tắc CloudThinker managed sandbox và mô tả của nó" />
+</Frame>
+
+| Công tắc | Lệnh kết nối | Công cụ tệp và shell |
+|---|---|---|
+| **On** (mặc định) | Chạy trong sandbox được CloudThinker quản lý | Chạy trên Worker |
+| **Off** | Không chạy. CloudThinker báo cho bạn biết kết nối không khả dụng. | Chạy trên Worker |
+
+Tin nhắn đầu tiên cố định công tắc cùng với Worker.
+
+### Những gì ở lại trong CloudThinker Cloud
+
+Các lượt chạy [Cyber](/vi/guide/security/cyber-overview) và phiên trình duyệt cần CloudThinker Cloud. Trong cuộc hội thoại trên Worker, các tác vụ này trả về lỗi, và không có gì âm thầm chuyển lên cloud. Hãy bắt đầu một cuộc hội thoại mới trong CloudThinker Cloud cho những việc đó.
+
+## Quy tắc thư mục và Skill
+
+Khi một cuộc hội thoại bắt đầu, agent đọc các tệp hướng dẫn ở gốc thư mục: `AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md` và `GEMINI.md`. Agent đọc tất cả các tệp có mặt theo đúng thứ tự đó, không chỉ tệp đầu tiên. Khi làm việc trong thư mục con, agent cũng đọc các tệp tương tự từ thư mục con đó và các thư mục phía trên. Các tệp ở gốc được đọc một lần mỗi cuộc hội thoại, nên một chỉnh sửa sẽ áp dụng từ cuộc hội thoại tiếp theo.
+
+Skill chỉ đến từ `.agents/skills/` (tối đa 64), không đến từ thư mục của các công cụ khác như `.claude/skills/`. Mỗi Skill là một thư mục có `SKILL.md` với frontmatter chứa `description`, và agent nạp Skill khi một tác vụ phù hợp. Đặt `disable-model-invocation: true` để ẩn một Skill. Xem [Định dạng Skill](/vi/guide/skills/skill-format).
+
+## Giữ Worker luôn chạy
+
+`worker start` dừng khi bạn đóng terminal. Để giữ Worker chạy, thêm `--background` vào cùng lệnh. Flag này thực hiện `service install` và `service start` trong một bước, cho cùng Worker, thư mục, mức đồng thời và nhãn: một systemd user unit trên Linux, một LaunchAgent trên macOS. Trên Linux, lệnh này cũng bật lingering để Worker tiếp tục chạy sau khi đăng xuất, hoặc in ra lệnh `loginctl enable-linger <user>` khi không thể bật. Sau đó lệnh in ra các lệnh xem trạng thái, log và dừng. Trên macOS, LaunchAgent chỉ chạy khi bạn đang đăng nhập.
+
+| Lệnh (tiền tố `cloudthinker worker`) | Chức năng |
+|---|---|
+| `service install --outpost <name> --workdir <path>` | Đăng ký service mà không khởi động. Trên Linux, thêm `--enable-linger` để giữ service chạy sau khi đăng xuất. |
+| `service start` / `service stop` | Khởi động, hoặc dừng sau khi công việc hiện tại hoàn tất. |
+| `service status --json` | Hiển thị trạng thái, exit code gần nhất và vị trí log. |
+| `service uninstall` | Gỡ service. Thông tin xác thực và Worker vẫn được giữ. |
+| `status --outpost <name>` | Hiển thị tình trạng khả dụng và phiên bản CLI theo góc nhìn của workspace. |
+| `doctor` | Kiểm tra phiên bản, mạng, đồng hồ, thông tin xác thực, thư mục và service. In ra một cách sửa cho mỗi vấn đề. |
+| `outpost ls` / `outpost archive <name>` | Liệt kê Worker, hoặc ngừng dùng một Worker sau khi công việc đang mở của Worker đó hoàn tất. |
+
+**Để nâng cấp CLI trên một Worker đang chạy:** chạy `cloudthinker worker service stop` (lệnh này để công việc hiện tại hoàn tất), rồi `cloudthinker update`, rồi `cloudthinker worker service start`. Ở foreground, nhấn Ctrl-C, cập nhật và chạy lại cùng lệnh `worker start`.
+
+Các flag hữu ích của `worker start`: `--concurrency <1-32>` (mặc định 4) cho số lượt chạy tối đa Worker xử lý cùng lúc, `--label <name>` cho tên hiển thị của thư mục, và `--health-addr 127.0.0.1:9464` cho các endpoint `/healthz` và Prometheus `/metrics`.
+
+## Chạy Automation trên Worker
+
+Trong biểu mẫu [Automation](/vi/guide/automation/automations), đặt **Run in** thành một Worker dùng chung. Automation không thể dùng Worker cá nhân, và chỉ Admin workspace mới có thể thay đổi nơi một Automation chạy. Thay đổi công tắc managed sandbox sẽ áp dụng từ lượt chạy tiếp theo. Nếu Worker offline khi đến giờ chạy, lượt chạy không bao giờ chuyển sang CloudThinker Cloud. Hãy giữ các Worker dùng chung phục vụ Automation chạy dưới dạng service.
+
+## Khắc phục sự cố
+
+<AccordionGroup>
+  <Accordion title="Hộp thoại báo Verification failed">
+    Một trong các bước kiểm tra khởi động đã thất bại. Dừng Worker, chạy `cloudthinker worker doctor` trong thư mục, áp dụng cách sửa mà lệnh in ra, rồi chọn **New command** và chạy lại. Nếu lệnh báo **Your CLI is out of date**, hãy chạy `cloudthinker update` trước.
+  </Accordion>
+  <Accordion title="Worker hiển thị Offline">
+    Bạn thấy **Offline** trên dòng của Worker trong **Admin Settings → Sandboxes** và trong menu **Run in**. Tiến trình đã dừng hoặc mất mạng. Kiểm tra `worker start` hoặc service vẫn đang chạy bằng `cloudthinker worker status --outpost <name>`. Worker tự kết nối lại sau khi máy ngủ hoặc thay đổi mạng.
+  </Accordion>
+  <Accordion title="Lệnh shell không tìm thấy biến hoặc công cụ">
+    Chỉ `PATH`, `HOME`, `LANG`, `TERM`, `USER` và `TMPDIR` được truyền theo mặc định. Khởi động lại Worker với `--env NAME` cho mỗi biến, hoặc `--inherit-env`.
+  </Accordion>
+  <Accordion title="Worker thoát với WORKDIR_IDENTITY_CHANGED">
+    Thư mục đã bị thay thế, ví dụ bị xóa và clone lại. Chạy `worker start` một lần với cùng `--outpost` và `--workdir` cộng thêm `--reset-folder`. Các cuộc hội thoại đã dùng thư mục cũ vẫn không khả dụng.
+  </Accordion>
+  <Accordion title="Thông tin xác thực đã hết hạn hoặc bị thu hồi (exit code 3)">
+    Thông tin xác thực có hiệu lực trong 30 ngày kể từ lần dùng cuối và tự xoay vòng khi Worker đang chạy. Nếu thông tin xác thực hết hạn, hãy đăng ký lại bằng một lệnh mới từ **Admin Settings → Sandboxes**, hoặc **Run in → New worker**.
+  </Accordion>
+  <Accordion title="Thu hồi một Worker, ví dụ khi mất laptop">
+    Trong **Admin Settings → Sandboxes**, mở dòng của Worker. Chọn biểu tượng thu hồi trên một máy (**Revoke this machine**), hoặc **Revoke all machines**. Thông tin xác thực ngừng hoạt động ngay lập tức: công việc đang chạy dừng lại, và mỗi máy phải đăng ký lại. Để ngừng dùng Worker vĩnh viễn, chọn **Remove worker**, hoặc chạy `cloudthinker worker outpost archive <name>` khi các cuộc hội thoại đang mở của Worker kết thúc.
+  </Accordion>
+  <Accordion title="Đồng đội thấy &quot;This conversation runs on another member's personal Worker&quot;">
+    Cuộc hội thoại chạy trên Worker cá nhân của bạn, nên chỉ bạn mới gửi được tin nhắn trong đó. Hãy tạo một Worker dùng chung thay thế.
+  </Accordion>
+</AccordionGroup>
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="CLI" icon="terminal" href="/vi/guide/cli/overview">
+    Cài CLI, đăng nhập và chạy CloudThinker từ terminal.
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Chọn những hành động agent nào cần người phê duyệt trước.
+  </Card>
+  <Card title="Automations" icon="robot" href="/vi/guide/automation/automations">
+    Lên lịch công việc chạy trên Worker dùng chung.
+  </Card>
+  <Card title="Các lựa chọn triển khai" icon="cloud" href="/vi/guide/deployment/overview">
+    So sánh CloudThinker Cloud, Worker và các bản triển khai riêng.
+  </Card>
+</CardGroup>

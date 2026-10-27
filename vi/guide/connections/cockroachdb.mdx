@@ -1,0 +1,196 @@
+---
+title: CockroachDB
+description: "Kết nối CockroachDB để agent đọc schema, chạy truy vấn và query plan có giới hạn, và thay đổi row qua phê duyệt của bạn"
+icon: "/images/icons/cockroachdb.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
+
+Kết nối CockroachDB để các agent CloudThinker đọc schema, chạy truy vấn và query plan có giới hạn, xem những gì đang chạy trên cluster, và chèn, cập nhật hoặc xóa row, với mỗi thay đổi đều đi qua phê duyệt của bạn. Bạn cung cấp cho CloudThinker hai connection string được mã hóa: một cho SQL user chỉ đọc, và một cho user ghi riêng biệt chỉ dùng cho các thay đổi đã được phê duyệt.
+
+## Điều kiện tiên quyết
+
+- Cluster CockroachDB có SQL endpoint mà CloudThinker truy cập được từ internet. Agent kết nối từ CloudThinker Cloud, nên `localhost` và địa chỉ private được phân giải ở đó, không phải trên mạng của bạn. Xem [Truy cập dịch vụ private](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ).
+- Tài khoản admin có thể tạo SQL user và cấp quyền.
+- Xác thực bằng mật khẩu với TLS. Kết nối từ chối `sslmode=disable`, `allow` và `prefer`.
+
+## Thiết lập
+
+<Steps>
+  <Step title="Tạo hai SQL user">
+    Mở một phiên SQL với quyền admin, từ **SQL Shell** trong CockroachDB Cloud console hoặc bằng `cockroach sql --url '<admin-connection-string>'`. Sau đó tạo một user để đọc và một user cho các thao tác ghi đã được phê duyệt:
+
+    ```sql
+    CREATE USER cloudthinker_read WITH PASSWORD '<read-password>';
+    CREATE USER cloudthinker_write WITH PASSWORD '<write-password>';
+    ```
+  </Step>
+  <Step title="Cấp quyền trên bảng">
+    Chạy các lệnh này trong từng schema mà agent cần truy cập. Ví dụ này dùng `public`:
+
+    ```sql
+    GRANT USAGE ON SCHEMA public TO cloudthinker_read, cloudthinker_write;
+    GRANT SELECT ON ALL TABLES IN SCHEMA public TO cloudthinker_read;
+    GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO cloudthinker_write;
+    ```
+
+    User ghi cũng cần `SELECT`: CockroachDB yêu cầu quyền này cho mọi `UPDATE` hoặc `DELETE` đọc row qua mệnh đề `WHERE`, và agent luôn gửi kèm một mệnh đề như vậy.
+
+    Các bảng được tạo sau này cũng cần các quyền tương tự. Để tự động áp dụng, hãy đặt default privileges cho role tạo bảng của bạn (ở đây là `app_owner`):
+
+    ```sql
+    ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA public GRANT SELECT ON TABLES TO cloudthinker_read;
+    ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO cloudthinker_write;
+    ```
+
+    Bạn không thể bỏ qua user ghi, vì biểu mẫu bắt buộc phải có. Nếu chỉ muốn đọc, hãy tạo user ghi và không cấp quyền nào trên bảng. Mọi thao tác ghi đã phê duyệt khi đó sẽ thất bại tại cơ sở dữ liệu.
+  </Step>
+  <Step title="Cho phép user đọc xem các câu lệnh đang chạy (tùy chọn)">
+    Chỉ cấp `VIEWACTIVITY` nếu agent cần xem câu lệnh từ các phiên khác. Đọc schema và dữ liệu vẫn hoạt động khi không có quyền này. Nội dung câu lệnh chứa các giá trị literal, có thể bao gồm dữ liệu cá nhân, nên đừng cấp quyền này nếu điều đó quan trọng với bạn.
+
+    ```sql
+    GRANT SYSTEM VIEWACTIVITY TO cloudthinker_read;
+    ```
+  </Step>
+  <Step title="Mở quyền truy cập mạng">
+    CloudThinker phải truy cập được cổng SQL (mặc định `26257`). Trong CockroachDB Cloud, mở trang **Networking** của cluster và thêm các egress IP của CloudThinker vào **IP Allowlist**. Với cluster tự host, hãy cho phép các IP này trong firewall hoặc security group. Tài liệu này không công bố danh sách egress IP của CloudThinker: hãy hỏi đầu mối liên hệ CloudThinker của bạn, hoặc [liên hệ chúng tôi](https://cloudthinker.io/contact).
+  </Step>
+  <Step title="Tạo hai connection string">
+    Tạo một chuỗi cho mỗi user, cả hai cùng trỏ đến một cluster và cơ sở dữ liệu. URL-encode các ký tự đặc biệt trong mỗi mật khẩu.
+
+    <Tabs>
+      <Tab title="CockroachDB Cloud">
+        Mở hộp thoại **Connect** của cluster và sao chép connection string chung, rồi thay vào từng user:
+
+        ```text
+        postgresql://cloudthinker_read:<read-password>@your-cluster.cockroachlabs.cloud:26257/appdb?sslmode=verify-full
+        postgresql://cloudthinker_write:<write-password>@your-cluster.cockroachlabs.cloud:26257/appdb?sslmode=verify-full
+        ```
+
+        Xóa mọi đường dẫn `sslrootcert` trỏ đến một tệp trên máy của bạn, vì CloudThinker không đọc được tệp đó.
+      </Tab>
+      <Tab title="Tự host">
+        Trỏ đến một load balancer hoặc địa chỉ SQL của bất kỳ node nào:
+
+        ```text
+        postgresql://cloudthinker_read:<read-password>@crdb.example.com:26257/appdb?sslmode=require
+        postgresql://cloudthinker_write:<write-password>@crdb.example.com:26257/appdb?sslmode=require
+        ```
+
+        Kết nối không thể chứa tệp chứng chỉ CA. Cluster được ký bởi CA riêng của bạn sẽ không qua được `verify-full`, nên hãy dùng `require`, chế độ này vẫn mã hóa kết nối.
+      </Tab>
+    </Tabs>
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Mở **More → Workspace settings → Connections**, chọn **CockroachDB** và nhấn **Connect** trên bảng chi tiết. Trong hộp thoại, bạn có thể đổi **Alias** và **Description**. Dán URL đọc vào **Connection string** và URL ghi vào **Write connection string**, rồi nhấn **Connect**.
+
+    **Trạng thái thành công:** kết nối hiển thị **Connecting** và **Verifying**, sau đó là **Connected**. CloudThinker chạy [Discovery](/vi/guide/connections/overview#điều-gì-xảy-ra-sau-khi-kết-nối) một lần, và kết quả hiển thị trong phần **Discovery** trên bảng chi tiết của kết nối.
+  </Step>
+</Steps>
+
+## Chi tiết kết nối
+
+| Trường | Bắt buộc | Mô tả |
+|-------|----------|-------------|
+| **Alias** | Không | Tên ngắn cho cluster này. Được điền sẵn alias còn trống tiếp theo, chẳng hạn `cockroachdb-1` |
+| **Description** | Không | Cluster này là gì. Agent đọc mô tả này để chọn giữa các instance |
+| **Connection string** | Có | URL được mã hóa cho user đọc, giới hạn ở `SELECT` và `VIEWACTIVITY` tùy chọn |
+| **Write connection string** | Có | URL được mã hóa cho một user khác, giới hạn ở `SELECT`, `INSERT`, `UPDATE` và `DELETE` |
+
+Hai chuỗi phải khác nhau. Nếu chúng giống hệt nhau, hoặc chuỗi ghi để trống, CloudThinker sẽ không chạy kết nối.
+
+## Quyền yêu cầu
+
+| Bạn muốn agent | Quyền |
+|--------------------|-----------|
+| Liệt kê cơ sở dữ liệu và bảng, đọc schema | `USAGE` trên schema và `SELECT` trên bảng, cho user đọc |
+| Chạy truy vấn có giới hạn và plan ước tính | `SELECT` trên bảng, cho user đọc |
+| Xem câu lệnh đang chạy trong các phiên khác | Quyền hệ thống `VIEWACTIVITY`, cho user đọc |
+| Chèn, cập nhật hoặc xóa row qua phê duyệt của bạn | `INSERT`, `UPDATE` hoặc `DELETE` trên bảng, cộng `SELECT` cho các thay đổi có lọc, cho user ghi |
+
+<Tip>
+Không user nào cần `admin` hay bất kỳ quyền thay đổi schema nào. Chỉ cấp quyền trên các bảng agent cần làm việc, và bỏ `INSERT`, `UPDATE` hoặc `DELETE` khỏi user ghi cho bất kỳ thay đổi nào bạn không bao giờ muốn agent thực hiện.
+</Tip>
+
+## Khả năng của agent
+
+| Khả năng | Agent có thể làm gì |
+|------------|--------------------|
+| **Khám phá schema** | Liệt kê cơ sở dữ liệu và bảng, đọc câu lệnh `CREATE` của một bảng với các cột, index và ràng buộc |
+| **Truy vấn có giới hạn** | Mỗi lượt chạy một câu `SELECT` chỉ đọc |
+| **Query plan** | Chạy `EXPLAIN` ước tính mà không thực thi câu lệnh |
+| **Metadata SQL** | Chạy các câu lệnh `SHOW` như `SHOW INDEXES` |
+| **Kiểm tra cluster** | Báo cáo bản build của server và các câu lệnh đang chạy, kèm login và địa chỉ client của từng câu |
+| **Thay đổi row** | Chèn, cập nhật hoặc xóa row qua user ghi, khi thay đổi đã qua phê duyệt của bạn |
+
+Truy vấn dừng sau 30 giây và trả về tối đa 1.000 row. `EXPLAIN ANALYZE` bị từ chối vì lệnh này thực thi câu lệnh thật. Danh sách node và danh sách SQL user không khả dụng: CockroachDB v26 hạn chế các bảng nội bộ chứa chúng, và agent sẽ nói rõ điều đó thay vì đoán.
+
+### Xác minh kết nối
+
+```text
+List my CockroachDB databases and the tables in the application database
+```
+
+Kết quả mong đợi là tên các cơ sở dữ liệu, sau đó là các bảng trong cơ sở dữ liệu bạn nêu. Lỗi `relation does not exist` nghĩa là tên sai hoặc user đọc không thấy được đối tượng đó.
+
+### Ví dụ prompt
+
+```text
+Show the schema and indexes for public.orders
+Explain the query plan for looking up an order by customer_id, without running it
+Which statements are running on the cluster right now, and who is running them?
+Set status = 'cancelled' for order 123 in public.orders
+```
+
+## Quyền ghi
+
+Agent chỉ có thể chèn, cập nhật hoặc xóa row. Mỗi thay đổi đi qua [Approvals](/vi/guide/approvals/overview) và chạy với write connection string cho đúng lần gọi đó.
+
+<ApprovalDefault />
+
+- Trước khi hỏi, agent nêu hành động, bảng và mệnh đề `WHERE` chọn các row.
+- `UPDATE` hoặc `DELETE` không có mệnh đề `WHERE` sẽ bị từ chối.
+- Agent không thể tạo, sửa, xóa hay truncate cơ sở dữ liệu, bảng hoặc index.
+- Kết quả báo cáo hành động, bảng và số row bị ảnh hưởng, không bao giờ báo giá trị row.
+- Phê duyệt một thay đổi không đồng nghĩa với phê duyệt thay đổi tiếp theo.
+
+## Khắc phục sự cố
+
+<Accordion title="SSL mode bị từ chối">
+Dùng `sslmode=require`, `verify-ca` hoặc `verify-full`. Kết nối từ chối `disable`, `allow` và `prefer` vì chúng cho phép kết nối không mã hóa.
+</Accordion>
+
+<Accordion title="Xác thực hoặc kết nối thất bại">
+Kiểm tra username, mật khẩu đã URL-encode, host, cổng (mặc định `26257`) và cơ sở dữ liệu trong mỗi chuỗi. Sau khi đặt lại mật khẩu, hãy sao chép lại connection string từ CockroachDB Cloud console.
+</Accordion>
+
+<Accordion title="Thiếu bảng hoặc truy vấn bị từ chối">
+User đọc thiếu `USAGE` trên schema hoặc `SELECT` trên bảng. Bảng mới cần được cấp quyền riêng hoặc có default privileges.
+</Accordion>
+
+<Accordion title="Thao tác ghi bị từ chối">
+Xác nhận URL ghi khác URL đọc, user ghi có quyền trên bảng đó (cộng `SELECT` cho cập nhật hoặc xóa), và thay đổi cụ thể này đã được phê duyệt. Mọi cập nhật hoặc xóa đều cần mệnh đề `WHERE`.
+</Accordion>
+
+<Accordion title="LIMIT exceeds maximum">
+Truy vấn yêu cầu hơn 1.000 row. Hãy yêu cầu tập nhỏ hơn, hoặc một phép đếm hay tổng hợp được lọc trên server.
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Tách user đọc và ghi**: chỉ cho user đọc quyền `SELECT`, và chỉ cấp quyền thay đổi row cho user ghi. Không bao giờ cấp `INSERT`, `UPDATE` hoặc `DELETE` cho user đọc.
+- **Xác minh chứng chỉ server**: ưu tiên `sslmode=verify-full` khi chứng chỉ của cluster đến từ CA công khai và hostname khớp. Dùng `require` cho CA private.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="PostgreSQL" icon="/images/icons/postgresql.svg" href="/vi/guide/connections/postgresql">
+    Kết nối cơ sở dữ liệu PostgreSQL bằng user chỉ đọc.
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Quyết định thay đổi row nào được chạy, phải chờ người duyệt hoặc bị từ chối.
+  </Card>
+</CardGroup>

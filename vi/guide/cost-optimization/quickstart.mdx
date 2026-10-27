@@ -1,0 +1,186 @@
+---
+title: Bắt đầu nhanh với Optimize
+description: "Kết nối một tài khoản cloud ở chế độ chỉ đọc, chạy lần quét Optimize đầu tiên, đọc Cost Health và các phát hiện đầu tiên, rồi chia sẻ báo cáo chi phí."
+icon: bolt
+---
+
+Khi hoàn tất trang này, bạn sẽ có một tài khoản cloud trong Optimize, các phát hiện tiết kiệm đầu tiên, và một báo cáo chi phí có thể gửi cho đồng nghiệp. Hãy dành **khoảng 10 phút**, cộng thêm thời gian provider của bạn trả về dữ liệu billing.
+
+## Điều kiện tiên quyết
+
+- Một tài khoản AWS, project GCP hoặc subscription Azure mà bạn có thể cấp quyền đọc. Với AWS Organizations, Optimize chỉ đọc chi tiêu riêng của tài khoản đã kết nối, kể cả trên tài khoản management (payer), nên hãy kết nối từng tài khoản bạn muốn bao phủ. Xem [Làm việc với nhiều tài khoản AWS](/vi/guide/use-cases/multi-aws-accounts).
+- **AWS:** Cost Explorer đã được bật trong AWS console. Với tài khoản mới, có thể mất đến 24 giờ để bắt đầu trả về dữ liệu.
+- **GCP:** đã bật export Cloud Billing Standard usage cost sang BigQuery, và đã có dữ liệu trong đó. Google không backfill đầy đủ cho một export mới, nên hãy thiết lập trước một ngày. Xem [hướng dẫn thiết lập export](https://cloud.google.com/billing/docs/how-to/export-data-bigquery-setup) của Google.
+- [Vai trò workspace](/vi/guide/workspace-users) phù hợp cho từng bước:
+
+| Vai trò | Có thể làm gì trong Optimize |
+|---|---|
+| Admin | Kết nối tài khoản cloud, đánh dấu phát hiện là expected, snoozed hoặc disputed, cùng mọi việc mà Developer làm được |
+| Developer | Chạy quét, bật hoặc tắt làm mới hằng ngày, di chuyển, sửa và giao phát hiện, bắt đầu các hành động trên phát hiện như **Implement**, lên lịch báo cáo, tạo liên kết chia sẻ |
+| Viewer | Đọc mọi trang Optimize và mở báo cáo |
+
+<Steps>
+  <Step title="Mở Optimize và kết nối tài khoản cloud (Admin)">
+    Bạn cần vai trò Admin của workspace cho bước này. Developer và Viewer không thể kết nối tài khoản cloud, nên hãy nhờ Admin thực hiện. Trong thanh bên, nhấn **Optimize**. Trên một workspace trống, **Overview** hiển thị thiết lập ba bước và nút **Connect a cloud account** (hoặc **Connect AWS**, **Connect GCP**, **Connect Azure** khi provider đã được chọn). Nhấn nút đó và điền hộp thoại kết nối mà không cần rời Optimize.
+
+    Cấp các quyền chỉ đọc sau. Optimize cần cả quyền đọc billing và quyền đọc tài nguyên, vì lần quét kiểm tra từng dịch vụ được tính phí bằng các lệnh chỉ đọc.
+
+    | Provider | Cấp | Ở đâu |
+    |---|---|---|
+    | AWS | AWS managed `ReadOnlyAccess` ([script thiết lập AWS](/vi/guide/connections/aws) gắn quyền này. Policy này bao gồm các quyền đọc Cost Explorer mà Optimize cần | IAM role trong từng tài khoản |
+    | GCP | **Viewer**, **BigQuery Data Viewer** và **BigQuery Job User** | Project chứa billing export |
+    | Azure | **Reader** và **Cost Management Reader**, cấp cho app registration (service principal) bạn tạo trong [hướng dẫn kết nối Azure](/vi/guide/connections/azure). Với Microsoft Customer Agreement, cấp thêm **Billing profile reader** trên billing profile | Subscription |
+
+    Giữ `ReadOnlyAccess` trên AWS nếu bạn muốn có phát hiện ở cấp tài nguyên. Policy tùy chỉnh trong [Khắc phục sự cố](#khắc-phục-sự-cố) chỉ bao gồm quyền đọc billing và commitment, nên nếu chỉ có policy này, lần quét không thể đọc tài nguyên của bạn. Xem hướng dẫn [GCP](/vi/guide/connections/gcp) và [Azure](/vi/guide/connections/azure) để biết các lệnh thiết lập.
+
+    <Note>
+    Các quyền này là chỉ đọc, nên hành động **Implement** của một phát hiện chưa thể thay đổi gì. Trước khi dùng, hãy thêm quyền ghi cho các thay đổi bạn muốn và để **Allow writes** bật cho kết nối. Xem quyền ghi cho [AWS](/vi/guide/connections/aws#quyền-ghi), [GCP](/vi/guide/connections/gcp#quyền-ghi) và [Azure](/vi/guide/connections/azure#quyền-ghi). Quét, báo cáo và mọi trang Optimize khác đều hoạt động với quyền chỉ đọc.
+    </Note>
+
+    **Trạng thái thành công:** trang chuyển sang **Your AWS account is connected** (hoặc **GCP project**, **Azure subscription**) với nút **Run first scan**.
+  </Step>
+
+  <Step title="Chọn nguồn billing (chỉ GCP và Azure)">
+    <Tabs>
+      <Tab title="AWS">
+        Không cần làm gì. Optimize đọc tài khoản đã kết nối thông qua AWS Cost Explorer.
+      </Tab>
+      <Tab title="GCP">
+        Chọn **GCP billing export table** trong BigQuery chứa export Cloud Billing Standard của bạn, rồi nhấn **Use this export**.
+      </Tab>
+      <Tab title="Azure">
+        Chọn **Azure billing scope** (một subscription hoặc billing scope mà app registration của bạn có thể đọc với Cost Management Reader), rồi nhấn **Use this scope**.
+      </Tab>
+    </Tabs>
+
+    **Trạng thái thành công:** lời nhắc thiết lập đóng lại và màn hình quét lần đầu xuất hiện.
+  </Step>
+
+  <Step title="Chạy lần quét đầu tiên">
+    Nhấn **Run first scan**. CloudThinker lấy lịch sử billing của bạn (tối đa 13 tháng), rồi kiểm tra từng dịch vụ được tính phí để tìm khoản tiết kiệm bằng các lệnh chỉ đọc. Tài khoản cloud của bạn không bị thay đổi gì.
+
+    Lần quét chạy ở chế độ nền, nên bạn có thể rời trang. Để theo dõi, nhấn **Open CloudThinker's conversation** (nút quét hiển thị nhãn này khi đang quét) hoặc **Open analysis**. Cả hai đều mở cùng một cuộc hội thoại quét. Optimize lưu dữ liệu billing đã lấy trong workspace của bạn, nên các trang và báo cáo tải mà không cần gọi lại provider.
+
+    Sau lần quét này, CloudThinker lấy dữ liệu billing mới mỗi ngày một lần. Để chỉ xem một lần, nhấn **Updated …** trong header trang và tắt **Daily refresh**.
+
+    **Trạng thái thành công:** **Overview** được điền dữ liệu và header hiển thị thời gian **Updated**. Trong khi quét, nút quét hiển thị **Open CloudThinker's conversation**. Khi một lần quét đã hoàn tất, **Open analysis** cạnh **Re-scan** sẽ mở cuộc hội thoại của lần quét đó. Nếu chưa có lần quét nào hoàn tất, các thẻ hiển thị trạng thái chờ, không phải số không.
+  </Step>
+
+  <Step title="Đọc Overview">
+    Xem ba thẻ ở trên cùng:
+
+    | Thẻ | Cho bạn biết gì |
+    |---|---|
+    | **(Current month) spend**, ví dụ **October spend** | Tổng chi tiêu từ đầu tháng đến nay, kèm dự báo cho cuối tháng |
+    | **Potential monthly savings** | Mức trần tính trên các phát hiện đang mở. Các phát hiện có thể chồng lấn nhau |
+    | **Cost Health** | Điểm trên thang 100 kèm một giai đoạn: **Needs work** (Crawl), **On track** (Walk) hoặc **Strong** (Run). Xem [Khái niệm chính](/vi/guide/cost-optimization/overview#khái-niệm-chính) |
+
+    Bên dưới, **Start with these actions** liệt kê các phát hiện đang mở có giá trị cao nhất, **Where spend goes** hiển thị các dịch vụ lớn nhất trong tháng hoàn chỉnh gần nhất, và **Recent anomalies** hiển thị các thay đổi chi phí bất thường trong 30 ngày qua.
+
+    **Trạng thái thành công:** bạn thấy một số tiền trong mỗi thẻ chi tiêu, một điểm trong **Cost Health**, và ít nhất một hàng trong **Start with these actions**, hoặc **No open cost actions** nếu lần quét không tìm thấy gì cần khắc phục.
+  </Step>
+
+  <Step title="Mở Cost Health và phát hiện đầu tiên">
+    Nhấn **See what raises your score** để mở **Cost Health**. Trang này liệt kê các kiểm tra tạo nên điểm số, nhóm thành **Gaps**, **Passing**, **Not measured** và **Out of scope**. Hãy khắc phục gap trước: gap mới là thứ làm thay đổi điểm số. Về các trụ cột và ngưỡng giai đoạn, xem [Khái niệm chính](/vi/guide/cost-optimization/overview#khái-niệm-chính).
+
+    Sau đó quay lại **Overview** và nhấn vào hành động đầu tiên. Mỗi phát hiện hiển thị khoản tiết kiệm hằng tháng ước tính, công sức và rủi ro, kèm nhãn **Quick win** hoặc **Needs review**. Quick win là thay đổi có thể hoàn tác, ít công sức và có bằng chứng đã được xác minh.
+
+    **Trạng thái thành công:** bạn có thể giải thích trong một câu phát hiện hàng đầu sẽ thay đổi gì và có thể tiết kiệm bao nhiêu.
+  </Step>
+
+  <Step title="Tạo và chia sẻ báo cáo">
+    Trong thanh bên, nhấn **Optimize → Reports**. Để phạm vi ở **Selected account** và nhấn **Savings opportunities**. CloudThinker mở một cuộc hội thoại mới và viết báo cáo từ các phát hiện đã lưu của bạn.
+
+    Để chia sẻ với đồng nghiệp trong workspace, hãy chỉ họ đến **Artifacts** ở thanh bên trái, nơi báo cáo được lưu. Họ đăng nhập để đọc.
+
+    Với người ngoài workspace, nhấn **Share** trên thẻ của báo cáo trong **Artifacts** hoặc ở đầu trang artifact, rồi **Create share link**. Bất kỳ ai có URL đó đều có thể mở báo cáo mà không cần đăng nhập, và liên kết không có thời hạn: liên kết vẫn công khai cho đến khi bạn nhấn **Revoke**. Chỉ Developer và Admin mới có thể tạo hoặc thu hồi liên kết, và không có công tắc riêng để tắt liên kết công khai, nên vai trò workspace là cách bạn kiểm soát việc chia sẻ. Xem [Chia sẻ](/vi/guide/sharing).
+
+    <Note>
+    Báo cáo hiển thị account ID, số liệu chi tiêu, tên tài nguyên và chi tiết kiến trúc. Hãy đọc báo cáo với góc nhìn của người ngoài trước khi tạo liên kết công khai.
+    </Note>
+
+    **Trạng thái thành công:** báo cáo xuất hiện trong **Artifacts**, và bạn có một liên kết chia sẻ hoặc một đồng nghiệp có quyền truy cập workspace.
+  </Step>
+</Steps>
+
+## Bạn hoàn thành khi…
+
+- [ ] **Overview** hiển thị chi tiêu, khoản tiết kiệm tiềm năng và điểm Cost Health cho tài khoản của bạn
+- [ ] Bạn đã mở ít nhất một phát hiện và đọc bằng chứng của phát hiện đó
+- [ ] Một báo cáo **Savings opportunities** có trong **Artifacts**, và bạn đã có sẵn liên kết chia sẻ hoặc quyền truy cập cho đồng nghiệp
+
+## Khắc phục sự cố
+
+Mọi vấn đề của Optimize được tập hợp trong [Khắc phục sự cố Optimize](/vi/guide/cost-optimization/troubleshooting), kèm nguyên nhân, cách kiểm tra và cách khắc phục cho từng vấn đề. Những vấn đề bạn dễ gặp nhất ở lần quét đầu tiên:
+
+<AccordionGroup>
+  <Accordion title="AWS Cost Explorer access is required">
+    **Nguyên nhân:** role đã kết nối không thể gọi `ce:GetCostAndUsage`.
+
+    **Cách khắc phục:** gắn `ReadOnlyAccess` (khuyến nghị), rồi nhấn **Retry scan**. Nếu không thể, hãy thêm policy này vào một custom role. Nếu chỉ có policy này, billing tải được nhưng phát hiện cấp tài nguyên bị chặn, vì lần quét không thể đọc tài nguyên của bạn. Policy này cũng cấp các quyền đọc commitment, vốn nếu thiếu sẽ thất bại âm thầm và khiến độ bao phủ commitment trông ổn trong khi thực tế không phải vậy.
+
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": [
+            "ce:GetCostAndUsage",
+            "ce:GetCostForecast",
+            "ce:GetReservationCoverage",
+            "ce:GetReservationUtilization",
+            "ce:GetSavingsPlansCoverage",
+            "ce:GetSavingsPlansUtilization",
+            "savingsplans:DescribeSavingsPlans"
+          ],
+          "Resource": "*"
+        }
+      ]
+    }
+    ```
+
+    Với tài khoản AWS mới, Cost Explorer phải được bật trong AWS console trước, và có thể mất đến 24 giờ để bắt đầu trả về dữ liệu.
+  </Accordion>
+
+  <Accordion title="GCP billing export is not readable">
+    **Nguyên nhân:** service account đã kết nối không thể đọc dữ liệu billing trong BigQuery. Service account cần **BigQuery Data Viewer** và **BigQuery Job User** trên project chứa export. Nếu thay vào đó bạn thấy **GCP billing export is required**, project không có bảng export Standard.
+
+    **Cách khắc phục:** cấp các role còn thiếu, hoặc bật export Standard, rồi chọn bảng trong **GCP billing export table**. Xem [hướng dẫn kết nối GCP](/vi/guide/connections/gcp).
+  </Accordion>
+
+  <Accordion title="Azure Cost Management is not readable">
+    **Nguyên nhân:** Cost Management đã từ chối truy vấn. App registration thiếu **Cost Management Reader** trên subscription, hoặc, với Microsoft Customer Agreement, thiếu **Billing profile reader** trên billing profile.
+
+    **Cách khắc phục:** gán role còn thiếu cho service principal, rồi chọn lại scope trong **Azure billing scope**. Xem [hướng dẫn kết nối Azure](/vi/guide/connections/azure).
+  </Accordion>
+
+  <Accordion title="Lần quét đã hoàn tất nhưng không có dữ liệu chi phí">
+    **Nguyên nhân:** provider không trả về chi tiêu cho tháng hoàn chỉnh gần nhất hoặc tháng hiện tại, hoặc dữ liệu billing chưa đến. AWS Cost Explorer có thể trễ so với mức sử dụng từ 24 đến 48 giờ.
+
+    **Cách khắc phục:** chờ, rồi nhấn **Run scan again** (đó là nhãn trên màn hình này; trên **Findings**, cùng hành động này là **Re-scan**). Với GCP, xác nhận bảng export BigQuery bạn đã chọn là export Standard và có dữ liệu.
+  </Accordion>
+
+  <Accordion title="Tôi không thấy Run scan hoặc công tắc làm mới hằng ngày">
+    **Nguyên nhân:** vai trò workspace của bạn là Viewer. Chạy quét và thay đổi chế độ làm mới cần Developer hoặc Admin.
+
+    **Cách khắc phục:** nhờ Admin của workspace cấp vai trò Developer. Xem [Người dùng workspace](/vi/guide/workspace-users).
+  </Accordion>
+</AccordionGroup>
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="Xử lý phát hiện" icon="lightbulb" href="/vi/guide/cost-optimization/recommendations">
+    Chuyển các khoản tiết kiệm qua Pending, In Progress, Implemented hoặc Ignored
+  </Card>
+  <Card title="Khám phá lịch sử chi tiêu" icon="chart-line" href="/vi/guide/cost-optimization/analytics">
+    So sánh 6 hoặc 12 tháng hoàn chỉnh và hỏi vì sao một dịch vụ thay đổi
+  </Card>
+  <Card title="Lên lịch báo cáo" icon="file-chart-column" href="/vi/guide/cost-optimization/reports">
+    Tạo cùng một báo cáo mỗi tháng theo lịch
+  </Card>
+  <Card title="Thiết lập Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Quyết định CloudThinker được thay đổi gì khi bạn triển khai một phát hiện
+  </Card>
+</CardGroup>

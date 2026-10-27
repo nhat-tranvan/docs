@@ -1,209 +1,279 @@
 ---
-title: "Thiết Lập Cấp Phép SCIM"
-description: "Tự động hóa cấp phép người dùng và nhóm từ nhà cung cấp danh tính với SCIM 2.0"
+title: Cấp phát người dùng qua SCIM
+description: "Kết nối nhà cung cấp danh tính với CloudThinker qua SCIM 2.0 để người dùng được thêm, tạm ngưng và gỡ bỏ theo thay đổi trong thư mục của bạn."
 icon: users-gear
 ---
 
-Cấp phép SCIM khả dụng trên gói **Scale**, **Scale Plus** và **Enterprise**. Yêu cầu kết nối SSO đang hoạt động.
+SCIM (System for Cross-domain Identity Management) cho phép nhà cung cấp danh tính (IdP) của bạn, như Okta hoặc Microsoft Entra ID, quản lý tài khoản CloudThinker thay bạn. Gán một người vào ứng dụng CloudThinker trong IdP là người đó tham gia tổ chức của bạn; bỏ gán là quyền truy cập của họ chấm dứt, không cần mời hay gỡ thủ công.
 
-Hướng dẫn này bao gồm cách bật đồng bộ thư mục SCIM, cấu hình ánh xạ nhóm với workspace, quản lý token và giám sát hoạt động đồng bộ.
+## Điều kiện tiên quyết
 
-**Trước khi bắt đầu:** Hoàn tất các bước trong [Thiết lập single sign-on (SSO)](/vi/guide/security/sso) trước. SCIM được xây dựng trên kết nối SSO đang hoạt động — bạn cần xác minh domain và cấu hình SSO với nhà cung cấp danh tính trước khi tiếp tục.
+- Một tổ chức dùng gói **Scale**, **Scale Plus** hoặc **Enterprise**. Xem [Bảng giá](/vi/guide/billing/pricing).
+- Một [kết nối SSO](/vi/guide/security/sso) đang hoạt động với domain đã xác minh. Cài đặt cấp phát chỉ xuất hiện khi SSO đã hoạt động.
+- Vai trò **Owner** của tổ chức trong CloudThinker. Admin không quản lý được SSO hay SCIM. Xem [Vai trò và quyền](/vi/guide/security/roles).
+- Quyền admin với cài đặt cấp phát (provisioning) của ứng dụng CloudThinker trong IdP.
 
----
+## SCIM thay đổi những gì trong CloudThinker
 
-## Cách SCIM hoạt động trong CloudThinker
+| Trong IdP | Trong CloudThinker |
+|---|---|
+| Gán một người vào ứng dụng CloudThinker | Người đó được thêm vào tổ chức với **Auto-assigned organization role** và nhận các **Auto-assigned workspaces** |
+| Đổi tên hoặc email của họ | Hồ sơ CloudThinker của họ được cập nhật |
+| Vô hiệu hóa họ (đặt inactive) | Tư cách thành viên bị tạm ngưng và họ mất quyền truy cập mọi workspace |
+| Kích hoạt lại họ | Tư cách thành viên được khôi phục, kèm các workspace tự động gán |
+| Xóa họ (SCIM `DELETE`) | Họ bị gỡ khỏi tổ chức |
+| Push một nhóm | Nhóm xuất hiện trong **Group mappings**, nơi bạn chọn workspace cho các thành viên của nhóm |
 
-SCIM (System for Cross-domain Identity Management) là tiêu chuẩn ngành cho phép nhà cung cấp danh tính tự động đồng bộ CloudThinker với thư mục công ty của bạn. Thay vì mời và xóa người dùng thủ công, IdP xử lý việc đó cho bạn.
+Bỏ gán một người khỏi ứng dụng thường được tính là vô hiệu hóa, không phải xóa. Cả Okta và Microsoft Entra ID đều gửi `active=false` khi bạn bỏ gán user, nên người đó bị **tạm ngưng** trong CloudThinker chứ không bị gỡ. Họ chỉ bị gỡ khi IdP gửi `DELETE`.
 
-Khi SCIM được bật:
+Khi SCIM đang bật, IdP là nguồn sự thật về việc ai thuộc tổ chức:
 
-- **Người dùng được gán** vào ứng dụng CloudThinker trong IdP được tự động thêm vào tổ chức của bạn
-- **Người dùng bị xóa** khỏi ứng dụng IdP được tự động vô hiệu hóa trong CloudThinker
-- **Nhóm được đẩy** từ IdP xuất hiện trong CloudThinker và có thể được ánh xạ với workspace và vai trò cụ thể
-- **Thay đổi thành viên nhóm** trong IdP tự động cập nhật quyền truy cập workspace trong CloudThinker
+- **Lời mời thành viên bị tắt.** Mời từ CloudThinker sẽ trả về "Member invitations are disabled because this organization uses SCIM provisioning."
+- **Bạn không gỡ được thành viên do SCIM cấp phát trong CloudThinker.** Thông báo lỗi là "This member was provisioned via SCIM." Hãy gỡ họ trong IdP.
+- **Cấp phát just-in-time bị tắt.** SCIM và just-in-time (tài khoản được tạo ở lần đăng nhập SSO đầu tiên) không chạy cùng nhau được. Bật SCIM sẽ tự tắt just-in-time. Người thuộc domain của bạn mà IdP chưa cấp phát sẽ bị từ chối khi đăng nhập SSO với thông báo "No account found. Contact your administrator for access." cho tới khi IdP cấp phát cho họ.
 
-Phía sau, IdP gọi SCIM 2.0 API của CloudThinker bằng bearer token mỗi khi cần tạo, cập nhật hoặc xóa người dùng và nhóm.
+Bạn vẫn đổi được vai trò hoặc quyền truy cập workspace của thành viên trong CloudThinker. Xem [Tổ chức](/vi/guide/organization).
 
----
-
-## Bước 1: Bật SCIM trong CloudThinker
+## Bật SCIM trong CloudThinker
 
 <Steps>
-  <Step title="Điều hướng đến cài đặt Identity and access">
-    Vào **Admin Settings → Identity and access**. Thẻ **Provisioning & directory sync** xuất hiện bên dưới thẻ SSO khi kết nối SSO của bạn đang hoạt động.
+  <Step title="Mở cài đặt cấp phát">
+    Vào **Admin Settings → Identity and access** và tìm thẻ **Provisioning & directory sync** bên dưới kết nối SSO.
+
+    Nếu không thấy thẻ, kết nối SSO của bạn chưa hoạt động. Hãy hoàn tất [thiết lập SSO](/vi/guide/security/sso) trước.
   </Step>
   <Step title="Chọn SCIM">
-    Nhấp tùy chọn **SCIM** trong bộ chọn chế độ cấp phép. CloudThinker tạo bearer token và URL endpoint SCIM.
-  </Step>
-  <Step title="Sao chép thông tin xác thực">
-    Một hộp thoại xuất hiện với hai giá trị bạn cần dán vào nhà cung cấp danh tính:
-    - **Bearer token** — token bí mật IdP dùng để xác thực với SCIM API của CloudThinker
-    - **SCIM base URL** — endpoint IdP sẽ gửi yêu cầu đến (định dạng: `https://<your-domain>/api/v1/scim/{org_id}/v2`)
+    Chọn **SCIM** (Sync users and groups from your identity provider). Các lựa chọn khác là **Manual** (bạn tự mời người dùng) và **Just-in-time** (tài khoản được tạo ở lần đăng nhập SSO đầu tiên).
 
-    Sao chép cả hai giá trị ngay — bearer token chỉ hiển thị một lần.
+    **Trạng thái thành công:** hộp thoại **SCIM enabled** mở ra.
+  </Step>
+  <Step title="Sao chép hai giá trị">
+    Hộp thoại hiển thị:
+
+    - **Bearer token**: thông tin bí mật mà IdP gửi để chứng minh request của mình được phép.
+    - **SCIM base URL**: endpoint mà IdP gọi tới. URL có dạng `https://<your-cloudthinker-host>/api/v1/scim/<organization-id>/v2`.
+
+    Sao chép cả hai, rồi nhấn **Done**.
+
+    **Trạng thái thành công:** thẻ hiển thị **Directory sync (SCIM)** kèm "SCIM directory sync is active."
   </Step>
 </Steps>
 
 <Warning>
-Sao chép bearer token ngay lập tức — không thể lấy lại sau khi bạn đóng hộp thoại. Nếu mất, bạn cần xoay vòng token.
+Bearer token chỉ hiển thị một lần. Nếu bạn đóng hộp thoại mà chưa sao chép, hãy nhấn **Rotate token** để lấy token mới.
 </Warning>
 
----
+## Đặt giá trị mặc định cho thành viên mới
 
-## Bước 2: Cấu hình SCIM trong nhà cung cấp danh tính
+Bên dưới các lựa chọn cấp phát, hai cài đặt quyết định người mới được cấp phát sẽ nhận được gì. Hãy đặt trước khi IdP gửi những user đầu tiên.
 
-Chuyển sang bảng điều khiển admin của nhà cung cấp danh tính và thiết lập cấp phép SCIM cho ứng dụng CloudThinker của bạn. Các bước chính xác khác nhau theo nhà cung cấp (Okta, Azure AD / Microsoft Entra, OneLogin, v.v.), nhưng các giá trị bạn cần là như nhau.
+| Cài đặt | Tác dụng | Mặc định |
+|---|---|---|
+| **Auto-assigned organization role** | Vai trò tổ chức mà thành viên mới nhận: **Viewer**, **Developer** hoặc **Admin** | **Viewer** |
+| **Auto-assigned workspaces** | Các workspace mà thành viên mới tham gia | Workspace mặc định của bạn |
 
-### Cấu hình chung
+Không gán được Owner theo cách này. Để biết mỗi vai trò làm được gì, xem [Vai trò và quyền](/vi/guide/security/roles).
 
-Trong cài đặt SCIM hoặc cấp phép của IdP cho ứng dụng CloudThinker, nhập:
+## Cấu hình nhà cung cấp danh tính
 
-| Trường | Giá trị |
-|-------|-------|
-| **SCIM connector base URL** | SCIM base URL từ Bước 1 |
-| **Authentication mode** | HTTP Header / Bearer Token |
-| **Bearer token** | Token từ Bước 1 |
-| **Unique identifier field** | `userName` (ánh xạ đến địa chỉ email của người dùng) |
+Dùng ứng dụng CloudThinker bạn đã tạo cho SSO.
 
-### Những gì IdP có thể đồng bộ
+<Tabs>
+  <Tab title="Okta">
+    <Steps>
+      <Step title="Bật SCIM trên ứng dụng">
+        Mở ứng dụng CloudThinker. Trên tab **General**, nhấn **Edit** trong **App Settings**, đặt **Provisioning** thành **SCIM** rồi lưu.
+      </Step>
+      <Step title="Nhập thông tin kết nối">
+        Trên **Provisioning → Integration**, nhấn **Edit**:
 
-| Thao tác | Hỗ trợ | Chức năng |
-|-----------|-----------|-------------|
-| Tạo người dùng | Có | Thêm tài khoản người dùng mới vào tổ chức CloudThinker |
-| Cập nhật thuộc tính người dùng | Có | Đồng bộ tên, email và trạng thái hoạt động |
-| Vô hiệu hóa người dùng | Có | Tắt quyền truy cập khi người dùng bị vô hiệu hóa trong IdP |
-| Xóa người dùng | Có | Xóa người dùng khỏi tổ chức của bạn |
-| Đẩy nhóm | Có | Đồng bộ nhóm IdP với CloudThinker để ánh xạ workspace |
-| Thành viên nhóm | Có | Đồng bộ thành viên nhóm giữa IdP và CloudThinker |
+        | Trường trong Okta | Giá trị |
+        |---|---|
+        | **SCIM connector base URL** | **SCIM base URL** lấy từ CloudThinker |
+        | **Unique identifier field for users** | `userName` |
+        | **Supported provisioning actions** | **Push New Users**, **Push Profile Updates**, **Push Groups** |
+        | **Authentication Mode** | **HTTP Header** |
+        | **Authorization** | **Bearer token** lấy từ CloudThinker |
 
-<Info>
-CloudThinker hỗ trợ lọc theo `userName` cho tra cứu người dùng và `displayName` cho tra cứu nhóm. Thao tác hàng loạt hiện chưa được hỗ trợ.
-</Info>
+        Nhấn **Test Connector Configuration**, rồi **Save**.
+      </Step>
+      <Step title="Bật các hành động To App">
+        Trên **Provisioning → To App**, nhấn **Edit** và bật **Create Users**, **Update User Attributes** và **Deactivate Users**. Lưu lại.
+      </Step>
+      <Step title="Push nhóm">
+        Trên tab **Push Groups**, thêm các nhóm bạn muốn ánh xạ tới workspace.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Microsoft Entra ID">
+    <Steps>
+      <Step title="Đặt thông tin xác thực admin">
+        Mở **Enterprise applications → CloudThinker → Provisioning**. Đặt **Provisioning Mode** thành **Automatic**. Trong **Admin Credentials**, nhập **SCIM base URL** vào **Tenant URL** và **Bearer token** vào **Secret Token**. Nhấn **Test Connection**, rồi **Save**.
+      </Step>
+      <Step title="Kiểm tra ánh xạ">
+        Trong **Mappings**, giữ bật cấp phát user và nhóm. Xác nhận thuộc tính được ánh xạ tới `userName` chứa email của user thuộc một domain đã xác minh.
+      </Step>
+      <Step title="Bắt đầu cấp phát">
+        Trong **Settings**, đặt **Scope** thành **Sync only assigned users and groups**. Đặt **Provisioning Status** thành **On** rồi lưu. Entra chạy một chu kỳ khoảng 40 phút một lần.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Nhà cung cấp SCIM 2.0 khác">
+    | Trường trong IdP | Giá trị |
+    |---|---|
+    | SCIM base URL / Tenant URL | **SCIM base URL** lấy từ CloudThinker |
+    | Xác thực | HTTP header, bearer token |
+    | Bearer token / Secret token | **Bearer token** lấy từ CloudThinker |
+    | Định danh duy nhất cho user | `userName`, đặt bằng địa chỉ email của user |
 
----
+    Bật tạo user, cập nhật thuộc tính user, vô hiệu hóa user và push nhóm. Chạy **Test connection** của IdP nếu có.
+  </Tab>
+</Tabs>
 
-## Bước 3: Ánh xạ nhóm với workspace và vai trò
+CloudThinker đọc các thuộc tính sau:
 
-Sau khi IdP bắt đầu đẩy nhóm qua SCIM, chúng tự động xuất hiện trong phần **Group mappings** trên trang Identity and access. Ánh xạ nhóm cho phép kiểm soát workspace người dùng vào và vai trò họ nhận được, dựa trên thành viên nhóm trong IdP.
+| Tài nguyên | Thuộc tính | Bắt buộc | Dùng cho |
+|---|---|---|---|
+| User | `userName` | Có | Email, khi `emails` trống |
+| User | `emails` | Không | Email. Mục `primary` được ưu tiên, nếu không thì lấy mục đầu tiên. |
+| User | `name.givenName`, `name.familyName` | Không | Tên hiển thị |
+| User | `active` | Không (mặc định `true`) | Tạm ngưng và kích hoạt lại |
+| User | `externalId` | Không | Khớp user trong bộ lọc |
+| Group | `displayName` | Có | Tên hiển thị trong **Group mappings** |
+| Group | `members` | Không | Ai nhận các workspace của nhóm |
+| Group | `externalId` | Không | Khớp nhóm |
 
-Đối với mỗi nhóm đã đồng bộ, bạn có thể cấu hình:
+**Trạng thái thành công:** gán một user thử nghiệm vào ứng dụng. Trong khoảng thời gian đồng bộ của IdP, user đó xuất hiện trong **Admin Settings → Organization → Members**, và **View sync logs** hiển thị một mục `CREATE` có trạng thái `SUCCESS`.
 
-| Cài đặt | Mô tả |
-|---------|-------------|
-| **Auto-assigned workspaces** | Workspace nào thành viên của nhóm này được tự động thêm vào |
-| **Auto-assigned organization role** | Vai trò tổ chức cho thành viên của nhóm này — chọn Viewer, Developer hoặc Admin. Chọn "Use connection role" để sử dụng vai trò mặc định từ cài đặt kết nối SSO. |
+Những gì SCIM API của CloudThinker hỗ trợ, để bạn khớp với các tùy chọn của IdP:
+
+| Khả năng | Hỗ trợ |
+|---|---|
+| Tài nguyên Users và Groups (tạo, đọc, thay thế, patch, xóa) | Có |
+| Bộ lọc `eq` trên `userName`, `emails.value`, `externalId`, `active` (user) và `displayName` (nhóm) | Có, tối đa 100 kết quả |
+| Thao tác hàng loạt (bulk) | Không |
+| Sắp xếp, ETag, đổi mật khẩu | Không |
+
+<Note>
+Nếu ai đó đã có tài khoản CloudThinker từ tổ chức khác, CloudThinker chỉ thêm tài khoản sẵn có đó vào tổ chức của bạn khi domain email của tài khoản thuộc các domain SSO đã xác minh của bạn. Nếu không, IdP nhận được "User email domain not verified for this organization."
+</Note>
+
+## Ánh xạ nhóm tới workspace
+
+Nhóm cho phép một thay đổi trong IdP đưa cả một đội vào đúng các workspace.
 
 <Steps>
-  <Step title="Chờ nhóm xuất hiện">
-    Sau khi cấu hình SCIM trong IdP, gán nhóm cho ứng dụng CloudThinker của bạn. Các nhóm xuất hiện trong bảng **Group mappings** khi IdP đẩy chúng — điều này có thể mất vài phút tùy thuộc vào chu kỳ đồng bộ của IdP.
+  <Step title="Push nhóm từ IdP">
+    Trong IdP, gán các nhóm vào ứng dụng CloudThinker và push nhóm.
+
+    **Trạng thái thành công:** mỗi nhóm xuất hiện trong **Group mappings** trên **Admin Settings → Identity and access**, kèm **Group name** và số **Members**. Trước đó, mục này hiển thị "No groups synced yet."
   </Step>
-  <Step title="Chọn workspace">
-    Đối với mỗi nhóm, chọn workspace nào thành viên của họ nên có quyền truy cập bằng dropdown workspace.
+  <Step title="Chọn workspace cho từng nhóm">
+    Trên dòng của nhóm, mở **Auto-assigned workspaces** và chọn các workspace mà thành viên nhóm sẽ tham gia.
   </Step>
-  <Step title="Đặt vai trò (tùy chọn)">
-    Tùy chọn chọn vai trò cụ thể cho mỗi nhóm. Nếu để là "Use connection role," thành viên nhận vai trò mặc định từ cài đặt kết nối SSO.
+  <Step title="Chọn vai trò của nhóm">
+    Đặt **Auto-assigned organization role** cho nhóm, hoặc giữ **Inherit from connection** để dùng vai trò mặc định bạn đã đặt ở trên.
+
+    CloudThinker đặt vai trò tổ chức của thành viên một lần duy nhất, khi tạo thành viên. Các lần đồng bộ sau không thay đổi vai trò này, nên vai trò bạn tự đổi trong CloudThinker sẽ được giữ nguyên.
   </Step>
-  <Step title="Lưu">
-    Nhấp **Save** cho mỗi hàng nhóm để áp dụng ánh xạ.
+  <Step title="Lưu dòng">
+    Nhấn **Save** trong cột **Actions**.
+
+    **Trạng thái thành công:** thành viên hiện tại của nhóm được thêm vào các workspace đã chọn, còn thành viên tương lai được thêm khi IdP đồng bộ họ vào nhóm.
   </Step>
 </Steps>
 
-<Info>
-Nếu chưa có nhóm nào được đồng bộ, phần Group mappings hiển thị thông báo: "No groups synced yet. Groups will appear here automatically once your identity provider pushes them via SCIM."
-</Info>
-
----
-
-## Quản lý token SCIM
-
-### Xoay vòng token
-
-Nếu token bị xâm phạm hoặc chính sách bảo mật yêu cầu xoay vòng định kỳ, bạn có thể xoay vòng mà không có thời gian ngừng hoạt động:
-
-1. Trong phần **Directory sync (SCIM)**, nhấp **Rotate token**
-2. Xác nhận việc xoay vòng — token cũ vẫn có hiệu lực thêm 24 giờ, cho bạn thời gian cập nhật IdP
-3. Sao chép token mới và cập nhật trong cấu hình SCIM của IdP
-
-Cả token cũ và mới đều hoạt động trong cửa sổ chồng lấp 24 giờ, vì vậy IdP sẽ không gặp lỗi đồng bộ trong khi bạn thực hiện chuyển đổi.
-
-### Thu hồi token
-
-Chuyển khỏi SCIM (sang Manual hoặc JIT) tự động thu hồi token SCIM và dừng toàn bộ đồng bộ thư mục. IdP sẽ không còn có thể tạo, cập nhật hoặc xóa người dùng trong CloudThinker.
-
----
-
-## Giám sát hoạt động đồng bộ
-
-Nhấp **View sync logs** trong phần Directory sync để xem lịch sử tất cả thao tác SCIM. Điều này hữu ích để xác minh IdP đang đẩy thay đổi đúng cách và khắc phục sự cố cấp phép.
-
-Mỗi mục nhật ký hiển thị:
-
-| Trường | Mô tả |
-|-------|-------------|
-| **Timestamp** | Khi thao tác xảy ra |
-| **Action** | Điều gì đã xảy ra (ví dụ: CREATE, UPDATE, DELETE) |
-| **Resource** | Người dùng hoặc nhóm nào bị ảnh hưởng |
-| **Status** | Có thành công (SUCCESS), bị bỏ qua (SKIPPED) hay thất bại (FAILED) |
-
----
-
-## Tắt SCIM
-
-Nếu bạn không còn cần đồng bộ thư mục, bạn có thể tắt SCIM:
-
-1. Trong thẻ **Provisioning & directory sync**, chọn **Manual** hoặc **Just-in-time**
-2. Xác nhận hành động — thao tác này ngay lập tức thu hồi token SCIM và dừng tất cả đồng bộ thư mục
-3. Người dùng hiện tại vẫn trong tổ chức của bạn, nhưng IdP không còn có thể tự động thêm hoặc xóa người dùng
-
 <Warning>
-Tắt SCIM có hiệu lực ngay lập tức. Nhà cung cấp danh tính của bạn sẽ bắt đầu nhận lỗi xác thực trong chu kỳ đồng bộ tiếp theo. Cập nhật hoặc tắt cấp phép SCIM trong IdP để tránh cảnh báo lỗi không cần thiết.
+Ánh xạ nhóm chỉ thêm quyền truy cập workspace. Gỡ một người khỏi nhóm, hoặc gỡ một workspace khỏi ánh xạ, không đưa họ ra khỏi workspace đó. Hãy gỡ họ trong [thành viên workspace](/vi/guide/workspace-users), hoặc bỏ gán họ khỏi ứng dụng trong IdP để gỡ khỏi mọi nơi.
 </Warning>
 
----
+Sau lần đồng bộ đầu tiên, hãy kiểm tra vai trò của các thành viên mới trong **Admin Settings → Organization → Members** và điều chỉnh những vai trò cần khác đi.
+
+## Điều gì xảy ra khi một người rời đi
+
+| Hành động trong IdP | Tư cách thành viên trong CloudThinker | Workspace | Automation của họ |
+|---|---|---|---|
+| Vô hiệu hóa (đặt inactive) | Tạm ngưng | Bị gỡ khỏi tất cả | Bị tắt |
+| Kích hoạt lại | Hoạt động trở lại, nếu còn seat trống | Chỉ các workspace tự động gán; các workspace còn lại phải thêm lại | Vẫn tắt cho tới khi có người bật lại |
+| Xóa (SCIM `DELETE`) | Bị gỡ | Bị gỡ khỏi tất cả | Bị tắt |
+
+[Automation](/vi/guide/automation/automations) không bao giờ tự đổi chủ sở hữu. Admin của workspace có thể chọn **Take ownership** trên trang của automation, và automation vẫn tắt cho tới khi họ bật lại. Xem [chủ sở hữu automation](/vi/guide/automation/autonomous-agents).
+
+<Note>
+Nếu gói của bạn tính phí theo seat và mọi seat đã được dùng hết, người mới được cấp phát hoặc được kích hoạt lại sẽ được thêm ở trạng thái inactive và chưa dùng được CloudThinker. Thành viên đang hoạt động và lời mời đang chờ đều chiếm seat; thành viên bị tạm ngưng và inactive thì không. Owner thêm seat trên **Admin Settings → Billing**; xem [Thêm hoặc bớt seat](/vi/guide/billing/subscription#thêm-hoặc-bớt-seat). Sau đó kiểm tra trạng thái của họ trong **Admin Settings → Organization → Members**.
+</Note>
+
+## Xoay vòng hoặc tắt token
+
+**Xoay vòng token** khi token có thể đã bị lộ hoặc chính sách của bạn yêu cầu:
+
+<Steps>
+  <Step title="Xoay vòng">
+    Trong **Directory sync (SCIM)**, nhấn **Rotate token**, rồi nhấn **Rotate** trong hộp xác nhận.
+
+    **Trạng thái thành công:** một hộp thoại hiển thị **Bearer token** mới và **SCIM base URL**. Token cũ vẫn hoạt động trong 24 giờ.
+  </Step>
+  <Step title="Cập nhật IdP">
+    Dán token mới vào cài đặt cấp phát của IdP và kiểm tra kết nối. Hãy làm trong vòng 24 giờ, nếu không các lượt đồng bộ sẽ bắt đầu thất bại với lỗi xác thực.
+  </Step>
+</Steps>
+
+**Tắt SCIM** bằng cách chọn **Manual** hoặc **Just-in-time** trong **Provisioning & directory sync**, rồi chọn **Disable SCIM** trong hộp xác nhận. Thao tác này thu hồi token ngay lập tức và dừng đồng bộ thư mục. Thành viên hiện có vẫn giữ tài khoản, và từ đó bạn quản lý họ trong CloudThinker. Hãy tắt cả cấp phát trong IdP, nếu không IdP sẽ tiếp tục gửi các request thất bại.
+
+Các thay đổi token (tạo, xoay vòng, thu hồi) và mọi user hay nhóm mà SCIM cấp phát, cập nhật hoặc gỡ bỏ đều được ghi vào [nhật ký kiểm toán](/vi/guide/security/audit-logs).
+
+## Kiểm tra hoạt động đồng bộ
+
+Nhấn **View sync logs** trong **Directory sync (SCIM)** để mở **SCIM sync logs**.
+
+| Cột | Hiển thị |
+|---|---|
+| **Timestamp** | Thời điểm CloudThinker xử lý request |
+| **Action** | `CREATE`, `UPDATE`, `DEACTIVATE` hoặc `DELETE` |
+| **Resource** | `User` hoặc `Group`, kèm ID |
+| **Status** | `SUCCESS`, `SKIPPED` hoặc `FAILED` |
+
+Mỗi ngày một lần, CloudThinker còn kiểm tra những người do SCIM cấp phát mà không có hoạt động đồng bộ nào trong 7 ngày, và thêm một mục `UPDATE` có trạng thái `SKIPPED` cho từng người. Đây chỉ là lời nhắc: CloudThinker không thay đổi quyền truy cập của họ. Hãy kiểm tra người đó còn được gán trong IdP không, và bỏ gán tại đó nếu họ đã rời đi.
 
 ## Khắc phục sự cố
 
-### Nhóm không xuất hiện trong CloudThinker
+<AccordionGroup>
+  <Accordion title="Không thấy thẻ Provisioning & directory sync">
+    Thẻ chỉ hiển thị khi kết nối SSO đã hoạt động. Hãy hoàn tất [thiết lập SSO](/vi/guide/security/sso), kể cả xác minh domain. Bạn cũng cần vai trò Owner.
+  </Accordion>
+  <Accordion title="Nhóm không xuất hiện trong Group mappings">
+    CloudThinker không tự kéo nhóm về; IdP phải push nhóm sang. Gán các nhóm vào ứng dụng CloudThinker trong IdP, chạy push, rồi tìm các mục `Group` trong **View sync logs**.
+  </Accordion>
+  <Accordion title="Một user không được cấp phát">
+    Xác nhận user đã được gán vào ứng dụng CloudThinker trong IdP, rồi tìm mục `FAILED` trong sync log. Nguyên nhân thường gặp: token đã được xoay vòng hơn 24 giờ trước hoặc đã bị thu hồi, tài khoản sẵn có của người đó dùng domain email chưa xác minh ("User email domain not verified for this organization"), hoặc email được dành riêng cho một tài khoản nội bộ của CloudThinker ("This email belongs to a CloudThinker System user"). Với trường hợp cuối, hãy dùng email khác hoặc liên hệ đội hỗ trợ.
+  </Accordion>
+  <Accordion title="Một người đã rời đi nhưng vẫn đăng nhập được">
+    Bỏ gán hoặc vô hiệu hóa họ ngay trên ứng dụng CloudThinker. Gỡ họ khỏi một nhóm chỉ thay đổi tư cách thành viên nhóm. Một số IdP đồng bộ theo lịch (Microsoft Entra ID chạy khoảng 40 phút một lần), nên hãy chờ chu kỳ tiếp theo và kiểm tra sync log.
+  </Accordion>
+  <Accordion title="Mọi lượt đồng bộ đều thất bại với lỗi xác thực">
+    Token trong IdP không còn hợp lệ: token đã được xoay vòng hơn 24 giờ trước, hoặc SCIM đã bị tắt. Nhấn **Rotate token** và dán giá trị mới vào IdP. Nếu SCIM đã bị tắt, hãy chọn lại **SCIM** để lấy token mới.
+  </Accordion>
+  <Accordion title="Cannot enable JIT provisioning while SCIM is active">
+    Just-in-time và SCIM không chạy cùng nhau được. Chọn **Just-in-time** trong **Provisioning & directory sync** và xác nhận **Disable SCIM**, thao tác này thu hồi token và dừng đồng bộ thư mục.
+  </Accordion>
+  <Accordion title="Tôi không mời hoặc gỡ được thành viên">
+    Đây là hành vi bình thường khi SCIM đang bật. Hãy gán hoặc bỏ gán người dùng trong IdP.
+  </Accordion>
+</AccordionGroup>
 
-Đảm bảo nhóm được gán cho ứng dụng CloudThinker của bạn trong cài đặt cấp phép của IdP. CloudThinker không kéo nhóm từ IdP — IdP cần đẩy chúng. Kiểm tra **View sync logs** để xem có thao tác đồng bộ nhóm nào được thực hiện chưa.
-
-### Người dùng không được cấp phép
-
-1. Xác minh người dùng được gán cho ứng dụng CloudThinker trong IdP
-2. Kiểm tra token SCIM chưa bị xoay vòng hoặc thu hồi — nếu nghi ngờ, xoay vòng token và cập nhật IdP
-3. Mở **View sync logs** và tìm các mục FAILED — thường chứa chi tiết về điều gì xảy ra sai
-4. Đảm bảo địa chỉ email của người dùng hợp lệ và chưa liên kết với tổ chức CloudThinker khác
-
-### Người dùng không được hủy cấp phép
-
-1. Đảm bảo người dùng đã bị xóa khỏi ứng dụng CloudThinker trong IdP (chỉ xóa khỏi nhóm là chưa đủ — họ cần bị bỏ gán khỏi ứng dụng)
-2. Kiểm tra nhật ký đồng bộ để tìm hành động DELETE hoặc DEACTIVATE cho người dùng đó
-3. Một số IdP không đồng bộ thay đổi ngay lập tức — ví dụ, Microsoft Entra đồng bộ khoảng mỗi 40 phút. Chờ chu kỳ tiếp theo và kiểm tra lại.
-
-### Token SCIM ngừng hoạt động
-
-Token có thể đã bị xoay vòng hoặc thu hồi bởi admin khác. Tạo token mới trong CloudThinker và cập nhật cấu hình SCIM của IdP với giá trị mới.
-
-### "Cannot enable JIT provisioning while SCIM is active"
-
-JIT (Just-in-Time) provisioning và SCIM không thể dùng cùng lúc. Để chuyển sang JIT, trước tiên chọn chế độ cấp phép khác (Manual hoặc JIT) — thao tác này sẽ thu hồi token SCIM và dừng đồng bộ thư mục.
-
----
-
-## Liên quan
+## Bước tiếp theo
 
 <CardGroup cols={2}>
-  <Card title="Thiết lập SSO" icon="key" href="/vi/guide/security/sso">
-    Cấu hình single sign-on SAML hoặc OIDC (điều kiện tiên quyết cho SCIM)
+  <Card title="Vai trò và quyền" icon="user-shield" href="/vi/guide/security/roles">
+    Chọn vai trò mặc định phù hợp cho thành viên được cấp phát.
   </Card>
-  <Card title="Tổng quan bảo mật" icon="shield-halved" href="/vi/guide/security/overview">
-    MFA, RBAC, khóa API và bảo mật dữ liệu
+  <Card title="Thành viên workspace" icon="users" href="/vi/guide/workspace-users">
+    Tinh chỉnh ai được mở từng workspace.
   </Card>
-  <Card title="Tổ chức" icon="building-columns" href="/vi/guide/organization">
-    Quản lý thành viên và vai trò tổ chức
+  <Card title="Nhật ký kiểm toán" icon="clipboard-list" href="/vi/guide/security/audit-logs">
+    Xem lại các thay đổi token và việc thu hồi cấp phát.
   </Card>
-  <Card title="Người dùng workspace" icon="users" href="/vi/guide/workspace-users">
-    Kiểm soát truy cập cấp workspace
+  <Card title="Đăng nhập một lần" icon="key" href="/vi/guide/security/sso">
+    Thay đổi kết nối SSO hoặc các domain đã xác minh.
   </Card>
 </CardGroup>

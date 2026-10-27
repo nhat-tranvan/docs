@@ -1,0 +1,257 @@
+---
+title: Databricks
+description: "Kết nối Databricks để CloudThinker giải thích job run thất bại, phát hiện cluster nhàn rỗi và khám phá notebook cùng Unity Catalog"
+icon: layer-group
+---
+
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối Databricks để các agent CloudThinker giải thích vì sao một job run thất bại, đánh dấu cluster nhàn rỗi hoặc không khỏe, đọc notebook và tệp workspace, khám phá Unity Catalog, và chạy SQL chỉ đọc khi bạn thêm một SQL warehouse. Kết nối dùng **personal access token** (PAT) của Databricks, nên agent thấy đúng những gì người dùng của token thấy.
+
+<Warning>
+Thay đổi sẽ chạy bất cứ khi nào người dùng của token có quyền thay đổi, và với Approval mode mặc định, AI có thể phê duyệt chúng, kể cả terminate cluster hoặc xóa job. Hãy chọn **Manual**, hoặc giữ quyền của token ở mức chỉ đọc, trước khi kết nối một workspace production. [Rule Ask first](#quyền-ghi) bổ sung thêm lớp kiểm soát đó khi CloudThinker bật [Rule enforcement](/vi/guide/approvals/rules#khắc-phục-sự-cố) cho workspace của bạn.
+</Warning>
+
+---
+
+## Điều kiện tiên quyết
+
+- Workspace Databricks đã bật personal access token. Workspace admin bật tính năng này trong **Settings → Advanced → Personal Access Tokens**, và cấp **Can Use** trên quyền token cho người dùng hoặc service principal mà kết nối đại diện.
+- Tùy chọn: một SQL warehouse, nếu bạn muốn agent chạy truy vấn SQL. Truy vấn trên warehouse đã dừng sẽ khởi động warehouse, và Databricks tính phí cho thời gian chạy. Dùng kích thước 2X-Small với auto stop đặt 5 đến 10 phút.
+- Vai trò workspace Admin trong CloudThinker để thêm kết nối. Xem [Cách quyền truy cập hoạt động](/vi/guide/connections/overview#cách-quyền-truy-cập-hoạt-động).
+
+<Note>
+Kết nối chỉ nhận token. Đăng nhập OAuth machine-to-machine (client ID và secret) không được hỗ trợ.
+</Note>
+
+---
+
+## Thiết lập
+
+<Steps>
+  <Step title="Tạo personal access token">
+    Token mang mọi quyền của danh tính gắn với token, nên hãy dùng một danh tính riêng, không phải admin.
+    <Tabs>
+      <Tab title="Service principal (khuyến nghị)">
+        Token của service principal không gắn với một người, nhưng không thể tạo từ trang Settings. Workspace admin thực hiện như sau:
+        1. Vào **Settings → Advanced → Personal Access Tokens**, nhấn **Permission Settings** và cấp **Can Use** cho service principal.
+        2. Đăng nhập Databricks CLI bằng workspace admin với `databricks auth login --host <workspace-url>`.
+        3. Tạo token:
+        ```bash
+        # 7776000 seconds = 90 days
+        databricks token-management create-obo-token <service-principal-application-id> \
+          --lifetime-seconds 7776000 --comment cloudthinker
+        ```
+        Sao chép `token_value` từ kết quả. Đồng thời lưu `token_info.token_id`: bạn cần giá trị này để thu hồi token sau này. Trên Azure Databricks, application ID là Microsoft Entra application (client) ID của service principal.
+      </Tab>
+      <Tab title="Token người dùng">
+        Đăng nhập bằng người dùng mà kết nối sẽ đại diện. Nhấn username ở thanh trên cùng, rồi vào **Settings → Developer**. Cạnh **Access tokens**, nhấn **Manage**, rồi **Generate new token**.
+        - **Comment**: `cloudthinker`
+        - **Lifetime**: 90 ngày là mặc định hợp lý. Workspace admin có thể áp đặt mức tối đa ngắn hơn
+
+        Sao chép token ngay. Databricks chỉ hiển thị một lần.
+      </Tab>
+    </Tabs>
+    Ghi ngày hết hạn vào lịch để kịp [xoay vòng token](#xoay-vòng-token).
+  </Step>
+  <Step title="Sao chép URL workspace">
+    Sao chép địa chỉ trên thanh địa chỉ trình duyệt đến hết tên miền, ví dụ `https://dbc-a1b2345c-d6e7.cloud.databricks.com`. Giữ `https://` và bỏ mọi đường dẫn sau tên miền.
+  </Step>
+  <Step title="Sao chép SQL warehouse ID (tùy chọn)">
+    Bỏ qua bước này nếu bạn không muốn agent chạy SQL. Nếu có, vào **SQL Warehouses**, mở warehouse và chọn **Connection details**. Warehouse ID là đoạn cuối của **HTTP path**: trong `/sql/1.0/warehouses/1a2b3c4d5e6f7g8h`, ID là `1a2b3c4d5e6f7g8h`.
+  </Step>
+  <Step title="Mở quyền truy cập mạng">
+    Bỏ qua bước này nếu workspace không có IP access list. Nếu có, nhờ workspace admin thêm các địa chỉ IP egress của CloudThinker vào IP access list của workspace. Tài liệu này không công bố danh sách IP egress của CloudThinker: hãy hỏi người liên hệ CloudThinker của bạn, hoặc [liên hệ chúng tôi](https://cloudthinker.io/contact).
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Vào **More → Workspace settings → Connections**, chọn **Databricks**, điền các trường trong [Chi tiết kết nối](#chi-tiết-kết-nối) và nhấn **Connect**.
+
+    Databricks hiển thị trạng thái **Connected**. Điều đó có nghĩa là CloudThinker đã khởi động các công cụ Databricks. Trạng thái này không chứng minh token, warehouse ID hay quyền là đúng, nên hãy hoàn tất bằng bước tiếp theo.
+  </Step>
+  <Step title="Chạy prompt xác minh">
+    Chạy [prompt xác minh](#xác-minh-kết-nối).
+
+    **Trạng thái thành công:** kết nối hiển thị **Connected** và prompt xác minh liệt kê cluster, job và catalog của bạn.
+
+    Token sai hiển thị ở đây là `401`, thiếu quyền là `403`, và host sai là workspace không truy cập được. Warehouse ID sai chỉ lộ ra ở truy vấn SQL đầu tiên.
+  </Step>
+</Steps>
+
+<Warning>
+Databricks thu hồi personal access token sau 90 ngày không dùng, và mọi token hết hạn theo lifetime bạn đặt. Khi một trong hai xảy ra, lệnh gọi của agent thất bại với 401. Tạo token mới và [xoay vòng](#xoay-vòng-token) vào kết nối.
+</Warning>
+
+---
+
+## Chi tiết kết nối
+
+Form kết nối gắn nhãn mỗi trường bằng tên biến, như bên dưới.
+
+| Trường | Bắt buộc | Mô tả | Ví dụ |
+|-------|----------|-------------|---------|
+| **DATABRICKS_HOST** | Có | URL workspace, bao gồm `https://`. Azure có dạng `https://adb-1234567890123456.7.azuredatabricks.net`, Google Cloud có dạng `https://1234567890123456.7.gcp.databricks.com` | `https://dbc-a1b2345c-d6e7.cloud.databricks.com` |
+| **DATABRICKS_TOKEN** | Có | Personal access token của người dùng kết nối | Bí mật, không hiển thị |
+| **DATABRICKS_WAREHOUSE_ID** | Không | SQL warehouse ID. Chỉ cần cho truy vấn SQL. Để trống để tắt SQL. | `1a2b3c4d5e6f7g8h` |
+
+Bạn có thể thêm nhiều kết nối Databricks, ví dụ mỗi workspace một kết nối. Nêu tên workspace trong prompt để CloudThinker chọn đúng kết nối.
+
+---
+
+## Quyền yêu cầu
+
+Token mang mọi quyền của danh tính gắn với token (người dùng hoặc service principal, xem bước Thiết lập 1). Chỉ cấp những gì agent cần.
+
+| Agent có thể | Cấp cho người dùng của token |
+|------------|------------------------|
+| Xem cluster và trạng thái | **Can Attach To** trên các cluster |
+| Xem job và lịch sử chạy, chẩn đoán run thất bại | **Can View** trên các job |
+| Đọc notebook và tệp workspace | **Can Read** trên các thư mục hoặc notebook |
+| Khám phá catalog và metadata của bảng | `USE CATALOG`, `USE SCHEMA` và `BROWSE` trong Unity Catalog |
+| Chạy truy vấn SQL | **Can Use** trên warehouse, cùng `SELECT` trên các bảng |
+| Start, restart hoặc terminate cluster | **Can Restart** trên cluster |
+| Resize cluster, tạo hoặc xóa job | **Can Manage** trên cluster hoặc job |
+| Chạy hoặc hủy job | **Can Manage Run** trên job |
+| Import notebook, ghi hoặc xóa tệp | **Can Edit** trên thư mục hoặc notebook |
+
+<Tip>
+Đừng tạo token bằng workspace admin. Bắt đầu với các quyền cấp xem ở trên, để trống **DATABRICKS_WAREHOUSE_ID** cho đến khi cần SQL, và chỉ thêm quyền thay đổi cho các đối tượng bạn muốn agent thay đổi.
+</Tip>
+
+---
+
+## Khả năng của agent
+
+| Khả năng | Mô tả |
+|------------|-------------|
+| **Khám phá workspace** | Liệt kê cluster, job, job run gần đây và catalog Unity Catalog trong một lượt |
+| **Phân loại run thất bại** | Phân tích kết quả run theo trạng thái và giải thích lỗi, giới hạn trong một job khi bạn nêu tên |
+| **Tình trạng cluster** | Tóm tắt trạng thái cluster và đánh dấu cluster đang chạy có vẻ nhàn rỗi và tốn tiền |
+| **Notebook và tệp** | Đọc notebook, tệp workspace và đường dẫn DBFS để lấy ngữ cảnh |
+| **Catalog và lineage** | Khám phá catalog, schema, bảng và lineage của bảng |
+| **Truy vấn SQL** | Chạy truy vấn (`SELECT`, `SHOW`, `DESCRIBE`) qua warehouse đã cấu hình |
+| **Thay đổi** | Start, resize hoặc terminate cluster, chạy hoặc hủy job, tạo hoặc xóa job, import notebook, ghi hoặc xóa tệp. Mỗi thao tác đều qua phê duyệt. |
+
+CloudThinker không lọc câu lệnh SQL. Agent chỉ dùng `SELECT`, `SHOW` và `DESCRIBE` trừ khi bạn yêu cầu ghi, và mọi câu lệnh SQL, kể cả đọc, đều qua phê duyệt. Ở **Manual**, điều đó có nghĩa là mọi `SELECT` đều chờ người duyệt. Nếu người dùng của token có `MODIFY` trên một bảng, lệnh `INSERT` đã được phê duyệt sẽ chạy. Quyền trên bảng mới là ranh giới thực sự.
+
+### Xác minh kết nối
+
+```text
+Check my Databricks connection: list my clusters, jobs, and catalogs with their current state
+```
+
+**Trạng thái thành công:** CloudThinker liệt kê cluster, job và catalog của bạn cùng trạng thái hiện tại.
+
+### Ví dụ prompt
+
+```text
+Why did the last run of the nightly-etl job fail? Show the error and a likely fix
+Which Databricks clusters are running but look idle right now?
+Show daily row counts for main.sales.orders over the last 7 days
+```
+
+Prompt thứ ba cần **DATABRICKS_WAREHOUSE_ID**. Không có giá trị này, CloudThinker có thể mô tả bảng nhưng không truy vấn được.
+
+---
+
+## Quyền ghi
+
+Databricks không có công tắc **Allow writes**. Quyền của người dùng token là ranh giới thực sự: chỉ với các quyền cấp xem trong [Quyền yêu cầu](#quyền-yêu-cầu), Databricks từ chối mọi thay đổi.
+
+Thao tác ghi có thể xảy ra ngay từ ngày đầu nếu người dùng của token có quyền thay đổi.
+
+<ApprovalDefault />
+
+CloudThinker không hoàn tác thay đổi cho bạn, nên cluster đã terminate, job đã xóa hoặc tệp đã xóa sẽ giữ nguyên như vậy.
+
+**Manual** cũng áp dụng cho SQL, nên mọi `SELECT` đều chờ có người phê duyệt. Điều đó phù hợp với workspace production có kiểm soát thay đổi. Với phân tích chủ yếu đọc trên workspace mà quyền đã chặn thay đổi, chờ duyệt ở mỗi truy vấn có thể tốn kém hơn lợi ích bảo vệ.
+
+- **Phê duyệt mọi thay đổi ngay hiện nay**: chọn **Manual**. Có người phê duyệt mọi lệnh gọi, kể cả SQL, và điều này giữ nguyên dù Rule enforcement có bật hay không.
+- **Phê duyệt mọi thay đổi bằng Rule**: thêm một Rule **Ask first** trên kết nối Databricks. Đây là lựa chọn đúng cho phần lớn workspace production khi thực thi đã bật.
+- **Workspace chỉ đọc, phê duyệt từng truy vấn SQL**: giữ người dùng của token ở quyền cấp xem và thêm một Rule **Ask first**. Quyền khiến Databricks từ chối mọi thay đổi, còn Rule khiến bạn phê duyệt từng truy vấn SQL.
+- **Chặn mọi thứ, kể cả SQL**: thêm một Rule **Deny** bao phủ mọi thao tác. Mọi câu lệnh SQL đều được tính là thay đổi, nên Rule Deny cũng chặn truy vấn `SELECT`. Khám phá, phân loại và đọc notebook vẫn hoạt động.
+
+Ba lựa chọn Rule phụ thuộc vào Rule enforcement, được CloudThinker bật theo từng workspace ([chi tiết](/vi/guide/approvals/rules#khắc-phục-sự-cố)). Cho đến khi bật, **Manual** hiện là cơ chế giữ lại mọi thao tác ghi, và quyền của token là ranh giới còn lại luôn áp dụng.
+
+Để tạo Rule:
+
+<Steps>
+  <Step title="Yêu cầu tạo Rule">
+    Trong một chat, nhập `/create-policy Ask first for every write on the Databricks connection`. Để chặn, hãy yêu cầu một Rule **Deny**.
+  </Step>
+  <Step title="Kiểm tra đề xuất">
+    Mở **Approvals** trong thanh bên, rồi **Rules → Needs review**, và mở Rule. Kiểm tra **Effect** là **Ask first** (hoặc **Deny**), Rule có huy hiệu **Every operation**, và **Connections** nêu tên kết nối Databricks của bạn.
+  </Step>
+  <Step title="Chấp nhận">
+    Chọn Rule và nhấn **Accept**.
+
+    **Trạng thái thành công:** một thông báo xác nhận Rule đã được chấp nhận, và Rule chuyển sang tab **Active**.
+  </Step>
+</Steps>
+
+---
+
+## Xoay vòng token
+
+<Steps>
+  <Step title="Tạo token mới">
+    Lặp lại bước Thiết lập 1. Giữ token cũ cho đến khi thay xong.
+  </Step>
+  <Step title="Thay token trong CloudThinker">
+    Mở **More → Workspace settings → Connections**, chọn **Databricks**, nhấn biểu tượng bút chì trên hàng của workspace, và trong **Edit Instance** nhấn **Replace…**. Dán token mới vào **DATABRICKS_TOKEN**, để trống các trường khác để giữ giá trị đã lưu, rồi nhấn **Save and test**.
+
+    **Trạng thái thành công:** kết nối vẫn **Connected**. Nếu kiểm tra thất bại, CloudThinker giữ token trước đó.
+  </Step>
+  <Step title="Thu hồi token cũ">
+    Trong Databricks, thu hồi token cũ tại **Settings → Developer → Access tokens**. Với token của service principal, workspace admin xóa bằng `databricks token-management delete <token-id>`, dùng `token_info.token_id` bạn đã lưu ở bước Thiết lập 1.
+  </Step>
+</Steps>
+
+---
+
+## Khắc phục sự cố
+
+<Accordion title="401 Unauthorized">
+Token sai, đã hết hạn hoặc bị thu hồi. Databricks thu hồi token không dùng trong 90 ngày. Tạo token mới và cập nhật **DATABRICKS_TOKEN**.
+</Accordion>
+
+<Accordion title="403 Forbidden trên cluster, job hoặc bảng">
+Người dùng của token thiếu quyền trên đối tượng đó. Cấp quyền tương ứng trong [Quyền yêu cầu](#quyền-yêu-cầu), rồi hỏi lại.
+</Accordion>
+
+<Accordion title="Kết nối không truy cập được workspace">
+**DATABRICKS_HOST** sai. Dùng URL workspace có `https://` và không có đường dẫn sau tên miền.
+</Accordion>
+
+<Accordion title="Không có job run nào trả về dù job tồn tại">
+Kiểm tra người dùng của token có **Can View** trên các job. Sau đó hỏi về một job cụ thể theo tên, ví dụ "show recent runs of the nightly-etl job". Danh sách cluster hoặc job trống trên workspace mới là bình thường.
+</Accordion>
+
+<Accordion title="Truy vấn SQL thất bại trong khi mọi thứ khác hoạt động">
+**DATABRICKS_WAREHOUSE_ID** trống hoặc sai, warehouse đã dừng và không khởi động được, hoặc người dùng thiếu **Can Use** trên warehouse. Sao chép lại ID từ **Connection details** của warehouse và kiểm tra quyền của warehouse.
+</Accordion>
+
+---
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Danh tính token**: kết nối có thể làm mọi thứ mà người dùng của token làm được trong Databricks, nên quyền của người dùng đó là ranh giới quyền thực sự.
+- **SQL là tùy chọn**: không có warehouse ID, agent không truy vấn được bảng. Agent vẫn đọc được mọi notebook, tệp workspace và đường dẫn DBFS mà người dùng của token đọc được, và những nơi đó có thể chứa dữ liệu.
+
+---
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Kết nối Snowflake" icon="/images/icons/snowflake.svg" href="/vi/guide/connections/snowflake">
+    Truy vấn và phân tích chi phí cho Snowflake warehouse
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Quyết định thay đổi nào tự chạy và thay đổi nào chờ bạn
+  </Card>
+  <Card title="Tổng quan kết nối" icon="plug" href="/vi/guide/connections/overview">
+    Cách credential và kiểm soát ghi hoạt động trên các kết nối
+  </Card>
+</CardGroup>

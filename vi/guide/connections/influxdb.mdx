@@ -1,0 +1,200 @@
+---
+title: InfluxDB
+description: "Kết nối InfluxDB 2 hoặc 3 để agent liệt kê bucket hoặc database, đánh dấu retention vô hạn và chạy truy vấn đọc Flux hoặc SQL có giới hạn"
+icon: "/images/icons/influxdb.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối một instance InfluxDB để các agent CloudThinker liệt kê bucket hoặc database, tìm những nơi giữ dữ liệu vĩnh viễn, và trả lời câu hỏi bằng cách truy vấn chính dữ liệu time series. Kết nối đăng nhập bằng một **API token**, tự phát hiện bạn chạy InfluxDB 2 hay 3, và ở chế độ chỉ đọc cho đến khi bạn bật **Allow writes**.
+
+## Phiên bản được hỗ trợ
+
+| Phiên bản | Hỗ trợ | Agent làm việc với gì |
+|---------|-----------|-----------------------|
+| **InfluxDB OSS 2.x** | Có | Bucket bên trong một organization, truy vấn bằng Flux |
+| **InfluxDB Cloud 2** | Có | Giống OSS 2.x, do InfluxData host |
+| **InfluxDB 3 Core** | Có | Database không có organization, truy vấn bằng SQL |
+| **InfluxDB 3 Enterprise** | Có | Giống Core, cộng thêm token đọc có phạm vi |
+| **InfluxDB 1.x** | Không | Ra đời trước token API mà kết nối này sử dụng |
+| **InfluxDB Cloud Dedicated** | Không | Management API của phiên bản này là một sản phẩm riêng |
+
+Bạn không cần chọn phiên bản. Thông báo **Connected** nêu tên phiên bản CloudThinker tìm thấy, và agent dùng Flux hoặc SQL cho phù hợp.
+
+## Điều kiện tiên quyết
+
+- InfluxDB HTTP API mà CloudThinker truy cập được qua **HTTPS**. `http` thuần chỉ được chấp nhận trên các triển khai CloudThinker tự host.
+- Với instance tự host sau tường lửa, hãy cho phép các egress IP của CloudThinker. Tài liệu này không công bố danh sách egress IP của CloudThinker: hãy hỏi đầu mối CloudThinker của bạn, hoặc [liên hệ chúng tôi](https://cloudthinker.io/contact). Xem [Truy cập dịch vụ private](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ) để biết các lựa chọn khác.
+- Quyền tạo API token có quyền đọc các bucket hoặc database mà agent cần thấy.
+- Trên InfluxDB 2: tên organization, nếu token truy cập được nhiều hơn một organization.
+- Vai trò **Admin** trong workspace CloudThinker, vai trò có thể thêm và sửa kết nối. Xem [Vai trò](/vi/guide/security/roles).
+
+## Thiết lập
+
+<Tabs>
+  <Tab title="InfluxDB 2">
+    <Steps>
+      <Step title="Tạo token đọc">
+        Trong giao diện InfluxDB, mở **Load Data → API Tokens**, nhấn **Generate API Token** và chọn **Custom API Token** (hoặc **Read/Write API Token** trên các phiên bản cũ). Chọn các bucket trong **Read** và để trống **Write**. Sao chép token. InfluxDB chỉ hiển thị token một lần.
+      </Step>
+      <Step title="Thêm kết nối trong CloudThinker">
+        Mở **More → Workspace settings → Connections** và chọn **InfluxDB**. Nhập:
+        - **Base URL**: scheme, host và port, chẳng hạn `https://influx.example.com:8086` hoặc `https://us-east-1-1.aws.cloud2.influxdata.com`
+        - **API token**: token bạn đã sao chép
+        - **Organization**: chỉ khi token truy cập được nhiều hơn một organization
+
+        Nhấn **Connect**.
+
+        **Trạng thái thành công:** kết nối hiển thị **Connected** với thông báo như `InfluxDB 2 connection verified (v2.7.12)`.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="InfluxDB 3">
+    <Steps>
+      <Step title="Tạo token">
+        Trên **InfluxDB 3 Enterprise**, tạo một resource token chỉ đọc được các database bạn muốn. Hãy ưu tiên cách này khi có thể. Phân tách nhiều database bằng dấu phẩy, chẳng hạn `db:telemetry,metrics:read`:
+
+        ```bash
+        influxdb3 create token --permission "db:telemetry:read" --name cloudthinker
+        ```
+
+        Trên **InfluxDB 3 Core**, chỉ có admin token. Tạo một token bằng CLI `influxdb3` và đọc phần [Bảo mật](#bảo-mật) trước:
+
+        ```bash
+        influxdb3 create token --admin --name cloudthinker
+        ```
+
+        Sao chép token từ đầu ra. Token chỉ hiển thị một lần.
+      </Step>
+      <Step title="Thêm kết nối trong CloudThinker">
+        Mở **More → Workspace settings → Connections** và chọn **InfluxDB**. Nhập:
+        - **Base URL**: scheme, host và port, chẳng hạn `https://influx.example.com:8181`
+        - **API token**: token bạn đã tạo
+        - **Organization**: để trống. InfluxDB 3 không có organization
+
+        Nhấn **Connect**.
+
+        **Trạng thái thành công:** kết nối hiển thị **Connected** với thông báo nêu InfluxDB 3 kèm số phiên bản.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+## Chi tiết kết nối
+
+| Trường | Bắt buộc | Mô tả | Ví dụ |
+|-------|----------|-------------|---------|
+| **Base URL** | Có | Scheme, host và port của HTTP API. Cho phép tiền tố reverse proxy như `/influx`. Không có query string, fragment hoặc `user:pass@` | `https://influx.example.com:8086` |
+| **API token** | Có | Token có quyền đọc các bucket hoặc database mà agent cần thấy | `<token>` |
+| **Organization** | Không | Chỉ InfluxDB 2, khi token truy cập được nhiều hơn một organization | `my-org` |
+
+InfluxDB 2 tự host thường lắng nghe trên `8086`, InfluxDB 3 Core trên `8181`.
+
+## Quyền yêu cầu
+
+| Phiên bản | Tối thiểu | Cách cấp |
+|---------|---------|-----------------|
+| **InfluxDB 2** | Quyền đọc trên các bucket agent cần thấy | Token chỉ chọn bucket trong **Read** |
+| **InfluxDB 3 Enterprise** | Quyền đọc trên các database agent cần thấy | Resource token giới hạn trong các database đó |
+| **InfluxDB 3 Core** | Không có | Core chỉ cấp admin token. Khi **Allow writes** tắt, agent vẫn không thể thay đổi retention hay database, và từ chối các truy vấn ghi trước khi bất cứ thứ gì được gửi đi. Bản thân token vẫn có quyền admin nếu bị lộ |
+
+Token chỉ cần quyền ghi nếu bạn bật **Allow writes**, và khi đó chỉ để thay đổi retention hoặc tạo và xóa bucket hay database.
+
+<Tip>
+Tạo một token chỉ dành cho CloudThinker để bạn có thể xem và thu hồi riêng quyền của token đó. Nếu token có phạm vi quan trọng với bạn, hãy ưu tiên InfluxDB 2 hoặc InfluxDB 3 Enterprise thay vì Core.
+</Tip>
+
+## Khả năng của agent
+
+| Khả năng | Agent làm được gì |
+|------------|--------------------|
+| **Kiểm kê** | Liệt kê bucket hoặc database cùng retention đặt cho từng bucket hoặc database |
+| **Rà soát retention** | Nêu tên mọi bucket hoặc database giữ dữ liệu vĩnh viễn |
+| **Một bucket hoặc database cụ thể** | Xác nhận một bucket hoặc database theo tên, kể cả trên instance lớn |
+| **Truy vấn có giới hạn** | Trả lời từ dữ liệu bằng Flux (InfluxDB 2) hoặc SQL (InfluxDB 3) |
+
+Kết quả có giới hạn. Mặc định, bước kiểm kê đọc tối đa 25 bucket hoặc database. Mỗi truy vấn trả về 50 hàng theo mặc định, và bạn có thể yêu cầu nhiều hơn trong prompt, tối đa 200. Truy vấn hết thời gian sau 60 giây theo mặc định, và không bao giờ chạy quá 300 giây. Agent cho biết khi một kết quả bị cắt ngắn. Retention mà token không đọc được sẽ được báo là **unreadable**, không bao giờ bị tính là vĩnh viễn.
+
+Truy vấn luôn là thao tác đọc. Agent từ chối Flux ghi point hoặc mở kết nối ra ngoài, và SQL insert, update hoặc delete. Không có gì được gửi đến instance của bạn khi một truy vấn bị từ chối.
+
+### Xác minh kết nối
+
+```text
+List the InfluxDB buckets or databases and the retention on each
+```
+
+Kết quả mong đợi là tên từng bucket hoặc database cùng retention, và danh sách những bucket hoặc database giữ dữ liệu vĩnh viễn.
+
+### Ví dụ prompt
+
+```text
+Which InfluxDB buckets keep their data forever?
+How many points were written to the telemetry bucket in the last 24 hours?
+Suggest a retention for our highest-volume bucket and tell me what would expire
+```
+
+## Quyền ghi
+
+Quyền ghi mặc định tắt. Để cho phép agent thay đổi retention hoặc tạo và xóa bucket hay database, mở **More → Workspace settings → Connections**, chọn **InfluxDB** và bật công tắc **Allow writes** trong bảng chi tiết. Thay đổi có hiệu lực ngay. Sau đó mỗi thay đổi đều đi qua Rules và chế độ của [Approvals](/vi/guide/approvals/overview), và agent nêu chính xác bucket hoặc database cùng thay đổi trước.
+
+Token cũng cần quyền tương ứng:
+
+| Phiên bản | Để thay đổi retention | Để tạo hoặc xóa |
+|---------|--------------------|---------------------|
+| **InfluxDB 2** | Quyền ghi trên bucket đó | Quyền ghi trên mọi bucket trong organization |
+| **InfluxDB 3** | Admin token | Admin token |
+
+| Hành động | Được phép |
+|--------|---------|
+| Thay đổi retention của bucket hoặc database | Khi bật **Allow writes**, thông qua Approvals |
+| Tạo hoặc xóa bucket hay database | Khi bật **Allow writes**, thông qua Approvals |
+| Ghi, sửa hoặc xóa data point đã lưu | Không bao giờ. Kết nối không có cách nào truy cập chúng |
+
+<Warning>
+Rút ngắn retention sẽ xóa dữ liệu ngay lập tức: mọi point cũ hơn khoảng thời gian mới đều hết hạn, và không có bản sao nào được giữ lại. Xóa bucket trên InfluxDB 2 sẽ xóa dữ liệu trong bucket và không thể hoàn tác. InfluxDB 3 xóa mềm database và giải phóng dung lượng sau.
+</Warning>
+
+## Khắc phục sự cố
+
+<Accordion title="InfluxDB rejected this API token">
+Token đã bị thu hồi, sao chép không đầy đủ hoặc thuộc về một instance khác. InfluxDB chỉ hiển thị token khi tạo, vì vậy hãy tạo token mới và cập nhật kết nối.
+</Accordion>
+
+<Accordion title="InfluxDB accepted the token but it has no read permission">
+Token hợp lệ nhưng không bao gồm các bucket hoặc database. Mở rộng phạm vi đọc của token trong InfluxDB, hoặc tạo token bao gồm chúng, rồi kết nối lại.
+</Accordion>
+
+<Accordion title="Không có phản hồi, hoặc URL không tự nhận là InfluxDB 2 hay 3">
+Kiểm tra instance đang chạy và truy cập được, **Base URL** trỏ đến HTTP port (thường là `8086` hoặc `8181`), và mọi path chỉ là tiền tố proxy. InfluxDB 1.x và Cloud Dedicated phản hồi khác và không được hỗ trợ.
+</Accordion>
+
+<Accordion title="InfluxDB URL must use HTTPS">
+`http` thuần bị từ chối trên CloudThinker Cloud vì token được gửi kèm mọi request. Đặt instance sau TLS và dùng URL `https`.
+</Accordion>
+
+<Accordion title="Agent báo token truy cập được nhiều organization">
+Trên InfluxDB 2, không bucket hay truy vấn nào được giới hạn phạm vi cho đến khi bạn chọn một organization. Sửa kết nối và đặt **Organization**.
+</Accordion>
+
+<Accordion title="Agent báo ít bucket hơn giao diện InfluxDB hiển thị">
+Hoặc token không thấy được phần còn lại, hoặc bước kiểm kê đã dừng ở giới hạn mặc định 25. Kiểm tra phạm vi đọc của token, rồi hỏi về bucket theo tên.
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **InfluxDB 3 Core không có token chỉ đọc**: Core chỉ cấp admin token, nên không thể làm theo lời khuyên chỉ đọc ở trên. Hãy giữ **Allow writes** ở trạng thái tắt, và dùng token chỉ đọc trên InfluxDB 2 hoặc InfluxDB 3 Enterprise.
+- **Token là toàn bộ thông tin xác thực**: không có yếu tố thứ hai, vì vậy hãy giới hạn token trong các bucket hoặc database agent cần và coi mọi token InfluxDB 3 Core là thông tin xác thực admin.
+- **Không theo chuyển hướng**: nếu một proxy chuyển hướng lệnh gọi API sang host khác, CloudThinker dừng lại thay vì gửi token của bạn đến đó.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Quyết định thay đổi retention nào được chạy, chờ người duyệt hoặc bị từ chối.
+  </Card>
+  <Card title="Prometheus" icon="/images/icons/prometheus.svg" href="/vi/guide/connections/prometheus">
+    Kết nối Prometheus để truy vấn metric, quy tắc cảnh báo và tình trạng target.
+  </Card>
+</CardGroup>

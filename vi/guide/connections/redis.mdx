@@ -1,270 +1,191 @@
 ---
 title: Redis
-description: "Kết nối Redis với CloudThinker để giám sát hiệu suất cache trên các triển khai tự host, Upstash hoặc Redis Cloud"
+description: "Kết nối Redis để agent kiểm tra bộ nhớ, kích thước key, thời hạn, client và độ trễ lệnh bằng một ACL user chỉ đọc"
 icon: "/images/icons/redis.svg"
 ---
 
 import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
 
-Kết nối cơ sở dữ liệu Redis của bạn để [CloudThinker](/vi/guide/agents/overview) có thể kiểm tra keyspace, phân tích các pattern lệnh và giám sát sức khỏe cơ sở dữ liệu.
-
-## Nền tảng được hỗ trợ
-
-| Nền tảng | Hỗ trợ |
-|----------|---------|
-| **Redis tự host** | 6.x, 7.x (vanilla và Redis Stack) |
-| **Upstash Redis** | Tất cả gói |
-| **Redis Cloud** | Tất cả gói |
+Kết nối một Redis server, như Redis tự host, Upstash hoặc Redis Cloud, để agent CloudThinker kiểm tra bộ nhớ và eviction, tìm các key lớn nhất và các key không có TTL, liệt kê client và đọc độ trễ lệnh. Bạn cung cấp cho CloudThinker một URL kết nối (`REDIS_URL`): agent chạy được các lệnh mà ACL của user đó cho phép, và các công cụ ghi của kết nối luôn đi qua [Approvals](/vi/guide/approvals/overview) trước.
 
 ## Điều kiện tiên quyết
 
-- Một instance Redis có thể tiếp cận từ CloudThinker qua mạng.
-- Quyền admin để tạo người dùng ACL (tự host) hoặc người dùng RBAC (Upstash/Redis Cloud).
-- Connection string `REDIS_URL` kèm thông tin xác thực.
+- Một Redis endpoint mà CloudThinker truy cập được từ internet. Agent kết nối từ CloudThinker Cloud, nên `localhost` và địa chỉ private được phân giải ở phía CloudThinker, không phải trong mạng của bạn. Không có tùy chọn private link, nên các dịch vụ chỉ chạy trong VPC như Amazon ElastiCache và MemoryDB không kết nối được. Xem [Truy cập dịch vụ private](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ).
+- Redis 6 trở lên nếu bạn muốn dùng một ACL user riêng. Các phiên bản cũ hơn chỉ hỗ trợ một password dùng chung.
+- Quyền admin để chạy `ACL SETUSER`, hoặc để tạo user trong console của nhà cung cấp dịch vụ managed.
 
 ## Thiết lập
 
-Chọn nền tảng Redis của bạn để xem hướng dẫn kết nối cụ thể.
-
-<Tabs>
-  <Tab title="Redis tự host">
-    Hai hình thức triển khai phổ biến được hỗ trợ:
-
-    - **Vanilla Redis** — image tối giản, không có module. Dùng khi bạn chỉ cần các lệnh Redis cơ bản.
-    - **Redis Stack** — tích hợp RediSearch, RedisJSON, RedisTimeSeries và Bloom. Dùng khi CloudThinker cần các lệnh `FT.*`, `JSON.*`, `TS.*` hoặc `BF.*`. Vanilla sẽ báo lỗi nhẹ khi gặp các lệnh đó.
-
-    <Steps>
-      <Step title="Khởi động Redis">
-        **Vanilla Redis (không có module):**
-        ```bash
-        docker run -d --name redis-min \
-          -p 6379:6379 \
-          redis:7-alpine \
-          redis-server --requirepass <admin-password> --appendonly yes
-        ```
-
-        Mật khẩu admin được đặt qua flag server `--requirepass`. `--appendonly yes` bật AOF để dữ liệu bền vững qua các lần khởi động lại.
-
-        **Redis Stack (có module và RedisInsight UI trên cổng 8001):**
-        ```bash
-        docker run -d --name redis-stack \
-          -p 6379:6379 -p 8001:8001 \
-          -e REDIS_ARGS="--requirepass <admin-password>" \
-          redis/redis-stack:latest
-        ```
-
-        Xác minh instance:
-        ```bash
-        redis-cli -a <admin-password> ping
-        # PONG
-        ```
-      </Step>
-      <Step title="Tạo người dùng ACL chỉ đọc">
-        Tạo người dùng riêng cho CloudThinker. Username ACL Redis cho phép `[A-Za-z0-9_-]`; dùng `cloudthinker-readonly`.
+<Steps>
+  <Step title="Tạo user chỉ đọc">
+    <Tabs>
+      <Tab title="Redis tự host">
+        Tạo một user chỉ đọc được key và chạy các lệnh chẩn đoán mà agent dùng, ngoài ra không gì khác:
 
         ```bash
-        redis-cli -a <admin-password> ACL SETUSER cloudthinker-readonly on \
-          '><readonly-password>' \
-          '~*' \
-          '+@read' '-@write' '-@dangerous' '-@admin'
+        redis-cli --askpass ACL SETUSER cloudthinker-readonly on \
+          '><readonly-password>' '~*' \
+          -@all +@read +info +ping +select '+client|list' -keys
         ```
 
-        - `on` — bật người dùng
-        - `><readonly-password>` — đặt mật khẩu (tiền tố `>` là cú pháp ACL)
-        - `~*` — khớp tất cả key; thu hẹp thành `~app:*` để phạm vi hóa chặt hơn
-        - `+@read -@write -@dangerous -@admin` — chỉ đọc; chặn ghi, `FLUSHALL`/`CONFIG`/`DEBUG`/`SHUTDOWN` và replication
-        - Tùy chọn: thêm `-@slow` để chặn `KEYS`, `SMEMBERS`, `HGETALL` trên collection lớn
-      </Step>
-      <Step title="Lưu ACL bền vững qua khởi động lại">
-        Mount file `users.acl` để ACL tồn tại sau khi container khởi động lại:
+        | Thành phần | Ý nghĩa |
+        |------|---------|
+        | `'><readonly-password>'` | Đặt password. Dấu `>` là cú pháp ACL |
+        | `'~*'` | Cho phép mọi key. Thu hẹp về một prefix, như `'~app:*'` |
+        | `-@all +@read` | Bắt đầu từ con số không, rồi cho phép các lệnh đọc như `GET`, `SCAN`, `TYPE` và `TTL` |
+        | `+info +ping +select '+client\|list'` | Cho phép đọc thống kê server, kiểm tra sức khỏe, chọn database index và liệt kê client |
+        | `-keys` | Chặn `KEYS`, lệnh có thể làm treo một instance lớn. Agent dùng `SCAN` thay thế |
+
+        `--askpass` hỏi password admin qua prompt, nên password không nằm trong lịch sử shell. Thêm `--user <admin-user>` nếu bạn không đăng nhập bằng `default`. Giữ dấu nháy quanh `'+client|list'`: thiếu dấu nháy, shell sẽ hiểu `|` là pipe.
+
+        Lưu cấu hình để giữ lại sau khi khởi động lại: chạy `ACL SAVE` nếu bạn dùng `aclfile`, hoặc `CONFIG REWRITE` nếu user nằm trong `redis.conf`.
+      </Tab>
+      <Tab title="Redis managed">
+        Nhà cung cấp nào cũng nhận cùng một ACL rule. Dán rule không kèm dấu nháy vào trường trên console, còn trong shell thì giữ dấu nháy quanh `'+client|list'`:
 
         ```text
-User default on ><admin-password> ~* &* +
-User cloudthinker-readonly on ><readonly-password> ~* +---
-```
+        ~* -@all +@read +info +ping +select +client|list -keys
+        ```
 
-Khởi động Redis với file được mount:
-```bash
--v $PWD/users.acl:/data/users.acl
-```
-Và thêm `--aclfile /data/users.acl` vào lệnh server.
-</Step>
-<Step title="Xác minh người dùng chỉ đọc">
-```bash
-Redis-cli -u redis://cloudthinker-readonly:<readonly-password>SET foo bar
-# (error) NOPERM ... has no permissions to run the 'set' command
+        - **Redis Cloud**: vào **Data Access Control**. Thêm một Redis ACL với rule ở trên, tạo một role áp dụng ACL đó cho database của bạn, rồi tạo một user có role đó.
+        - **Azure Cache for Redis**: dùng port TLS `6380` với `rediss://`, và cho phép egress IP của CloudThinker trong firewall rule của cache.
 
-Redis-cli -u redis://cloudthinker-readonly:<readonly-password>GET foo
-# works
-```
-</Step>
-<Step title="Cấu hình truy cập mạng">
-Đảm bảo CloudThinker có thể tiếp cận cơ sở dữ liệu:
-- Thêm IP CloudThinker vào firewall hoặc security group
-- Đảm bảo Redis được bind tới interface có thể truy cập (tránh chỉ dùng `bind 127.0.0.1`)
-</Step>
-<Step title="Thêm kết nối trong CloudThinker">
-Điều hướng đến **Connections → Redis** và nhập connection string của bạn làm **REDIS_URL**:
+        Sau đó sao chép URL kết nối TCP hoặc Redis CLI của user đó. Đừng dùng URL REST hay SDK: CloudThinker giao tiếp bằng giao thức Redis.
+      </Tab>
+    </Tabs>
+  </Step>
+  <Step title="Kiểm tra user là chỉ đọc">
+    ```bash
+    redis-cli -u 'rediss://cloudthinker-readonly@redis.example.com:6379' --askpass SET probe 1
+    redis-cli -u 'rediss://cloudthinker-readonly@redis.example.com:6379' --askpass INFO memory
+    ```
 
-```
-Redis://cloudthinker-readonly:<readonly-password>
-```
+    Chỉ dùng `redis://` nếu server của bạn không dùng TLS. Scheme không khớp với server sẽ báo lỗi kết nối, không phải `NOPERM`.
 
-Dùng `rediss://` (lưu ý chữ `s` thứ hai) nếu triển khai của bạn terminate TLS. Nhấn **Connect**. CloudThinker hiển thị trạng thái **Connected** khi thành công.
-</Step>
+    **Trạng thái thành công:** `SET` thất bại với `NOPERM`, còn `INFO memory` in ra thống kê bộ nhớ.
+  </Step>
+  <Step title="Mở quyền truy cập mạng">
+    Cho phép kết nối vào port Redis từ egress IP của CloudThinker trong tường lửa, security group hoặc allowlist của nhà cung cấp. Tài liệu này không công bố danh sách egress IP của CloudThinker: hãy hỏi đầu mối liên hệ CloudThinker của bạn, hoặc [liên hệ với chúng tôi](https://cloudthinker.io/contact). Port mặc định là `6379`, `6380` với Azure TLS, còn trên Redis Cloud thì mỗi database được cấp một port riêng. Với Redis tự host, hãy đảm bảo `bind` trong `redis.conf` không chỉ có `127.0.0.1`.
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Mở **More → Workspace settings → Connections**, chọn **Redis**, rồi nhấn **Connect** trên bảng chi tiết. Trong hộp thoại, bạn có thể đổi **Alias** và **Description** nếu muốn. Dán URL vào **REDIS_URL** và nhấn **Connect**:
+
+    ```text
+    rediss://cloudthinker-readonly:<readonly-password>@redis.example.com:6379/0
+    ```
+
+    **Trạng thái thành công:** kết nối hiển thị **Connecting** và **Verifying**, rồi **Connected**. Sau đó CloudThinker chạy [Discovery](/vi/guide/connections/overview#điều-gì-xảy-ra-sau-khi-kết-nối) một lần: một lượt xem chỉ đọc trên server, kết quả hiện trong mục **Discovery** của bảng chi tiết kết nối.
+  </Step>
 </Steps>
-</Tab>
-<Tab title="Upstash Redis">
-<Steps>
-<Step title="Tạo cơ sở dữ liệu">
-Mở [Upstash Redis console](https://console.upstash.com/redis) và nhấn **Create Database**. Trong modal:
-- Nhập **Database Name**
-- Chọn **Primary Region** và **Cloud Provider**
-- Bật **Eviction** (khuyến nghị)
-- Nhấn **Next**, chọn gói và xác nhận
-</Step>
-<Step title="Sao chép TCP connection URL">
-Trên trang cơ sở dữ liệu, cuộn xuống phần **Connection**. Tab mặc định là **REST** — chuyển sang tab **TCP** và sao chép URL:
 
-```
-Rediss://<username>:<password>
-```
+## Chi tiết kết nối
 
-`<hash>` là duy nhất cho cơ sở dữ liệu của bạn; `<port>` thường là `6379`. Upstash bắt buộc TLS, nên scheme là `rediss://`.
-</Step>
-<Step title="Tạo người dùng chỉ đọc (tùy chọn)">
-Upstash hỗ trợ RBAC trong tab **RBAC** trên trang cơ sở dữ liệu. Kích hoạt RBAC, sau đó tạo tài khoản tên `cloudthinker-readonly` với quyền chỉ đọc. Mô hình ACL giống như thiết lập tự host — cấp `+và từ chối `-`-`-
+| Trường | Bắt buộc | Mô tả | Ví dụ |
+|-------|----------|-------------|---------|
+| **Alias** | Không | Tên ngắn cho server này. Được điền sẵn alias trống tiếp theo, như `redis-1` | `prod-cache` |
+| **Description** | Không | Server này là gì. Agent đọc trường này để chọn giữa các instance | `Production session cache` |
+| **REDIS_URL** | Có | URL đầy đủ: scheme, user, password, host, port và database index (tùy chọn) | `rediss://cloudthinker-readonly:<password>@redis.example.com:6379/0` |
 
-Xem [tài liệu Upstash RBAC](https://upstash.com/docs/redis/overall/enterpriseđể biết luồng UI chi tiết.
-</Step>
-<Step title="Thêm kết nối trong CloudThinker">
-Điều hướng đến **Connections → Redis** và dán URL làm **REDIS_URL**. Nhấn **Connect**. CloudThinker hiển thị trạng thái **Connected** khi thành công.
-</Step>
-</Steps>
-</Tab>
-<Tab title="Redis Cloud">
-<Steps>
-<Step title="Tạo cơ sở dữ liệu">
-Mở [trang cơ sở dữ liệu Redis Cloud](https://cloud.redis.io/và nhấn **New database**. Chọn gói, **Database Name**, **Database Version**, **Cloud Vendor** và **Region**, sau đó nhấn **Create Database**.
+| Thành phần URL | Giá trị |
+|----------|--------|
+| Scheme | `rediss://` cho TLS (bắt buộc với Upstash), `redis://` cho TCP thường |
+| User | ACL user của bạn. Trên Upstash và trên Redis chỉ dùng password, hãy dùng `default` |
+| Port | Mặc định `6379`, `6380` với Azure TLS. Redis Cloud cấp port riêng cho từng database, nên hãy sao chép từ console |
+| Database index | `/0` tới `/15` ở cuối URL. Bỏ trống nếu là `0` |
 
-Quay lại trang cơ sở dữ liệu — cơ sở dữ liệu mới xuất hiện trong danh sách.
-</Step>
-<Step title="Sao chép connection URL">
-Trên thẻ cơ sở dữ liệu, tìm thẻ **Connection to database** và nhấn **Connect**. Trong panel bên:
-- Đóng dropdown mặc định **Redis SDK clients**
-- Chọn **Redis CLI**
-- Sao chép URL
+Mã hóa URL các ký tự đặc biệt trong password (`@` thành `%40`).
 
-URL theo định dạng:
-```
-Redis://<username>:<password>
-```
+## Quyền yêu cầu
 
-Cổng Redis Cloud thường nằm trong dải `13xxx` thay vì `6379`.
-</Step>
-<Step title="Tạo role và người dùng chỉ đọc">
-Mở [trang Data Access Control roles](https://cloud.redis.io/
-- Nhấn **New role** và đặt tên `cloudthinker-readonly`
-- Đặt **ACL Rules** thành **Read-Only**
-- Chọn các cơ sở dữ liệu mà role này có thể truy cập
-- Nhấn **Save role**
-
-Sau đó tạo hoặc gán người dùng gắn với role này và sử dụng thông tin xác thực của người dùng đó trong connection URL.
-</Step>
-<Step title="Thêm kết nối trong CloudThinker">
-Điều hướng đến **Connections → Redis** và dán URL làm **REDIS_URL**. Nhấn **Connect**. CloudThinker hiển thị trạng thái **Connected** khi thành công.
-</Step>
-</Steps>
-</Tab>
-</Tabs>
-
-Chi tiết kết nối
-
-| Trường | Mô tả | Ví dụ |
-|-------|-------------|---------|
-| **REDIS_URL** | Redis connection URI bao gồm thông tin xác thực | `redis://cloudthinker-readonly:pass|
-| **TLS/SSL** | Dùng scheme `rediss://` để bắt buộc TLS | `rediss://` cho Upstash; tùy chọn ở nơi khác |
-| **Port** | Cổng Redis | `6379` (tự host, Upstash); `13xxx` (Redis Cloud) |
-| **Database index** | Chỉ số DB logic | `0` |
-
-Quyền bắt buộc
-
-Các ACL category khuyến nghị cho người dùng CloudThinker:
-
-| Category | Cài đặt | Lý do |
-|----------|---------|-----|
-| `+| Cho phép | Đọc key, chạy `INFO`, `CLIENT LIST`, v.v. |
-| `-| Từ chối | Chặn `SET`, `DEL` và các lệnh thay đổi khác |
-| `-| Từ chối | Chặn `FLUSHALL`, `CONFIG`, `DEBUG`, `SHUTDOWN`, replication |
-| `-| Từ chối | Chặn các lệnh admin |
-| `-*(tùy chọn)* | Từ chối | Chặn `KEYS`, `SMEMBERS`, `HGETALL` trên collection lớn |
+| Bạn muốn agent | Cho phép |
+|--------------------|-------|
+| Đọc key, kiểu, TTL, kích thước và số lượng key | `+@read` và một key pattern như `~*` |
+| Đọc bộ nhớ, eviction, hit rate, replication và thống kê lệnh | `+info` |
+| Xem các client đang kết nối | `+client\|list` |
+| Dùng database index khác `0` | `+select` |
+| Thay đổi key | Các nhóm lệnh ghi như `+@write`. Không khuyến nghị. Xem [Quyền ghi](#quyền-ghi) |
 
 <Tip>
-Phạm vi hóa key (`~*` cho tất cả key, hoặc `~app:*` cho prefix) thu hẹp những gì người dùng CloudThinker có thể truy cập. Bắt đầu với `~*` và giới hạn dần khi cần.
+Giữ user ở chế độ chỉ đọc. ACL chỉ đọc chặn mọi thao tác ghi ngay tại Redis, bất kể thao tác đó đã được phê duyệt hay chưa.
 </Tip>
 
-Khả năng của agent
+## Khả năng của agent
 
-Sau khi kết nối, CloudThinker có thể:
+| Khả năng | Agent làm được gì |
+|------------|--------------------|
+| **Bộ nhớ và eviction** | Đọc bộ nhớ đã dùng, tỷ lệ phân mảnh, chính sách `maxmemory`, số eviction và hit rate |
+| **Keyspace** | Đếm key theo database, lấy mẫu key bằng `SCAN`, đọc kiểu, kích thước và TTL |
+| **Kiểm tra thời hạn** | So sánh key có và không có TTL trong từng database, đối chiếu với chính sách `maxmemory` |
+| **Key lớn nhất** | Xếp hạng các key lấy mẫu theo kích thước: độ dài chuỗi, hoặc số phần tử với list, hash, set và sorted set. Mẫu mặc định là 100 key từ `SCAN`, nên kết quả là ước lượng, và câu trả lời sẽ nói rõ khi lượt quét không phủ hết mọi key |
+| **Client và độ trễ** | Liệt kê client đang kết nối, đọc số lần gọi và độ trễ theo từng lệnh từ `INFO commandstats` |
+| **Replication** | Đọc vai trò, số replica đang kết nối và replication offset |
+| **Module** | Đọc index RediSearch và document RedisJSON, khi server đã nạp các module đó |
 
-| Khả năng | Mô tả |
-|------------|-------------|
-| **Phân tích keyspace** | Kiểm tra các pattern key, kích thước và phân phối TTL |
-| **Thống kê lệnh** | Xem xét latency và throughput lệnh qua `INFO commandstats` |
-| **Metrics hiệu suất** | Giám sát bộ nhớ, kết nối, eviction và replication lag |
-| **Thông tin module** | Kiểm tra RediSearch index, RedisJSON document và TimeSeries (chỉ Redis Stack) |
-
-Xác minh kết nối
+### Xác minh kết nối
 
 ```text
-Run Redis INFO and summarize memory usage, connected clients, and keyspace stats
+Summarize Redis memory usage, connected clients, eviction policy, and key counts per database
 ```
+
+Kết quả mong đợi: bộ nhớ đã dùng và mức đỉnh, số client, chính sách `maxmemory`, và số key của từng database index. Lỗi `NOPERM` sẽ nêu tên lệnh còn thiếu. Thêm lệnh đó bằng `ACL SETUSER cloudthinker-readonly`, rồi hỏi lại.
 
 ### Ví dụ prompt
 
 ```text
-Analyze hot keys and memory distribution on the production Redis instance
-Check memory fragmentation ratio and eviction stats
-Review replication lag on the Redis replica
+Which sampled keys are the largest, and what share of keys in each database has no TTL?
+Is Redis evicting keys? Show the eviction policy, evictions, and hit rate
+Which commands have the highest average latency according to commandstats?
 ```
+
+## Quyền ghi
+
+Kết nối Redis có công cụ ghi. Nếu ACL cho phép ghi, mỗi thao tác ghi đều đi qua [Approvals](/vi/guide/approvals/overview) trước, và một [rule](/vi/guide/approvals/rules) có thể yêu cầu hỏi trước hoặc từ chối thao tác đó.
+
+<ApprovalDefault />
+
+| Loại | Công cụ |
+|---|---|
+| Ghi | Set, đặt thời hạn, đổi tên, publish, pop khỏi list, và thêm vào hash, list, set, sorted set, stream và document JSON |
+| Phá hủy | Xóa một key, hoặc xóa phần tử khỏi hash, list, set, sorted set, stream hoặc document JSON |
+| Tùy theo lệnh | Một lệnh Redis thô: lệnh đọc như `GET` chạy mà không cần hỏi, `DEL` hoặc `FLUSHALL` được tính là phá hủy, mọi lệnh khác được tính là ghi |
 
 ## Khắc phục sự cố
 
-<Accordion title="Xác thực thất bại (NOAUTH / WRONGPASS)">
-- Xác minh username và password trong connection URL
-- Với tự host, xác nhận người dùng được bật bằng `ACL WHOAMI` và `ACL LIST`
-- Với Upstash và Redis Cloud, đảm bảo bạn đã sao chép TCP/Redis CLI URL, không phải REST hoặc SDK URL
+<Accordion title="NOAUTH hoặc WRONGPASS">
+User hoặc password sai hoặc bị thiếu. Kiểm tra cả hai trong **REDIS_URL**, kể cả phần mã hóa URL. Trên Upstash, dùng `default` làm user và database token làm password. Trên Redis tự host, chạy `ACL LIST` để xác nhận user tồn tại và đang `on`.
 </Accordion>
 
-<Accordion title="NOPERM — không có quyền chạy lệnh">
-- Người dùng chỉ đọc đang hoạt động đúng với các lệnh ghi
-- Nếu đọc cũng bị chặn, kiểm tra lại ACL rules — `+@read` phải được cấp
+<Accordion title="Kết nối bị đóng, hoặc kết nối không bao giờ đạt Connected">
+Thường do URL sai định dạng. Kiểm tra scheme (`rediss://` cho endpoint TLS, Upstash bắt buộc dùng), host, port, và URL có kèm password. URL REST hoặc SDK của nhà cung cấp sẽ không hoạt động: hãy dùng URL TCP hoặc Redis CLI.
 </Accordion>
 
 <Accordion title="Connection refused hoặc timeout">
-- Xác minh host và port có thể tiếp cận từ CloudThinker
-- Với tự host, đảm bảo Redis không chỉ bind với `127.0.0.1`
-- Thêm IP CloudThinker vào firewall hoặc allowlist của cloud provider
+CloudThinker không truy cập được server. Kiểm tra tường lửa, security group hoặc allowlist của nhà cung cấp, và đảm bảo `bind` trong `redis.conf` không chỉ có `127.0.0.1`. Server trong mạng private cần có một endpoint truy cập được trước.
 </Accordion>
 
-<Accordion title="Lệnh module thất bại (FT.*, JSON.*, TS.*, BF.*)">
-- Vanilla Redis không bao gồm module. Chạy Redis Stack (`redis/redis-stack`) hoặc bản managed tương đương tích hợp các module cần thiết.
+<Accordion title="NOPERM với INFO, CLIENT LIST hoặc một lệnh đọc">
+ACL thiếu một lệnh. Thêm `+info`, `'+client|list'` hoặc nhóm lệnh mà thông báo lỗi nêu tên bằng `ACL SETUSER cloudthinker-readonly ...`, rồi hỏi lại. `NOPERM` với lệnh ghi là điều bình thường đối với user chỉ đọc.
+</Accordion>
+
+<Accordion title="Command is not available: FT.* or JSON.*">
+Server chưa nạp module RediSearch hoặc RedisJSON. Nhiều gói hosted không đi kèm các module này. Mọi chức năng khác vẫn hoạt động bình thường.
 </Accordion>
 
 ## Bảo mật
 
 <ConnectionSecurity />
 
-- **Dùng rediss:// cho TLS** — dùng scheme `rediss://` khi triển khai hỗ trợ TLS để mã hóa dữ liệu truyền tải.
-- **Lưu ACL bền vững** — dùng `aclfile` cho các triển khai tự host để người dùng chỉ đọc tồn tại qua các lần khởi động lại.
+- **Dùng `rediss://`**: `redis://` thường gửi password và mọi giá trị dưới dạng không mã hóa. Hãy dùng TLS bất cứ khi nào server hoặc nhà cung cấp hỗ trợ.
+- **Giới hạn phạm vi key**: thay `~*` bằng các prefix agent cần, như `~cache:*`, để session token và các key nhạy cảm khác nằm ngoài tầm với.
 
 ## Liên quan
 
 <CardGroup cols={2}>
-  <Card title="Agent" icon="database" href="/vi/guide/agents/overview">
-    Agent tối ưu cơ sở dữ liệu
+  <Card title="MongoDB" icon="/images/icons/mongodb.svg" href="/vi/guide/connections/mongodb">
+    Kết nối MongoDB hoặc Atlas ở chế độ chỉ đọc.
   </Card>
-  <Card title="Kết nối MongoDB" icon="/images/icons/mongodb.svg" href="/vi/guide/connections/mongodb">
-    Hướng dẫn thiết lập cho cơ sở dữ liệu MongoDB
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Quyết định thao tác ghi Redis nào được chạy, phải chờ người duyệt hoặc bị từ chối.
   </Card>
 </CardGroup>

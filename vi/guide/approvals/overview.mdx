@@ -1,0 +1,145 @@
+---
+title: Approvals
+description: "Quyết định thao tác ghi nào của agent tự chạy, thao tác nào chờ người duyệt và thao tác nào không bao giờ chạy, đồng thời trả lời yêu cầu phê duyệt."
+icon: shield-check
+---
+
+import AutonomyModes from '/snippets/vi/autonomy-modes.mdx';
+
+Approvals kiểm soát điều xảy ra khi agent muốn thay đổi thứ gì đó qua một [kết nối](/vi/guide/connections/overview), chẳng hạn khởi động lại một dịch vụ hoặc sửa một tài nguyên cloud. Mỗi thao tác ghi sẽ chạy, chờ người duyệt hoặc bị từ chối, còn thao tác đọc luôn chạy.
+
+## Cách quyết định một thao tác ghi
+
+**Thao tác ghi** là bất kỳ lệnh gọi nào của agent làm thay đổi một trong các hệ thống đã kết nối của bạn. Mọi thao tác ghi đi qua các bước sau theo thứ tự, và bước đầu tiên đưa ra câu trả lời sẽ quyết định.
+
+| Bước | Yếu tố quyết định | Kết quả |
+|------|--------------|--------|
+| 1. Always blocked | Danh sách tích hợp sẵn các lệnh gọi không bao giờ chạy, chẳng hạn dừng ghi log CloudTrail, đóng tài khoản AWS hoặc xóa namespace `kube-system` | Bị từ chối. Không người nào và không Rule nào thay đổi được điều này. |
+| 2. [Rules](/vi/guide/approvals/rules) | Các Rule bạn đã chấp nhận. Mỗi Rule chỉ định một loại thao tác ghi. | **Allow** cho chạy, trừ ở chế độ **Manual**, khi đó vẫn phải hỏi người duyệt. **Ask first** chờ người duyệt. **Deny** từ chối. Cả ba chỉ có hiệu lực khi CloudThinker bật Rule enforcement cho workspace của bạn; trước đó Rules chỉ ghi lại quyết định mà chúng sẽ đưa ra. |
+| 3. [Approval mode](/vi/guide/approvals/approval-mode) | **Manual** hoặc **Auto** cho lượt chạy này | Manual hỏi người duyệt. Auto có thể để AI judgment cho phép một thao tác ghi an toàn, rồi hỏi bạn hoặc từ chối phần còn lại. |
+| 4. [Người phê duyệt](/vi/guide/approvals/approvers) | Người phê duyệt mặc định, hoặc nhóm mà một Rule chỉ định | Một người phê duyệt hoặc từ chối. |
+
+Khi nhiều Rule khớp với một thao tác ghi, **Deny** thắng **Ask first**, và **Ask first** thắng **Allow**.
+
+Approvals kiểm tra mọi lệnh gọi ra ngoài CloudThinker: lệnh gọi qua các kết nối của bạn, CLI cho cloud và cluster như `aws` và `kubectl`, chương trình từ xa như `ssh` và `psql`, Git push và pull, và các lệnh gửi một [credential](/vi/guide/credentials) đã lưu, chẳng hạn `curl` với `$STRIPE_API_KEY`. Approvals không kiểm tra tệp mà agent thay đổi trong thư mục làm việc riêng của agent. Trên một [Worker](/vi/guide/workers), các lệnh shell của agent chạy trên máy của bạn thay vì trong sandbox do CloudThinker quản lý. Lệnh gọi đến hệ thống của bạn vẫn được kiểm tra như cũ, nhưng đừng trông cậy vào Approvals để chặn một lệnh chỉ tác động lên máy đó, chẳng hạn `rm` hoặc ghi tệp cục bộ.
+
+## Cấu hình mặc định
+
+Workspace mới bắt đầu với **Auto · Rules + AI · Ask me**. Trên thực tế:
+
+- Thao tác đọc chạy mà không hỏi.
+- Thao tác ghi được một Rule cho phép sẽ chạy, khi Rule enforcement đã bật cho workspace của bạn.
+- Thao tác ghi không có Rule nào bao phủ sẽ được chuyển cho AI judgment. Nếu được đánh giá là an toàn, thao tác sẽ chạy. Nếu không, agent tạm dừng và hỏi người duyệt. Ví dụ, khởi động lại một pod staging mà bạn vừa yêu cầu agent khởi động lại thì có thể chạy luôn. Xóa một RDS snapshot là thao tác phá hủy, nên agent sẽ hỏi bạn.
+- Automation, vốn thường chạy khi không có ai theo dõi, mặc định dùng **Auto · Rules + AI · Refuse**, nên bỏ qua thao tác ghi thay vì chờ mãi.
+
+<AutonomyModes />
+
+Agent đề xuất Rule trong quá trình làm việc. Rule được đề xuất không có tác dụng gì cho đến khi workspace Admin chấp nhận.
+
+## Xem lại thiết lập
+
+Làm việc này một lần khi bắt đầu, sau đó mỗi khi **Needs you** hiển thị một con số.
+
+<Steps>
+  <Step title="Mở Approvals">
+    Mở **Approvals** trong thanh bên. Nếu không thấy, nhấn **More** và chọn **Approvals** để hiển thị. Trang mở ở tab **Overview**.
+
+    <Frame caption="Màn hình Approvals Overview: bước Rules, Approval mode và người phê duyệt">
+      <img src="/images/v2/approvals-overview.webp" alt="Tab Approvals Overview với các thẻ Rules, When no Rule matches và Who approves theo thứ tự" />
+    </Frame>
+  </Step>
+  <Step title="Xem lại các Rule được đề xuất">
+    Nếu thẻ trên cùng cho biết có Rule cần bạn xem lại, nhấn **Review**. Chấp nhận các Rule phù hợp với cách nhóm bạn làm việc và loại bỏ phần còn lại.
+
+    Chưa có đề xuất nào? Ở tab **Rules**, nhấn **Find rules**. CloudThinker đọc các kết nối, phát hiện của Optimize, sự cố, cảnh báo và lịch sử phê duyệt của bạn, rồi đề xuất Rule. Không có gì thay đổi cho đến khi bạn chấp nhận.
+
+    **Trạng thái thành công:** **Needs you** hiển thị "Nothing needs your review" và thẻ **Rules** hiển thị các Rule đang hoạt động của bạn.
+  </Step>
+  <Step title="Kiểm tra chế độ của workspace">
+    Trong **When no Rule matches**, bộ chọn **Workspace mode** hiển thị chế độ hiện tại. Đổi chế độ tại đây, hoặc nhấn **Edit run types** để đặt chế độ khác cho chat, automation và các loại lượt chạy khác.
+  </Step>
+  <Step title="Kiểm tra người phê duyệt">
+    Trong **Who approves**, nhấn **Open Approvers**. Khi Default approvers trống, mọi Developer trở lên đều có thể phê duyệt. Thêm người để thu hẹp phạm vi.
+
+    **Trạng thái thành công:** thẻ **Who approves** hiển thị số người phê duyệt mặc định và quy tắc hai người có đang bật hay không.
+  </Step>
+</Steps>
+
+## Trả lời yêu cầu phê duyệt
+
+Khi một thao tác ghi phải chờ người duyệt, agent tạm dừng và chat hiển thị thẻ phê duyệt nêu tên hành động cùng kết nối bị tác động.
+
+| Nút | Tác dụng |
+|--------|--------------|
+| **Approve** | Chạy đúng lệnh gọi này. |
+| **Approve for…** | Chạy lệnh gọi này và cho phép cùng thao tác trên cùng kết nối chạy mà không hỏi, chỉ trong chat hoặc sự cố này, trong **1 hour**, **This incident** hoặc **30 days**. Thao tác này tạo một Rule có thời hạn gọi là [Window](/vi/guide/approvals/rules#window). |
+| **Approve and draft rule** | Chạy lệnh gọi này ngay. Một chat phụ soạn một Rule để bạn chấp nhận, còn chat này tiếp tục chạy. |
+| **Decline** | Từ chối lệnh gọi. Hãy cho agent biết lý do để agent thử cách khác. |
+| **Break glass…** | Chạy một lần một lệnh gọi đã bị Rule **Deny** từ chối. Chỉ chủ sở hữu workspace và workspace Admin thấy nút này, và chỉ khi [break-glass](/vi/guide/approvals/approvers#break-glass) đang bật. |
+
+**Approve for…** chỉ xuất hiện với một thao tác ghi thông thường trên một kết nối ở chế độ Auto, và chỉ với workspace Admin. Thao tác xóa, lệnh gọi ở chế độ Manual, hoặc Rule Ask first khi Rule enforcement đã bật, không bao giờ cung cấp Window.
+
+Nếu bạn không thể phê duyệt, thẻ hiển thị "Waiting for an approver." Người bắt đầu cuộc hội thoại có thể nhấn **Notify approvers** để báo cho họ. Bất kỳ ai có thể chat đều có thể **Decline**. Trong [Google Chat](/vi/guide/google-chat-integration), thẻ có các nút **Approve**, **Approve with reason** và **Reject**. [Slack](/vi/guide/slack-integration) và [Microsoft Teams](/vi/guide/teams-integration) chỉ liên kết đến ứng dụng web, nên bạn quyết định ở đó. Để nhận các yêu cầu này qua email hoặc chat, bật **Agent approvals** trong [Notifications](/vi/guide/notifications).
+
+## Các tab của Approvals
+
+| Tab | Việc bạn làm ở đó |
+|-----|-------------------|
+| **Overview** | Xem những gì cần bạn và 7 ngày gần nhất: bao nhiêu lệnh gọi đã chạy, đã hỏi người duyệt hoặc bị từ chối |
+| **Rules** | Tìm, xem lại, chấp nhận, sửa và tắt Rule. Nhập hoặc xuất chính sách dưới dạng tệp YAML hoặc JSON. |
+| **Approval mode** | Đặt chế độ cho workspace, cho từng loại lượt chạy và những gì mọi người có thể chọn trong một chat |
+| **Approvers** | Đặt Default approvers, nhóm người phê duyệt, quy tắc hai người và break-glass |
+| **Activity** | Xem mỗi Rule đã quyết định gì trong một khoảng thời gian và xuất ra CSV |
+
+## Ai có thể thay đổi Approvals
+
+| Vai trò workspace | Xem trang | Thay đổi Rule, chế độ và người phê duyệt | Phê duyệt thao tác ghi |
+|----------------|---------------|-------------------------------------|-----------------|
+| Admin | Có | Có | Có |
+| Developer | Có | Không | Có, trừ khi một nhóm giới hạn |
+| Viewer | Có | Không | Không |
+
+Owner và Admin của tổ chức là workspace Admin trong mọi workspace, nên một workspace có thể có nhiều Admin. Các điều khiển bạn không dùng được vẫn hiển thị và ghi "Ask a workspace admin". Một số thông báo ghi "Ask a workspace owner"; điều đó có nghĩa là chủ sở hữu workspace hoặc bất kỳ workspace Admin nào.
+
+## Khắc phục sự cố
+
+<AccordionGroup>
+  <Accordion title="Một thao tác ghi vẫn hỏi tôi dù có Rule cho phép">
+    Trước tiên hãy kiểm tra Rule enforcement: khi bước **Rules** ghi **In preview**, Rules chỉ ghi lại quyết định mà chúng sẽ đưa ra, nên chưa Rule nào cho chạy thao tác ghi. Nếu thực thi đã bật, lượt chạy đang dùng chế độ **Manual**, vốn hỏi trước mọi thao tác ghi. Kiểm tra chế độ trong chat, trên automation, cho loại lượt chạy và cho workspace ở tab **Approval mode**.
+  </Accordion>
+  <Accordion title="Một automation bỏ qua thao tác ghi thay vì hỏi">
+    Automation mặc định dùng **Auto · Rules + AI · Refuse**, vì có thể không có ai ở đó để trả lời. Thêm một Rule Allow cho thao tác ghi đó, hoặc đổi chế độ của automation.
+  </Accordion>
+  <Accordion title="Tôi không thấy nút Approve">
+    Máy chủ kiểm tra ai có thể phê duyệt ở mỗi lần nhấn. Một Rule có thể chỉ định nhóm người phê duyệt mà bạn không thuộc về, hoặc Default approvers có thể không bao gồm bạn. Nhấn **Notify approvers** nếu bạn bắt đầu cuộc hội thoại, hoặc **Decline**.
+  </Accordion>
+  <Accordion title="Bước Rules ghi 'In preview: Rules record what they would decide'">
+    Thực thi Rule chưa bật cho workspace này. Rules ghi lại phán quyết mà chúng sẽ đưa ra, nhưng chỉ Approval mode quyết định từng thao tác ghi. CloudThinker bật thực thi theo từng workspace; không có công tắc nào cho việc này trên trang này. Liên hệ bộ phận hỗ trợ CloudThinker để yêu cầu.
+  </Accordion>
+  <Accordion title="Tôi có thể phê duyệt một lệnh gọi bị Always blocked từ chối không?">
+    Không. Lệnh gọi thuộc Always blocked không bao giờ chạy, và break-glass cũng không thể ghi đè.
+  </Accordion>
+  <Accordion title="Agent có thể tự bật Rule của mình không?">
+    Không. Agent có thể đề xuất một Rule, sửa đề xuất của chính mình hoặc đề xuất tắt một Rule. Workspace Admin phải chấp nhận từng đề xuất.
+  </Accordion>
+  <Accordion title="Tool Permissions và Command Permissions đã đi đâu?">
+    Rules đã thay thế chúng. Các quyền cấp cũ trở thành đề xuất Rule với nguồn **Imported**. Chúng chờ trong **Needs review** ở tab **Rules** và không có tác dụng cho đến khi bạn chấp nhận.
+  </Accordion>
+</AccordionGroup>
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="Rules" icon="list-check" href="/vi/guide/approvals/rules">
+    Tìm, xem lại và chấp nhận các Rule được đề xuất cho từng loại thao tác ghi
+  </Card>
+  <Card title="Approval mode" icon="bolt" href="/vi/guide/approvals/approval-mode">
+    Chọn Manual hoặc Auto cho workspace, một loại lượt chạy hoặc một chat
+  </Card>
+  <Card title="Người phê duyệt và Activity" icon="users" href="/vi/guide/approvals/approvers">
+    Chọn người phê duyệt và kiểm tra mỗi Rule đã quyết định gì
+  </Card>
+  <Card title="Notifications" icon="bell" href="/vi/guide/notifications">
+    Gửi yêu cầu phê duyệt đến email, Slack, Teams hoặc Google Chat
+  </Card>
+</CardGroup>

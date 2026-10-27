@@ -1,0 +1,92 @@
+---
+title: "Chương 10 · Các trụ cột theo chiều dọc: độ phức tạp, chi phí và bảo mật"
+description: "Tinh chỉnh một agent harness cho sự cố, chi phí cloud và bảo mật bằng cách điều chỉnh trigger, nhịp độ, ngữ cảnh, rủi ro hành động và chi phí xác minh."
+icon: building-columns
+---
+
+*Một harness, ba lĩnh vực. Vòng lặp, ngữ cảnh, công cụ và chính sách từ Phần 01 đến 03 chỉ tạo ra giá trị khi bạn hướng chúng vào công việc thực tế, và mỗi lĩnh vực uốn cong việc thiết kế theo cách riêng.*
+
+Các nhóm thường triển khai agent vận hành vào ba lĩnh vực: độ phức tạp, chi phí cloud và bảo mật. Cuốn sách này gọi độ tin cậy và ứng phó sự cố là "độ phức tạp", vì đó là nơi quy mô và sự chằng chịt của hạ tầng bộc lộ thành sự cố ngừng dịch vụ. Hãy coi ba lĩnh vực này là một vòng lặp với các thiết lập khác nhau, không phải ba sản phẩm. Chương này đưa ra các thiết lập đó cho từng lĩnh vực, các cái bẫy trong mỗi lĩnh vực, và thứ tự mà mỗi lĩnh vực có thể an toàn giành thêm quyền tự chủ.
+
+## 10.1 Một vòng lặp, năm núm điều chỉnh
+
+Năm tham số quyết định cách một agent hành xử trong một lĩnh vực. Chúng là một phần của harness, thứ mà [Chương 7](/vi/learn/aio-engineer/chapter-7-evaluating-agents) đã cho thấy đóng góp cho kết quả production nhiều hơn mô hình trần. Hàng cuối là kết quả cộng dồn của năm tham số đó.
+
+| Núm điều chỉnh | Độ phức tạp (độ tin cậy) | Chi phí | Bảo mật |
+|---|---|---|---|
+| Trigger | Cảnh báo và event, theo thời gian thực | Theo lịch; dữ liệu billing thường trễ một hai ngày | Phát hiện từ scanner và pentest, nguồn cấp lỗ hổng, config drift |
+| Nhịp độ | Tính bằng phút; độ trễ quan trọng | Hàng giờ đến hằng ngày; chạy batch là được | Tính bằng phút với lỗ hổng đang bị phơi nhiễm; hằng ngày với tư thế bảo mật |
+| Ngữ cảnh quyết định chất lượng | Topology, thay đổi gần đây, runbook, incident memory | Mức sử dụng theo thời gian, dữ liệu giá và cam kết, tag sở hữu | Inventory tài sản, trạng thái infrastructure-as-code (IaC), danh tính, các control bạn theo dõi |
+| Rủi ro hành động | Phần lớn đảo ngược được; có rollback | Phần lớn đảo ngược được, trừ cam kết nhiều năm | Việc thực thi có thể làm hỏng production; cách ly có phạm vi ảnh hưởng |
+| Xác minh | Probe sức khỏe hoặc SLO sau khi sửa | Thay đổi billing, cộng kiểm tra hiệu năng không bị suy giảm | Scan lại hoặc kiểm thử lại cho thấy phát hiện đã hết |
+| Quyền tự chủ bắt đầu từ đâu | Điều tra tự do; hành động qua phê duyệt (Ch. 6) | Báo cáo tự do; kiểm soát rightsizing; cam kết luôn cần người duyệt | Phát hiện và thu thập bằng chứng tự do; khắc phục cần phê duyệt trước |
+
+Dùng bảng này làm checklist review thiết kế. Nếu bạn không điền được một ô cho môi trường của mình, agent cũng không làm được.
+
+## 10.2 Độ phức tạp: trụ cột mà pager phải trả lời
+
+Ứng phó sự cố là trường hợp khó nhất trong cuốn sách này. Câu hỏi là mở ("vì sao checkout chậm?"), hệ thống đang lỗi trong khi bạn điều tra, và chứng minh một bản sửa nghĩa là probe một service đang chạy, không phải đọc hóa đơn. Đó là lý do kết quả benchmark trong [Chương 7](/vi/learn/aio-engineer/chapter-7-evaluating-agents) yếu nhất ở đây, và vì sao trụ cột này giành quyền tự chủ chậm.
+
+Bốn quy tắc rút ra từ đó.
+
+- **Chẩn đoán chính là sản phẩm.** Theo dõi tần suất kỹ sư on-call chấp nhận nguyên nhân gốc của agent. Con số đó mở khóa mọi thứ khác.
+- **Sửa nguyên nhân, không sửa triệu chứng.** Chương 7 cho thấy agent vượt qua bài kiểm thử khắc phục bằng vòng lặp restart. Trên production, hãy escalate mọi bản sửa không dẫn chiếu một nguyên nhân đã chẩn đoán, hoặc lặp lại ngay trong cửa sổ cooldown của bản sửa đó.
+- **Hành động qua runbook.** Runbook có kiểm tra trước, các bước có kiểu và kiểm tra sau biến một hành động mở thành hành động có giới hạn và audit được.
+- **Đo theo baseline của chính bạn.** Theo dõi thay đổi MTTR, tỷ lệ chấp nhận chẩn đoán, tỷ lệ escalate và tỷ lệ sự cố lặp lại. Con số cuối cho bạn biết incident memory ([Chương 2](/vi/learn/aio-engineer/chapter-2-context-engineering)) có đang học hay không.
+
+## 10.3 Chi phí: nơi quyền tự chủ được giành nhanh nhất
+
+Lĩnh vực chi phí thì ngược lại hoàn toàn. Xác minh gần như miễn phí, vì hóa đơn hoặc đã thay đổi hoặc chưa. Phần lớn hành động hoàn tác được gọn gàng: bạn có thể resize instance trở lại, khôi phục volume từ snapshot, hoặc bật lại lịch chạy. Bằng chứng rẻ cộng hành động đảo ngược được chính là bài kiểm tra nâng cấp mà [Chương 12](/vi/learn/aio-engineer/chapter-12-autonomous-mission-loop) chính thức hóa, nên chi phí thường là lĩnh vực đầu tiên nơi agent tự hành động và báo cho bạn sau.
+
+Ba cái bẫy vẫn cần được xử lý về mặt kỹ thuật.
+
+| Cái bẫy | Điều gì sai | Cần làm gì |
+|---|---|---|
+| Tiết kiệm giả định | "Tiết kiệm" là tuyên bố về chi tiêu lẽ ra đã xảy ra. Cộng dồn các khuyến nghị sẽ thổi phồng con số này. | Báo cáo thay đổi thực tế so với baseline cố định: chi tiêu được ghi nhận trước khi agent bắt đầu và không bao giờ sửa đổi sau đó ([Phụ lục A](/vi/learn/aio-engineer/appendix-a-poc-test-plan)). |
+| Dời hóa đơn | Một lần rightsizing gây sự cố về độ trễ sẽ chuyển chi phí sang nhóm độ tin cậy. | Xác minh bằng thay đổi billing và một chốt chặn hiệu năng. Nếu chốt chặn bị kích hoạt, rollback và ghi trường hợp đó vào memory. |
+| Cam kết không đảo ngược được | Reserved instance và savings plan ràng buộc bạn từ một đến ba năm. | Giữ chúng ở chế độ chỉ-phê-duyệt mãi mãi. Việc của agent là bằng chứng: lịch sử sử dụng, phép tính độ phủ, điểm hòa vốn. |
+
+## 10.4 Bảo mật: rủi ro cao nhất, ranh giới rõ nhất
+
+Bảo mật có khoảng cách lớn nhất giữa đọc và ghi. Phía đọc là khối lượng công việc lớn, lặp lại, với chi phí xác minh rẻ: triage phát hiện, kiểm tra một lỗ hổng có thực sự khai thác được trong môi trường của bạn không, và thu thập bằng chứng. Hãy tự động hóa phía đọc trước. Phía ghi (vá lỗi, cách ly workload, thu hồi thông tin xác thực, thay đổi IAM) có phạm vi ảnh hưởng tệ nhất trong cuốn sách này. Cách ly quá rộng là sự cố ngừng dịch vụ tự gây ra, và một thay đổi IAM sai có thể khóa luôn những người ứng phó của bạn.
+
+Chạy cơ chế phê duyệt của [Chương 6](/vi/learn/aio-engineer/chapter-6-policy-approvals) ở mức nghiêm ngặt nhất tại đây. Mặc định để các hành động thực thi phải hỏi người phê duyệt (**Manual**, hoặc Rule **Ask first**), rồi nới lỏng dần, mỗi lần một nhóm hành động hẹp.
+
+Hai thói quen quan trọng nhất trong lĩnh vực này.
+
+- **Sửa trong code, không sửa trong console.** Nếu IaC quản lý tài nguyên, bản sửa trên console sẽ bị lần apply tiếp theo hoàn tác và phát hiện quay lại. Đề xuất thay đổi vào nguồn IaC và để CI làm cổng xác minh.
+- **Giữ bằng chứng luôn cập nhật, không phải dựng lại.** Snapshot cấu hình, review quyền truy cập và bản ghi thay đổi đều chỉ đọc và dễ xác minh. Thu thập chúng liên tục giúp tránh cảnh vội vã trước audit, và đây thường là bản triển khai dễ được phê duyệt nhất.
+
+Các thước đo hữu ích: thời gian khắc phục theo mức độ nghiêm trọng, thời gian các phát hiện hướng internet còn bị phơi nhiễm, độ mới của bằng chứng, và không có hành động thực thi nào bỏ qua phê duyệt.
+
+## 10.5 Một harness, ba gói
+
+Với mỗi lĩnh vực, bạn thay đổi bốn thứ: gói công cụ, gói ngữ cảnh, chính sách mặc định và bộ đánh giá. Giữ chung bản thân harness: một policy engine, một nơi phê duyệt, một kho trace, một phương pháp đánh giá.
+
+Anti-pattern là mỗi lĩnh vực một sản phẩm riêng, mỗi sản phẩm có console, quyền và audit trail riêng. Cách làm này tái tạo vấn đề "swivel-chair" ở tầng cao hơn và nhân ba bề mặt tấn công từ [Chương 5](/vi/learn/aio-engineer/chapter-5-threat-model). Tệ hơn, cách làm này che giấu các trường hợp xuyên lĩnh vực, như một thay đổi chi phí gây ra sự cố, hoặc một phát hiện bảo mật do thay đổi mà agent độ tin cậy đã thực hiện.
+
+<Info>
+**Trong thực tế: một nền tảng, ba module**
+
+CloudThinker ánh xạ các trụ cột này thành các module dùng chung một bộ [kết nối](/vi/guide/connections/overview), một hệ thống [Approvals](/vi/guide/approvals/overview) và một [audit log](/vi/guide/security/audit-logs).
+
+| Trụ cột | Module | Hiện làm được gì |
+|---|---|---|
+| Độ phức tạp | [Resolve](/vi/guide/incident/overview) | Chạy [phân tích nguyên nhân gốc](/vi/guide/incident/root-cause-analysis) trên sự cố, đọc [runbook](/vi/guide/incident/runbooks) của bạn và học từ các sự cố trước qua [incident memory](/vi/guide/incident/incident-memory). |
+| Chi phí | [Optimize](/vi/guide/cost-optimization/overview) | Scan billing AWS, GCP hoặc Azure ở chế độ chỉ đọc và xếp hạng các phát hiện tiết kiệm kèm ước tính. Cần quyền đọc dữ liệu billing: AWS Cost Explorer, GCP billing export trong BigQuery, hoặc một phạm vi Azure Cost Management. Scan đầu tiên lấy tối đa 13 tháng lịch sử, và AWS Cost Explorer có thể trễ 24 đến 48 giờ so với mức sử dụng. Trên một phát hiện, **Implement** yêu cầu CloudThinker thực hiện thay đổi, và thao tác ghi đó đi qua Approvals. Để cho một loại thay đổi chạy mà không cần hỏi ngay hôm nay, [Approval mode](/vi/guide/approvals/approval-mode) là cơ chế kiểm soát duy nhất: ở **Auto · Rules + AI**, AI judgment có thể cho phép thao tác ghi mà AI judgment đánh giá là an toàn và trong phạm vi. Rule **Allow** thu hẹp phạm vi đó xuống một thao tác và kết nối cụ thể khi CloudThinker bật [Rule enforcement](/vi/guide/approvals/rules#khắc-phục-sự-cố) cho workspace của bạn. |
+| Bảo mật | [Cyber](/vi/guide/security/cyber-overview) | Pentest một ứng dụng web hoặc API trên tên miền bạn đã xác minh, và giữ request và response chứng minh từng phát hiện. Trên một phát hiện, **Create PR with agent** chuẩn bị bản sửa dưới dạng pull request trong repository gắn với ứng dụng, nên bạn cần [kết nối nhà cung cấp Git](/vi/guide/connections/github) trước. Sau đó bạn kiểm thử lại. Cyber không đánh giá cấu hình cloud hay tư thế IAM. |
+
+Mọi thao tác ghi, trong bất kỳ module nào, đều đi qua cùng các Rule và cùng Approval mode **Manual** hoặc **Auto**, nên bạn chỉ đặt chính sách một lần. Một ngoại lệ: **Apply fix** và **Fix all findings** của Review commit vào nhánh nguồn khi có người nhấn, mà không đi qua Approvals.
+</Info>
+
+<Tip>
+**Điều cần nhớ**
+
+1. **Lĩnh vực không thay đổi vòng lặp, chỉ thay đổi các núm điều chỉnh.** Đặt trigger, nhịp độ, ngữ cảnh, rủi ro hành động và chi phí xác minh theo từng lĩnh vực thay vì mua một sản phẩm cho mỗi lĩnh vực.
+2. **Quyền tự chủ đến với tốc độ của việc xác minh.** Chi phí thường được nâng cấp trước, các hành động có giới hạn trong xử lý sự cố tiếp theo, thực thi bảo mật sau cùng. Thu thập bằng chứng là thắng lợi sớm, lặng lẽ nhưng chắc chắn.
+3. **Một harness, ba gói.** Các stack riêng cho từng lĩnh vực nhân bề mặt audit lên và che giấu những lỗi xuyên lĩnh vực gây hại nhất.
+</Tip>
+
+## Bước tiếp theo
+
+Đọc [Chương 11](/vi/learn/aio-engineer/chapter-11-failure-catalog) để biết mười hai cách các bản triển khai này thất bại trên production và cách nhận ra sớm từng cách. Để thử một trụ cột trên hệ thống của bạn, hãy bắt đầu với [Resolve quickstart](/vi/guide/incident/quickstart), [Optimize quickstart](/vi/guide/cost-optimization/quickstart), hoặc [Cyber quickstart](/vi/guide/security/cyber-quickstart), bắt đầu bằng việc xác minh tên miền của bạn.

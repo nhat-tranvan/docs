@@ -1,96 +1,93 @@
 ---
-title: AWS CloudWatch
-description: "Cài đặt AWS CloudWatch alarm để tự động tạo incident trong CloudThinker qua Amazon EventBridge"
-icon: "/images/icons/integrations/aws-cloudwatch.svg"
+title: Kết nối CloudWatch Alarm
+description: "Chuyển các thay đổi trạng thái CloudWatch alarm tới Resolve qua EventBridge, rồi xác nhận từng alarm đến Pulse dưới dạng signal."
+icon: aws
 ---
 
-Kết nối AWS CloudWatch alarm với CloudThinker để các thay đổi trạng thái alarm tự động tạo incident với phân tích nguyên nhân gốc rễ được hỗ trợ bởi AI. Cách tiếp cận được đề xuất sử dụng **Amazon EventBridge** để định tuyến sự kiện CloudWatch alarm trực tiếp đến URL webhook CloudThinker của bạn — không cần Lambda function.
+Hướng dẫn này gửi mọi thay đổi trạng thái của CloudWatch alarm tới Resolve, để CloudThinker thấy alarm trong vài giây, có thể mở sự cố và bắt đầu phân tích nguyên nhân gốc (RCA). Amazon EventBridge đảm nhận việc chuyển tiếp: không cần Lambda function, không có mã nào phải bảo trì.
 
----
+## Cách hoạt động
 
-## Tổng quan kiến trúc
-
-```
-CloudWatch Alarm → EventBridge Rule → API Destination → CloudThinker Webhook
+```text
+CloudWatch alarm → EventBridge rule → API destination → CloudThinker webhook URL → Pulse
 ```
 
-Khi một CloudWatch alarm thay đổi trạng thái (ví dụ: OK → ALARM), EventBridge bắt sự kiện và chuyển tiếp đến CloudThinker qua API Destination. CloudThinker phân tích sự kiện, tạo incident và tùy chọn kích hoạt phân tích nguyên nhân gốc rễ tự động.
-
-<Note>
-  **Tại sao chọn EventBridge?** EventBridge gửi JSON sạch trực tiếp đến webhook của bạn với logic retry tích hợp, dead-letter queue và bảo mật dựa trên IAM. Không cần bắt tay xác nhận subscription (khác với SNS), và không cần Lambda function để chuyển đổi payload.
-</Note>
-
----
+Khi alarm đổi trạng thái, EventBridge chuyển tiếp sự kiện tới webhook URL CloudThinker của bạn. Resolve biến sự kiện thành một **signal** (sự kiện đã vượt qua bước lọc nhiễu) trong [Pulse](/vi/guide/pulse/overview). Pulse gom các signal liên quan thành một **cluster**, tức một vấn đề, và bước phân loại quyết định cluster cần xử lý có trở thành sự cố hay không.
 
 ## Điều kiện tiên quyết
 
-- Một tài khoản AWS với quyền tạo EventBridge rule, API destination và connection
-- Một CloudWatch alarm đã được cấu hình cho số liệu bạn muốn giám sát
-- Một URL webhook CloudThinker (được tạo trong các bước bên dưới)
+- Vai trò **Admin** trong workspace. Developer và Viewer xem được các tích hợp Resolve nhưng không thêm hay thay đổi được. Xem [Vai trò](/vi/guide/security/roles).
+- Một tài khoản AWS mà bạn có quyền tạo EventBridge connection, API destination và rule.
+- Ít nhất một CloudWatch alarm trong region bạn đang thiết lập.
+- AWS CLI, nếu bạn muốn kiểm thử bằng alarm mô phỏng (khuyến nghị). Người gọi lệnh cần quyền IAM `cloudwatch:SetAlarmState`.
 
----
-
-## Hướng dẫn cài đặt
+## Tạo webhook trong CloudThinker
 
 <Steps>
-  <Step title="Tạo CloudThinker Webhook">
-    1. Trong CloudThinker, vào **Resolve** → **Settings** → **Integrations**
-    2. Nhấp **Connect** trên card **AWS CloudWatch**
-    3. Nhập tên (ví dụ: "Production CloudWatch Alerts")
-    4. Xem lại các field mapping được cấu hình sẵn — được đặt cho định dạng EventBridge:
+  <Step title="Mở nền tảng AWS">
+    Vào **Resolve → Integrations** và chọn **Amazon Web Services**. Trong **Signals to Resolve**, nhấn **Add signal**. Hộp thoại **Create Webhook** mở ra với preset AWS CloudWatch.
 
-    | Trường Incident | JSONPath | Trích xuất |
-    |----------------|----------|----------|
-    | Title | `detail.alarmName` | Tên alarm |
-    | Description | `detail.state.reason` | Lý do thay đổi trạng thái |
-    | Severity | `detail.state.value` | Trạng thái alarm (`ALARM`, `OK`, `INSUFFICIENT_DATA`) |
-    | Service | `detail.configuration.metrics[0].metricStat.metric.namespace` | Namespace dịch vụ AWS (ví dụ: `AWS/EC2`) |
-
-    5. Phương thức xác thực mặc định là **API Key** với header `x-api-key` — phù hợp với cài đặt EventBridge connection
-    6. Cấu hình severity mapping và cài đặt auto-trigger nếu cần
-    7. Nhấp **Create** và **lưu Secret Key** — bạn sẽ cần nó cho EventBridge connection
-
-    <Warning>
-      Secret key chỉ được hiển thị một lần khi tạo. Sao chép ngay lập tức — bạn sẽ dán nó làm giá trị API key trong EventBridge connection.
-    </Warning>
+    Bạn không cần kết nối AWS trước. Khi chưa có kết nối, nền tảng hiển thị **Not configured** hoặc **Needs setup** (không bao giờ là **Needs connection**), và **Add signal** vẫn hoạt động. Bạn chỉ cần [kết nối AWS](/vi/guide/connections/aws) nếu muốn CloudThinker truy vấn các tài nguyên bị ảnh hưởng trong lúc RCA.
   </Step>
-
-  <Step title="Tạo EventBridge Connection">
-    1. Trong AWS Console, vào **Amazon EventBridge** → **Integration** → **Connections**
-    2. Nhấp **Create connection**
-    3. Cấu hình connection:
-       - **Name:** `cloudthinker-webhook`
-       - **Authorization type:** API Key
-       - **API key name:** `x-api-key`
-       - **API key value:** Dán **Secret Key** từ hộp thoại tạo webhook CloudThinker
-
-    <Warning>
-      Lưu secret key trong quá trình tạo webhook — nó chỉ được hiển thị một lần. Khóa này xác thực các yêu cầu EventBridge đến CloudThinker.
-    </Warning>
+  <Step title="Basic Info">
+    Giữ **Webhook Name** mặc định hoặc đổi tên, ví dụ `Production CloudWatch`. Nhấn **Next**.
   </Step>
-
-  <Step title="Tạo API Destination">
-    1. Vào **Amazon EventBridge** → **Integration** → **API destinations**
-    2. Nhấp **Create API destination**
-    3. Cấu hình:
-       - **Name:** `cloudthinker-incidents`
-       - **API destination endpoint:** Dán URL webhook CloudThinker của bạn
-       - **HTTP method:** `POST`
-       - **Connection:** Chọn connection `cloudthinker-webhook` đã tạo ở trên
-       - **Invocation rate limit:** `1` mỗi giây
+  <Step title="Configure">
+    **Field Mapping** và **Severity Mapping** đã được điền sẵn cho sự kiện EventBridge (xem các bảng bên dưới). Hãy giữ nguyên khi thiết lập lần đầu. Với tài khoản production, hãy cân nhắc hạ mức `INSUFFICIENT_DATA` ngay lúc này (xem [Ánh xạ trường và mức độ nghiêm trọng](#ánh-xạ-trường-và-mức-độ-nghiêm-trọng)). Nhấn **Next**.
   </Step>
+  <Step title="Advanced">
+    Giữ nguyên **Auth Method**: **API Key** với header `x-api-key`, đúng như EventBridge gửi. Sau đó quyết định hai tùy chọn:
 
-  <Step title="Tạo EventBridge Rule">
-    1. Vào **Amazon EventBridge** → **Rules**
-    2. Chọn event bus **default**
-    3. Nhấp **Create rule**
-    4. Cấu hình:
-       - **Name:** `cloudwatch-alarms-to-cloudthinker`
-       - **Description:** Route CloudWatch alarm state changes to CloudThinker
-       - **Event bus:** default
-       - **Rule type:** Rule with an event pattern
+    | Tùy chọn | Mặc định | Thay đổi khi |
+    |---|---|---|
+    | **Auto-investigate** | Bật | Bạn muốn alarm được gom cluster trong Pulse nhưng không khởi động gì cho đến khi có người xử lý. Hãy tắt tùy chọn này. |
+    | **Only from a minimum severity** | Tắt | Bạn chỉ muốn một số alarm bắt đầu điều tra. Hãy bật và chọn một mức, ví dụ **High and above**. |
 
-    5. Định nghĩa **event pattern**:
+    Khi cả hai để mặc định, mọi alarm trở thành sự cố đều bắt đầu một cuộc điều tra. Xem [Các tùy chọn webhook](/vi/guide/pulse/setup#các-tùy-chọn-webhook-làm-thay-đổi-hành-vi). Nhấn **Create**.
+  </Step>
+  <Step title="Sao chép URL và secret">
+    Sao chép **Webhook URL** và **API Secret** từ hộp thoại vừa mở. URL dùng cho EventBridge API destination, còn **API Secret** dùng cho **Value** của API key trong connection.
+  </Step>
+  <Step title="Nâng giới hạn tốc độ (production)">
+    Mở menu **...** của webhook trong **Signals to Resolve**, chọn **Edit**, và đặt **Rate limit (requests per hour)** tối thiểu là `3600`. Mức mặc định 1.000 thấp hơn lượng mà một API destination gửi 1 sự kiện mỗi giây có thể đạt tới khi có bão alarm, và các sự kiện vượt giới hạn bị loại bỏ mà không báo lỗi. Hộp thoại **Create Webhook** không có trường này.
+  </Step>
+</Steps>
+
+**Trạng thái thành công:** webhook xuất hiện trong **Signals to Resolve** trên nền tảng Amazon Web Services, và [huy hiệu sẵn sàng](/vi/guide/incident/integrations#đọc-mức-độ-sẵn-sàng) của nền tảng hiển thị **Ready**. **Ready** nghĩa là webhook đã được thiết lập và đang hoạt động. Trạng thái này không chứng minh đã có alarm đến, nên hãy chạy bước [kiểm thử](#kiểm-thử-tích-hợp) bên dưới.
+
+<Warning>
+**API Secret** chỉ hiển thị một lần. Nếu bạn đóng hộp thoại mà chưa sao chép, hãy mở menu **...** của webhook trong **Signals to Resolve** và chọn **Regenerate credentials**. Thao tác này thay cả secret lẫn **Webhook URL**, và cặp cũ ngừng hoạt động ngay lập tức. Hãy cập nhật **Value** của EventBridge connection và endpoint của API destination ngay sau đó.
+</Warning>
+
+## Thiết lập EventBridge trong AWS
+
+Thực hiện các bước sau trong AWS console, ở cùng region với các alarm.
+
+<Steps>
+  <Step title="Tạo connection">
+    Mở **Amazon EventBridge → Integration → Connections** và nhấn **Create connection**. Đặt:
+
+    | Trường | Giá trị |
+    |---|---|
+    | Name | `cloudthinker-webhook` |
+    | Authorization type | API Key |
+    | API key name | `x-api-key` |
+    | Value | **API Secret** từ CloudThinker |
+  </Step>
+  <Step title="Tạo API destination">
+    Mở **Integration → API destinations** và nhấn **Create API destination**. Đặt:
+
+    | Trường | Giá trị |
+    |---|---|
+    | Name | `cloudthinker-resolve` |
+    | API destination endpoint | **Webhook URL** từ CloudThinker |
+    | HTTP method | `POST` |
+    | Connection | `cloudthinker-webhook` |
+
+    Đặt **Invocation rate limit per second** là `1`. Hãy chắc chắn bạn đã [nâng giới hạn tốc độ của webhook](#tạo-webhook-trong-cloudthinker) ở trên.
+  </Step>
+  <Step title="Tạo rule">
+    Mở **Rules**, chọn event bus **default**, và nhấn **Create rule**. Chọn **Rule with an event pattern** và dán pattern sau:
 
     ```json
     {
@@ -99,227 +96,301 @@ Khi một CloudWatch alarm thay đổi trạng thái (ví dụ: OK → ALARM), E
     }
     ```
 
-    Bạn cũng có thể lọc theo alarm cụ thể hoặc trạng thái:
+    Ở phần target, chọn **EventBridge API destination**, chọn `cloudthinker-resolve`, và trong **Execution role** chọn **Create a new role for this specific resource** (role này được cấp `events:InvokeApiDestination`).
 
-    ```json
-    {
-      "source": ["aws.cloudwatch"],
-      "detail-type": ["CloudWatch Alarm State Change"],
-      "detail": {
-        "state": {
-          "value": ["ALARM"]
-        }
-      }
-    }
-    ```
-
-    6. Chọn target:
-       - **Target type:** EventBridge API destination
-       - **API destination:** Chọn `cloudthinker-incidents`
-       - **Execution role:** Tạo role mới hoặc dùng role hiện có có quyền `events:InvokeApiDestination`
-
-    7. Nhấp **Create rule**
-  </Step>
-
-  <Step title="Kiểm tra tích hợp">
-    Dùng AWS CLI để mô phỏng thay đổi trạng thái alarm:
-
-    ```bash
-    aws cloudwatch set-alarm-state \
-      --alarm-name "YourAlarmName" \
-      --state-value ALARM \
-      --state-reason "Testing CloudThinker integration"
-    ```
-
-    Trong vài giây, bạn sẽ thấy một incident mới được tạo trong CloudThinker với chi tiết alarm.
-
-    Để đặt lại alarm về bình thường:
-
-    ```bash
-    aws cloudwatch set-alarm-state \
-      --alarm-name "YourAlarmName" \
-      --state-value OK \
-      --state-reason "Test complete"
-    ```
+    Tùy chọn, khuyến nghị cho production: trong **Additional settings** của target, đặt retry policy và dead-letter queue, để alarm không chuyển được trong lúc gián đoạn vẫn được giữ lại thay vì mất. Điểm khởi đầu hợp lý là **Maximum age of event** 1 giờ và **Retry attempts** 10: alarm cũ hơn một giờ hiếm khi đáng để điều tra lại từ đầu. Gắn một SQS queue làm dead-letter queue. Nhấn **Create rule**.
   </Step>
 </Steps>
 
----
+**Trạng thái thành công:** rule hiển thị **Enabled** với API destination của bạn là target.
 
-## Payload sự kiện
+## Kiểm thử tích hợp
 
-EventBridge gửi sự kiện CloudWatch alarm theo định dạng sau. Các field mapping của CloudThinker tự động trích xuất dữ liệu incident từ cấu trúc này.
+Alarm thử nghiệm được xử lý như alarm thật. Khi **Auto-investigate** bật, alarm sẽ mở sự cố và CloudThinker bắt đầu điều tra. Để chỉ kiểm thử việc chuyển tiếp, trước tiên hãy tắt **Auto-investigate** trên webhook này (menu **...** → **Edit**), rồi bật lại sau khi xong. Đừng tạm dừng **On duty** cho việc này trong workspace đang hoạt động: thao tác đó dừng việc tự động phân loại và điều tra cho mọi nguồn, không chỉ nguồn này (xem [Điều gì bắt đầu một cuộc điều tra](/vi/guide/incident/settings#điều-gì-khởi-động-một-cuộc-điều-tra)).
 
-```json
-{
-  "version": "0",
-  "id": "abcd1234-ef56-gh78-ij90-klmnopqrstuv",
-  "detail-type": "CloudWatch Alarm State Change",
-  "source": "aws.cloudwatch",
-  "account": "123456789012",
-  "time": "2024-01-15T10:30:00Z",
-  "region": "us-east-1",
-  "detail": {
-    "alarmName": "HighCPUUtilization",
-    "state": {
-      "value": "ALARM",
-      "reason": "Threshold Crossed: 1 out of the last 1 datapoints [85.0 (15/01/24 10:25:00)] was greater than the threshold (80.0)",
-      "reasonData": "{\"version\":\"1.0\",\"queryDate\":\"2024-01-15T10:30:00.000+0000\",\"startDate\":\"2024-01-15T10:25:00.000+0000\",\"statistic\":\"Average\",\"period\":300,\"recentDatapoints\":[85.0],\"threshold\":80.0,\"evaluatedDatapoints\":[{\"timestamp\":\"2024-01-15T10:25:00.000+0000\",\"sampleCount\":5.0,\"value\":85.0}]}",
-      "timestamp": "2024-01-15T10:30:00.000+0000"
-    },
-    "previousState": {
-      "value": "OK",
-      "reason": "Threshold Crossed: 1 out of the last 1 datapoints [65.0 (15/01/24 10:20:00)] was not greater than the threshold (80.0)",
-      "timestamp": "2024-01-15T10:20:00.000+0000"
-    },
-    "configuration": {
-      "description": "CPU utilization exceeded 80%",
-      "metrics": [
-        {
-          "id": "m1",
-          "metricStat": {
-            "metric": {
-              "namespace": "AWS/EC2",
-              "name": "CPUUtilization",
-              "dimensions": {
-                "InstanceId": "i-0123456789abcdef0"
-              }
-            },
-            "period": 300,
-            "stat": "Average"
-          },
-          "returnData": true
-        }
-      ]
-    }
-  }
-}
-```
+<Steps>
+  <Step title="Kích hoạt một alarm">
+    Thay `YourAlarmName` bằng một alarm thật đang ở trạng thái `OK`, và `us-east-1` bằng region của alarm. Sai region sẽ báo lỗi không tìm thấy alarm. CloudWatch chỉ gửi sự kiện khi trạng thái thực sự thay đổi, nên alarm đang ở `ALARM` sẽ không gửi gì. Nếu alarm của bạn đang như vậy, hãy đặt về `OK` trước, rồi sang `ALARM`.
 
----
+    ```bash
+    aws cloudwatch set-alarm-state \
+      --alarm-name "YourAlarmName" \
+      --region us-east-1 \
+      --state-value ALARM \
+      --state-reason "Testing CloudThinker integration"
+    ```
+  </Step>
+  <Step title="Kiểm tra Pulse">
+    Mở **Resolve → Pulse**. Trong vài giây, một signal xuất hiện với tiêu đề là tên alarm và mức độ nghiêm trọng **High**.
+  </Step>
+  <Step title="Đặt lại alarm">
+    Chạy lại lệnh trên với `--state-value OK`. Sau đó CloudWatch đánh giá alarm bình thường trở lại. CloudWatch cũng có thể tự đưa alarm về `OK` ở lần đánh giá tiếp theo, nên signal `OK` có thể đến trước khi bạn đặt lại.
 
-## Severity mapping
+    Sự kiện `OK` đến dưới dạng signal **Info**. Bộ phân loại của Pulse coi sự hồi phục là không cần xử lý, nên thường không mở sự cố thứ hai. Bước kiểm tra này là đánh giá của mô hình, nên một sự hồi phục vẫn có thể lọt sang bước phân loại sự cố. Sự kiện `OK` cũng không giải quyết sự cố mà `ALARM` đã mở. Sự cố đó vẫn mở cho đến khi có người đóng.
+  </Step>
+</Steps>
 
-Các trạng thái CloudWatch alarm được ánh xạ sang mức severity của CloudThinker. Ánh xạ mặc định là:
+**Trạng thái thành công:** signal hiển thị tên alarm làm tiêu đề, lý do trạng thái làm mô tả, và namespace của metric (ví dụ `AWS/EC2`) làm service.
 
-| Trạng thái CloudWatch | Severity CloudThinker |
-|-----------------|----------------------|
+## Ánh xạ trường và mức độ nghiêm trọng
+
+Preset đọc các trường sau từ sự kiện EventBridge:
+
+| Trường | Đường dẫn | Giá trị ví dụ |
+|---|---|---|
+| **Title Path** | `detail.alarmName` | `HighCPUUtilization` |
+| **Description Path** | `detail.state.reason` | `Threshold Crossed: 1 out of the last 1 datapoints [85.0] was greater than the threshold (80.0)` |
+| **Severity Path** | `detail.state.value` | `ALARM` |
+| **Service Path** | `detail.configuration.metrics[0].metricStat.metric.namespace` | `AWS/EC2` |
+
+| Trạng thái CloudWatch | Mức độ nghiêm trọng trong CloudThinker |
+|---|---|
 | `ALARM` | High |
 | `INSUFFICIENT_DATA` | Medium |
 | `OK` | Info |
 
-Bạn có thể tùy chỉnh ánh xạ này trong cấu hình webhook dưới **Severity Mapping**.
+Với cấu hình mặc định, một lần dao động sang `INSUFFICIENT_DATA` (chẳng hạn metric bị gián đoạn sau một lần deploy) có thể bắt đầu điều tra. Để ngăn điều đó, tìm dòng `INSUFFICIENT_DATA` trong **Severity Mapping**, mở danh sách **Maps To** và chọn **Low** hoặc **Info**. Hoặc bật **Only from a minimum severity** và chọn **High and above**.
 
----
+Giới hạn nhiễu của Pulse (100 cảnh báo mỗi phút) luôn cho Critical và High đi qua, và có thể loại bỏ phần còn lại khi có bão cảnh báo. Hãy ánh xạ mọi trạng thái bạn không thể để mất sang **High** trở lên.
 
-## Lọc alarm
+Muốn alarm ở mức critical? Hãy sửa webhook và đổi dòng `ALARM` trong **Severity Mapping**. Ánh xạ áp dụng cho mọi alarm mà webhook nhận. Để xử lý production và non-production khác nhau, hãy tạo hai webhook và hai EventBridge rule, mỗi rule lọc theo tiền tố tên alarm (xem [Chỉ gửi những alarm bạn quan tâm](#chỉ-gửi-những-alarm-bạn-quan-tâm)). Trạng thái không có dòng ánh xạ sẽ dùng mặc định Medium.
 
-Bạn có thể kiểm soát alarm nào kích hoạt incident bằng cách tinh chỉnh event pattern của EventBridge rule.
+Composite alarm và metric-math alarm không có khối `metricStat`, nên **Service** nhận giá trị `unknown`. Nếu bạn dựa vào các alarm này, hãy trỏ **Service Path** tới một trường chúng có, như `detail.alarmName`, và đặt tên alarm theo service. Các lần lặp của cùng một alarm được gom theo ARN của alarm, bất kể **Service** là gì. **Service** vẫn có tác dụng: các alarm có cùng giá trị **Service** trong vòng 6 giờ có thể vào chung một cluster, nên hai alarm `AWS/EC2` khác nhau cùng kích hoạt có thể nằm trong một cluster. Xem [Cách signal được gắn vào cluster](/vi/guide/pulse/clusters#tín-hiệu-gia-nhập-cluster-như-thế-nào).
 
-**Theo tiền tố tên alarm:**
+## Chỉ gửi những alarm bạn quan tâm
+
+Hãy thu hẹp event pattern của EventBridge rule thay vì lọc trong CloudThinker. Thêm một khối `detail` vào pattern gốc:
+
+| Mục tiêu | Thêm vào pattern |
+|---|---|
+| Chỉ các alarm có tên `prod-*` | `"detail": { "alarmName": [{ "prefix": "prod-" }] }` |
+| Bỏ qua sự kiện hồi phục | `"detail": { "state": { "value": ["ALARM", "INSUFFICIENT_DATA"] } }`. Bạn sẽ mất signal `OK`, nên Pulse không còn cho thấy khi nào alarm được gỡ. |
+
+## Nhiều region hoặc tài khoản
+
+CloudWatch chỉ gửi sự kiện alarm tới EventBridge trong chính region và tài khoản của alarm. Hãy chọn một trong các bố cục sau:
+
+| Bố cục | Những gì bạn dựng | Phù hợp khi |
+|---|---|---|
+| Rule theo từng region | Connection, API destination và rule ở mọi region và tài khoản, tất cả trỏ tới cùng một webhook URL | Vài region trong một tài khoản |
+| Event bus trung tâm | Ở mỗi region hoặc tài khoản nguồn, một rule chuyển tiếp sự kiện alarm tới event bus trong một tài khoản giám sát. Connection và API destination chỉ có trong tài khoản đó. | AWS Organizations, hoặc nhiều tài khoản |
+
+### Triển khai bằng CloudFormation
+
+Template này dựng connection, API destination, rule và dead-letter queue, đồng thời xuất URL của queue để bạn theo dõi. Với bố cục theo từng region, hãy triển khai template ở mọi tài khoản và region (ví dụ bằng StackSets); với bus trung tâm, triển khai một lần trong tài khoản giám sát, đặt `EventBusName` là tên bus đó.
+
+Triển khai một stack cho mỗi webhook ở mỗi tài khoản và region. Để gửi alarm prod và non-prod tới hai webhook từ cùng một region, hãy triển khai hai lần với giá trị `NamePrefix` khác nhau, và thu hẹp pattern của từng rule (xem [Chỉ gửi những alarm bạn quan tâm](#chỉ-gửi-những-alarm-bạn-quan-tâm)).
+
+```yaml
+AWSTemplateFormatVersion: "2010-09-09"
+Parameters:
+  NamePrefix:
+    Type: String
+    Default: cloudthinker
+    Description: Prefix for the connection and API destination names. Unique per stack in a region.
+  EventBusName:
+    Type: String
+    Default: default
+    Description: The bus that receives the alarm events. Use your central bus name for the central layout.
+  WebhookUrl:
+    Type: String
+    Description: The Webhook URL from the CloudThinker webhook dialog
+  ApiSecret:
+    Type: String
+    NoEcho: true
+    Description: The API Secret from the CloudThinker webhook dialog
+Resources:
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600
+  DeadLetterQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref DeadLetterQueue]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sqs:SendMessage
+            Resource: !GetAtt DeadLetterQueue.Arn
+            Condition:
+              ArnEquals: { "aws:SourceArn": !GetAtt AlarmRule.Arn }
+  Connection:
+    Type: AWS::Events::Connection
+    Properties:
+      Name: !Sub "${NamePrefix}-webhook"
+      AuthorizationType: API_KEY
+      AuthParameters:
+        ApiKeyAuthParameters:
+          ApiKeyName: x-api-key
+          ApiKeyValue: !Ref ApiSecret
+  Destination:
+    Type: AWS::Events::ApiDestination
+    Properties:
+      Name: !Sub "${NamePrefix}-resolve"
+      ConnectionArn: !GetAtt Connection.Arn
+      InvocationEndpoint: !Ref WebhookUrl
+      HttpMethod: POST
+      InvocationRateLimitPerSecond: 1
+  InvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: invoke-cloudthinker
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: events:InvokeApiDestination
+                Resource: !GetAtt Destination.Arn
+  AlarmRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: !Ref EventBusName
+      EventPattern:
+        source: ["aws.cloudwatch"]
+        detail-type: ["CloudWatch Alarm State Change"]
+      Targets:
+        - Id: cloudthinker
+          Arn: !GetAtt Destination.Arn
+          RoleArn: !GetAtt InvokeRole.Arn
+          RetryPolicy:
+            MaximumEventAgeInSeconds: 3600
+            MaximumRetryAttempts: 10
+          DeadLetterConfig:
+            Arn: !GetAtt DeadLetterQueue.Arn
+Outputs:
+  DeadLetterQueueUrl:
+    Value: !Ref DeadLetterQueue
+```
+
+Triển khai bằng AWS CLI. Trước tiên, hãy đọc secret vào một biến môi trường (`read -rs` không hiển thị secret và không ghi vào lịch sử shell):
+
+```bash
+read -rs CT_API_SECRET   # paste the API Secret, then press Enter
+aws cloudformation deploy \
+  --stack-name cloudthinker-cloudwatch \
+  --template-file cloudthinker-cloudwatch.yaml \
+  --capabilities CAPABILITY_IAM \
+  --parameter-overrides \
+    WebhookUrl="https://your-webhook-url" \
+    ApiSecret="$CT_API_SECRET"
+```
+
+Connection lưu API key trong một secret của AWS Secrets Manager do EventBridge tạo và quản lý cho bạn, nên secret không nằm trong template hay rule. Các alarm vẫn thất bại sau khi hết lượt thử lại sẽ vào SQS dead-letter queue và được giữ trong 14 ngày.
+
+### Chuyển tiếp alarm tới bus trung tâm
+
+Với bố cục trung tâm, hãy triển khai template trên trong tài khoản giám sát với `EventBusName` là tên bus của bạn. Sau đó thêm hai phần.
+
+Trong tài khoản giám sát, gán cho bus trung tâm một resource policy cho phép tổ chức của bạn gửi sự kiện. Thay tên bus, region, account ID và organization ID:
 
 ```json
 {
-  "source": ["aws.cloudwatch"],
-  "detail-type": ["CloudWatch Alarm State Change"],
-  "detail": {
-    "alarmName": [{ "prefix": "prod-" }]
-  }
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Sid": "AllowOrgPutEvents",
+    "Effect": "Allow",
+    "Principal": "*",
+    "Action": "events:PutEvents",
+    "Resource": "arn:aws:events:us-east-1:111111111111:event-bus/central-alarms",
+    "Condition": { "StringEquals": { "aws:PrincipalOrgID": "o-exampleorgid" } }
+  }]
 }
 ```
 
-**Theo trạng thái alarm cụ thể:**
+Ở mỗi tài khoản và region nguồn, triển khai một rule chuyển tiếp trên bus **default**:
 
-```json
-{
-  "source": ["aws.cloudwatch"],
-  "detail-type": ["CloudWatch Alarm State Change"],
-  "detail": {
-    "state": {
-      "value": ["ALARM", "INSUFFICIENT_DATA"]
-    }
-  }
-}
+```yaml
+AWSTemplateFormatVersion: "2010-09-09"
+Parameters:
+  CentralBusArn:
+    Type: String
+    Description: ARN of the central bus in the monitoring account
+Resources:
+  ForwardRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: put-central-bus
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: events:PutEvents
+                Resource: !Ref CentralBusArn
+  ForwardRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: default
+      EventPattern:
+        source: ["aws.cloudwatch"]
+        detail-type: ["CloudWatch Alarm State Change"]
+      Targets:
+        - Id: central-bus
+          Arn: !Ref CentralBusArn
+          RoleArn: !GetAtt ForwardRole.Arn
 ```
 
-**Theo metric namespace:**
-
-```json
-{
-  "source": ["aws.cloudwatch"],
-  "detail-type": ["CloudWatch Alarm State Change"],
-  "detail": {
-    "configuration": {
-      "metrics": {
-        "metricStat": {
-          "metric": {
-            "namespace": ["AWS/EC2", "AWS/RDS"]
-          }
-        }
-      }
-    }
-  }
-}
-```
-
----
-
-## Cài đặt đa vùng
-
-Sự kiện CloudWatch theo vùng — alarm chỉ phát ra sự kiện đến EventBridge bus trong vùng của chúng. Để giám sát đa vùng:
-
-1. **Tùy chọn A: Chuyển tiếp sự kiện cross-region** — Tạo một EventBridge rule trong mỗi vùng nguồn để chuyển tiếp sự kiện CloudWatch alarm đến event bus của vùng trung tâm, sau đó định tuyến từ đó đến CloudThinker.
-
-2. **Tùy chọn B: Rule theo vùng** — Tạo API destination và rule trong mỗi vùng trỏ đến cùng URL webhook CloudThinker. Cách này đơn giản hơn nhưng yêu cầu duy trì rule trên nhiều vùng.
-
----
-
-## Xử lý sự cố
-
-<Accordion title="Không có incident nào được tạo">
-  1. **Kiểm tra EventBridge rule** — Vào EventBridge → Rules → chọn rule của bạn → tab Monitoring. Xác minh rule đang khớp sự kiện (số liệu `Invocations` > 0)
-  2. **Kiểm tra API destination** — Vào API destinations → chọn của bạn → xác minh URL endpoint khớp với URL webhook CloudThinker
-  3. **Kiểm tra log CloudThinker** — Vào Resolve → Settings → Integrations → chọn webhook → tab Logs để xem lịch sử gửi
-  4. **Kiểm tra bằng CLI** — Chạy `aws cloudwatch set-alarm-state` để mô phỏng alarm và xác minh toàn bộ chuỗi
-</Accordion>
-
-<Accordion title="Sự kiện được nhận nhưng thiếu trường">
-  Xác minh field mapping khớp với định dạng sự kiện EventBridge. Sự kiện CloudWatch được định tuyến qua EventBridge dùng tiền tố `detail.*`:
-
-  - Title: `detail.alarmName` (không phải `AlarmName`)
-  - Severity: `detail.state.value` (không phải `NewStateValue`)
-  - Description: `detail.state.reason` (không phải `NewStateReason`)
-
-  Nếu trước đây bạn dùng SNS, hãy cập nhật field mapping sang định dạng EventBridge.
-</Accordion>
-
-<Accordion title="Rule không khớp sự kiện nào">
-  - Đảm bảo event pattern dùng `"detail-type": ["CloudWatch Alarm State Change"]` (chuỗi chính xác, phân biệt hoa thường)
-  - Đảm bảo rule nằm trên event bus **default** — CloudWatch gửi sự kiện đến bus default
-  - Xác minh alarm nằm trong cùng vùng với EventBridge rule
-</Accordion>
-
-<Accordion title="API destination trả về lỗi">
-  - **401/403**: Xác minh giá trị API key của EventBridge connection khớp với secret key của webhook, và tên key là `x-api-key`
-  - **422**: Định dạng payload có thể không khớp với field mapping mong đợi — kiểm tra cấu trúc payload sự kiện
-  - **429**: Bạn đã vượt quá giới hạn tốc độ webhook — tăng giới hạn tốc độ trong cài đặt webhook CloudThinker
-</Accordion>
-
----
+Sự kiện được chuyển tiếp giữ nguyên `source` và `detail-type`, nên rule trên bus trung tâm khớp được mà không cần thay đổi. Để biết thêm tùy chọn, xem hướng dẫn của AWS về chuyển tiếp [giữa các tài khoản](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-cross-account.html) và [giữa các region](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-cross-region.html).
 
 <Note>
-  Amazon SNS vẫn hoạt động nhưng không được khuyến nghị. SNS không gửi được header `x-api-key`, nên webhook phải đặt **Auth Method** thành **No Authentication**, và URL trở thành thông tin xác thực duy nhất. Nếu vẫn dùng SNS, hãy thêm **Webhook URL** làm subscription HTTPS trên SNS topic. CloudThinker tự xác nhận subscription cho bạn.
+Amazon SNS dùng được nhưng không được khuyến nghị. SNS không gửi được header `x-api-key`, nên webhook phải đặt **Auth Method** là **No Authentication**, và URL trở thành thông tin xác thực duy nhất. Nếu vẫn dùng, hãy đăng ký **Webhook URL** vào topic với giao thức HTTPS. CloudThinker sẽ tự xác nhận đăng ký cho bạn.
 </Note>
 
----
+## Khắc phục sự cố
 
-## Liên quan
+<AccordionGroup>
+  <Accordion title="Không có signal nào xuất hiện trong Pulse">
+    - **Kiểm tra rule:** trong EventBridge, mở tab **Monitoring** của rule. Nếu `Invocations` vẫn là 0, pattern không khớp (xem mục tiếp theo).
+    - **Kiểm tra destination:** endpoint của API destination phải đúng chính xác **Webhook URL** từ CloudThinker. Sau khi **Regenerate credentials**, URL cũng thay đổi.
+    - **Kiểm tra các lần chuyển thất bại:** trên tab **Monitoring** của rule, xem `FailedInvocations`, rồi kiểm tra SQS dead-letter queue. Các message trong đó chứa lỗi HTTP trả về.
+    - **Kiểm tra Pulse:** trên **Resolve → Pulse**, chọn làn **All** và kiểm tra bộ chọn khoảng thời gian ở đầu trang (mặc định **Last 7 days**). Pulse cũng có thể loại cảnh báo vì coi là nhiễu, xem [lọc nhiễu](/vi/guide/pulse/clusters#lọc-nhiễu).
+  </Accordion>
+  <Accordion title="Rule không bao giờ khớp">
+    Rule phải nằm trên bus nhận sự kiện alarm: bus **default** trong region của alarm, hoặc bus trung tâm của bạn. Giá trị `detail-type` phân biệt chữ hoa chữ thường: `CloudWatch Alarm State Change`.
+  </Accordion>
+  <Accordion title="EventBridge báo 401 hoặc 403">
+    `401` nghĩa là thiếu header `x-api-key`, hoặc endpoint không phải **Webhook URL** hiện hành. `403` nghĩa là giá trị key sai. Tên API key của connection phải là `x-api-key` và giá trị phải là **API Secret**. Nếu bạn làm mất secret, mở **Resolve → Integrations → Amazon Web Services**, mở menu **...** của webhook trong **Signals to Resolve** và chọn **Regenerate credentials**. Sau đó cập nhật cả **Value** của connection lẫn endpoint của API destination, vì URL cũng thay đổi.
+  </Accordion>
+  <Accordion title="Signal đến nhưng tiêu đề hoặc mức độ nghiêm trọng trống">
+    Các đường dẫn trường phải bắt đầu bằng `detail.`, vì EventBridge đặt alarm ở đó. CloudThinker chuyển message alarm của SNS về cùng dạng, nên các đường dẫn như `AlarmName` hoặc `NewStateValue` không bao giờ khớp, kể cả với SNS. Service trống trên composite alarm hoặc metric-math alarm là điều bình thường, xem [Ánh xạ trường và mức độ nghiêm trọng](#ánh-xạ-trường-và-mức-độ-nghiêm-trọng).
+  </Accordion>
+  <Accordion title="Alarm bị mất khi có bão cảnh báo, hoặc EventBridge báo 429">
+    Webhook có giới hạn theo giờ **Rate limit (requests per hour)**. Mặc định là 1.000, tối đa 10.000, và `0` nghĩa là không giới hạn. Sự kiện vượt giới hạn vẫn nhận phản hồi thành công, rồi bị loại bỏ trước khi đến Pulse, bất kể mức độ nghiêm trọng, nên EventBridge không hiển thị lỗi nào. Đây là giới hạn khác với giới hạn nhiễu 100 cảnh báo mỗi phút của Pulse, vốn luôn cho Critical và High đi qua.
+
+    `429` chỉ trả về khi vượt 10 lần giới hạn theo giờ: với mức mặc định 1.000, tức sau 10.000 request trong cùng một giờ. `429` cũng trả về sau 10 lần xác thực thất bại trong 15 phút, hoặc khi CloudThinker bận trong thời gian ngắn (kèm header `Retry-After`). EventBridge thử lại `429` theo retry policy của rule.
+
+    **Kiểm tra:** việc loại bỏ không để lại lỗi, nên hãy so sánh số lượng. Ngay sau một đợt dồn dập, đặt khoảng thời gian của **Resolve → Pulse** là **Last 1 hour** và đọc số **raw events** ở đầu trang. So sánh với metric `Invocations` của rule (tab **Monitoring**) trong cùng giờ đó. Raw events đếm mọi nguồn trong workspace, nên nếu con số thấp hơn lượng EventBridge đã gửi thì có sự kiện bị loại bỏ.
+
+    **Cách sửa:** mở menu **...** của webhook, chọn **Edit** và nâng **Rate limit (requests per hour)**. Hoặc thu hẹp event pattern của rule. Nếu trước đó có lỗi `401` hoặc `403`, hãy sửa secret.
+  </Accordion>
+  <Accordion title="Alarm đã đến Pulse nhưng RCA không bắt đầu">
+    **Auto-investigate** đang tắt, mức độ nghiêm trọng thấp hơn ngưỡng tối thiểu, hoặc **On duty** đang tạm dừng. Xem [Điều gì bắt đầu một cuộc điều tra](/vi/guide/incident/settings#điều-gì-khởi-động-một-cuộc-điều-tra).
+  </Accordion>
+</AccordionGroup>
+
+## Bước tiếp theo
 
 <CardGroup cols={2}>
-  <Card title="Webhook Integrations Overview" icon="webhook" href="/vi/guide/incident/webhook-integrations/overview">
-    Tìm hiểu về tất cả nền tảng được hỗ trợ và cấu hình webhook chung.
+  <Card title="Theo dõi cuộc điều tra" icon="magnifying-glass" href="/vi/guide/incident/root-cause-analysis">
+    Xem CloudThinker kiểm tra những gì khi một sự cố CloudWatch kích hoạt RCA.
   </Card>
-  <Card title="Root Cause Analysis" icon="magnifying-glass" href="/vi/guide/incident/root-cause-analysis">
-    Cấu hình điều tra tự động được hỗ trợ bởi AI cho CloudWatch incident.
+  <Card title="Tinh chỉnh Pulse" icon="filter" href="/vi/guide/pulse/setup">
+    Kiểm soát signal nào được gom nhóm, lọc bỏ hoặc định tuyến.
   </Card>
 </CardGroup>

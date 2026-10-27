@@ -1,0 +1,109 @@
+---
+title: Chương 1 · Giải phẫu một agent vận hành
+description: "Tách một agent vận hành thành vòng lặp cốt lõi, rồi đánh giá mọi nền tảng qua cách xử lý ngữ cảnh, kiểm soát chi phí, đường ray thực thi và xác minh."
+icon: arrows-rotate
+---
+
+*Bỏ qua lớp vỏ marketing, agent vận hành thực chất chỉ là một vòng lặp. Chất lượng, chi phí và an toàn đều được quyết định bởi những gì bạn đặt vào bên trong vòng lặp đó.*
+
+## 1.1 Vòng lặp, một cách chính xác
+
+**Agent vận hành** là phần mềm chạy lặp đi lặp lại một chu trình: tập hợp ngữ cảnh, suy luận, chọn hành động, chạy công cụ, quan sát kết quả, rồi tiếp tục, kết luận hoặc chuyển cấp. Mỗi lượt là một **bước (step)**. Cuộc điều tra là một **quỹ đạo (trajectory)**, tức một chuỗi các bước. Khắc phục là một quỹ đạo mà các bước cuối thay đổi một thứ gì đó rồi xác minh thay đổi đó.
+
+[Leadership Edition](/vi/learn/aio/chapter-4-architecture) đặt tên cho pipeline bên ngoài: Detect, Analyze, Resolve, Validate. Chương này nói về những gì diễn ra bên trong từng giai đoạn.
+
+```text
+loop (one step):
+  if budget exceeded or loop detected:       # step, token, time budgets; checked first
+      escalate with partial findings         # say what was checked and what wasn't
+  context   = system_prompt + task + memory + retrieved_context + tool_results_so_far
+  decision  = model.reason(context)          # hypothesis, plan, or tool selection
+  if decision is tool_call:
+      result = execute(tool, args)           # via policy + sandbox (Ch. 5-6)
+      append result to trajectory            # feeds the next step
+  elif decision is conclusion:
+      emit finding | plan | verification     # with evidence attached
+  elif decision is escalation:
+      hand to a human with evidence so far   # low confidence, or needs approval
+```
+
+Ba thuộc tính của vòng lặp này chi phối mọi quyết định thiết kế trong phần còn lại của cuốn sách:
+
+| Thuộc tính | Ý nghĩa | Được đề cập trong |
+|---|---|---|
+| **Có trạng thái giữa các bước, không trạng thái giữa các sự cố** | Agent quên sự cố trước trừ khi bạn chủ động xây dựng memory | [Chương 2](/vi/learn/aio-engineer/chapter-2-context-engineering) |
+| **Chi phí nhân lên** | Token mỗi bước × số bước mỗi tác vụ × số tác vụ mỗi ngày | [Chương 4](/vi/learn/aio-engineer/chapter-4-orchestration-economics) |
+| **Đầu vào không tin cậy nằm cạnh chỉ dẫn tin cậy** | Log, ticket và chú thích cảnh báo đến từ môi trường, và bất kỳ thứ nào trong số đó đều có thể mang theo một cuộc tấn công | [Chương 5](/vi/learn/aio-engineer/chapter-5-threat-model) |
+
+## 1.2 Một bước thực sự tốn bao nhiêu
+
+Hãy tư duy theo kinh tế đơn vị ngay từ ngày đầu. Cuộc điều tra thực tế cho một sự cố không đơn giản chạy qua nhiều bước, và lượng token tăng nhanh khi các trích đoạn telemetry nằm trong ngữ cảnh. Các benchmark độc lập như ITBench-AA công bố đường cong số lượt, token và chi phí bên cạnh độ chính xác vì lý do này ([Phụ lục D](/vi/learn/aio-engineer/appendix-d-sources)). Hãy dùng các benchmark này để thấy hình dạng xu hướng, rồi ước lượng chi phí của riêng bạn từ các lượt chạy trong POC.
+
+Ba hệ quả kéo theo:
+
+1. **Ngữ cảnh chiếm phần lớn chi phí.** Kết quả công cụ (trích đoạn log, chuỗi metric, bản dump cấu hình) hầu như luôn là dòng token lớn nhất, không phải phần suy luận của chính model. Kiểm soát những gì quay lại vòng lặp là tối ưu hóa đầu tiên: tóm tắt, cắt bớt, hoặc truyền một con trỏ thay vì toàn bộ dữ liệu.
+2. **Số bước là độ trễ của bạn.** Mỗi bước là một vòng gọi model đầy đủ. Một cuộc điều tra 40 bước trên một frontier model chậm không thể phản hồi theo thời gian thực. Gọi công cụ song song và giao việc cho chuyên gia ([Chương 4](/vi/learn/aio-engineer/chapter-4-orchestration-economics)) giúp giảm độ trễ không kém gì việc cải thiện chất lượng.
+3. **Ngân sách là guardrail.** Agent production chạy với trần rõ ràng về số bước, token, thời gian và chi tiêu cho mỗi tác vụ. Agent production cũng cần một **bộ phát hiện vòng lặp**: một kiểm tra nhận ra cùng một công cụ đang được gọi với cùng đối số mà không tạo ra hiệu quả mới. Agent không có ngân sách chính là một sự cố chi phí chỉ chờ một cuối tuần vắng người để xảy ra.
+
+**Khi đánh giá một nền tảng, hãy hỏi:** ngân sách cho mỗi tác vụ là gì, điều gì xảy ra khi chạm ngân sách, và bạn có thể xem token và số bước của mỗi lượt chạy ở đâu?
+
+<Info>
+**TRONG THỰC TẾ: NGÂN SÁCH TRONG CLOUDTHINKER**
+
+Mỗi lượt chạy CloudThinker có một trần cố định về số lần gọi model, và mỗi subagent có trần riêng. Khi chạm trần, lượt chạy dừng lại và cho biết đã chạm ngân sách gọi model trước khi hoàn tất. Gửi một tin nhắn tiếp theo để tiếp tục từ chỗ đã dừng. Trần này không phải là cài đặt bạn thay đổi được.
+
+Chi tiêu được giới hạn theo từng workspace bằng [Credit limits](/vi/guide/billing/credit-limits): một ngân sách hằng tháng với **Throttle** hoặc **Notify only** khi chạm hạn mức. Để xem credit đã được dùng vào đâu, mở **Admin Settings → Usage** và chuyển giữa **By Feature**, **By User** và **By Workspace** ([Usage và credit](/vi/guide/billing/usage)). Usage được hiển thị theo tính năng, người dùng và workspace, không theo từng lượt chạy.
+</Info>
+
+## 1.3 Ranh giới tất định
+
+Câu hỏi thiết kế hữu ích nhất bên trong vòng lặp: phần nào phải là code tất định, và phần nào được lợi từ phán đoán của model? Các hệ thống trưởng thành vạch ranh giới này một cách có chủ đích.
+
+| Lớp | Tất định (code) | Sinh (model) |
+|---|---|---|
+| Cảm nhận và kích hoạt | Định tuyến cảnh báo, cửa sổ khử trùng lặp, ánh xạ mức độ nghiêm trọng, bộ lọc policy | Quyết định một bất thường đáng được điều tra sâu |
+| Điều tra | Thực thi công cụ, thu thập dữ liệu, che dữ liệu, timeout | Hình thành giả thuyết, cân nhắc bằng chứng, chọn bước thăm dò tiếp theo |
+| Khắc phục | Chính các bước của runbook, kiểm tra trước khi chạy, cơ chế rollback | Chọn bản sửa phù hợp với sự cố này; soạn kế hoạch khi không có runbook |
+| Xác minh | Health check, thăm dò SLO, so sánh trạng thái trước/sau | Đánh giá kết quả có khớp với ý định hay không; quyết định chuyển cấp |
+
+Nguyên tắc là **đường ray tất định, lõi sinh**. Model chọn; code thực thi. Mọi tác dụng phụ quan trọng đều nên đi qua các đường code có phiên bản, kiểm thử được và idempotent, không bao giờ qua một chuỗi shell mà model soạn dưới áp lực. [Chương 3](/vi/learn/aio-engineer/chapter-3-tools-skills-protocol) biến điều này thành thiết kế công cụ và runbook. [Chương 6](/vi/learn/aio-engineer/chapter-6-policy-approvals) biến nguyên tắc này thành policy.
+
+<Info>
+**TRONG THỰC TẾ: LỆNH CHỈ ĐỌC VÀ LỆNH TẠO THAY ĐỔI**
+
+Khi CloudThinker dùng một trong các [runbook](/vi/guide/incident/runbooks) của bạn trong một cuộc điều tra Resolve, CloudThinker xử lý lệnh chỉ đọc (như `kubectl get pods`) khác với lệnh thay đổi thứ gì đó (như `kubectl rollout restart`). Lệnh chỉ đọc chạy mà không phải chờ. Lệnh tạo thay đổi đi qua Approvals của bạn. Nếu cần người duyệt, lệnh dừng ở **Action requires approval** cho đến khi có người quyết định, và mọi lần thử đều xuất hiện trên tab **Execution history** cùng quyết định policy, phê duyệt và kết quả. Với runbook được tải lên, một AI model đọc các khối code khi tải lên và ghi lại các lệnh tạo thay đổi. Nếu bước đó thất bại, một danh sách cố định các lệnh chỉ xem (như `kubectl get` và `kubectl logs`) sẽ quyết định, và mọi thứ không có trong danh sách đều được coi là lệnh tạo thay đổi ([Runbook](/vi/guide/incident/runbooks)). Hành động nào cần người duyệt là do Rule và chế độ [Approvals](/vi/guide/approvals/overview) của bạn quyết định, sau khi danh sách có sẵn [Always blocked](/vi/guide/approvals/overview#cách-quyết-định-một-thao-tác-ghi) đã chặn những lệnh gọi không bao giờ được phép chạy. Hãy hỏi cùng câu hỏi với mọi nền tảng: suy luận kết thúc và thực thi bắt đầu ở đâu, và ai ký duyệt cho bước chuyển đó?
+</Info>
+
+## 1.4 Xác minh là điều làm nên một agent
+
+Automation thực thi và hy vọng. Agent thực thi và kiểm tra. Giai đoạn validate là điều khiến quyền tự chủ theo cấp độ trở nên có cơ sở: thăm dò lại triệu chứng, so sánh trạng thái với ý định, theo dõi SLO trong một giai đoạn soak, và rollback khi thất bại. Đó là điều đầu tiên cần kiểm tra trong bất kỳ bản demo nào.
+
+Hai quy tắc cho xác minh:
+
+- **Kiểm tra các tín hiệu độc lập.** Cảnh báo đã tắt không phải là bằng chứng. Lần khởi động lại che giấu lỗi cũng có thể tắt cảnh báo, một kiểu thất bại được ghi nhận trong các benchmark công khai ([Chương 7](/vi/learn/aio-engineer/chapter-7-evaluating-agents)). Hãy xác minh với một tín hiệu mà bản sửa không thể làm im lặng, như thăm dò SLO hoặc so sánh trạng thái trước/sau.
+- **Đặt thời hạn cho xác minh.** Đặt một cửa sổ soak rõ ràng. Khi cửa sổ kết thúc, hệ thống hoặc tuyên bố thành công kèm bằng chứng, hoặc chuyển cấp với một rollback đã được chuẩn bị sẵn.
+
+<Info>
+**TRONG THỰC TẾ: XÁC MINH MỘT BẢN SỬA CỦA RESOLVE**
+
+Mỗi cuộc điều tra Resolve đi đến kết luận sẽ ghi một hồi ức vào [incident memory](/vi/guide/incident/incident-memory). Dòng `Verify-with:` trong hồi ức nêu một kiểm tra có phạm vi, mục tiêu và kết quả mong đợi, ví dụ "5xx rate on tg-checkout over 15 minutes; expected below 1%". Dòng đó chính là cửa sổ soak và tín hiệu độc lập.
+
+Khi CloudThinker đã áp dụng một bản sửa và ghi lại kiểm tra đó, CloudThinker đề xuất một bước theo dõi dưới dạng thẻ trong cuộc hội thoại. Nhấn **Enable** để lên lịch. Kiểm tra đánh dấu bản sửa là **Verified** hoặc **Failed**. Bản sửa thất bại được lưu lại làm phản ví dụ, để các cuộc điều tra sau không lặp lại bản sửa đó. Khi cùng triệu chứng quay lại, CloudThinker chạy kiểm tra `Verify-with:` cũ trước, và nếu kiểm tra thất bại thì điều tra lỗi hiện tại như một lỗi mới.
+</Info>
+
+<Tip>
+**ĐIỀU CẦN NHỚ**
+
+Agent vận hành là một vòng lặp có ngân sách, quan sát được, với ranh giới tất định có chủ đích và xác minh độc lập. Hãy đánh giá mọi nền tảng qua cấu trúc bên trong của vòng lặp (xử lý ngữ cảnh, kiểm soát chi phí, đường ray thực thi, tín hiệu xác minh), chứ không phải qua việc các phát hiện của nền tảng đó đọc hay đến đâu.
+</Tip>
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="Chương 2 · Context Engineering" icon="layer-group" href="/vi/learn/aio-engineer/chapter-2-context-engineering">
+    Đòn bẩy lớn nhất cho chất lượng agent: những gì agent được cung cấp để suy luận.
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Xem cách CloudThinker quyết định hành động nào tự chạy và hành động nào chờ người duyệt.
+  </Card>
+</CardGroup>

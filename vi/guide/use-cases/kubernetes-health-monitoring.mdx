@@ -1,97 +1,276 @@
 ---
-title: "Giám sát Sức khỏe Kubernetes"
-description: "Dùng CloudThinker để giám sát sức khỏe cụm EKS, phát hiện lãng phí tài nguyên, và nhận khuyến nghị HPA trước khi sự cố xảy ra trên môi trường production."
+title: Giám sát sức khỏe Kubernetes
+description: "Kết nối cluster Kubernetes, kiểm tra sức khỏe bằng ngôn ngữ tự nhiên và điều tra pod lỗi mà không cần tự chạy kubectl."
 icon: heart-pulse
 ---
 
-CloudThinker liên tục giám sát cụm Amazon EKS của bạn, phát hiện pod được cấp phát thừa, node chưa được tận dụng, và thiếu chính sách autoscaling trước khi chúng gây ra sự cố nghiêm trọng.
+CloudThinker đọc cluster Kubernetes của bạn qua một service account chỉ đọc và trả lời trong chat, nên bạn không còn phải chạy `kubectl get`, `describe` và `logs` trên hàng chục pod để đối chiếu event, số lần restart và mức sử dụng. Hướng dẫn này đưa bạn từ một workspace trống đến bước kiểm tra sức khỏe cluster và điều tra một pod lỗi trong khoảng 15 phút.
 
-## Tình huống
+## Bạn cần gì
 
-Một nhóm platform đang vận hành cụm EKS production trải dài nhiều namespace. Cảnh báo CPU xuất hiện ngắt quãng nhưng điều tra chậm chạp — kỹ sư phải chạy thủ công các lệnh `kubectl` qua hàng trăm pod để tương quan log, metrics, và event.
+| Yêu cầu | Lý do |
+|-------------|-----|
+| Một cluster có API server mà CloudThinker truy cập được qua internet | Lệnh chạy trên CloudThinker cloud, nên endpoint chỉ dùng nội bộ sẽ không qua được bước kiểm tra kết nối. Nếu bạn giới hạn quyền truy cập API (EKS public access CIDRs, GKE authorized networks, AKS authorized IP ranges), hãy đưa các IP egress của CloudThinker vào allowlist thay vì mở cho `0.0.0.0/0`. Hỏi đầu mối CloudThinker của bạn để lấy danh sách hiện tại. Xem [Truy cập dịch vụ nội bộ](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ). |
+| Quyền `kubectl` có thể tạo namespace, ClusterRole và ClusterRoleBinding | Bạn tạo tài khoản chỉ đọc mà CloudThinker dùng để đăng nhập |
+| Tùy chọn: [Metrics Server](https://github.com/kubernetes-sigs/metrics-server) | Không có Metrics Server, bạn vẫn nhận được trạng thái pod, event và điều kiện node, nhưng không có số liệu CPU và memory trực tiếp |
 
-<Frame>
-  <img src="/images/use-cases/kubernetes-health-monitoring/01-manual-troubleshooting-challenges.jpg" alt="Thách thức khi xử lý sự cố Kubernetes thủ công qua các namespace và tài nguyên" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Thách thức khi xử lý sự cố Kubernetes thủ công</p>
+<Info>
+Mỗi workspace có **một** kết nối Kubernetes, và CloudThinker làm việc trong **current context** của kubeconfig. Chọn một cluster bạn muốn kiểm tra. Với nhiều cluster, hãy dùng mỗi cluster một workspace, hoặc thêm [kết nối Rancher](/vi/guide/connections/rancher) để có inventory và sức khỏe trên các cluster mà Rancher quản lý.
+</Info>
 
-Nhóm yêu cầu CloudThinker đánh giá toàn diện cụm, xác định lãng phí tài nguyên, và khuyến nghị chính sách autoscaling cho những nơi còn thiếu.
-
-## Hướng dẫn từng bước
+## Bước 1: Kết nối cluster
 
 <Steps>
+  <Step title="Tạo service account chỉ đọc">
+    Lưu manifest bên dưới thành `cloudthinker-reader.yaml` và áp dụng manifest:
 
-### Kết nối CloudThinker với cụm của bạn
+    ```bash
+    kubectl apply -f cloudthinker-reader.yaml
+    ```
 
-Làm theo [hướng dẫn kết nối Kubernetes](/vi/guide/connections/kubernetes) để cấp cho CloudThinker quyền truy cập cụm EKS của bạn. Khi kết nối hiển thị trạng thái **Connected**, CloudThinker có thể truy vấn cụm trực tiếp.
+    Manifest tạo namespace `cloudthinker`, service account `cloudthinker-reader`, một ClusterRole gắn với service account đó, và một Secret chứa token dài hạn. Role chỉ cấp `get`, `list` và `watch`, và không bao giờ cấp trên Secret:
 
-### Phân tích mức sử dụng tài nguyên pod
+    | API group | Tài nguyên |
+    |---|---|
+    | core (`""`) | pods, pods/log, nodes, namespaces, services, endpoints, events, configmaps, persistentvolumeclaims, persistentvolumes, resourcequotas, limitranges, serviceaccounts, replicationcontrollers |
+    | `apps` | deployments, replicasets, statefulsets, daemonsets |
+    | `batch` | jobs, cronjobs |
+    | `autoscaling` | horizontalpodautoscalers |
+    | `networking.k8s.io` | ingresses, networkpolicies |
+    | `policy` | poddisruptionbudgets |
+    | `storage.k8s.io` | storageclasses |
+    | `rbac.authorization.k8s.io` | roles, rolebindings, clusterroles, clusterrolebindings |
+    | `metrics.k8s.io` | pods, nodes (`get` và `list`) |
 
-```text
-Analyze pod resource utilization in the production namespace and write it up as a report
-```
+    <Accordion title="cloudthinker-reader.yaml">
+      ```yaml
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: cloudthinker
+      ---
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: cloudthinker-reader
+        namespace: cloudthinker
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: cloudthinker-reader
+      rules:
+      - apiGroups: [""]
+        resources: ["pods", "pods/log", "nodes", "namespaces", "services", "endpoints", "events", "configmaps", "persistentvolumeclaims", "persistentvolumes", "resourcequotas", "limitranges", "serviceaccounts", "replicationcontrollers"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["apps"]
+        resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["batch"]
+        resources: ["jobs", "cronjobs"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["autoscaling"]
+        resources: ["horizontalpodautoscalers"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["networking.k8s.io"]
+        resources: ["ingresses", "networkpolicies"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["policy"]
+        resources: ["poddisruptionbudgets"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["storage.k8s.io"]
+        resources: ["storageclasses"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["metrics.k8s.io"]
+        resources: ["pods", "nodes"]
+        verbs: ["get", "list"]
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: cloudthinker-reader
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: cloudthinker-reader
+      subjects:
+      - kind: ServiceAccount
+        name: cloudthinker-reader
+        namespace: cloudthinker
+      ---
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: cloudthinker-reader-token
+        namespace: cloudthinker
+        annotations:
+          kubernetes.io/service-account.name: cloudthinker-reader
+      type: kubernetes.io/service-account-token
+      ```
+    </Accordion>
 
-<Frame>
-  <img src="/images/use-cases/kubernetes-health-monitoring/02-pod-resource-utilization.jpg" alt="Phân tích mức sử dụng tài nguyên pod thể hiện mẫu sử dụng CPU và bộ nhớ" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Phân tích mức sử dụng tài nguyên pod</p>
+    Secret chứa token không bao giờ tự hết hạn. Để xoay vòng, xóa Secret, áp dụng lại manifest, tạo lại kubeconfig và thay file đó trong CloudThinker. Xem [Bảo mật](/vi/guide/connections/kubernetes#bảo-mật) để biết các lệnh và cách thu hồi quyền truy cập.
+  </Step>
+  <Step title="Tạo kubeconfig cho tài khoản đó">
+    Chạy đoạn sau từ một shell có `kubectl` context hiện tại là cluster đích. Đoạn script đọc server URL từ context đó, đọc token và chứng chỉ CA từ Secret, nên bạn không cần điền gì. Kết quả được ghi ra file `cloudthinker-kubeconfig.yaml`:
 
-<Frame>
-  <img src="/images/use-cases/kubernetes-health-monitoring/03-pod-analysis-visualization.jpg" alt="Trực quan hóa phân tích pod kèm khuyến nghị hiệu năng" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Trực quan hóa phân tích pod kèm khuyến nghị hiệu năng</p>
+    ```bash
+    SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+    CA=$(kubectl get secret cloudthinker-reader-token -n cloudthinker -o jsonpath='{.data.ca\.crt}')
+    TOKEN=$(kubectl get secret cloudthinker-reader-token -n cloudthinker -o jsonpath='{.data.token}' | base64 --decode)
 
-CloudThinker phát hiện ba vấn đề: auth-service và notification-worker được cấp phát thừa (CPU 18–21%), api-gateway và cache-redis có kích thước phù hợp, và payment-processor đang thiếu tài nguyên nguy hiểm ở mức CPU 80–86% và bộ nhớ 88–94% — có nguy cơ cao bị OOM kill và gián đoạn dịch vụ.
+    cat > cloudthinker-kubeconfig.yaml <<EOF
+    apiVersion: v1
+    kind: Config
+    clusters:
+    - name: target
+      cluster:
+        server: ${SERVER}
+        certificate-authority-data: ${CA}
+    users:
+    - name: cloudthinker-reader
+      user:
+        token: ${TOKEN}
+    contexts:
+    - name: cloudthinker
+      context:
+        cluster: target
+        user: cloudthinker-reader
+    current-context: cloudthinker
+    EOF
+    ```
 
-### Xác định node chưa được tận dụng
+    Trên các bản macOS cũ, thay `base64 --decode` bằng `base64 -D`. Sau đó kiểm tra file:
 
-```text
-Show nodes with less than 30% CPU utilization
-```
+    ```bash
+    kubectl --kubeconfig cloudthinker-kubeconfig.yaml get nodes
+    ```
 
-<Frame>
-  <img src="/images/use-cases/kubernetes-health-monitoring/04-node-cpu-utilization.jpg" alt="Phân tích mức sử dụng CPU node cho thấy instance chưa được tận dụng và lãng phí chi phí" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Phân tích mức sử dụng CPU node cho thấy instance chưa được tận dụng</p>
+    Nếu lệnh liệt kê các node với `STATUS` là `Ready`, bước kiểm tra kết nối của CloudThinker cũng sẽ thành công. CloudThinker chạy đúng lệnh này.
+  </Step>
+  <Step title="Tải lên trong CloudThinker">
+    Trong thanh bên, nhấn **More → Workspace settings → Connections**, chọn **Kubernetes**, tải file lên trường **KUBECONFIG** và nhấn **Connect**.
 
-CloudThinker tìm thấy năm node có mức CPU trung bình dưới 30% (một số chỉ 12–15%), lãng phí khoảng $573 mỗi tháng. Các instance t3.xlarge quá lớn chạy workload nhẹ — kết hợp với lịch trình pod kém — khiến một số node chỉ có 2–3 pod trong khi các node khác mang 8–9 pod.
-
-### Nhận khuyến nghị HPA
-
-```text
-Recommend HPA policies for the web deployments
-```
-
-<Frame>
-  <img src="/images/use-cases/kubernetes-health-monitoring/05-hpa-policy-recommendations.jpg" alt="Khuyến nghị chính sách HPA cho cấu hình auto-scaling web deployment" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Khuyến nghị chính sách HPA cho auto-scaling</p>
-
-CloudThinker đánh dấu payment-processor là có rủi ro nghiêm trọng — chỉ có 2 replica ở mức CPU 80–86%, không có autoscaling. CloudThinker khuyến nghị thêm HPA cho api-gateway để xử lý spike lưu lượng, và loại bỏ capacity dư thừa khỏi user-service và auth-service.
-
+    Trạng thái chuyển qua **Connecting** và **Verifying** đến **Connected**. Nếu kiểm tra thất bại, hộp thoại hiển thị **Failed** hoặc **Timed out** kèm lỗi từ cluster. Xem [Khắc phục sự cố](#khắc-phục-sự-cố).
+  </Step>
 </Steps>
 
-## Điều gì tạo nên hiệu quả
+<Warning>
+Không tải lên kubeconfig bạn dùng hằng ngày. File trỏ đến đường dẫn cục bộ hoặc đăng nhập qua plugin `exec` (như một cloud CLI) phụ thuộc vào công cụ trên máy bạn và sẽ thất bại trong CloudThinker. File dựa trên token bạn tạo ở bước **Tạo kubeconfig cho tài khoản đó** tránh được cả hai vấn đề.
+</Warning>
 
-- **[CloudThinker](/vi/guide/agents/overview)** truy vấn trực tiếp cluster API, thay thế các phiên `kubectl` thủ công và chuyển đổi công cụ.
-- **Tương quan đa lớp** liên kết mức sử dụng pod, dung lượng node, và mẫu lịch trình trong một lượt phân tích duy nhất.
-- **Nêu dạng đầu ra bằng lời** ("dưới dạng báo cáo") tạo đầu ra có cấu trúc để CloudThinker suy luận trước khi trình bày phát hiện.
-- **Yêu cầu khuyến nghị bằng lời** tạo ra các thay đổi chính sách HPA có thể thực thi thay vì chỉ dump metrics thô.
-- **[Automations](/guide/automation/automations)** có thể chạy lại phân tích này trước khi kỹ sư trực bị gọi.
+## Bước 2: Kiểm tra sức khỏe cluster
 
-## Tự mình thử
+Bắt đầu bằng một kiểm tra nhanh để xác nhận kết nối thấy đúng những gì bạn mong đợi:
+
+```text
+Check the Kubernetes connection: list the namespaces, the node count, and any nodes that are not Ready
+```
+
+Bạn nhận được danh sách namespace, số node và trạng thái từng node. Nếu thiếu số liệu sử dụng, câu trả lời sẽ cho biết Metrics Server chưa được cài đặt.
+
+Sau đó hỏi về bức tranh rộng hơn. Mỗi prompt sau bao quát một lớp của cluster:
+
+| Mục tiêu | Ví dụ prompt | Bạn nhận được gì |
+|------|----------------|-------------------|
+| Áp lực trên node | `Which nodes are under memory or disk pressure, and what is using the most memory?` | Điều kiện node, tài nguyên capacity và allocatable, và các thành phần tiêu thụ nhiều nhất (khi có Metrics Server) |
+| Định cỡ | `Analyze pod resource utilization in the payments namespace` | So sánh request và limit với mức sử dụng thực, đánh dấu các pod cấp phát thừa hoặc thiếu |
+| Dung lượng nhàn rỗi | `Show nodes with less than 30% CPU utilization` | Các node ít được dùng và cách pod được phân bổ trên chúng |
+| Tự động co giãn | `Recommend HPA policies for the deployments in the payments namespace` | Các deployment không có autoscaler hoặc quá ít replica, cùng các policy đề xuất |
+
+Nêu tên namespace, hoặc một label như `app.kubernetes.io/part-of=web`, trong mỗi prompt. Một cụm từ mơ hồ như "the web deployments" khiến CloudThinker phải đoán ý bạn.
+
+Trong namespace `payments` của một nhóm, prompt định cỡ đã đánh dấu hai service chạy ở khoảng 20% CPU (cấp phát thừa) và một service, `payment-processor`, chạy trên 80% CPU và gần chạm giới hạn memory. Pod đó có nguy cơ bị OOM (out-of-memory) kill. Prompt về tự động co giãn sau đó cho thấy service này chỉ có 2 replica và không có Horizontal Pod Autoscaler (HPA).
+
+## Bước 3: Điều tra một pod lỗi
+
+Khi đã có sự cố, hãy nêu tên namespace và mô tả triệu chứng:
+
+```text
+Which pods in the payments namespace are crash-looping, and what do their logs say?
+```
+
+CloudThinker tìm các pod đang crash-loop, pending hoặc restart, đọc log và warning event của chúng, và giải thích nguyên nhân khả dĩ trong một câu trả lời. Hỏi tiếp trong cùng cuộc hội thoại để thu hẹp vấn đề:
+
+```text
+Why can't the pending pods in payments be scheduled?
+Compare the memory limit of payment-processor with its current usage
+```
+
+Với vấn đề lập lịch, câu trả lời so sánh request của pod với phần mỗi node còn có thể cấp phát. Với restart, câu trả lời liên kết số lần restart với log, event và giới hạn tài nguyên.
+
+### Áp dụng bản sửa
+
+Với vai trò chỉ đọc, các lệnh thay đổi như `scale`, `rollout restart`, `cordon`, `drain` hoặc `apply` thất bại với `403`, kể cả sau khi bạn phê duyệt. Để cho phép một thay đổi, trước tiên hãy gắn một Role chỉ có các verb cần thiết, rồi phê duyệt lệnh khi CloudThinker hỏi. Role này chỉ cho phép CloudThinker scale và restart deployment trong `payments`:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cloudthinker-scale
+  namespace: payments
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments", "deployments/scale"]
+  verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cloudthinker-scale
+  namespace: payments
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cloudthinker-scale
+subjects:
+- kind: ServiceAccount
+  name: cloudthinker-reader
+  namespace: cloudthinker
+```
+
+Cordon và drain tác động lên node, nên cần ClusterRole. Xem [Quyền ghi](/vi/guide/connections/kubernetes#quyền-ghi) và [Approvals](/vi/guide/approvals/overview).
+
+## Chạy theo lịch
+
+Khi một prompt cho bạn câu trả lời hữu ích, hãy chạy lại prompt đó theo lịch để kết quả kiểm tra sức khỏe đến trước khi có ai bị page. Mở **Automations** trong thanh bên, chọn **New automation** và chọn **Create with chat** (hoặc gõ `/create-automation` trong chat). Sau đó mô tả công việc, ví dụ:
+
+```text
+Every weekday at 08:00, check the payments namespace for crash-looping or pending pods and nodes under memory or disk pressure, and summarize what changed since yesterday
+```
+
+Mỗi lượt chạy có cuộc hội thoại riêng trong **Runs**. Để nhận kết quả hoặc lỗi qua Slack, Teams, Google Chat hoặc email, hãy thiết lập [thông báo](/vi/guide/notifications). Xem [Automations](/vi/guide/automation/automations).
+
+## Khắc phục sự cố
+
+<AccordionGroup>
+  <Accordion title="Kiểm tra kết nối không truy cập được cluster">
+    Địa chỉ API server trong kubeconfig không truy cập được từ internet. Kiểm tra xem địa chỉ này có chỉ truy cập được qua VPN không. Nếu bạn dùng allowlist (EKS public access CIDRs, GKE authorized networks, AKS authorized IP ranges), hãy thêm các IP egress của CloudThinker vào đó. Hỏi đầu mối CloudThinker của bạn để lấy danh sách hiện tại.
+  </Accordion>
+  <Accordion title="Câu trả lời không có số liệu CPU hoặc memory">
+    Metrics Server chưa được cài đặt hoặc chưa sẵn sàng. Chạy `kubectl top nodes` để kiểm tra. Trạng thái pod, event và điều kiện node vẫn hoạt động khi không có Metrics Server.
+  </Accordion>
+  <Accordion title="Câu trả lời nhắc đến lỗi 403 trên một tài nguyên">
+    ClusterRole không bao gồm tài nguyên đó. Lỗi có nêu tên tài nguyên, nên hãy thêm tài nguyên đó vào role (hoặc cố ý bỏ ra, như với Secret).
+  </Accordion>
+  <Accordion title="Câu trả lời nói về sai cluster">
+    CloudThinker dùng current context của kubeconfig. Tạo lại file từ cluster bạn muốn. Sau đó mở **Kubernetes** trong Connections, nhấn biểu tượng bút chì trên hàng của kết nối, nhấn **Replace…** trong **Edit Instance**, tải file mới lên và nhấn **Save and test**.
+  </Accordion>
+  <Accordion title="Kiểm tra thất bại với lỗi exec plugin hoặc file not found">
+    Bạn đã tải lên một kubeconfig đăng nhập qua lệnh cục bộ (như `aws`, `gcloud` hoặc `kubelogin`) hoặc trỏ đến file cục bộ. Hãy tạo kubeconfig dựa trên token ở Bước 1 và tải file đó lên. Kubeconfig mặc định từ `aws eks update-kubeconfig` và `gcloud container clusters get-credentials` đều dùng plugin `exec`, nên đừng tải chúng lên.
+  </Accordion>
+</AccordionGroup>
+
+## Bước tiếp theo
 
 <CardGroup cols={2}>
-  <Card title="Agent" icon="robot" href="/vi/guide/agents/overview">
-    Xem CloudThinker làm được gì và cách nó tạo subagent
-  </Card>
   <Card title="Kết nối Kubernetes" icon="/images/icons/kubernetes.svg" href="/vi/guide/connections/kubernetes">
-    Hướng dẫn từng bước kết nối CloudThinker với cụm EKS của bạn
+    Thiết lập đầy đủ, manifest quyền và cách thu hồi quyền truy cập
   </Card>
-  <Card title="Cụm Pulse" icon="diagram-project" href="/vi/guide/pulse/clusters">
-    Nhóm các tín hiệu Kubernetes liên quan trước khi chúng trở thành incident
-  </Card>
-  <Card title="Automations" icon="calendar-check" href="/guide/automation/automations">
-    Chạy phân tích Kubernetes này theo lịch định kỳ
+  <Card title="Approvals" icon="circle-check" href="/vi/guide/approvals/overview">
+    Cách Approval mode quyết định một thay đổi như scale hoặc restart
   </Card>
 </CardGroup>

@@ -1,0 +1,312 @@
+---
+title: Thiết lập SAML SSO
+description: "Kết nối Okta, Microsoft Entra ID, Google Workspace, AWS IAM Identity Center, OneLogin hoặc bất kỳ identity provider SAML 2.0 nào."
+icon: shield
+---
+
+SAML 2.0 là chuẩn đăng nhập một lần (single sign-on) dựa trên XML mà hầu hết identity provider (IdP) doanh nghiệp hỗ trợ. Bạn trao đổi hai bộ giá trị: thông tin service provider (SP) của CloudThinker đưa vào IdP, và thông tin của IdP đưa ngược lại vào CloudThinker.
+
+## Điều kiện tiên quyết
+
+- Organization dùng gói **Scale**, **Scale Plus** hoặc **Enterprise**.
+- Vai trò **Owner** của organization và một tên miền email đã xác minh. Xem [Thiết lập single sign-on](/vi/guide/security/sso).
+- Quyền admin trên identity provider của bạn.
+
+## Những gì cần trao đổi
+
+Trình hướng dẫn tại **Admin Settings → Identity and access → Setup SSO → SAML 2.0** có ba bước: **Protocol**, **SP Metadata** và **IdP Config**.
+
+| Chiều | Giá trị | Nơi tìm |
+|---|---|---|
+| CloudThinker → IdP của bạn | **ACS URL (Assertion Consumer Service)**, kết thúc bằng `/api/v1/sso/saml/acs`, và **SP Entity ID**, kết thúc bằng `/api/v1/sso/saml/metadata` | Bước **SP Metadata**, mỗi giá trị có nút sao chép. Cả hai giống nhau cho mọi kết nối, nên bạn có thể sao chép trước khi nhập bất kỳ giá trị IdP nào và gửi cho admin IdP. |
+| IdP của bạn → CloudThinker | **IdP Entity ID**, **SSO URL**, **IdP Certificate** | SAML app trong IdP, hoặc metadata URL của nó. **Import** chỉ nhận URL; không hỗ trợ tải file lên hay dán XML. |
+| Thuộc tính IdP gửi | Email (bắt buộc), tên, họ | Ánh xạ thuộc tính trong IdP |
+
+<Tip>
+  Ở bước **IdP Config**, dán metadata URL của IdP vào trường phía trên và nhấn **Import**. CloudThinker điền **IdP Entity ID**, **SSO URL** và **IdP Certificate**, cùng **SLO URL** và **Name ID Format** nếu metadata có chúng.
+</Tip>
+
+CloudThinker đọc email người dùng từ claim `email`, `mail`, `emailAddress` hoặc `emailaddress` của Microsoft, và dùng NameID nếu NameID là email. Nếu NameID không phải email (ví dụ **Persistent** hoặc **Transient**), bạn phải gửi thuộc tính email, nếu không đăng nhập sẽ thất bại. Tên và họ lấy từ `firstName`/`givenName` và `lastName`/`surname`.
+
+## Cấu hình provider
+
+Bắt đầu trình hướng dẫn, chọn **SAML 2.0**, nhấn **Next**, và giữ bước **SP Metadata** mở trong lúc làm việc trên IdP. Mọi provider cũng cần **Display Name** ở bước **IdP Config**; nhãn nào cũng được, ví dụ `Company SSO`.
+
+<Tabs>
+  <Tab title="Okta">
+    <Steps>
+      <Step title="Tạo SAML app integration">
+        Trong Okta Admin Console, vào **Applications → Applications → Create App Integration → SAML 2.0**. Đặt tên **CloudThinker**.
+      </Step>
+      <Step title="Cấu hình SAML">
+        | Trường Okta | Giá trị |
+        |---|---|
+        | **Single sign-on URL** | **ACS URL** của CloudThinker |
+        | **Audience URI (SP Entity ID)** | **SP Entity ID** của CloudThinker |
+        | **Name ID format** | `EmailAddress` |
+        | **Application username** | `Email` |
+        | **Assertion Signature** (trong **Show Advanced Settings**) | `Signed` |
+      </Step>
+      <Step title="Thêm attribute statement">
+        | Name | Value |
+        |---|---|
+        | `email` | `user.email` |
+        | `firstName` | `user.firstName` |
+        | `lastName` | `user.lastName` |
+      </Step>
+      <Step title="Sao chép IdP metadata">
+        Lưu app. Trên tab **Sign On**, nhấn **View SAML setup instructions**. Sao chép metadata URL, hoặc sao chép **Identity Provider Single Sign-On URL**, **Identity Provider Issuer** và **X.509 Certificate**.
+      </Step>
+      <Step title="Gán người dùng trong Okta">
+        Trên tab **Assignments** của app, gán các người dùng hoặc nhóm cần dùng CloudThinker.
+      </Step>
+      <Step title="Hoàn tất trong CloudThinker">
+        Nhấn **Next** để đến **IdP Config**. **Import** metadata URL, hoặc nhập **Identity Provider Issuer** vào **IdP Entity ID**, **Identity Provider Single Sign-On URL** vào **SSO URL**, và **X.509 Certificate** vào **IdP Certificate**. Nhấn **Create Connection**.
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Microsoft Entra ID">
+    <Steps>
+      <Step title="Tạo enterprise application">
+        Trong [Azure portal](https://portal.azure.com), vào **Microsoft Entra ID → Enterprise applications → New application → Create your own application**. Đặt tên **CloudThinker**, chọn **Integrate any other application you don't find in the gallery**, và nhấn **Create**.
+      </Step>
+      <Step title="Thiết lập single sign-on">
+        Mở app, vào **Single sign-on → SAML**, và sửa **Basic SAML Configuration**:
+
+        | Trường Entra | Giá trị |
+        |---|---|
+        | **Identifier (Entity ID)** | **SP Entity ID** của CloudThinker |
+        | **Reply URL (Assertion Consumer Service URL)** | **ACS URL** của CloudThinker |
+
+        Lưu.
+      </Step>
+      <Step title="Kiểm tra attributes và claims">
+        Các claim mặc định của Entra (`emailaddress`, `givenname`, `surname`) dùng được ngay. Xác nhận `emailaddress` ánh xạ tới `user.mail` và người dùng của bạn đã có thuộc tính mail.
+
+        Nếu một số người dùng không có thuộc tính mail (thường gặp với tài khoản chỉ trên cloud), hãy ánh xạ `emailaddress` tới `user.userprincipalname`. Cách này chỉ hoạt động khi mọi UPN đều thuộc tên miền đã xác minh.
+      </Step>
+      <Step title="Kiểm tra tùy chọn ký">
+        Trong **SAML Certificates**, nhấn **Edit** và đặt **Signing Option** là **Sign SAML assertion** hoặc **Sign SAML response and assertion**. Chỉ **Sign SAML response** sẽ thất bại.
+      </Step>
+      <Step title="Sao chép federation metadata">
+        Trong **SAML Certificates**, sao chép **App Federation Metadata Url**. Hoặc tải **Certificate (Base64)** và sao chép **Login URL** cùng **Microsoft Entra Identifier**.
+      </Step>
+      <Step title="Gán người dùng và hoàn tất trong CloudThinker">
+        Gán người dùng hoặc nhóm trong **Users and groups**. Ở bước **IdP Config** của CloudThinker, **Import** metadata URL, hoặc nhập Entra Identifier vào **IdP Entity ID**, Login URL vào **SSO URL**, và chứng chỉ Base64 vào **IdP Certificate**. Nhấn **Create Connection**.
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Google Workspace">
+    <Steps>
+      <Step title="Tạo custom SAML app">
+        Trong [Google Admin console](https://admin.google.com), vào **Apps → Web and mobile apps → Add app → Add custom SAML app**. Đặt tên **CloudThinker** và nhấn **Continue**.
+      </Step>
+      <Step title="Sao chép thông tin IdP của Google">
+        Trên **Google Identity Provider details**, sao chép **SSO URL**, **Entity ID** và **Certificate**, hoặc tải metadata. Nhấn **Continue**.
+      </Step>
+      <Step title="Nhập thông tin SP của CloudThinker">
+        | Trường Google | Giá trị |
+        |---|---|
+        | **ACS URL** | **ACS URL** của CloudThinker |
+        | **Entity ID** | **SP Entity ID** của CloudThinker |
+        | **Name ID format** | `EMAIL` |
+        | **Name ID** | **Basic Information > Primary email** |
+        | **Signed response** | Không chọn. Google ký assertion theo mặc định. |
+
+        Nhấn **Continue**.
+      </Step>
+      <Step title="Ánh xạ thuộc tính">
+        | Thuộc tính Google Directory | Thuộc tính app |
+        |---|---|
+        | Primary email | `email` |
+        | First name | `firstName` |
+        | Last name | `lastName` |
+
+        Nhấn **Finish**. Sau đó đặt **User access** thành **ON for everyone**, hoặc bật cho các đơn vị tổ chức cần dùng CloudThinker.
+      </Step>
+      <Step title="Hoàn tất trong CloudThinker">
+        Google cung cấp file metadata, không phải URL, mà **Import** chỉ nhận URL, nên hãy nhập giá trị thủ công. Ở bước **IdP Config**, nhập **Entity ID** của Google vào **IdP Entity ID**, **SSO URL** của Google vào **SSO URL**, và chứng chỉ vào **IdP Certificate**. Nhấn **Create Connection**.
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="AWS IAM Identity Center">
+    <Steps>
+      <Step title="Thêm custom SAML application">
+        Trong AWS console, vào **IAM Identity Center → Applications → Add application → I have an application I want to set up → SAML 2.0**. Đặt tên **CloudThinker**.
+      </Step>
+      <Step title="Sao chép metadata IAM Identity Center">
+        Trong **IAM Identity Center metadata**, sao chép URL file SAML metadata, hoặc sign-in URL, issuer URL và chứng chỉ.
+      </Step>
+      <Step title="Nhập application metadata">
+        | Trường IAM Identity Center | Giá trị |
+        |---|---|
+        | **Application ACS URL** | **ACS URL** của CloudThinker |
+        | **Application SAML audience** | **SP Entity ID** của CloudThinker |
+
+        Nhấn Submit để tạo application.
+      </Step>
+      <Step title="Ánh xạ thuộc tính">
+        Mở **Actions → Edit attribute mappings** và thêm:
+
+        | Thuộc tính trong application | Ánh xạ tới | Định dạng |
+        |---|---|---|
+        | `Subject` | `${user:email}` | `emailAddress` |
+        | `email` | `${user:email}` | `unspecified` |
+        | `firstName` | `${user:givenName}` | `unspecified` |
+        | `lastName` | `${user:familyName}` | `unspecified` |
+      </Step>
+      <Step title="Gán người dùng và hoàn tất trong CloudThinker">
+        Gán người dùng hoặc nhóm cho app. Trong CloudThinker, **Import** metadata URL, hoặc nhập issuer URL vào **IdP Entity ID**, sign-in URL vào **SSO URL**, và chứng chỉ vào **IdP Certificate**. Nhấn **Create Connection**.
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="OneLogin">
+    <Steps>
+      <Step title="Thêm SAML custom connector">
+        Trong OneLogin admin portal, vào **Applications → Applications → Add App**, tìm **SAML Custom Connector (Advanced)**, đặt tên **CloudThinker** và lưu.
+      </Step>
+      <Step title="Cấu hình connector">
+        Trên tab **Configuration**:
+
+        | Trường OneLogin | Giá trị |
+        |---|---|
+        | **Audience (EntityID)** | **SP Entity ID** của CloudThinker |
+        | **Recipient** | **ACS URL** của CloudThinker |
+        | **ACS (Consumer) URL** | **ACS URL** của CloudThinker |
+        | **ACS (Consumer) URL Validator** | ACS URL dưới dạng regex với dấu chấm được escape. Với ACS URL `https://api.example.com/api/v1/sso/saml/acs`, nhập `^https://api\.example\.com/api/v1/sso/saml/acs$`, dùng host từ ACS URL bạn đã sao chép |
+        | **SAML signature element** | `Assertion` hoặc `Both` |
+      </Step>
+      <Step title="Thêm parameter">
+        Trên tab **Parameters**, thêm `email` (Email), `firstName` (First Name) và `lastName` (Last Name), mỗi parameter đều chọn **Include in SAML assertion**.
+      </Step>
+      <Step title="Sao chép thông tin IdP">
+        Trên tab **SSO**, sao chép **Issuer URL**, **SAML 2.0 Endpoint (HTTP)** và chứng chỉ X.509.
+      </Step>
+      <Step title="Gán người dùng và hoàn tất trong CloudThinker">
+        Thêm người dùng trên tab **Users**. Trong CloudThinker, nhập Issuer URL vào **IdP Entity ID**, SAML 2.0 Endpoint vào **SSO URL**, và chứng chỉ vào **IdP Certificate**. Nhấn **Create Connection**.
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Provider SAML 2.0 khác">
+    <Steps>
+      <Step title="Tạo SAML app trong provider">
+        Đặt **ACS URL** của CloudThinker vào trường "Reply URL", "ACS URL" hoặc "Recipient" của provider, và **SP Entity ID** vào trường "Audience" hoặc "Entity ID". Gửi email người dùng làm NameID và làm thuộc tính `email`, cùng `firstName` và `lastName`. Ký assertion.
+      </Step>
+      <Step title="Điền IdP Config">
+        | Trường | Nhập gì |
+        |---|---|
+        | **Display Name** | Nhãn bất kỳ, ví dụ `Company SSO` |
+        | **IdP Entity ID** | Entity ID của provider, đôi khi gọi là "Issuer" |
+        | **SSO URL** | Endpoint single sign-on của provider |
+        | **IdP Certificate** | Chứng chỉ ký X.509, gồm cả dòng `-----BEGIN CERTIFICATE-----` và `-----END CERTIFICATE-----` |
+        | **SLO URL (Optional)** | Endpoint single logout của provider |
+        | **Name ID Format** | **Email Address** (mặc định). Các lựa chọn khác: **Persistent**, **Transient**, **Unspecified**. Với các lựa chọn này, IdP cũng phải gửi thuộc tính `email`. |
+
+        Nhấn **Create Connection**.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+**Trạng thái thành công:** hộp thoại hiển thị **SSO Connection Created** và kết nối ở trạng thái **Active**. Tiếp theo, chạy kiểm tra kết nối và đăng nhập thử theo [Thiết lập single sign-on](/vi/guide/security/sso#tạo-kết-nối).
+
+## Cách CloudThinker xử lý đăng nhập SAML
+
+| Hành vi | Ý nghĩa với bạn |
+|---|---|
+| Đăng nhập bắt đầu tại CloudThinker | Người dùng nhập email trên trang đăng nhập CloudThinker và nhấn **Continue with SSO**. Mở CloudThinker từ app dashboard của IdP (đăng nhập do IdP khởi tạo) không được chấp nhận. |
+| Bắt buộc assertion được ký | IdP phải ký SAML assertion. Chỉ ký response bên ngoài là không đủ. |
+| Dung sai đồng hồ 120 giây | Assertion bị từ chối nếu đồng hồ của IdP và CloudThinker lệch nhau hơn hai phút. |
+| Không hỗ trợ assertion mã hóa | CloudThinker không có khóa giải mã SP. Tắt mã hóa assertion trong IdP, nếu không đăng nhập sẽ thất bại. |
+| AuthnRequest không được ký | CloudThinker không ký các request gửi đi. Nếu IdP yêu cầu AuthnRequest có chữ ký, hãy tắt yêu cầu đó cho app này. |
+| Không có single logout | Đăng xuất khỏi CloudThinker chỉ kết thúc phiên CloudThinker. CloudThinker lưu **SLO URL** nhưng không gửi logout request tới IdP hay nhận chúng từ IdP. |
+| Một chứng chỉ ký | Trường **IdP Certificate** chứa một chứng chỉ. Không có chứng chỉ phụ, nên hãy lên kế hoạch xoay vòng dưới dạng chuyển đổi tức thời. Xem [Xoay vòng chứng chỉ IdP](#xoay-vòng-chứng-chỉ-idp). |
+| SP Metadata URL sau khi tạo | Một số IdP có thể import SP metadata URL. URL này xuất hiện trong **Manage → Configuration** khi kết nối đã tồn tại. |
+
+## Điều gì xảy ra ở lần đăng nhập đầu tiên
+
+| Nếu | Thì |
+|---|---|
+| Chế độ cấp phép là **Just-in-time** | CloudThinker tạo tài khoản ở lần đăng nhập SSO đầu tiên của người đó, với **Auto-assigned organization role** (mặc định **Viewer**) và **Auto-assigned workspaces** bạn đã đặt. |
+| Người đó có lời mời đang chờ | Vai trò và workspace của lời mời được áp dụng thay thế. Nếu organization không còn seat trống, đăng nhập thất bại với thông báo "This organization has reached its seat limit." |
+| Người đó đã có tài khoản CloudThinker cùng email | CloudThinker liên kết tài khoản đó với IdP. Không tạo bản trùng lặp. |
+| Chế độ cấp phép là **Manual** và người đó không có tài khoản hay lời mời | Đăng nhập bị từ chối. Hãy mời họ trước. |
+| Bạn muốn nhóm IdP quyết định quyền truy cập | Đăng nhập SAML chỉ đọc email và tên, không đọc nhóm. Dùng [SCIM](/vi/guide/security/scim#ánh-xạ-nhóm-tới-workspace) để ánh xạ nhóm với workspace. |
+
+Đặt chế độ cấp phép và vai trò mặc định trong [Thiết lập single sign-on](/vi/guide/security/sso).
+
+## Nếu IdP không khả dụng
+
+Owner của organization được miễn **Require SSO** và vẫn có thể đăng nhập bằng mã email. Xem [Nếu IdP không khả dụng](/vi/guide/security/sso#nếu-idp-không-khả-dụng) để biết các bước và hộp thư cần thiết lập trước.
+
+## Xoay vòng chứng chỉ IdP
+
+CloudThinker không cảnh báo trước khi chứng chỉ đã lưu hết hạn và không hiển thị ngày hết hạn. Hãy kiểm tra ngày đó trong IdP và tự đặt nhắc nhở.
+
+CloudThinker kiểm tra chữ ký với một chứng chỉ duy nhất, nên đăng nhập sẽ thất bại trong khoảng từ lúc IdP bắt đầu ký bằng chứng chỉ mới đến lúc bạn lưu nó trong CloudThinker. Hãy giữ khoảng gián đoạn này trong vòng một đến hai phút.
+
+<Steps>
+  <Step title="Chuẩn bị chứng chỉ mới trong IdP">
+    Tạo hoặc tải lên chứng chỉ ký mới, nhưng chưa kích hoạt. Sao chép chứng chỉ, gồm cả dòng `BEGIN` và `END`.
+  </Step>
+  <Step title="Chuyển IdP sang chứng chỉ mới">
+    Kích hoạt chứng chỉ mới cho app CloudThinker.
+  </Step>
+  <Step title="Lưu ngay trong CloudThinker">
+    Mở **Manage → Configuration** trên thẻ **Single sign-on**, dán chứng chỉ vào **IdP Certificate**, và nhấn **Save Changes**.
+  </Step>
+  <Step title="Kiểm tra">
+    Chạy kiểm tra kết nối từ **Manage → Overview**, rồi đăng nhập qua SSO trong cửa sổ riêng tư.
+
+    **Trạng thái thành công:** kiểm tra đạt **Certificate Valid** và lần đăng nhập đưa bạn vào CloudThinker.
+  </Step>
+</Steps>
+
+Nếu có sự cố, Owner vẫn có thể đăng nhập bằng mã email và sửa chứng chỉ.
+
+## Khắc phục sự cố
+
+<AccordionGroup>
+  <Accordion title="IdP báo ACS hoặc reply URL không hợp lệ">
+    ACS URL trong IdP phải khớp chính xác với **ACS URL** của CloudThinker, gồm cả `https://` và không có dấu gạch chéo ở cuối. Sao chép lại từ bước **SP Metadata** hoặc từ **Manage → Configuration**.
+  </Accordion>
+  <Accordion title="'Audience mismatch' hoặc 'Entity ID mismatch'">
+    Audience hoặc entity ID trong IdP phải khớp chính xác với **SP Entity ID** của CloudThinker. Phép so sánh phân biệt chữ hoa chữ thường.
+  </Accordion>
+  <Accordion title="Kiểm tra kết nối thất bại ở Certificate Valid">
+    Dán toàn bộ chứng chỉ, gồm cả dòng `BEGIN` và `END`, không có ký tự thừa. Nếu IdP đã xoay vòng chứng chỉ, dán chứng chỉ mới vào **Manage → Configuration** và nhấn **Save Changes**. Để tránh lặp lại, hãy làm theo [Xoay vòng chứng chỉ IdP](#xoay-vòng-chứng-chỉ-idp).
+  </Accordion>
+  <Accordion title="Đăng nhập được từ CloudThinker nhưng không được từ dashboard IdP">
+    Đây là hành vi mong đợi. Đăng nhập do IdP khởi tạo đã bị tắt. Hãy yêu cầu người dùng bắt đầu từ trang đăng nhập CloudThinker.
+  </Accordion>
+  <Accordion title="'SSO authentication failed. Please try again or contact your administrator.'">
+    CloudThinker hiển thị cùng một thông báo này cho mọi SAML response bị từ chối, nên hãy kiểm tra lần lượt:
+
+    - **Assertion không được ký**: IdP chỉ ký response. Bật ký assertion (xem tab provider của bạn ở trên).
+    - **Assertion bị mã hóa**: tắt mã hóa assertion cho app CloudThinker.
+    - **Sai chứng chỉ**: dán chứng chỉ ký hiện tại của IdP vào **Manage → Configuration**.
+    - **Lệch đồng hồ**: đồng hồ của IdP lệch hơn hai phút.
+  </Accordion>
+  <Accordion title="Đăng nhập thất bại dù cấu hình hợp lệ">
+    Kiểm tra người dùng đã được gán vào app CloudThinker trong IdP, rồi đối chiếu thông báo họ thấy với [Tìm nguyên nhân đăng nhập SSO thất bại](/vi/guide/security/sso#khắc-phục-sự-cố).
+  </Accordion>
+  <Accordion title="Tên hiển thị dưới dạng địa chỉ email">
+    IdP không gửi tên và họ. Thêm `firstName` và `lastName` (hoặc `givenName` và `surname`) trong ánh xạ thuộc tính của provider.
+  </Accordion>
+</AccordionGroup>
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="Kiểm tra và bắt buộc SSO" icon="key" href="/vi/guide/security/sso">
+    Chạy kiểm tra kết nối, chọn cách cấp phép và bật Require SSO
+  </Card>
+  <Card title="Cấp phép SCIM" icon="users-gear" href="/vi/guide/security/scim">
+    Tự động đồng bộ người dùng và nhóm từ IdP
+  </Card>
+</CardGroup>

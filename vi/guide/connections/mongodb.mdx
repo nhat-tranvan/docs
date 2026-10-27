@@ -1,202 +1,169 @@
 ---
 title: MongoDB
-description: "Kết nối cơ sở dữ liệu MongoDB với CloudThinker để phân tích truy vấn document, tinh chỉnh hiệu suất và thu thập thông tin vận hành"
+description: "Kết nối MongoDB hoặc Atlas để agent xem database, collection, index và query plan ở chế độ chỉ đọc"
 icon: "/images/icons/mongodb.svg"
 ---
 
 import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
 
-Kết nối cơ sở dữ liệu MongoDB của bạn để [CloudThinker](/vi/guide/agents/overview) có thể phân tích truy vấn, tối ưu hiệu suất và giám sát sức khỏe cơ sở dữ liệu.
-
-## Nền tảng được hỗ trợ
-
-| Nền tảng | Hỗ trợ |
-|----------|---------|
-| **MongoDB tự host** | 4.x, 5.x, 6.x, 7.x |
-| **MongoDB Atlas** | Tất cả phiên bản |
+Kết nối một deployment MongoDB hoặc cluster MongoDB Atlas để các agent CloudThinker xem database, collection, index và query plan. Bạn đưa cho CloudThinker một connection string của database user dành riêng, và kết nối luôn chạy ở chế độ chỉ đọc: agent truy vấn và explain được, nhưng không insert, update, drop hay tạo index được.
 
 ## Điều kiện tiên quyết
 
-- Một instance MongoDB hoặc Atlas cluster có thể tiếp cận từ CloudThinker qua mạng.
-- Quyền admin để tạo người dùng cơ sở dữ liệu riêng và gán role.
-- Connection string MongoDB kèm thông tin xác thực.
+- Một deployment MongoDB hoặc cluster Atlas mà CloudThinker truy cập được từ internet. Agent kết nối từ CloudThinker Cloud, nên `localhost` và địa chỉ nội bộ được phân giải ở phía CloudThinker, không phải trong mạng của bạn. Atlas private endpoint và VPC peering không được hỗ trợ. Xem [Truy cập dịch vụ nội bộ](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ).
+- Quyền tạo database user: `userAdmin` trên `admin` với MongoDB tự vận hành, hoặc **Project Database Access Admin** (hoặc cao hơn) trong Atlas.
 
 ## Thiết lập
 
-Chọn nền tảng MongoDB của bạn để xem hướng dẫn kết nối cụ thể.
+<Steps>
+  <Step title="Tạo user chỉ đọc">
+    <Tabs>
+      <Tab title="MongoDB tự vận hành">
+        Kết nối bằng `mongosh` với quyền admin, rồi tạo user trên database `admin`:
 
-<Tabs>
-  <Tab title="MongoDB tự host">
-    <Steps>
-      <Step title="Kết nối với tư cách admin">
-        Kết nối tới instance MongoDB bằng Mongo shell (`mongosh`) với quyền admin.
-
-        *Thay `<admin-user>`, `<admin-password>` và `<your-host>` bằng thông tin xác thực của bạn. Cơ sở dữ liệu `/admin` là bắt buộc.*
-
-        ```bash
-        mongosh "mongodb://<admin-user>:<admin-password>@<your-host>:27017/admin"
-        ```
-      </Step>
-      <Step title="Chuyển sang cơ sở dữ liệu admin">
-        Đảm bảo bạn đang ở cơ sở dữ liệu `admin` nơi người dùng được tạo:
         ```javascript
         use admin
-        ```
-      </Step>
-      <Step title="Tạo người dùng chỉ đọc">
-        Tạo người dùng riêng cho CloudThinker sử dụng các role tích hợp sẵn của MongoDB:
-        ```javascript
         db.createUser({
-          user: "<cloudthinker_user>",
+          user: "cloudthinker_readonly",
           pwd: "<secure-password>",
           roles: [
-            { role: "readAnyDatabase", db: "admin" },
+            { role: "readAnyDatabase", db: "admin" },  // or { role: "read", db: "shop" } for one database
             { role: "clusterMonitor", db: "admin" }
           ]
         })
         ```
-        Role `clusterMonitor` được khuyến nghị để phân tích metrics hiệu suất.
-      </Step>
-      <Step title="Cấu hình truy cập mạng">
-        Đảm bảo CloudThinker có thể tiếp cận cơ sở dữ liệu:
-        - Thêm IP CloudThinker vào firewall hoặc security group
-        - Đảm bảo MongoDB được bind tới địa chỉ IP có thể truy cập trong `mongod.conf`
-      </Step>
-      <Step title="Thêm kết nối trong CloudThinker">
-        Điều hướng đến **Connections → MongoDB** và dán connection string:
+      </Tab>
+      <Tab title="MongoDB Atlas">
+        Trong Atlas, mở **Security → Database Access** và nhấn **Add New Database User**. Chọn xác thực **Password**, nhập `cloudthinker_readonly` cùng một mật khẩu mạnh, và trong **Database User Privileges** chọn role có sẵn **Only read any database**. Để giới hạn agent trong một database, thay vào đó thêm `read@shop` trong **Specific Privileges**. Nhấn **Add User**.
 
-        ```
-        mongodb://<cloudthinker_user>:<secure-password>@<your-host>:27017/admin?tls=true&appName=CloudThinker
-        ```
+        Để xem trạng thái máy chủ, log và độ trễ replica, thêm cả role **clusterMonitor** trong **Specific Privileges**.
+      </Tab>
+    </Tabs>
+  </Step>
+  <Step title="Mở quyền truy cập mạng">
+    Cho phép các egress IP của CloudThinker truy cập deployment. Tài liệu này không công bố danh sách egress IP của CloudThinker: hãy hỏi đầu mối CloudThinker của bạn, hoặc [liên hệ chúng tôi](https://cloudthinker.io/contact). Với MongoDB tự vận hành, cho phép kết nối vào cổng `27017` trên firewall hoặc security group, và đảm bảo `bindIp` trong `mongod.conf` không chỉ là `127.0.0.1`. Trong Atlas, thêm mỗi IP một mục trong **Security → Network Access → IP Access List**.
+  </Step>
+  <Step title="Tạo connection string">
+    <Tabs>
+      <Tab title="MongoDB tự vận hành">
+        Với replica set, liệt kê mọi thành viên và đặt tên set:
 
-        Bao gồm `tls=true` nếu triển khai của bạn bắt buộc mã hóa TLS. Nhấn **Connect**. CloudThinker hiển thị trạng thái **Connected** khi thành công.
-      </Step>
-    </Steps>
-  </Tab>
-  <Tab title="MongoDB Atlas">
-    <Steps>
-      <Step title="Điều hướng đến Database Access">
-        Đăng nhập vào MongoDB Atlas dashboard tại [cloud.mongodb.com/v2](https://cloud.mongodb.com/v2).
-
-        Từ thanh bên trái, cuộn xuống phần **Security** và chọn **Database Access**.
-      </Step>
-      <Step title="Thêm người dùng cơ sở dữ liệu mới">
-        Nhấn **Add New Database User** và cấu hình:
-        - **Authentication Method**: Password
-        - **Username**: `<cloudthinker_user>`
-        - **Password**: tạo mật khẩu bảo mật
-        - **Database User Privileges**: chọn **Built-in Role** → **Read Any Database**
-
-        Nhấn **Add User**.
-      </Step>
-      <Step title="Cấu hình truy cập mạng">
-        Điều hướng đến **Network Access** trong phần **Security**:
-        - Nhấn **IP Access List** → **+ Add IP Address**
-        - Nhập địa chỉ IP tĩnh của CloudThinker hiển thị trên màn hình thiết lập kết nối CloudThinker
-        - Thêm ghi chú như `CloudThinker Agent Access` để kiểm toán sau này
-        - Nhấn **Confirm**
-      </Step>
-      <Step title="Lấy connection string">
-        Điều hướng đến tab **Databases** (trong **Deployment**), nhấn **Connect** trên cluster của bạn và chọn **Drivers**.
-
-        Atlas cung cấp string theo định dạng:
-        ```
-        mongodb+srv://<username>:<password>@<cluster-name>.<cluster-hash>.mongodb.net/?appName=<ClusterName>
+        ```text
+        mongodb://cloudthinker_readonly:<secure-password>@h1.example.com:27017,h2.example.com:27017,h3.example.com:27017/?replicaSet=rs0&authSource=admin&tls=true&readPreference=secondaryPreferred&appName=CloudThinker
         ```
 
-        Tùy chỉnh cho CloudThinker:
-        ```
-        mongodb+srv://<cloudthinker_user>:<secure-password>@<cluster-name>.<cluster-hash>.mongodb.net/admin?appName=CloudThinker&tls=true&retryWrites=false
+        Với máy chủ đơn, dùng một host và bỏ `replicaSet`. Chỉ bỏ `tls=true` khi máy chủ không hỗ trợ TLS.
+      </Tab>
+      <Tab title="MongoDB Atlas">
+        Trên cluster, nhấn **Connect**, chọn **Drivers** và sao chép chuỗi `mongodb+srv://`. Điền user và mật khẩu từ bước 1:
+
+        ```text
+        mongodb+srv://cloudthinker_readonly:<secure-password>@cluster0.abcde.mongodb.net/?readPreference=secondaryPreferred&appName=CloudThinker
         ```
 
-        - `/admin` chỉ định rõ cơ sở dữ liệu xác thực
-        - `appName=CloudThinker` giúp dễ nhận biết trong log cơ sở dữ liệu
-        - `tls=true` bắt buộc mã hóa truyền tải
-        - `retryWrites=false` phù hợp cho người dùng chỉ đọc này
-      </Step>
-      <Step title="Thêm kết nối trong CloudThinker">
-        Điều hướng đến **Connections → MongoDB** và dán connection string đã tùy chỉnh. Nhấn **Connect**. CloudThinker hiển thị trạng thái **Connected** khi thành công.
-      </Step>
-    </Steps>
-  </Tab>
-</Tabs>
+        Atlas tự bật TLS cho chuỗi `mongodb+srv://`.
+      </Tab>
+    </Tabs>
+
+    `readPreference=secondaryPreferred` đưa các lượt đọc của agent tới secondary, để chúng không đè lên primary production. Khi không có secondary nào, lượt đọc quay về primary. `appName=CloudThinker` gắn nhãn kết nối trong log MongoDB. Mã hóa URL các ký tự đặc biệt trong mật khẩu (`@` thành `%40`).
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Mở **More → Workspace settings → Connections**, chọn **MongoDB**, và nhấn **Connect** trên bảng chi tiết. Trong hộp thoại, bạn có thể đổi **Alias** và **Description** nếu muốn. Dán chuỗi vào trường connection string, có nhãn **MDB_MCP_CONNECTION_STRING**, rồi nhấn **Connect**.
+
+    **Trạng thái thành công:** kết nối hiện **Connecting** và **Verifying**, rồi **Connected**. Sau đó CloudThinker chạy [Discovery](/vi/guide/connections/overview#điều-gì-xảy-ra-sau-khi-kết-nối) một lần: một lượt xem chỉ đọc qua database và collection của bạn, kết quả hiện trong mục **Discovery** trên bảng chi tiết của kết nối.
+  </Step>
+</Steps>
 
 ## Chi tiết kết nối
 
-| Trường | Mô tả | Ví dụ |
-|-------|-------------|---------|
-| **Connection string** | MongoDB URI đầy đủ bao gồm thông tin xác thực | `mongodb+srv://user:pass@host/admin?tls=true` |
-| **TLS/SSL** | Bắt buộc TLS cho kết nối — dùng `tls=true` trong URI | `true` |
-| **Read preference** | Node nào xử lý thao tác đọc | `primary` |
-| **Connection timeout** | Giây chờ kết nối | `10` |
+| Trường | Bắt buộc | Mô tả | Ví dụ |
+|-------|----------|-------------|---------|
+| **Alias** | Không | Tên ngắn cho deployment này. Được điền sẵn alias còn trống kế tiếp, chẳng hạn `mongodb-1` | `prod-atlas` |
+| **Description** | Không | Deployment này là gì. Agent đọc mô tả để chọn giữa các instance | `Production Atlas cluster` |
+| **MDB_MCP_CONNECTION_STRING** | Có | URI MongoDB đầy đủ với user, mật khẩu, host và tùy chọn | `mongodb+srv://cloudthinker_readonly:<password>@cluster0.abcde.mongodb.net/` |
 
-## Quyền bắt buộc
+Các tùy chọn hữu ích trong chuỗi:
 
-| Role | Mục đích |
-|------|---------|
-| `readAnyDatabase` | Phân tích truy vấn và mức sử dụng index trên tất cả collection |
-| `clusterMonitor` | Truy cập `serverStatus`, `replSetGetStatus` và các lệnh chẩn đoán khác để lấy metrics hiệu suất |
+| Tùy chọn | Dùng khi |
+|--------|-------------|
+| `authSource=admin` | User nằm trên database `admin` và chuỗi ghi một database khác |
+| `tls=true` | Máy chủ hỗ trợ TLS và scheme là `mongodb://` |
+| `readPreference=secondaryPreferred` | Khuyến nghị cho production: lượt đọc của agent đi tới secondary và không đè lên primary |
+| `appName=CloudThinker` | Bạn muốn nhận ra phiên CloudThinker trong log và `currentOp` |
+
+## Quyền yêu cầu
+
+| Role | Mở khóa |
+|------|-----------------|
+| `readAnyDatabase` | Liệt kê database và collection, lấy mẫu document, chạy `find`, `aggregate` và `count`, đọc index và query plan |
+| `clusterMonitor` | Trạng thái máy chủ, trạng thái và độ trễ replica set, và log máy chủ gần đây |
 
 <Tip>
-Gán cả hai role để mở khóa phân tích truy vấn toàn diện và giám sát sức khỏe cluster. Không bao giờ cấp role ghi hoặc admin cho người dùng CloudThinker.
+Để giới hạn agent trong một database, cấp `read` trên database đó thay cho `readAnyDatabase`, như ở bước 1. Không bao giờ cấp `readWrite`, `dbAdmin` hay `root`: kết nối vốn đã chỉ đọc, nên role thừa chỉ thêm rủi ro mà không thêm khả năng.
 </Tip>
 
 ## Khả năng của agent
 
-Sau khi kết nối, CloudThinker có thể:
+| Khả năng | Agent làm được gì |
+|------------|--------------------|
+| **Danh mục** | Liệt kê database và collection kèm số document và dung lượng lưu trữ |
+| **Schema** | Suy ra tên và kiểu trường từ các document được lấy mẫu |
+| **Truy vấn** | Chạy truy vấn `find`, `aggregate` và `count` để trả lời câu hỏi về dữ liệu |
+| **Rà soát index** | Liệt kê index theo từng collection và dùng `explain` để kiểm tra truy vấn có dùng index không |
+| **Sức khỏe máy chủ** | Đọc log máy chủ, số kết nối và trạng thái replica (cần `clusterMonitor`) |
 
-| Khả năng | Mô tả |
-|------------|-------------|
-| **Phân tích truy vấn** | Xác định slow query, phân tích execution plan bằng `explain()` |
-| **Khuyến nghị index** | Tìm index còn thiếu, xác định index không dùng |
-| **Metrics hiệu suất** | Giám sát kết nối, mức sử dụng bộ nhớ và replication lag |
+Agent không ghi được. Các công cụ insert, update, delete, drop và tạo index đều bị tắt cho kết nối này, nên yêu cầu như "drop the sessions collection" không chạy được. Agent vẫn có thể đề xuất index để bạn tự tạo.
+
+Suy ra schema và truy vấn trả về document thật, có thể chứa dữ liệu cá nhân. [Guardrails](/vi/guide/security/custom-guardrails) quyết định những định danh nào agent chỉ thấy dưới dạng placeholder. Email và số điện thoại được bật mặc định.
 
 ### Xác minh kết nối
 
 ```text
-List all MongoDB databases and summarize their collection counts
+List the MongoDB databases with their collection counts and storage size
 ```
+
+Kết quả mong đợi là tên từng database kèm collection và dung lượng. Trên Atlas, các database hệ thống `local` và `config` bị bỏ qua vì Atlas chặn truy cập vào chúng.
 
 ### Ví dụ prompt
 
 ```text
-Analyze slow queries on the production MongoDB instance
-Find missing indexes on the users collection
-Check replication lag on the secondary nodes
+Which queries on the orders collection scan the whole collection, and what index would fix them?
+Show the indexes on every collection in the shop database and flag ones that look redundant
+What does a typical document in users look like? List its fields and types
 ```
 
 ## Khắc phục sự cố
 
-<Accordion title="Xác thực thất bại">
-- Xác minh username và password chính xác
-- Đảm bảo người dùng được tạo trên cơ sở dữ liệu `admin`, hoặc thêm `?authSource=admin` vào connection string
-- Với Atlas: xác nhận người dùng được tạo với đúng đặc quyền trong Database Access
+<Accordion title="Authentication failed">
+User, mật khẩu hoặc auth database bị sai. Nếu bạn tạo user trên `admin` và chuỗi ghi một database khác, thêm `authSource=admin`. Trong Atlas, kiểm tra user có trong **Database Access** và các ký tự đặc biệt trong mật khẩu đã được mã hóa URL.
 </Accordion>
 
-<Accordion title="Connection refused hoặc timeout">
-- Kiểm tra IP CloudThinker đã được thêm vào danh sách Atlas Network Access hoặc firewall của bạn
-- Với MongoDB local, đảm bảo `bindIp` trong `mongod.conf` không chỉ đặt là `127.0.0.1`
+<Accordion title="Server selection timed out, hoặc connection refused">
+CloudThinker không truy cập được deployment. Trong Atlas, kiểm tra **IP Access List**. Với MongoDB tự vận hành, kiểm tra firewall và đảm bảo `bindIp` không chỉ là `127.0.0.1`. Deployment trong mạng nội bộ cần có một endpoint truy cập được trước.
 </Accordion>
 
-<Accordion title="Metrics hiệu suất không khả dụng">
-- CloudThinker cần role `clusterMonitor` để chạy `serverStatus` và `replSetGetStatus`
-- Thêm role `clusterMonitor` vào người dùng CloudThinker trên cơ sở dữ liệu `admin` và kết nối lại
+<Accordion title="not authorized on admin to execute command (serverStatus, replSetGetStatus, getLog)">
+User thiếu `clusterMonitor`. Thêm role này trên database `admin`, rồi hỏi lại agent. Truy vấn vào dữ liệu của bạn vẫn chạy được khi không có role này.
+</Accordion>
+
+<Accordion title="Agent báo thao tác ghi bị chặn bởi chế độ chỉ đọc">
+Đây là hành vi đúng. Kết nối MongoDB là chỉ đọc. Hãy tự thực hiện thay đổi, hoặc yêu cầu agent đưa câu lệnh chính xác để bạn chạy.
 </Accordion>
 
 ## Bảo mật
 
 <ConnectionSecurity />
 
-- **Bắt buộc TLS** — luôn dùng `tls=true` trong connection string để mã hóa dữ liệu truyền tải.
-- **Role tối thiểu** — chỉ cấp `readAnyDatabase` và `clusterMonitor`; không bao giờ cấp role ghi hoặc admin.
+- **Chỉ đọc ở hai lớp**: bản thân kết nối không ghi được, và user chỉ có `read` hoặc `readAnyDatabase` cũng không ghi được, kể cả khi chuỗi bị lộ.
+- **Dùng TLS**: dùng `mongodb+srv://` trên Atlas, hoặc `tls=true` với MongoDB tự vận hành, để thông tin xác thực và kết quả truy vấn được mã hóa khi truyền.
 
 ## Liên quan
 
 <CardGroup cols={2}>
-  <Card title="Agent" icon="database" href="/vi/guide/agents/overview">
-    Agent tối ưu cơ sở dữ liệu
+  <Card title="Redis" icon="/images/icons/redis.svg" href="/vi/guide/connections/redis">
+    Kết nối cache Redis với ACL user chỉ đọc.
   </Card>
-  <Card title="Kết nối PostgreSQL" icon="/images/icons/postgresql.svg" href="/vi/guide/connections/postgresql">
-    Hướng dẫn thiết lập cho cơ sở dữ liệu PostgreSQL
+  <Card title="Kết nối" icon="plug" href="/vi/guide/connections/overview">
+    Xem mọi dịch vụ bạn kết nối được và cách trạng thái kết nối hoạt động.
   </Card>
 </CardGroup>

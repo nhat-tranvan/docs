@@ -1,235 +1,222 @@
 ---
-title: "Tích hợp Webhook Incident"
-description: "Kết nối nền tảng cảnh báo của bạn để tự động tạo incident với điều tra được hỗ trợ bởi AI"
+title: Webhook Signals
+description: "Gửi cảnh báo từ công cụ giám sát vào Resolve qua webhook, ánh xạ các trường và chọn khi nào CloudThinker tự điều tra."
 icon: webhook
 ---
 
-CloudThinker tích hợp với các nền tảng cảnh báo và giám sát bao gồm PagerDuty, Datadog, Grafana và nhiều hơn nữa. Mỗi tích hợp bao gồm field mapping theo nền tảng, xác thực linh hoạt và kích hoạt điều tra AI tự động.
+Webhook là một URL mà công cụ giám sát gọi mỗi khi có cảnh báo, nhờ đó Resolve thấy cảnh báo chỉ sau vài giây. Bạn tạo một webhook cho mỗi công cụ, ánh xạ các trường JSON của công cụ thành tiêu đề, mức độ nghiêm trọng và service, rồi quyết định CloudThinker có tự bắt đầu phân tích nguyên nhân gốc (RCA) hay không.
 
----
+## Luồng đi của một cảnh báo
 
-## Nền tảng được hỗ trợ
+Cảnh báo tới webhook không trở thành sự cố ngay. Cảnh báo đi qua [Pulse](/vi/guide/pulse/overview) trước.
 
-### Quản lý incident
+```mermaid
+flowchart LR
+    A["Công cụ giám sát"] -->|POST| B["Webhook URL"]
+    B --> C["Pulse: lọc nhiễu, nhóm thành cluster"]
+    C -->|"cần xử lý, Auto-investigate bật"| D["Triage"]
+    D --> E["Sự cố và RCA"]
+```
 
-<CardGroup cols={2}>
-  <Card title="PagerDuty" icon="/images/icons/integrations/pagerduty-icon.svg" href="/vi/guide/connections/pagerduty">
-    Xác thực: HMAC-SHA256
+**Signal** là một event còn lại sau bước lọc nhiễu. **Cluster** là một nhóm signal liên quan mà Pulse coi là một vấn đề. Chỉ cluster chứa signal cần xử lý mới được đưa tới triage, bước quyết định cluster đó có trở thành sự cố hay không.
 
-    Quản lý on-call và phản hồi incident với field mapping gốc cho các sự kiện triggered, acknowledged và resolved.
-  </Card>
-  <Card title="ServiceNow" icon="/images/icons/integrations/service-now.svg" href="/vi/guide/connections/servicenow">
-    Xác thực: API Key
+Webhook là một trong ba cách đưa cảnh báo vào Resolve. Nếu nguồn của bạn được lấy theo kiểu polling hoặc đến qua một kênh chat, xem [Kết nối nguồn cảnh báo](/vi/guide/incident/connect-alert-sources).
 
-    Quản lý dịch vụ IT doanh nghiệp với CMDB CI mapping để cung cấp ngữ cảnh hạ tầng.
-  </Card>
-</CardGroup>
+## Trước khi bắt đầu
 
-| Nền tảng | Ghi chú |
-|---|---|
-| **Opsgenie** | Xác thực: API Key. Quản lý cảnh báo của Atlassian với priority mapping và dữ liệu phân công nhóm. |
-| **BigPanda** | Xác thực: Bearer Token. AIOps event correlation và quản lý cảnh báo với nhóm cảnh báo thông minh. |
+- Vai trò **Admin** của workspace.
+- Quyền admin trên công cụ giám sát, để thêm webhook vào đó.
+- Một payload cảnh báo thật mà bạn kích hoạt được khi cần, hoặc một mẫu JSON của payload đó.
 
-### Giám sát & quan sát
-
-<CardGroup cols={2}>
-  <Card title="Datadog" icon="/images/icons/integrations/datadog-icon.svg" href="/vi/guide/connections/datadog">
-    Xác thực: Bearer Token
-
-    Giám sát toàn stack với số liệu, cảnh báo và tương quan dịch vụ dựa trên thẻ.
-  </Card>
-  <Card title="Grafana" icon="/images/icons/integrations/grafana-logo.svg" href="/vi/guide/connections/grafana">
-    Xác thực: Bearer Token
-
-    Thông báo cảnh báo với liên kết dashboard, ngữ cảnh panel và trích xuất common label.
-  </Card>
-  <Card title="Prometheus / Alertmanager" icon="/images/icons/integrations/prometheus-logo.svg" href="/vi/guide/connections/prometheus">
-    Xác thực: Bearer Token
-
-    Webhook receiver gốc của Alertmanager với trích xuất label, hỗ trợ nhóm và metadata Kubernetes.
-  </Card>
-</CardGroup>
-
-| Nền tảng | Ghi chú |
-|---|---|
-| **Splunk** | Xác thực: Bearer Token. Cảnh báo tìm kiếm đã lưu với ngữ cảnh kết quả và liên kết tìm kiếm. |
-
-### Cảnh báo nhà cung cấp cloud
-
-<CardGroup cols={2}>
-  <Card title="AWS CloudWatch" icon="/images/icons/integrations/aws-cloudwatch.svg" href="/vi/guide/incident/webhook-integrations/cloudwatch">
-    Xác thực: API Key
-
-    Cảnh báo dựa trên EventBridge với trạng thái alarm, dữ liệu số liệu và ngữ cảnh namespace.
-  </Card>
-</CardGroup>
-
-| Nền tảng | Ghi chú |
-|---|---|
-| **Azure Monitor** | Xác thực: Không. Hỗ trợ Common Alert Schema với ngữ cảnh tài nguyên và severity mapping. |
-| **GCP Monitoring** | Xác thực: Bearer Token. Thông báo incident với chi tiết chính sách và tên hiển thị tài nguyên. |
-
-### APM & theo dõi lỗi
-
-<CardGroup cols={2}>
-  <Card title="New Relic" icon="/images/icons/integrations/new-relic.svg" href="/vi/guide/connections/newrelic">
-    Xác thực: API Key
-
-    Quan sát toàn stack với mức độ ưu tiên issue và ngữ cảnh entity.
-  </Card>
-  <Card title="Dynatrace" icon="/images/icons/integrations/dynatrace.svg" href="/vi/guide/connections/dynatrace">
-    Xác thực: API Key
-
-    Thông minh phần mềm với phân tích tác động vấn đề và nguyên nhân gốc rễ do AI phát hiện.
-  </Card>
-</CardGroup>
-
-| Nền tảng | Ghi chú |
-|---|---|
-| **Sentry** | Xác thực: HMAC-SHA256. Theo dõi lỗi ứng dụng với chi tiết issue, stack trace và ngữ cảnh project. |
-
-### Tích hợp tùy chỉnh
-
-| Nền tảng | Ghi chú |
-|---|---|
-| **Generic Webhook** | Xác thực: Bearer Token (có thể cấu hình). Webhook hoàn toàn tùy chỉnh cho bất kỳ nền tảng nào. Tự định nghĩa field mapping bằng biểu thức JSONPath. |
-
-> **Lộ trình nền tảng:** Không thấy nền tảng của bạn? Dùng Generic Webhook để tích hợp ngay lập tức, hoặc liên hệ hỗ trợ để yêu cầu connector gốc cho công cụ giám sát của bạn.
-
----
-
-## Thiết lập tích hợp webhook
-
-Trình hướng dẫn thiết lập sẽ dẫn bạn qua lựa chọn nền tảng, cấu hình webhook và cài đặt phân tích nguyên nhân gốc rễ tự động.
+## Tạo webhook
 
 <Steps>
-  <Step title="Điều hướng đến Integrations">
-    Vào **Resolve** → **Settings** → tab **Integrations** để truy cập quản lý webhook.
+  <Step title="Mở nền tảng">
+    Vào **Resolve → Integrations** và chọn công cụ của bạn, ví dụ Datadog, Grafana hoặc PagerDuty.
   </Step>
-  <Step title="Tạo Webhook">
-    Nhấp **Connect** trên card nền tảng của bạn. Trình tạo sẽ mở với các giá trị mặc định theo nền tảng đã được cài đặt sẵn.
-
+  <Step title="Thêm signal">
+    Trong **Signals to Resolve**, nhấn **Add signal** (hoặc **Add another signal**). Hộp thoại **Create Webhook** mở ra với ba bước.
   </Step>
-  <Step title="Cấu hình thông tin cơ bản">
-    Nhập tên và mô tả tùy chọn cho webhook của bạn. Đặt giới hạn tốc độ nếu cần (mặc định: 100 yêu cầu mỗi giờ).
+  <Step title="Basic Info">
+    Giữ nguyên hoặc đổi **Webhook Name** (mặc định là `<Tool> Webhook`) và thêm **Description** nếu muốn. Nhấn **Next**.
   </Step>
-  <Step title="Xem lại Field Mapping">
-    Mỗi nền tảng có sẵn JSONPath mapping được cấu hình sẵn để trích xuất các trường incident từ payload webhook của bạn. Tùy chỉnh nếu cần:
-
-    | Trường Incident | JSONPath ví dụ | Mô tả |
-    |----------------|------------------|-------------|
-    | Title | `event.data.title` | Tiêu đề incident |
-    | Description | `event.data.description` | Thông tin chi tiết |
-    | Severity | `event.data.priority` | Critical, High, Medium, Low, Info |
-    | Service | `event.data.service.name` | Tên dịch vụ bị ảnh hưởng |
-
-    Bạn cũng có thể cấu hình **severity mapping** để chuyển đổi giá trị severity của nền tảng (ví dụ: `warning` → `medium`, `P1` → `critical`) sang mức severity của CloudThinker.
-
+  <Step title="Configure">
+    Kiểm tra **Field Mapping** và **Severity Mapping**. Cả hai đã được điền sẵn cho công cụ bạn chọn. Để **Send directly to CloudThinker** ở trạng thái tắt ([lý do](#quyết-định-khi-nào-rca-bắt-đầu)). Nhấn **Next**.
   </Step>
-  <Step title="Cấu hình cài đặt Auto-Trigger">
-    Kiểm soát cách incident kích hoạt [Phân tích Nguyên nhân Gốc rễ](/vi/guide/incident/root-cause-analysis):
-
-    - **Auto-trigger RCA:** Tự động bắt đầu điều tra AI khi incident được tạo
-    - **Minimum severity:** Chỉ kích hoạt RCA cho incident ở mức severity này hoặc cao hơn (mặc định: Medium)
-    - **Send all fields to agent:** Chuyển tiếp toàn bộ payload webhook đến tác nhân RCA để phân tích phong phú hơn
-
-  </Step>
-  <Step title="Sao chép URL Webhook & Xác thực">
-    Tab **Setup** hiển thị URL webhook và chi tiết xác thực của bạn. Sao chép các thông tin xác thực này và cấu hình trong nền tảng cảnh báo của bạn.
-
+  <Step title="Advanced">
+    Chọn **Auth Method** và đặt **Auto-investigate** (cả hai được giải thích bên dưới). Nhấn **Create**.
   </Step>
 </Steps>
 
----
+**Trạng thái thành công:** một hộp thoại hiển thị **Webhook URL**, **Secret Key** trong **Authentication Setup**, và **Integration Examples** với các tab **cURL**, **JavaScript**, **Python** và **Node.js**. Hãy sao chép URL và **Secret Key** ngay: key chỉ hiển thị một lần. Cùng hộp thoại đó có **Setup Guide** cho công cụ của bạn: làm theo hướng dẫn để dán URL và key vào công cụ. Tab **cURL** là cách nhanh nhất để gửi thử.
 
-## Phương thức xác thực
+<Tip>
+Sao chép **Secret Key** trước khi nhấn **Done**. Nếu làm mất, vào **Resolve → Integrations**, mở công cụ, rồi trong **Signals to Resolve** mở menu **Manage** (**⋯**) của hàng webhook → **Regenerate credentials**. Thao tác này thay cả **Webhook URL** lẫn **Secret Key**, và cặp cũ ngừng hoạt động ngay lập tức. Mọi công cụ đang dùng webhook đều cần URL và key mới.
+</Tip>
 
-CloudThinker hỗ trợ bốn phương thức xác thực phù hợp với yêu cầu của nền tảng. Phương thức chính xác được chọn sẵn khi bạn chọn nền tảng, nhưng bạn có thể thay đổi cho tích hợp tùy chỉnh.
+## Ánh xạ các trường
 
-| Phương thức | Cách hoạt động | Được dùng bởi |
-|--------|-------------|---------|
-| **Bearer Token** | Xác thực dựa trên token tiêu chuẩn qua header `Authorization` | Datadog, Grafana, Prometheus, Splunk, GCP Monitoring, BigPanda |
-| **HMAC-SHA256** | Xác minh chữ ký mật mã — CloudThinker xác thực chữ ký nội dung yêu cầu bằng khóa bí mật chia sẻ | PagerDuty, Sentry |
-| **API Key** | Header tùy chỉnh với tiền tố tùy chọn (ví dụ: `GenieKey`, `Api-Token`) | Opsgenie, New Relic, Dynatrace, ServiceNow, AWS CloudWatch |
-| **No Authentication** | Dành cho nền tảng xác minh danh tính qua cơ chế khác | Azure Monitor |
+Mỗi trường ánh xạ nhận một path trỏ vào JSON của cảnh báo. Chỉ **Title Path** là bắt buộc.
+
+- Dùng key phân cách bằng dấu chấm, như `event.data.title`, và `[n]` cho một phần tử trong danh sách, như `alerts[0].labels.severity`. Tiền tố `$.` được chấp nhận và tự bỏ đi.
+- Path có tối đa 8 đoạn. Không truy cập được key có chứa dấu chấm, và không có path dự phòng.
+- Path phải kết thúc tại một giá trị văn bản hoặc số duy nhất. Path kết thúc tại một danh sách hoặc object sẽ không ánh xạ ra giá trị nào.
+
+| Trường | Điền vào |
+|---|---|
+| **Title Path** | Tiêu đề sự cố. Bắt buộc. |
+| **Severity Path** | Mức độ nghiêm trọng, được chuyển đổi qua **Severity Mapping**. |
+| **Description Path** | Mô tả sự cố. |
+| **Service Path** | Service bị ảnh hưởng. Các signal cùng tên service có thể vào chung một cluster, nên hãy dùng một tên service cụ thể, không dùng giá trị chung chung như `prod`. |
+| **Resource ID Path** | Định danh của tài nguyên bị ảnh hưởng. Các lần lặp lại có cùng resource ID sẽ vào chung một cluster. Nếu để trống, CloudThinker đọc key `resource_id` ở cấp cao nhất. Xem [Cách signal vào một cluster](/vi/guide/pulse/clusters#tín-hiệu-gia-nhập-cluster-như-thế-nào). |
+| **Resource Name Path** | Tên của tài nguyên bị ảnh hưởng. |
+| **Timestamp Path** | Thời điểm event bắt đầu, theo định dạng thời gian ISO 8601. Nếu để trống, CloudThinker đọc key `timestamp` ở cấp cao nhất. Nếu không có cả hai, hoặc giá trị không phân tích được, CloudThinker dùng thời điểm nhận được lần gửi. |
+
+Công cụ của bạn quyết định cấu trúc payload. Ví dụ trong Datadog, bạn tự viết JSON trong trường **Payload** của webhook, dùng các template variable của Datadog. Preset Datadog đọc `title`, `body` và `alert_type`. Hãy thêm key `service` với một tên service, vì **Service Path** mặc định của preset (`tags`) trỏ tới một danh sách nên không ánh xạ ra giá trị nào:
+
+```json
+{
+  "title": "$EVENT_TITLE",
+  "body": "$EVENT_MSG",
+  "alert_type": "$ALERT_TYPE",
+  "service": "web-api"
+}
+```
+
+| Trường | Path | Giá trị ví dụ |
+|---|---|---|
+| **Title Path** | `title` | High CPU on web-server-01 |
+| **Description Path** | `body` | CPU usage exceeded 90% for 5 minutes |
+| **Severity Path** | `alert_type` | error |
+| **Service Path** | `service` (đổi từ `tags`) | web-api |
+
+Giá trị `service` cố định sẽ áp dụng cho mọi monitor gửi thông báo tới webhook này. `$ALERT_TYPE` của Datadog gửi `error`, `warning`, `info` hoặc `success`, nhưng **Severity Mapping** của preset Datadog chỉ gồm `alert`, `warn`, `ok` và `no data`. Trong **Severity Mapping**, nhấn **Customize**, rồi nhấn **Add Mapping** cho từng hàng dưới đây (đổi mức độ cho phù hợp với nhóm của bạn). Bạn cũng có thể thêm sau qua menu **Manage** (**⋯**) của hàng webhook → **Edit**.
+
+| Giá trị nguồn | Mức độ nghiêm trọng |
+|---|---|
+| `error` | high |
+| `warning` | medium |
+| `info` | info |
+| `success` | info |
+
+Event `success` (phục hồi) không đóng bất cứ thứ gì. Event này đến như một signal thông thường, và cluster vẫn chỉ đóng sau 12 giờ không có signal mới hoặc khi có người resolve. Bộ phân loại của CloudThinker coi trạng thái phục hồi hoặc bình thường là không cần xử lý, nên cluster đó không tự đi tới triage. Đây là đánh giá của model, nên một event phục hồi vẫn có thể lọt qua. Người dùng luôn có thể đưa một cluster tới triage bằng **Escalate**.
+
+**Severity Mapping** chuyển các giá trị riêng của công cụ sang năm mức độ của CloudThinker: critical, high, medium, low và info. Ví dụ, preset chung ánh xạ `warning` thành medium và `error` thành high. Việc khớp giá trị không phân biệt hoa thường và bỏ qua khoảng trắng hai đầu, nên `ERROR` và `error` khớp cùng một hàng.
+
+| Giá trị tại **Severity Path** | Kết quả |
+|---|---|
+| Một trong năm mức độ | Dùng nguyên giá trị. Không cần hàng ánh xạ. |
+| Có hàng ánh xạ | Mức độ của hàng đó |
+| Giá trị khác | **medium** |
+| **Severity Path** để trống hoặc không tìm thấy gì | CloudThinker đọc key `severity` hoặc `priority` ở cấp cao nhất |
+| Cũng không có key `severity` hay `priority` | **medium** |
+
+Nếu công cụ của bạn không có trong danh sách, hãy dùng [Custom source](/vi/guide/incident/webhook-integrations/custom-source). Custom source bắt một payload thật và cho bạn nhấn vào các trường để ánh xạ.
+
+## Chọn phương thức xác thực
+
+| Auth Method | Công cụ của bạn gửi | Dùng khi |
+|---|---|---|
+| **Bearer Token** | `Authorization: Bearer <secret>` | Công cụ cho phép thêm header tùy chỉnh. Mặc định cho hầu hết công cụ. Trong Datadog, trường **Custom Headers** của webhook nhận JSON: `{"Authorization": "Bearer <secret>"}`. |
+| **HMAC Signature** | Giá trị HMAC-SHA256 của body request gốc, mã hóa hex, gửi dưới dạng `sha256=<hex digest>` trong header bạn đặt tên. `X-PagerDuty-Signature` của PagerDuty (`v1=<hex digest>`) cũng được chấp nhận. | Công cụ tự ký webhook, như PagerDuty. Đặt tên header trong **HMAC Signature Header**. Nếu công cụ tự tạo signing secret, dán secret đó vào **Provider signing secret**. |
+| **API Key** | Key trong một header bạn đặt tên | Công cụ chỉ hỗ trợ header API key, như CloudWatch qua EventBridge. Đặt **API Key Header** và **Key Prefix** nếu cần. |
+| **No Authentication** | Không gửi gì | Chỉ để thử nhanh. Ai có URL cũng gửi được cảnh báo. |
+
+Hộp thoại đặt tên thông tin xác thực theo phương thức bạn chọn: **Secret Key** cho **Bearer Token**, **HMAC Secret** cho **HMAC Signature**, và **API Secret** cho **API Key**. Dù tên nào, đó vẫn là cùng một thông tin xác thực và chỉ hiển thị một lần.
+
+## Quyết định khi nào RCA bắt đầu
+
+**Auto-investigate** bật theo mặc định: các cluster cần xử lý của webhook này đi tới triage, nơi mở sự cố và điều tra. Khi tắt, cảnh báo nằm lại trong Pulse cho đến khi có người nhấn **Escalate** và **Send to triage**. Với **Only from a minimum severity**, hãy chọn một ngưỡng: **Info and above**, **Low and above**, **Medium and above**, **High and above** hoặc **Critical only**. Cảnh báo dưới ngưỡng vẫn được nhóm với các cảnh báo liên quan, nhưng không tự bắt đầu triage.
+
+[Điều gì khởi động một cuộc điều tra](/vi/guide/incident/settings#điều-gì-khởi-động-một-cuộc-điều-tra) cho biết các tùy chọn này kết hợp thế nào với **On duty** và việc bắt đầu thủ công.
 
 <Note>
-  Khi bạn thay đổi phương thức xác thực trên webhook hiện có, các tích hợp hiện tại dùng phương thức cũ sẽ ngừng hoạt động ngay lập tức. Hãy tạo lại thông tin xác thực sau khi thay đổi phương thức xác thực.
+Mỗi cuộc điều tra tự động được tính phí bằng credit. Hãy đặt mức độ nghiêm trọng tối thiểu, hoặc một [Credit limit](/vi/guide/billing/credit-limits), trước khi kết nối một công cụ nhiều nhiễu.
 </Note>
 
----
+**Send directly to CloudThinker** (ở bước **Configure**, tắt theo mặc định) bỏ qua bước lọc và nhóm của Pulse. Khi đó CloudThinker đánh giá riêng từng event. Hãy để tắt, trừ khi công cụ đã tự loại bỏ cảnh báo trùng lặp.
 
-## Tương quan cảnh báo
+## Kiểm thử toàn bộ luồng
 
-Khi nhiều cảnh báo đến trong một khoảng thời gian ngắn, CloudThinker có thể tự động tương quan chúng thành một incident duy nhất thay vì tạo bản sao. Điều này giảm mệt mỏi cảnh báo từ các lỗi cascade.
+<Steps>
+  <Step title="Kích hoạt một cảnh báo thật">
+    Kích hoạt một cảnh báo tiêu biểu từ công cụ, hoặc gửi request từ tab **cURL** trong **Integration Examples**. Với **Bearer Token**, request thử trông như sau:
 
-### Tương quan cửa sổ thời gian
+    ```bash
+    curl -X POST "https://YOUR_WEBHOOK_URL" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer YOUR_SECRET_KEY" \
+      -d '{"title": "Test: high CPU on web-01", "alert_type": "error", "service": "web-api"}'
+    ```
 
-Nhóm các cảnh báo nhận được trong cửa sổ có thể cấu hình (mặc định: 5 phút). Khi một cảnh báo mới khớp với một incident đang mở, nó được gắn là cảnh báo tương quan thay vì tạo incident mới.
+    Lần gửi thành công trả về `200` với body có `"success": true` và một `request_id`. Nếu bạn chưa thêm các hàng cho Datadog, `error` sẽ ánh xạ thành medium.
+  </Step>
+  <Step title="Kiểm tra Pulse">
+    Mở **Resolve → Pulse** và tìm signal có tiêu đề bạn đã ánh xạ.
+  </Step>
+  <Step title="Kiểm tra sự cố">
+    Trên **Resolve → Pulse**, cluster đã đi tới triage sẽ chuyển sang lane **Routed** khi được liên kết với một sự cố. Sau đó mở **Resolve → Investigation**. Khi cả **Auto-investigate** lẫn **On duty** đều bật, sự cố hiển thị **AI is handling**. Nếu cluster không bao giờ tới **Routed**, bước phân loại có thể đã đánh giá cluster là không cần xử lý. Xem [Khắc phục sự cố với cluster](/vi/guide/pulse/clusters#khắc-phục-sự-cố).
+  </Step>
+</Steps>
 
-### Tương quan dựa trên quy tắc
+**Trạng thái thành công:** signal xuất hiện trong Pulse với đúng tiêu đề, mức độ nghiêm trọng và service, và sự cố đủ điều kiện hiển thị **AI is handling**. Chỉ riêng mã `200` thì mới chứng minh được việc gửi thành công.
 
-Định nghĩa các quy tắc tùy chỉnh để khớp cảnh báo đến với incident hiện có dựa trên các thuộc tính chung. Quy tắc được cấu hình từ menu card webhook trong **Correlation Rules**.
+Hãy thử một cảnh báo cho mỗi hàng mức độ nghiêm trọng mà bạn dựa vào. Với ví dụ Datadog ở trên, gửi một `error` (ánh xạ thành high) và một `warning` (ánh xạ thành medium).
 
-Mỗi quy tắc chỉ định:
-- **Điều kiện** với logic AND/OR để khớp
-- **Mức độ ưu tiên** (0–1000) để kiểm soát thứ tự đánh giá
-- **Trọng số** (0.0–1.0) để chỉ ra độ tin cậy khớp
-- Ngưỡng **trọng số khớp tối thiểu** để chấp nhận tương quan
+## Giới hạn và phản hồi
 
-**Toán tử có sẵn:**
+| Phản hồi | Khi nào |
+|---|---|
+| `200` với `"success": true` | Lần gửi đã được chấp nhận. |
+| `400` | Webhook đang tạm dừng hoặc bị vô hiệu hóa. Hàng của webhook trong **Signals to Resolve** hiển thị **Paused**. Không có màn hình nào trong Resolve để bật lại: hãy gửi email tới [support@cloudthinker.io](mailto:support@cloudthinker.io) kèm tên nguồn và workspace của bạn, và yêu cầu bật lại. |
+| `401` | Thiếu header xác thực, hoặc URL không phải **Webhook URL** hiện hành (gõ sai, hoặc đã bị thay bởi **Regenerate credentials**). |
+| `403` | Secret hoặc chữ ký sai. |
+| `413` | Body lớn hơn 1 MB. |
+| `422` | Body không phải JSON object. Hãy gửi `{...}`, không gửi mảng hay văn bản thuần. |
+| `429` | Quá nhiều request, hoặc quá nhiều lần xác thực thất bại: sau 10 lần thất bại trong vòng 15 phút, webhook từ chối request cho đến khi hết khung 15 phút đó. Thử lại sau khoảng thời gian trong header `Retry-After` nếu có. |
 
-| Toán tử | Mô tả |
-|----------|-------------|
-| `equals` / `not_equals` | Khớp chính xác hoặc không khớp |
-| `contains` / `not_contains` | Khớp chuỗi con |
-| `starts_with` / `ends_with` | Khớp tiền tố hoặc hậu tố |
-| `regex` | Khớp biểu thức chính quy |
-| `in` / `not_in` | Giá trị có hoặc không có trong danh sách |
-| `intersects` | Giao nhau mảng (ví dụ: thẻ chung) |
-| `exists` | Trường có mặt |
+<Warning>
+Theo mặc định, mỗi webhook nhận tối đa 1.000 lần gửi mỗi giờ. Các lần gửi vượt mức vẫn nhận `200` với `"success": true`, vì giới hạn được kiểm tra sau khi phản hồi, nhưng chúng bị loại bỏ mà không báo. Các lần gửi đó không bao giờ trở thành signal và không được tính vào **Signals ingested** trong [Pulse analytics](/vi/guide/pulse/analytics). Resolve không hiển thị số lần bị loại, nên dấu hiệu duy nhất là cảnh báo bị thiếu trong **Resolve → Pulse** khi có đợt tăng đột biến.
 
----
+Để tránh tình trạng này:
 
-## Bảo mật & giới hạn
+- Nâng giới hạn: mở menu **Manage** (**⋯**) của hàng webhook → **Edit** và đổi **Rate limit (requests per hour)**. Giới hạn tối đa là 10.000, và `0` nghĩa là không giới hạn.
+- Chia các monitor có lưu lượng lớn ra nhiều webhook.
+- Loại bỏ trùng lặp hoặc nhóm cảnh báo ngay trong công cụ trước khi gửi.
+</Warning>
 
-### Giới hạn payload
+Pulse coi một lần gửi là trùng lặp khi nguồn, tài nguyên, tiêu đề, mức độ nghiêm trọng và thời điểm event (chính xác tới phút; xem **Timestamp Path** để biết giá trị này lấy từ đâu) khớp với một signal trong một giờ qua. Lần gửi trùng lặp làm tăng bộ đếm của signal đó thay vì tạo signal mới. Cluster đóng sau 12 giờ không có signal mới, hoặc khi có người resolve. Xem [Vòng đời của cluster](/vi/guide/pulse/clusters#vòng-đời-cluster).
 
-| Giới hạn | Giá trị |
-|-------|-------|
-| Kích thước body HTTP tối đa | 1 MB |
-| Kích thước payload lưu trữ tối đa | 100 KB |
-| Độ dài trường tối đa | 10.000 ký tự |
-| Số phần tử mảng tối đa | 100 phần tử |
-| Độ sâu lồng tối đa | 10 cấp |
+## Khắc phục sự cố
 
-### Giới hạn tốc độ
+<AccordionGroup>
+  <Accordion title="Công cụ báo lỗi 401 hoặc 403">
+    **Nguyên nhân:** header xác thực không khớp với **Auth Method**, hoặc (với lỗi `401`) công cụ vẫn gửi tới một **Webhook URL** cũ. **Kiểm tra:** URL, tên header và secret trong công cụ so với **Authentication Setup**. **Cách sửa:** dán lại secret, hoặc dùng **Regenerate credentials** trong menu **Manage** của hàng webhook ở **Resolve → Integrations**.
+  </Accordion>
+  <Accordion title="Gửi thành công nhưng không có gì xuất hiện trong Pulse">
+    **Nguyên nhân:** Pulse đã lọc cảnh báo như nhiễu, tính cảnh báo là bản trùng của một signal trước đó, hoặc khoảng thời gian đang xem che mất cảnh báo. **Kiểm tra:** mở rộng khoảng thời gian trên **Resolve → Pulse**, rồi di chuột lên phễu ở trên cùng để xem bao nhiêu event đã bị lọc. Nếu bạn gửi cùng một cảnh báo hai lần trong vòng một phút, hãy tìm signal trước đó: bộ đếm của signal đó đã tăng lên (xem [Giới hạn và phản hồi](#giới-hạn-và-phản-hồi)). **Cách sửa:** xem [Lọc nhiễu](/vi/guide/pulse/clusters#lọc-nhiễu) để biết từng bước kiểm tra.
+  </Accordion>
+  <Accordion title="Signal đến với tiêu đề trống hoặc sai mức độ nghiêm trọng">
+    **Nguyên nhân:** một path không khớp với payload, hoặc giá trị mức độ nghiêm trọng của công cụ chưa có hàng ánh xạ. **Cách sửa:** đối chiếu các path với một payload thật, rồi thêm giá trị còn thiếu vào **Severity Mapping**.
+  </Accordion>
+  <Accordion title="Cảnh báo đã tới Pulse nhưng RCA không bắt đầu">
+    **Nguyên nhân:** **Auto-investigate** đang tắt, mức độ nghiêm trọng thấp hơn ngưỡng, hoặc **On duty** hiển thị **Paused**. **Cách sửa:** kiểm tra cả ba theo [Điều gì khởi động một cuộc điều tra](/vi/guide/incident/settings#điều-gì-khởi-động-một-cuộc-điều-tra), hoặc nhấn **Escalate** và **Send to triage** trên cluster. Nếu sự cố đã mở, nhấn **Investigate** trên sự cố đó.
+  </Accordion>
+</AccordionGroup>
 
-| Giới hạn | Giá trị |
-|-------|-------|
-| Giới hạn tốc độ mặc định | 100 yêu cầu mỗi giờ mỗi webhook |
-| Giới hạn lỗi xác thực | 10 lỗi trong cửa sổ 15 phút |
-| Phản hồi khi vượt quá | HTTP 429 |
-
-Giới hạn tốc độ có thể cấu hình theo từng webhook. Đặt thành 0 để không giới hạn.
-
-### Tính năng bảo mật
-
-- **Xác minh chữ ký an toàn về thời gian** ngăn chặn tấn công timing trên HMAC validation
-- **Lưu trữ khóa bí mật được mã hóa** — các khóa bí mật webhook được mã hóa khi lưu trữ
-- **Xoay thông tin xác thực** — tạo lại token và khóa bí mật webhook mà không cần tạo lại webhook
-- **Làm sạch payload** — các trường quá lớn được tự động cắt ngắn
-- **Lọc header nhạy cảm** — header xác thực bị loại khỏi nhật ký kiểm tra
-
----
-
-## Liên quan
+## Bước tiếp theo
 
 <CardGroup cols={2}>
-  <Card title="AWS CloudWatch" icon="/images/icons/integrations/aws-cloudwatch.svg" href="/vi/guide/incident/webhook-integrations/cloudwatch">
-    Hướng dẫn từng bước để định tuyến CloudWatch alarm qua Amazon EventBridge.
+  <Card title="Kết nối CloudWatch" icon="aws" href="/vi/guide/incident/webhook-integrations/cloudwatch">
+    Gửi alarm CloudWatch qua EventBridge.
   </Card>
-  <Card title="Root cause analysis" icon="magnifying-glass" href="/vi/guide/incident/root-cause-analysis">
-    Cấu hình điều tra tự động được hỗ trợ bởi AI được kích hoạt bởi webhook đến.
+  <Card title="Thêm custom source" icon="plug" href="/vi/guide/incident/webhook-integrations/custom-source">
+    Kết nối một hệ thống không có preset bằng cách nhấn vào các trường trong payload.
+  </Card>
+  <Card title="Tìm hiểu Pulse" icon="wave-pulse" href="/vi/guide/pulse/overview">
+    Xem cách signal được lọc, nhóm và định tuyến.
+  </Card>
+  <Card title="Quản lý integration" icon="arrows-rotate" href="/vi/guide/incident/integrations">
+    Kiểm tra mức sẵn sàng và bật các kết quả đầu ra cho từng nền tảng.
   </Card>
 </CardGroup>
