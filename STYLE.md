@@ -25,7 +25,7 @@ CloudThinker builds **Frontier Investigation Agents**. They find the root cause.
 |---|---|---|---|
 | Resolve | Finds the root cause. In minutes. | Finds the root cause, proposes the fix. Every incident makes it smarter. | The Frontier Investigation Agent for production incidents |
 | Review | Nothing breaks in production. | Catches what would break production. Proposes the fix. | The Frontier Investigation Agent for code changes |
-| Cyber | Hacks you before hackers do. | Every finding proven. Every fix ready to merge. | The Frontier Investigation Agent for application security |
+| Cyber | Find the real vulnerabilities in your running app, and fix them. | Verified findings. Fix PRs. Only on apps you own. | The Frontier Investigation Agent for application security |
 | Optimize | Pays only for what you use. | Finds the why behind every cost spike. Ships the fix as a merge request. | The Frontier Investigation Agent for cloud cost |
 | Customize | Works the way your team works. | Your rules, runbooks and tools. You decide what runs alone. | How you shape the agents to your team |
 | Automation | Put routine cloud ops on autopilot. | Routine checks run on a schedule or an event. Writes wait for your approval. | How you run the agents on a schedule or an event |
