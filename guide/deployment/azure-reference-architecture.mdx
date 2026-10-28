@@ -1,0 +1,74 @@
+---
+title: Enterprise Reference Architecture on Azure
+sidebarTitle: Azure reference architecture
+description: "Review how a self-hosted CloudThinker Enterprise deployment is laid out in your own Azure subscriptions, from network to data."
+icon: microsoft
+---
+
+CloudThinker Enterprise can run single-tenant in Azure subscriptions your organization owns, reachable only from your private network. This page shows the reference design that security and platform teams review before a self-hosted deployment.
+
+<Frame caption="CloudThinker Enterprise reference architecture on Microsoft Azure">
+  <img src="/images/deployment/enterprise-reference-architecture-azure.png" alt="CloudThinker Enterprise in a customer Azure tenant: a private virtual network across three availability zones with AKS platform and sandbox node pools, PostgreSQL Flexible Server, Azure Managed Redis, and Azure services reached through private endpoints, connected to the on-premises data centre over ExpressRoute." />
+</Frame>
+
+<Note>
+**Reference design.** Self-hosted deployments are in early access. Components, sizing, and supported services are confirmed during onboarding and can vary by release. See [Deployment options](/guide/deployment/overview).
+</Note>
+
+## Layers
+
+| Layer | Microsoft Azure services | What it does |
+|---|---|---|
+| Connectivity | Azure ExpressRoute or VPN Gateway, a hub network, Azure DNS Private Resolver | Users and connections reach the deployment over your private network. There's no internet ingress. |
+| Ingress | Internal Azure Load Balancer, certificates in Azure Key Vault | Serves the web console and API over TLS 1.2 or later. |
+| Compute | Azure Kubernetes Service as a private cluster, two node pools across three availability zones | The platform node pool runs the web console, API, agent workers, and vector store. The sandbox node pool runs agent-generated code and connection commands. |
+| Data | Azure Database for PostgreSQL Flexible Server, Azure Managed Redis, Azure Blob Storage, Azure Files | Holds conversations, findings, the task queue, documents, and shared files, encrypted with keys you manage. |
+| AI models | Microsoft Foundry, or a model you host behind an OpenAI-compatible endpoint | Model calls stay in the subscription and region you choose. The model is confirmed during onboarding. |
+| Azure APIs | Private endpoints (Azure Private Link) for Container Registry, Key Vault, Storage, and Azure Monitor | Workloads call Azure without leaving the private network. |
+| Security and audit | Microsoft Defender for Cloud, Microsoft Sentinel, Activity Log, Azure Policy | Your security subscription keeps full visibility, and logs flow to your SIEM. |
+| Recovery | Azure Backup with an immutable vault in a recovery region | Daily backups are copied to a second region. |
+
+## How a request flows
+
+1. A user opens the web console over ExpressRoute or VPN. The hub network routes the request to the internal load balancer.
+2. The API checks the user's [role](/guide/security/roles) and queues the task for an agent worker.
+3. CloudThinker plans each step with the model you configured. Reads run, and every write goes through [Approvals](/guide/approvals/overview), which can wait for a person or refuse it.
+4. Commands run in a sandbox on the sandbox node pool. Connections reach on-premises systems through the hub network, and other subscriptions through a read-only role assigned to CloudThinker's workload identity.
+5. Data, secrets, and logs stay in your environment. Backups are copied to the recovery region.
+
+## Design principles
+
+| Principle | How the design applies it |
+|---|---|
+| Private network only | No public IP address or public load balancer. |
+| No long-lived credentials | Each workload uses its own managed identity through Microsoft Entra Workload ID. Other subscriptions are reached through role assignments you create and can revoke. |
+| Keys you manage | Keys in Azure Key Vault or Managed HSM encrypt the database, cache, storage, and logs. |
+| Isolated agent code | Agent-generated code runs only in sandboxes, on nodes kept apart from the platform. |
+| Approval for changes | Writes pass Approvals before they run. A read-only credential can't write at all. |
+| Read-only by default | Connected systems get least-privilege read access. Add change access only where you approve it. |
+
+## What you provide
+
+- A Microsoft Entra tenant with management groups and separate connectivity, security, and workload subscriptions.
+- Azure ExpressRoute or a site-to-site VPN from your data centre.
+- An identity provider that supports SAML 2.0 or OIDC. See [Single sign-on](/guide/security/sso).
+- Access to approved models in Microsoft Foundry, or a model endpoint you host.
+
+To start a self-hosted deployment, follow [Request a private deployment](/guide/deployment/overview#request-a-private-deployment).
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Deployment options" icon="server" href="/guide/deployment/overview">
+    Compare the hosted cloud, Workers, and private deployments.
+  </Card>
+  <Card title="Security and trust" icon="shield-halved" href="/guide/security/overview">
+    Answer a vendor security review.
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Control which agent writes run, wait, or are refused.
+  </Card>
+  <Card title="BYOK" icon="key" href="/guide/byok">
+    Bring your own LLM provider credentials.
+  </Card>
+</CardGroup>
