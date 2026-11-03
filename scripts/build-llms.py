@@ -28,8 +28,8 @@ out = [
     "# CloudThinker",
     "",
     "> CloudThinker builds Frontier Investigation Agents. They find the root cause. You approve the fix. "
-    "Products: Resolve (incidents), Review (code changes), Cyber (application security), Optimize (cloud cost), "
-    "Customize (your rules, runbooks and tools) and Automation (scheduled and event-driven runs).",
+    "Four products: Resolve (incidents), Review (code changes), Cyber (application security) and Optimize (cloud cost). "
+    "Customize (your rules, runbooks and tools) and Automation (scheduled and event-driven runs) shape and schedule them.",
     "",
 ]
 

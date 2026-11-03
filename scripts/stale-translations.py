@@ -10,7 +10,7 @@ import json
 import os
 
 STALE = {
-    "index", "quickstart", "learn/faq",
+    "index", "quickstart",
     "guide/use-cases/kubernetes-health-monitoring", "guide/skills/overview",
     "guide/knowledge", "guide/artifacts/overview",
     "guide/connections/cloudflare", "guide/connections/betterstack",
