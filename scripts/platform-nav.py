@@ -25,7 +25,8 @@ GROUPS = [
     ("Admin Settings", ["guide/admin-settings", "guide/organization", "guide/workspaces",
                         "guide/billing/subscription", "guide/billing/pricing",
                         "guide/billing/credit-limits", "guide/billing/usage",
-                        "guide/capabilities", "guide/workers"]),
+                        "guide/capabilities", "guide/workers",
+                        "guide/worker-security"]),
     ("Run anywhere", ["guide/deployment/overview"]),
     ("Artifacts and sharing", ["guide/artifacts/overview", "guide/sharing"]),
 ]
