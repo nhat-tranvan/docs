@@ -1,0 +1,163 @@
+---
+title: FortiGate
+description: "Kết nối firewall FortiGate để agent kiểm tra tình trạng thiết bị, license và lưu lượng interface, đồng thời thay đổi cấu hình khi được phê duyệt"
+icon: "/images/icons/fortigate.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
+
+Kết nối một firewall FortiGate để các agent CloudThinker có thể báo cáo tình trạng thiết bị, thời hạn license và lưu lượng interface, xem xét policy và route, và thực hiện thay đổi cấu hình qua các phê duyệt của bạn. Kết nối dùng một **REST API token** của FortiGate (token gắn với một API administrator riêng), và CloudThinker phải truy cập được management interface của FortiGate qua HTTPS.
+
+## Điều kiện tiên quyết
+
+- Một FortiGate có HTTPS management interface mà CloudThinker truy cập được từ internet. Giới hạn quyền truy cập đó trong các egress IP của CloudThinker, bằng **Trusted Hosts** trên API administrator (bước 2) và một rule firewall hoặc local-in policy phía trước interface. Kết nối này chạy từ CloudThinker Cloud, nên không có lựa chọn mạng riêng. Xem [Truy cập dịch vụ nội bộ](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ).
+- Một administrator FortiGate có profile **super_admin**. Chỉ profile đó mới tạo được REST API administrator.
+- Quyền chỉnh sửa kết nối trong workspace CloudThinker của bạn.
+
+## Thiết lập
+
+<Steps>
+  <Step title="Tạo administrator profile">
+    Trong FortiGate, vào **System → Admin Profiles** và nhấn **Create New**. Đặt tên là `cloudthinker` và đặt mọi quyền thành **Read**.
+
+    Chỉ đặt **Read/Write** cho các khu vực bạn muốn agent thay đổi, chẳng hạn **Firewall**. Xem [Quyền yêu cầu](#quyền-yêu-cầu).
+  </Step>
+  <Step title="Tạo REST API administrator">
+    Vào **System → Administrators** và nhấn **Create New → REST API Admin**. Điền:
+    - **Username**: `cloudthinker`
+    - **Administrator Profile**: profile `cloudthinker`
+    - **PKI Group**: để trống
+    - **Trusted Hosts**: khuyến nghị. Thêm các địa chỉ egress IP của CloudThinker để token không hoạt động từ bất kỳ nơi nào khác. Tài liệu này không công bố danh sách egress IP của CloudThinker: hãy hỏi đầu mối liên hệ CloudThinker của bạn, hoặc [liên hệ chúng tôi](https://cloudthinker.io/contact).
+
+    Nhấn **OK** và sao chép token. FortiGate chỉ hiển thị token một lần.
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Trên thanh bên, nhấn **More → Workspace settings → Connections**. Trên tab **Builtin Connections**, tìm **FortiGate** và nhấn **Connect**. Điền các trường từ [Chi tiết kết nối](#chi-tiết-kết-nối) và nhấn **Connect**.
+
+    **FORTIGATE_VERIFY_SSL** bắt đầu ở **Skip SSL verification**, nên TLS không được kiểm tra trừ khi bạn thay đổi. Nếu FortiGate đã có chứng chỉ do CA ký, hãy chọn **Verify SSL certificate** ngay. Nếu chưa, hãy chuyển sang lựa chọn đó khi bạn cài chứng chỉ.
+
+    CloudThinker kiểm tra token bằng cách đọc trạng thái hệ thống của FortiGate.
+
+    **Trạng thái thành công:** thông báo kiểm tra hiển thị `FortiGate connection verified` và kết nối hiển thị **Connected**.
+  </Step>
+</Steps>
+
+## Chi tiết kết nối
+
+| Trường | Mô tả | Ví dụ |
+|-------|-------------|---------|
+| **FORTIGATE_HOST** | Địa chỉ hoặc hostname của FortiGate, không có `https://` hay cổng | `fw.example.com` |
+| **FORTIGATE_PORT** | Cổng quản trị HTTPS. Mặc định `443` | `443` |
+| **FORTIGATE_API_TOKEN** | Token của REST API administrator | `<your-api-token>` |
+| **FORTIGATE_VDOM** | Virtual domain (VDOM) mà agent làm việc. Mặc định `root` | `root` |
+| **FORTIGATE_VERIFY_SSL** | **Verify SSL certificate** (khuyến nghị, cần chứng chỉ tin cậy do CA ký trên FortiGate) hoặc **Skip SSL verification** (mặc định, cho chứng chỉ tự ký tích hợp sẵn của FortiGate) | **Skip SSL verification** (mặc định); **Verify SSL certificate** khi đã cài chứng chỉ do CA ký |
+
+Agent chỉ thấy VDOM bạn nhập. Để bao phủ nhiều VDOM, hãy thêm một kết nối cho mỗi VDOM. Trên FortiGate không dùng VDOM, giữ `root`.
+
+<Warning>
+**Skip SSL verification** là mặc định, nghĩa là CloudThinker không thể phân biệt FortiGate của bạn với một thiết bị giả mạo. Đừng để tùy chọn này trên firewall production. Hãy cài chứng chỉ do CA ký trên admin interface của FortiGate và chuyển sang **Verify SSL certificate**.
+</Warning>
+
+## Quyền yêu cầu
+
+Token có đúng các quyền của administrator profile gắn với token.
+
+| Mục tiêu | Quyền truy cập của profile |
+|------|----------------|
+| Đọc tình trạng thiết bị, license, lưu lượng và cấu hình | **Read** trên mọi khu vực |
+| Thay đổi các đối tượng cấu hình, chẳng hạn địa chỉ hoặc policy firewall | **Read/Write** chỉ trên các khu vực đó |
+
+<Tip>
+Bắt đầu với **Read** ở mọi nơi. Thêm **Read/Write** cho một khu vực khi một quy trình cần đến, và giữ **System** và **Network** ở chế độ chỉ đọc để agent không thể chạm vào cài đặt administrator hoặc interface.
+</Tip>
+
+## Khả năng của agent
+
+| Khả năng | Agent có thể làm gì |
+|------------|--------------------|
+| **Tổng quan thiết bị** | Báo cáo hostname, model, số serial, phiên bản firmware và uptime |
+| **Tình trạng license** | Hiển thị trạng thái và ngày hết hạn của license và subscription |
+| **Lưu lượng interface** | Xếp hạng interface theo lưu lượng gửi và nhận, kèm băng thông |
+| **Xem xét cấu hình** | Đọc policy firewall, địa chỉ, route, cài đặt VPN và các cấu hình khác |
+| **Thay đổi cấu hình** | Tạo, cập nhật hoặc xóa một đối tượng cấu hình cho mỗi yêu cầu |
+
+Thao tác đọc chạy mà không cần hỏi. Mọi thay đổi cấu hình đều là thao tác ghi: agent nêu chính xác đối tượng và thay đổi, và từng đối tượng đi qua Approvals của bạn một cách riêng rẽ. Agent chỉ có thể ghi các đối tượng cấu hình, không bao giờ chạy lệnh trên thiết bị.
+
+Thao tác ghi cũng cần bật **Allow writes**, vốn bật sẵn. Để khóa thao tác ghi trong CloudThinker, mở **FortiGate** trong **More → Workspace settings → Connections** và tắt công tắc **Allow writes** trên bảng chi tiết.
+
+<ApprovalDefault />
+
+Với firewall production, chọn **Manual** để mọi thay đổi đều phải có người duyệt. Khi CloudThinker bật [Rule enforcement](/vi/guide/approvals/rules#khắc-phục-sự-cố) cho workspace của bạn, một [Rule](/vi/guide/approvals/rules) **Ask first** có thể áp dụng riêng cho kết nối này.
+
+<Warning>
+Thay đổi cài đặt administrator hoặc interface có thể khóa bạn khỏi FortiGate hoặc làm hở firewall. Khi một thay đổi chờ bạn phê duyệt, hãy đọc chính xác đối tượng và thay đổi trong thẻ phê duyệt trước khi phê duyệt.
+</Warning>
+
+Trước khi phê duyệt thao tác ghi:
+
+- **Sao lưu cấu hình.** Lưu bản sao lưu cấu hình FortiGate trước, để bạn có thể khôi phục nếu một thay đổi gặp sự cố.
+- **Giữ các giá trị trước đó.** Yêu cầu agent đọc đối tượng trước khi thay đổi. Để hoàn tác, yêu cầu agent đặt lại các giá trị đó.
+- **Kiểm tra FortiManager.** Nếu FortiManager quản lý FortiGate này, hãy thực hiện thay đổi ở đó. Các thay đổi cục bộ có thể bị ghi đè ở lần install tiếp theo của FortiManager.
+
+### Xác minh kết nối
+
+```text
+Summarize my FortiGate: model, firmware version, license status, and the five busiest interfaces
+```
+
+Kết nối hoạt động sẽ trả về model và số serial của thiết bị và liệt kê các interface có tên như `wan1`. Lỗi `401` nghĩa là token bị từ chối: xem Khắc phục sự cố.
+
+### Ví dụ prompt
+
+```text
+Check which FortiGate licenses and subscriptions expire in the next 90 days
+Show interface traffic on the FortiGate and flag any interface close to saturation
+List the firewall address objects on the FortiGate and flag any that no policy uses
+Create a firewall address object named blocklist-203.0.113.7 for 203.0.113.7/32
+```
+
+## Khắc phục sự cố
+
+<Accordion title='Kiểm tra thất bại với "returned error: 401"'>
+Token bị từ chối. Kiểm tra xem bạn đã sao chép toàn bộ token chưa, **PKI Group** để trống trên REST API administrator, và **Trusted Hosts** (nếu có đặt) bao gồm các địa chỉ của CloudThinker. System event log của FortiGate ghi lại lần đăng nhập thất bại và IP nguồn, để bạn có thể so sánh với danh sách Trusted Hosts.
+</Accordion>
+
+<Accordion title='Kiểm tra thất bại với "Failed to connect" hoặc "Could not resolve host"'>
+CloudThinker không thể truy cập FortiGate. Kiểm tra **FORTIGATE_HOST** và **FORTIGATE_PORT**, và đảm bảo management interface chấp nhận HTTPS từ CloudThinker.
+</Accordion>
+
+<Accordion title="SSL certificate problem">
+Chứng chỉ của FortiGate không được tin cậy. Cài chứng chỉ do CA ký trên FortiGate. Để kiểm tra trước khi có chứng chỉ, đặt **FORTIGATE_VERIFY_SSL** thành **Skip SSL verification**, và chuyển sang **Verify SSL certificate** khi chứng chỉ đã sẵn sàng.
+</Accordion>
+
+<Accordion title="Invalid FortiGate connection configuration">
+**FORTIGATE_HOST** hoặc **FORTIGATE_API_TOKEN** đang trống. Điền cả hai và kết nối lại.
+</Accordion>
+
+<Accordion title="Đã kết nối, nhưng thiếu đối tượng">
+Agent chỉ thấy VDOM trong **FORTIGATE_VDOM**. Đặt giá trị này thành VDOM chứa các đối tượng, hoặc thêm một kết nối thứ hai cho VDOM đó.
+</Accordion>
+
+<Accordion title="Thay đổi cấu hình thất bại với HTTP 403">
+Administrator profile không cho phép thay đổi đó. Cấp **Read/Write** cho profile trên khu vực đó, hoặc tự thực hiện thay đổi trong FortiGate.
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Giới hạn trusted host.** Giới hạn REST API administrator trong các địa chỉ egress của CloudThinker để token có bị lộ cũng không dùng được ở nơi khác.
+- **Xác minh chứng chỉ.** **Skip SSL verification** là mặc định, nhưng hãy coi đó là cài đặt thử nghiệm. Dùng **Verify SSL certificate** khi FortiGate đã có chứng chỉ tin cậy.
+- **Token luôn được che.** CloudThinker chèn token lúc chạy và che token khỏi đầu ra lệnh, nên token không xuất hiện trong chat.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Quyết định thay đổi nào được chạy, chờ người duyệt, hoặc bị từ chối
+  </Card>
+  <Card title="Kết nối Wazuh" icon="/images/icons/wazuh.svg" href="/vi/guide/connections/wazuh">
+    Cảnh báo bảo mật và tình trạng agent từ Wazuh SIEM của bạn
+  </Card>
+</CardGroup>

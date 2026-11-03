@@ -1,151 +1,147 @@
 ---
 title: CircleCI
-description: "Kết nối CircleCI với CloudThinker để giám sát trạng thái pipeline, phân tích workflow và job, phân loại build log và điều khiển pipeline được kiểm soát bởi phê duyệt"
+description: "Kết nối CircleCI để agent phân loại pipeline lỗi, tìm test flaky, kiểm tra config và chạy lại workflow qua Approvals"
 icon: "/images/icons/circleci.svg"
 ---
 
 import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
 
-Kết nối tài khoản CircleCI của bạn để cho phép các agent CloudThinker giám sát trạng thái pipeline, kiểm tra workflow và job, phân loại build và test thất bại từ log, cũng như chạy các thao tác điều khiển được kiểm soát bởi phê duyệt như chạy lại workflow, kích hoạt pipeline hoặc rollback deployment.
-
-CircleCI xác thực bằng **Personal API Token**. Token kế thừa quyền của người tạo, vì vậy những gì agent có thể truy cập phản ánh quyền truy cập project của người dùng đó.
-
----
+Kết nối CircleCI để các agent CloudThinker đọc trạng thái pipeline, lấy log build và test để tìm lý do một lượt chạy thất bại, phát hiện test flaky và kiểm tra file `.circleci/config.yml` của bạn. Kết nối dùng personal API token của CircleCI, nên agent truy cập đúng những project mà người dùng của token nhìn thấy.
 
 ## Điều kiện tiên quyết
 
-- Một **tài khoản CircleCI** với quyền truy cập vào tổ chức và các project bạn muốn điều tra.
-- Một **Personal API Token**.
-- Với các thao tác điều khiển được kiểm soát bởi phê duyệt, người dùng của token cần có **quyền trigger/pipeline** trên project mục tiêu.
-
-<Info>
-Phân tích chỉ đọc hoạt động với Personal API Token tiêu chuẩn. Các thao tác điều khiển được kiểm soát bởi phê duyệt bổ sung yêu cầu người dùng của token có quyền trigger trên project.
-</Info>
-
----
+- Một tài khoản CircleCI nhìn thấy organization và các project bạn muốn agent điều tra.
+- Ít nhất một project mà tài khoản đó follow. Agent tìm project từ danh sách đã follow. Để follow, đăng nhập CircleCI bằng người dùng của token, mở **Projects** và nhấn **Follow Project** bên cạnh từng repository.
+- Với test flaky và kết quả test của job: các job phải tải kết quả JUnit lên bằng `store_test_results`. Nếu không, CircleCI không có dữ liệu test để trả về.
+- Để agent khởi chạy hoặc chạy lại pipeline: cùng tài khoản đó cần quyền trigger pipeline trên các project này.
+- Với CircleCI Server tự lưu trữ: CloudThinker phải truy cập được server qua HTTPS. Xem [Truy cập dịch vụ riêng tư](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ).
 
 ## Thiết lập
 
 <Steps>
-  <Step title="Tạo Personal API Token">
-    Trong CircleCI, vào **user avatar → User Settings → Personal API Tokens** ([app.circleci.com/settings/user/tokens](https://app.circleci.com/settings/user/tokens)) và nhấn **Create New Token**:
-    - **Token name**: `cloudthinker`
-    - **Expiry date**: chọn thời hạn và lên kế hoạch xoay vòng
+  <Step title="Tạo personal API token">
+    Trong CircleCI, mở **User Settings → Personal API Tokens** ([app.circleci.com/settings/user/tokens](https://app.circleci.com/settings/user/tokens)) và nhấn **Create New Token**. Đặt tên là `cloudthinker`.
 
-    Sao chép token ngay lập tức — CircleCI chỉ hiển thị một lần.
+    Sao chép token ngay. CircleCI chỉ hiển thị token một lần.
   </Step>
-  <Step title="Thêm kết nối trong CloudThinker">
-    Điều hướng đến **Connections → CircleCI** và nhập:
-    - **Token**: Personal API Token bạn vừa tạo
-    - **Base URL**: `https://circleci.com` cho CircleCI cloud, hoặc URL cài đặt của bạn cho Server hoặc Standalone tự lưu trữ
+  <Step title="Thêm kết nối">
+    Mở **More → Workspace settings → Connections**, giữ nguyên tab **Builtin Connections** và chọn **CircleCI**. Điền:
+    - **CIRCLECI_TOKEN**: token bạn vừa tạo.
+    - **CIRCLECI_BASE_URL**: giữ `https://circleci.com` với CircleCI cloud. Chỉ đổi khi bạn dùng bản cài đặt CircleCI Server tự lưu trữ.
 
-    Nhấn **Connect**. CloudThinker xác minh thông tin xác thực và hiển thị trạng thái **Connected**.
+    Nhấn **Connect**.
+
+    **Trạng thái thành công:** hộp thoại đóng lại và kết nối hiển thị **Connected**.
+  </Step>
+  <Step title="Xác nhận token hoạt động">
+    Chạy prompt trong phần [Xác minh kết nối](#xác-minh-kết-nối). CloudThinker không kiểm tra token với CircleCI khi bạn kết nối, nên trạng thái **Connected** chưa chứng minh token hợp lệ.
   </Step>
 </Steps>
 
-<Warning>
-Sao chép Personal API Token ngay sau khi tạo. Bạn cần tạo token mới nếu mất.
-</Warning>
-
----
-
 ## Chi tiết kết nối
 
-| Trường | Mô tả | Ví dụ |
-|--------|-------|-------|
-| **CIRCLECI_TOKEN** | Personal API Token dùng để xác thực kết nối | — |
-| **CIRCLECI_BASE_URL** | `https://circleci.com` cho cloud, hoặc URL cài đặt Server hay Standalone của bạn | `https://circleci.com` |
+| Trường | Bắt buộc | Mô tả | Ví dụ |
+|-------|----------|-------------|---------|
+| **CIRCLECI_TOKEN** | Có | Personal API token. Token mang quyền truy cập của người dùng đã tạo ra nó | `CCIPAT_...` |
+| **CIRCLECI_BASE_URL** | Không | Host của bản cài đặt CircleCI. Chỉ host, không kèm path phía sau | `https://circleci.com` |
 
-<Note>
-CloudThinker tự động xác định tổ chức và các project đang theo dõi từ token, nên không cần cấu hình thủ công org hay project ID trên CircleCI cloud.
-</Note>
+Bạn không cần nhập ID organization hay project. Agent tự xác định chúng từ các project mà người dùng của token đã follow.
 
----
+## Quyền yêu cầu
 
-## Quyền hạn cần thiết
+Personal API token có cùng quyền truy cập với người dùng CircleCI đã tạo ra nó. Quyền truy cập project của người dùng đó là giới hạn trên cho những gì agent đọc hoặc thay đổi được.
 
-Personal API Token kế thừa quyền truy cập của người tạo. Các thao tác đọc hoạt động với bất kỳ token nào có người dùng có thể xem project mục tiêu. Các thao tác điều khiển bổ sung yêu cầu người dùng của token có **quyền trigger/pipeline** trên project **và** [phê duyệt](/guide/approvals/overview) rõ ràng trong CloudThinker.
+| Việc bạn muốn agent làm | Người dùng của token cần |
+|----------------------------|-----------------------------|
+| Đọc trạng thái, log, kết quả test, artifact | Quyền đọc project |
+| Khởi chạy pipeline, chạy lại workflow, chạy evaluation test | Quyền trigger pipeline trên project |
+| Rollback một lần deploy | Một rollback pipeline đã thiết lập cho project trong **Deploys** của CircleCI, cùng quyền trigger pipeline trên project đó |
+
+**Evaluation test** là bài test prompt template của CircleCI: agent chạy chúng dưới dạng một pipeline trên CircleCI.
 
 <Tip>
-Tuân theo nguyên tắc ít quyền nhất: tạo token dưới tài khoản người dùng chỉ có quyền truy cập project mà CloudThinker cần, và giữ các thao tác điều khiển được kiểm soát bởi phê duyệt thay vì bỏ đi lớp bảo vệ này.
+Hãy tạo token dưới một người dùng CircleCI riêng, chỉ thuộc các project bạn muốn điều tra. Người dùng này cần là thành viên của organization GitHub hoặc Bitbucket, nên cách thường dùng là một machine user của VCS. Kiểm tra xem người dùng này có bị tính vào gói CircleCI của bạn không. Thao tác ghi vẫn đi qua [Approvals](/vi/guide/approvals/overview): token đặt giới hạn trên, còn Approvals quyết định từng thao tác.
 </Tip>
 
----
+## Khả năng của agent
 
-## Khả năng của Agent
+| Khả năng | Agent làm được gì |
+|------------|--------------------|
+| **Khám phá project** | Liệt kê các project đã follow và organization của chúng |
+| **Trạng thái pipeline** | Đọc trạng thái pipeline mới nhất của một project và branch |
+| **Phân loại lỗi** | Lấy log build lỗi và kết quả test của job để tìm bước thất bại |
+| **Test flaky** | Tìm test lúc đạt lúc trượt trên cùng một mã nguồn |
+| **Kiểm tra config** | Kiểm tra file `.circleci/config.yml` và giải thích lỗi |
+| **Artifact** | Liệt kê artifact do một job tạo ra |
+| **Xem xét mức sử dụng** | Tải dữ liệu sử dụng và đánh dấu resource class ít được dùng (chỉ gói trả phí) |
+| **Điều khiển pipeline** | Chạy pipeline, chạy lại workflow, chạy evaluation test, rollback một lần deploy. **Mỗi thao tác đều đi qua Approvals của bạn** |
 
-Sau khi kết nối, các agent có quyền đọc đối với các project, pipeline và log CircleCI của bạn.
+Trước mọi thao tác ghi, agent cho bạn biết điều sẽ xảy ra (ví dụ: "khởi chạy pipeline trên `gh/acme/api` branch `main`") và hiển thị chính xác đầu vào. Với rollback, agent còn liệt kê phiên bản hiện tại, phiên bản đích và yêu cầu bạn xác nhận phiên bản đích.
 
-| Khả năng | Mô tả |
-|----------|-------|
-| **Khám phá project** | Liệt kê các project đang theo dõi và xác định tổ chức đang hoạt động |
-| **Trạng thái pipeline** | Kiểm tra trạng thái pipeline mới nhất của một project |
-| **Workflow & job** | Xem xét các workflow và job của chúng trong một pipeline |
-| **Build & test log** | Lấy output build và test để phân loại lỗi |
-| **Điều khiển pipeline** | Chạy pipeline, chạy lại workflow, chạy evaluation test, rollback deployment và tạo prompt template — **yêu cầu phê duyệt** |
+<ApprovalDefault />
+
+Để được hỏi mỗi lần, chọn **Manual** làm [Approval mode](/vi/guide/approvals/approval-mode) để một người phê duyệt mọi thay đổi. Khi CloudThinker bật [Rule enforcement](/vi/guide/approvals/rules#khắc-phục-sự-cố) cho workspace của bạn, một [Rule](/vi/guide/approvals/rules) **Ask first** có thể áp dụng riêng cho kết nối này.
 
 ### Xác minh kết nối
 
 ```text
-List my followed CircleCI projects and show the latest pipeline status for one of them
+List my followed CircleCI projects and show the latest pipeline status for each
 ```
+
+Kết quả gồm từng project đã follow theo slug (ví dụ `gh/acme/api`) kèm trạng thái pipeline mới nhất. Nếu thiếu một project bạn mong đợi, người dùng của token chưa follow project đó.
 
 ### Ví dụ prompt
 
 ```text
-Check the latest CircleCI pipeline status for my main project and report any failures
-The latest workflow failed — pull the build and test logs, find the error, and recommend a fix
-List my followed CircleCI projects and their most recent pipeline status
+The main branch of gh/acme/api failed on CircleCI. Pull the failure logs and tell me which step broke and why
+Which tests in gh/acme/api are flaky, and how often does each one fail?
 ```
-
-Với các tổ chức có nhiều project, hãy giới hạn yêu cầu theo một project duy nhất để agent trả về kết quả tập trung.
-
----
 
 ## Khắc phục sự cố
 
-<Accordion title="401 hoặc 403 Unauthorized">
-Token bị thiếu, đã hết hạn hoặc bị thu hồi. Tạo một Personal API Token mới và kết nối lại kết nối CircleCI.
+<Accordion title="Mọi yêu cầu đều trả về 401 Unauthorized">
+Token bị thiếu, đã hết hạn hoặc đã bị thu hồi. Tạo personal API token mới và cập nhật trường **CIRCLECI_TOKEN** trên kết nối.
 </Accordion>
 
-<Accordion title="Kết nối thành công nhưng không có project nào xuất hiện">
-Người dùng của token không theo dõi project nào, hoặc tổ chức được xác định không đúng. Theo dõi ít nhất một project trong CircleCI, rồi chạy lại khám phá.
+<Accordion title="Đọc được nhưng khởi chạy hoặc chạy lại pipeline trả về lỗi quyền">
+Người dùng của token đọc được project nhưng không trigger được pipeline. Tạo token dưới người dùng có quyền trigger trên project đó, rồi cập nhật kết nối.
 </Accordion>
 
-<Accordion title="Thao tác điều khiển thất bại do lỗi quyền hạn">
-Token thiếu quyền trigger/pipeline trên project. Tạo lại token dưới tài khoản người dùng có quyền trigger trên project đó và kết nối lại.
+<Accordion title="Kết nối ở trạng thái Connected nhưng không có project nào">
+Người dùng của token chưa follow project nào. Follow ít nhất một project trong CircleCI, rồi hỏi lại.
 </Accordion>
 
-<Accordion title="Dữ liệu sử dụng hoặc phiên bản component không trả về kết quả">
-API sử dụng chỉ dành cho gói trả phí, và phiên bản component chỉ có trên Server hoặc Standalone. Xác nhận cấp gói của bạn — đây là giới hạn theo cấp, không phải lỗi cấu hình.
+<Accordion title="Test flaky hoặc kết quả test của job trả về rỗng">
+Các job không tải kết quả test lên. Thêm bước `store_test_results` trỏ đến đầu ra JUnit XML, đợi vài pipeline chạy xong, rồi hỏi lại.
 </Accordion>
 
-<Accordion title="Server tự lưu trữ trả về 404 hoặc lỗi xác thực">
-**CIRCLECI_BASE_URL** vẫn đang được đặt là `https://circleci.com`. Đặt thành URL cài đặt Server hoặc Standalone của bạn và kết nối lại.
+<Accordion title="Một project trả về 404">
+Slug project cần tiền tố VCS: `gh/<org>/<repo>` với GitHub hoặc `bb/<org>/<repo>` với Bitbucket. Yêu cầu agent liệt kê các project đã follow và dùng slug trong danh sách đó.
 </Accordion>
 
-<Accordion title="Thao tác rollback không chạy">
-Rollback deployment là thao tác ảnh hưởng đến production, được kiểm soát bởi phê duyệt và chỉ khả dụng trên Server hoặc Standalone — không phải các tổ chức chỉ dùng cloud. Phê duyệt thao tác khi được nhắc và xác nhận cài đặt của bạn hỗ trợ tính năng này.
+<Accordion title="Phân tích mức sử dụng yêu cầu organization ID">
+Dữ liệu sử dụng cần UUID của organization, và không API nào của CircleCI trả về giá trị này. Sao chép UUID từ **Organization Settings → Overview → Organization ID** trong CircleCI và dán vào chat. Usage API chỉ có ở gói trả phí và mỗi yêu cầu bao phủ tối đa 32 ngày.
 </Accordion>
 
----
+<Accordion title="Bản cài đặt tự lưu trữ trả về 404 hoặc lỗi xác thực">
+**CIRCLECI_BASE_URL** vẫn là `https://circleci.com`, hoặc có kèm path. Chỉ đặt host của CircleCI Server, ví dụ `https://circleci.example.com`.
+</Accordion>
 
 ## Bảo mật
 
 <ConnectionSecurity />
 
-- **Phê duyệt cho các thao tác điều khiển** — giữ các thao tác pipeline, chạy lại, rollback và các thao tác ghi khác được kiểm soát bởi phê duyệt thay vì bỏ đi lớp bảo vệ này.
-- **Base URL đúng** — dùng `https://circleci.com` cho cloud, hoặc URL cài đặt của bạn cho Server hoặc Standalone tự lưu trữ.
-
----
+- **Dùng người dùng riêng**: personal token của CircleCI không có scope riêng, nên quyền thành viên project của người dùng token là cách duy nhất để giới hạn phạm vi truy cập.
+- **Giữ các thao tác điều khiển sau phê duyệt**: mỗi lượt chạy pipeline tốn chi phí compute và có thể deploy. Hãy để các thao tác này đi qua [Approval mode](/vi/guide/approvals/approval-mode) thay vì tự động phê duyệt.
 
 ## Liên quan
 
 <CardGroup cols={2}>
-  <Card title="Kết nối Jenkins" icon="/images/icons/jenkins.svg" href="/vi/guide/connections/jenkins">
-    Giám sát build pipeline và phân tích job
+  <Card title="Buildkite" icon="/images/icons/buildkite.svg" href="/vi/guide/connections/buildkite">
+    Sức khỏe pipeline, phân loại build lỗi và chạy lại sau phê duyệt.
   </Card>
-  <Card title="Phê duyệt" icon="shield-check" href="/guide/approvals/overview">
-    Cách thức hoạt động của các hành động được kiểm soát bởi phê duyệt
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Cách CloudThinker quyết định thao tác nào cần một người phê duyệt.
   </Card>
 </CardGroup>

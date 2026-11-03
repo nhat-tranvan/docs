@@ -1,198 +1,156 @@
 ---
 title: MySQL
-description: "Kết nối cơ sở dữ liệu MySQL với CloudThinker để phân tích truy vấn, giám sát hiệu suất và tối ưu cơ sở dữ liệu"
+description: "Kết nối cơ sở dữ liệu MySQL để agent kiểm tra schema, index, tình trạng bảng và slow query bằng người dùng chỉ đọc"
 icon: "/images/icons/mysql.svg"
 ---
 
 import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
 
-Kết nối cơ sở dữ liệu MySQL của bạn để [CloudThinker](/vi/guide/agents/overview) có thể phân tích truy vấn, tối ưu hiệu suất và giám sát sức khỏe cơ sở dữ liệu.
-
-## Nền tảng được hỗ trợ
-
-| Nền tảng | Hỗ trợ |
-|----------|---------|
-| **MySQL tự host** | 5.7, 8.0, 8.1+ |
-| **MariaDB** | 10.x |
-| **AWS RDS MySQL** | Tất cả phiên bản |
-| **AWS Aurora MySQL** | Tất cả phiên bản |
-| **Google Cloud SQL** | Tất cả phiên bản MySQL |
-| **Azure Database for MySQL** | Flexible Server |
+Kết nối cơ sở dữ liệu MySQL để agent CloudThinker kiểm tra schema, index, tình trạng bảng và slow query bằng cách chạy SQL trên cơ sở dữ liệu đó. Bạn cung cấp cho CloudThinker một URL kết nối (`MYSQL_URL`) của một người dùng cơ sở dữ liệu riêng: agent làm được những gì grant của người dùng đó cho phép, và mọi thao tác ghi đều phải qua [Approvals](/vi/guide/approvals/overview) trước.
 
 ## Điều kiện tiên quyết
 
-- Một instance MySQL có thể tiếp cận từ CloudThinker qua mạng.
-- Quyền admin hoặc root để tạo người dùng riêng và cấp đặc quyền.
-- Performance Schema được bật (mặc định trong MySQL 5.7+; xác minh trước khi kết nối).
+- Một endpoint MySQL mà CloudThinker truy cập được từ internet, chẳng hạn MySQL tự host, Amazon RDS for MySQL hoặc Cloud SQL for MySQL. Agent kết nối từ CloudThinker Cloud, nên `localhost` và địa chỉ private được phân giải ở phía CloudThinker, không phải trong mạng của bạn. Xem [Truy cập dịch vụ private](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ).
+- Một tài khoản admin có thể chạy `CREATE USER` và `GRANT`.
+- Performance Schema đã bật nếu bạn muốn phân tích slow query. Performance Schema bật sẵn trong MySQL tự host từ bản 5.7 trở lên. Trên Amazon RDS, thiết lập này phụ thuộc vào tham số `performance_schema` trong parameter group của bạn.
 
 ## Thiết lập
 
 <Steps>
-  <Step title="Kết nối với tư cách root">
-    Kết nối tới MySQL với tư cách root hoặc admin:
-    ```bash
-    mysql -h your-host -u root -p
-    ```
-  </Step>
-  <Step title="Tạo người dùng chỉ đọc">
-    Tạo người dùng CloudThinker:
+  <Step title="Tạo người dùng riêng">
+    Kết nối bằng tài khoản admin và tạo người dùng cho CloudThinker. `%` cho phép người dùng đăng nhập từ mọi host. Để chỉ cho phép CloudThinker, hãy tạo người dùng riêng cho từng egress IP, ví dụ `'cloudthinker_readonly'@'203.0.113.10'`, và chạy các lệnh grant bên dưới cho từng người dùng. Tài liệu này không công bố danh sách egress IP của CloudThinker: hãy hỏi đầu mối liên hệ CloudThinker của bạn, hoặc [liên hệ với chúng tôi](https://cloudthinker.io/contact).
+
     ```sql
-    CREATE USER 'cloudthinker_readonly'@'%' IDENTIFIED BY 'your-secure-password';
+    CREATE USER 'cloudthinker_readonly'@'%' IDENTIFIED BY '<secure-password>';
     ```
   </Step>
   <Step title="Cấp quyền đọc">
-    Cấp đặc quyền SELECT và giám sát:
+    Cấp quyền đọc trên cơ sở dữ liệu cần phân tích, cùng các đặc quyền giám sát mà agent cần để xem session và thống kê truy vấn:
+
     ```sql
-    GRANT SELECT ON *.* TO 'cloudthinker_readonly'@'%';
-    GRANT SHOW DATABASES ON *.* TO 'cloudthinker_readonly'@'%';
+    GRANT SELECT, SHOW VIEW ON your_database.* TO 'cloudthinker_readonly'@'%';
     GRANT PROCESS ON *.* TO 'cloudthinker_readonly'@'%';
-    ```
-  </Step>
-  <Step title="Cấp quyền truy cập Performance Schema">
-    Bắt buộc để phân tích truy vấn:
-    ```sql
     GRANT SELECT ON performance_schema.* TO 'cloudthinker_readonly'@'%';
-    FLUSH PRIVILEGES;
     ```
+
+    `GRANT` có hiệu lực ngay, nên bạn không cần `FLUSH PRIVILEGES`. Xem [Quyền yêu cầu](#quyền-yêu-cầu) để thêm quyền kiểm tra replication.
   </Step>
-  <Step title="Xác minh Performance Schema được bật">
+  <Step title="Kiểm tra Performance Schema">
     ```sql
     SHOW VARIABLES LIKE 'performance_schema';
-    -- Should return: ON
     ```
 
-    Nếu bị tắt, thêm vào `my.cnf` và khởi động lại:
-    ```ini
-    [mysqld]
-    performance_schema = ON
-    ```
+    **Trạng thái thành công:** giá trị là `ON`. Nếu giá trị là `OFF`, đặt `performance_schema = ON` trong mục `[mysqld]` của `my.cnf` rồi khởi động lại MySQL. Trên RDS hoặc Cloud SQL, đổi giá trị trong parameter group hoặc database flags. Đây là tham số tĩnh, nên chỉ có hiệu lực sau khi reboot.
   </Step>
-  <Step title="Cấu hình truy cập mạng">
-    Đảm bảo CloudThinker có thể tiếp cận cơ sở dữ liệu:
-    - Thêm IP CloudThinker vào security group hoặc firewall
-    - Với RDS: bật public access hoặc dùng VPC peering
+  <Step title="Mở truy cập mạng">
+    Cho phép kết nối vào port MySQL (mặc định `3306`) từ các egress IP của CloudThinker trong tường lửa, security group hoặc danh sách authorized networks. Cơ sở dữ liệu chỉ lắng nghe trên mạng private cần có endpoint truy cập được trước, vì kết nối này không có tùy chọn private link.
   </Step>
   <Step title="Thêm kết nối trong CloudThinker">
-    Điều hướng đến **Connections → MySQL** và nhập:
-    - **Host**: hostname hoặc IP cơ sở dữ liệu
-    - **Port**: cổng cơ sở dữ liệu (mặc định: `3306`)
-    - **Database**: tên cơ sở dữ liệu
-    - **Username**: `cloudthinker_readonly`
-    - **Password**: mật khẩu bạn đặt ở trên
-    - **SSL**: bật (khuyến nghị)
+    Mở **More → Workspace settings → Connections**, chọn **MySQL** rồi nhấn **Connect** trên bảng chi tiết. Trong hộp thoại, bạn có thể đổi **Alias** và **Description** (agent đọc mô tả để chọn đúng cơ sở dữ liệu khi bạn kết nối nhiều cơ sở dữ liệu). Dán URL vào **MYSQL_URL** rồi nhấn **Connect**:
 
-    Nhấn **Connect**. CloudThinker hiển thị trạng thái **Connected** khi thành công.
+    ```text
+    mysql://cloudthinker_readonly:<secure-password>@db.example.com:3306/your_database
+    ```
+
+    **Trạng thái thành công:** kết nối hiển thị **Connecting** và **Verifying**, sau đó là **Connected**. CloudThinker chạy [Discovery](/vi/guide/connections/overview#điều-gì-xảy-ra-sau-khi-kết-nối) một lần: một lượt xem xét chỉ đọc cơ sở dữ liệu, kết quả hiển thị trong mục **Discovery** của bảng chi tiết kết nối. Discovery chạy tối đa 30 phút.
   </Step>
 </Steps>
 
 ## Chi tiết kết nối
 
-| Trường | Mô tả | Mặc định |
-|-------|-------------|---------|
-| **Host** | Hostname hoặc IP cơ sở dữ liệu | — |
-| **Port** | Cổng MySQL | `3306` |
-| **Database** | Tên cơ sở dữ liệu | — |
-| **Username** | Người dùng riêng, ví dụ: `cloudthinker_readonly` | — |
-| **Password** | Mật khẩu người dùng | — |
-| **SSL** | Bật mã hóa SSL/TLS | Bật |
-| **Connection timeout** | Giây chờ kết nối | `10` |
-| **Read timeout** | Thời gian chờ kết quả truy vấn tối đa tính bằng giây | `30` |
+| Trường | Bắt buộc | Mô tả | Ví dụ |
+|-------|----------|-------------|---------|
+| **Alias** | Không | Tên ngắn cho cơ sở dữ liệu này. Được điền sẵn alias trống tiếp theo, ví dụ `mysql-1` | `prod-db` |
+| **Description** | Không | Cơ sở dữ liệu này dùng cho việc gì. Agent đọc mô tả để chọn giữa các instance | `Production orders database` |
+| **MYSQL_URL** | Có | URL kết nối đầy đủ: người dùng, mật khẩu, host, port và cơ sở dữ liệu | `mysql://cloudthinker_readonly:<password>@db.example.com:3306/shop` |
 
-Định dạng connection string:
+Nếu mật khẩu chứa `@`, `:`, `/` hoặc `#`, hãy URL-encode mật khẩu (ví dụ `@` thành `%40`), nếu không URL sẽ không phân tích được.
 
-```
-mysql://cloudthinker_readonly:your-secure-password@your-host:3306/database-name
-```
+## Quyền yêu cầu
 
-## Quyền bắt buộc
+Chỉ cấp các đặc quyền cho những khả năng bạn cần.
 
-### Tối thiểu
-
-```sql
-GRANT SELECT ON your_database.* TO 'cloudthinker_readonly'@'%';
-GRANT PROCESS ON *.* TO 'cloudthinker_readonly'@'%';
-```
-
-### Khuyến nghị (phân tích toàn diện)
-
-```sql
--- All of the above, plus:
-GRANT SELECT ON performance_schema.* TO 'cloudthinker_readonly'@'%';
-GRANT SELECT ON mysql.* TO 'cloudthinker_readonly'@'%';
-GRANT REPLICATION CLIENT ON *.* TO 'cloudthinker_readonly'@'%';
-```
+| Bạn muốn agent | Grant |
+|--------------------|-------|
+| Đọc schema, bảng và index | `SELECT, SHOW VIEW ON your_database.*` |
+| Xem session đang hoạt động và truy vấn đang chạy | `PROCESS ON *.*` |
+| Tìm slow query và mức sử dụng index | `SELECT ON performance_schema.*` |
+| Kiểm tra trạng thái replica và độ trễ | `REPLICATION CLIENT ON *.*` |
 
 <Tip>
-Bắt đầu với các grant tối thiểu. Thêm `performance_schema` và `REPLICATION CLIENT` để mở khóa dữ liệu slow query và giám sát replication.
+Giữ người dùng ở chế độ chỉ đọc. Không bao giờ cấp `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER` hoặc `ALL PRIVILEGES`, trừ khi bạn có workflow cần ghi. Xem [Quyền ghi](#quyền-ghi).
 </Tip>
 
 ## Khả năng của agent
 
-Sau khi kết nối, CloudThinker có thể:
-
-| Khả năng | Mô tả |
-|------------|-------------|
-| **Phân tích truy vấn** | Xác định slow query từ slow query log và Performance Schema |
-| **Khuyến nghị index** | Tìm index còn thiếu, xác định index dư thừa |
-| **Metrics hiệu suất** | Giám sát kết nối, buffer pool và query cache |
-| **Thống kê bảng** | Phân tích kích thước bảng, phân mảnh và trạng thái engine |
-| **Giám sát replication** | Kiểm tra trạng thái replica, lag và lỗi |
+| Khả năng | Agent có thể làm gì |
+|------------|--------------------|
+| **Kiểm tra schema** | Liệt kê cơ sở dữ liệu và bảng, đọc kiểu cột, khóa và kích thước bảng |
+| **Rà soát index** | Tìm index còn thiếu, không dùng đến và dư thừa |
+| **Slow query** | Xếp hạng câu lệnh theo tổng độ trễ và độ trễ trung bình từ Performance Schema |
+| **Tình trạng bảng** | Kiểm tra số dòng, kích thước dữ liệu và index, dung lượng trống của từng bảng |
+| **Session và replication** | Liệt kê session đang chạy và truy vấn chạy lâu, kiểm tra độ trễ replica (cần `REPLICATION CLIENT`) |
 
 ### Xác minh kết nối
 
 ```text
-Check MySQL connection health and show current active sessions
+List the tables in the connected MySQL database with their row counts and sizes
 ```
+
+Kết quả mong đợi là một bảng gồm tên bảng, số dòng xấp xỉ, kích thước dữ liệu và index. Nếu lỗi nêu tên một đặc quyền còn thiếu, đó chính là grant bạn cần thêm.
 
 ### Ví dụ prompt
 
 ```text
-Analyze slow queries on the production MySQL instance
-Find missing indexes for high-frequency queries
-Show buffer pool usage and connection statistics
+Which 10 queries spend the most total time on MySQL, and which indexes would help them?
+Find indexes that haven't been used since the last restart
+Is anything blocking right now? Show long-running sessions and what they're waiting on
 ```
+
+## Quyền ghi
+
+CloudThinker phân loại từng câu lệnh SQL agent gửi đi trước khi chạy.
+
+- Câu lệnh `SELECT`, `SHOW`, `DESCRIBE`, `EXPLAIN` và `WITH` chỉ đọc chạy mà không hỏi.
+- Mọi câu lệnh khác, như `INSERT`, `UPDATE` hoặc `ALTER`, được tính là thao tác ghi và phải qua [Approvals](/vi/guide/approvals/overview).
+- `DELETE`, `DROP` và `TRUNCATE` được tính là thao tác phá hủy. Một [rule](/vi/guide/approvals/rules) có thể yêu cầu hỏi trước hoặc từ chối các câu lệnh này.
+- Câu lệnh đã được phê duyệt vẫn thất bại nếu grant của người dùng không cho phép. Người dùng chỉ đọc là lớp chặn cứng.
+
+<ApprovalDefault />
 
 ## Khắc phục sự cố
 
-<Accordion title="Connection refused">
-- Xác minh host và port chính xác
-- Kiểm tra security group hoặc firewall cho phép IP CloudThinker
-- Với RDS: đảm bảo "Publicly accessible" được bật hoặc dùng VPC peering
-- Xác nhận MySQL đang lắng nghe trên interface đúng (`bind-address` trong `my.cnf`)
+<Accordion title="Connection refused or timed out">
+CloudThinker không truy cập được host. Kiểm tra host và port trong **MYSQL_URL** là công khai hoặc truy cập được, tường lửa hoặc security group cho phép CloudThinker, và `bind-address` trong `my.cnf` không phải `127.0.0.1`. Trên RDS, instance phải ở chế độ publicly accessible hoặc truy cập được qua cấu hình mạng của bạn.
 </Accordion>
 
-<Accordion title="Access denied">
-- Xác minh username và password chính xác
-- Kiểm tra người dùng có đúng host specification (`'user'@'%'` so với `'user'@'localhost'`)
-- Đảm bảo lệnh `GRANT` đã được thực hiện sau `FLUSH PRIVILEGES`
+<Accordion title="Access denied for user">
+Người dùng, mật khẩu hoặc phần host không khớp. Người dùng tạo dưới dạng `'cloudthinker_readonly'@'localhost'` không thể đăng nhập từ xa, nên hãy tạo với `'%'` hoặc dải địa chỉ của CloudThinker. Đồng thời kiểm tra mật khẩu đã được URL-encode trong **MYSQL_URL**.
 </Accordion>
 
-<Accordion title="Performance Schema bị tắt">
-- Kiểm tra bằng: `SHOW VARIABLES LIKE 'performance_schema';`
-- Bật trong `my.cnf` và khởi động lại MySQL
-- Với RDS: sửa parameter group và reboot instance
+<Accordion title="SELECT command denied, or no slow-query data">
+Người dùng thiếu grant cho thao tác agent vừa thử. Với slow query, hãy cấp `SELECT ON performance_schema.*` và xác nhận `SHOW VARIABLES LIKE 'performance_schema'` trả về `ON`. Thống kê của Performance Schema bị đặt lại khi khởi động lại, nên server vừa khởi động lại sẽ có ít dữ liệu lịch sử.
 </Accordion>
 
-<Accordion title="Thiếu dữ liệu slow query">
-- Bật slow query log: `SET GLOBAL slow_query_log = 'ON';`
-- Đặt ngưỡng: `SET GLOBAL long_query_time = 1;`
-- Với RDS: sửa parameter group
+<Accordion title="Unknown database">
+Tên cơ sở dữ liệu ở cuối **MYSQL_URL** không tồn tại hoặc người dùng không nhìn thấy cơ sở dữ liệu đó. Chạy `SHOW DATABASES;` bằng người dùng đó và sửa lại tên.
 </Accordion>
 
 ## Bảo mật
 
 <ConnectionSecurity />
 
-- **Bắt buộc SSL** — luôn bật SSL để mã hóa dữ liệu truyền tải.
-- **Grant tối thiểu** — chỉ cấp `SELECT` cho người dùng CloudThinker; không bao giờ cấp quyền ghi.
+- **Giới hạn grant trong một cơ sở dữ liệu**: cấp `SELECT` trên `your_database.*`, không phải `*.*`, để agent không đọc được schema hệ thống `mysql` hay dữ liệu của ứng dụng khác.
+- **Bắt buộc TLS trên server**: đặt `REQUIRE SSL` cho người dùng (`ALTER USER ... REQUIRE SSL`) khi server hỗ trợ, để thông tin xác thực và kết quả được mã hóa khi truyền.
 
 ## Liên quan
 
 <CardGroup cols={2}>
-  <Card title="Agent" icon="database" href="/vi/guide/agents/overview">
-    Agent tối ưu cơ sở dữ liệu
+  <Card title="PostgreSQL" icon="/images/icons/postgresql.svg" href="/vi/guide/connections/postgresql">
+    Kết nối PostgreSQL cũng bằng người dùng chỉ đọc. PostgreSQL chạy ở chế độ hạn chế, nên chặn thao tác ghi kể cả khi đã được phê duyệt.
   </Card>
-  <Card title="Kết nối PostgreSQL" icon="/images/icons/postgresql.svg" href="/vi/guide/connections/postgresql">
-    Thiết lập tương tự cho cơ sở dữ liệu PostgreSQL
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Quyết định thao tác ghi cơ sở dữ liệu nào được chạy, chờ người phê duyệt hoặc bị từ chối.
   </Card>
 </CardGroup>

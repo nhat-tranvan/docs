@@ -1,150 +1,161 @@
 ---
 title: SSH
-description: "Kết nối máy chủ của bạn với CloudThinker qua SSH để agent có thể chạy lệnh shell bằng xác thực key và host key đáng tin cậy"
+description: "Kết nối server qua SSH để CloudThinker kiểm tra ổ đĩa, bộ nhớ, tiến trình, service và log bằng đăng nhập dùng key"
 icon: "/images/icons/ssh.svg"
 ---
 
 import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
 
-Kết nối máy chủ của bạn qua SSH để [CloudThinker](/vi/guide/agents/overview) có thể chạy lệnh shell trên host: kiểm tra dung lượng đĩa, theo dõi log, kiểm tra service và chẩn đoán sự cố trực tiếp trên máy chủ.
+Kết nối một server qua SSH để [CloudThinker](/vi/guide/agents/overview) chạy lệnh shell trên đó: kiểm tra ổ đĩa và bộ nhớ, đọc log, xem tiến trình và service. Bạn đăng nhập bằng private key, và CloudThinker ghi nhớ host key của server ở lần kết nối đầu tiên để phát hiện khi danh tính server thay đổi.
 
 ## Điều kiện tiên quyết
 
-| Yêu cầu | Chi tiết |
-|-------------|--------|
-| **Host có thể tiếp cận** | Máy chủ phải chấp nhận kết nối SSH đến từ CloudThinker trên cổng SSH |
-| **Người dùng đăng nhập** | Một tài khoản người dùng có quyền truy cập shell |
-| **Authorized key** | Phần khóa công khai của bạn phải có trong file `~/.ssh/authorized_keys` của người dùng đó |
-| **Xác thực key được bật** | `sshd` phải cho phép xác thực khóa công khai cho người dùng |
+- Một server chấp nhận kết nối SSH từ CloudThinker trên port SSH. CloudThinker kết nối thẳng tới **Host**: không có trường jump host hay bastion. Với server nằm sau tường lửa hoặc không có địa chỉ công khai, xem lựa chọn Worker trong [Truy cập dịch vụ private](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ). Tài liệu này không công bố danh sách egress IP của CloudThinker: hãy hỏi đầu mối liên hệ CloudThinker của bạn, hoặc [liên hệ với chúng tôi](https://cloudthinker.io/contact).
+- Một user đăng nhập có quyền shell, và `sshd` đã bật xác thực bằng public key.
+- Một cặp key có public key nằm trong `~/.ssh/authorized_keys` của user đó.
+- Vai trò **Admin** trong workspace CloudThinker, cần thiết để thêm kết nối. Xem [Vai trò](/vi/guide/security/roles).
 
 ## Thiết lập
 
 <Steps>
-  <Step title="Chuẩn bị cặp khóa">
-    Sử dụng cặp khóa hiện có hoặc tạo một cặp riêng cho CloudThinker:
+  <Step title="Tạo cặp key riêng">
+    Tạo một key chỉ CloudThinker dùng, để bạn thu hồi được mà không ảnh hưởng tới thứ khác:
 
     ```bash
     ssh-keygen -t ed25519 -C "cloudthinker" -f ./cloudthinker_key
     ```
 
-    Lệnh này tạo ra `cloudthinker_key` (khóa riêng tư) và `cloudthinker_key.pub` (khóa công khai). Cả hai định dạng OpenSSH (`-----BEGIN OPENSSH PRIVATE KEY-----`) và PEM (`-----BEGIN RSA/EC PRIVATE KEY-----`) đều được chấp nhận, bao gồm các khóa `ed25519`, `rsa` và `ecdsa`.
+    Lệnh này tạo `cloudthinker_key` (private) và `cloudthinker_key.pub` (public). Key RSA hoặc ECDSA sẵn có ở định dạng OpenSSH hoặc PEM cũng dùng được.
   </Step>
-  <Step title="Ủy quyền khóa công khai">
-    Thêm khóa công khai vào authorized keys của người dùng đăng nhập trên máy chủ:
-
+  <Step title="Cấp quyền cho public key trên server">
     ```bash
-    ssh-copy-id -i ./cloudthinker_key.pub user@server.example.com
-    # or append cloudthinker_key.pub manually to ~/.ssh/authorized_keys
+    ssh-copy-id -i ./cloudthinker_key.pub ubuntu@server.example.com
     ```
+
+    Hoặc tự thêm nội dung `cloudthinker_key.pub` vào cuối `~/.ssh/authorized_keys` của user.
   </Step>
   <Step title="Thêm kết nối trong CloudThinker">
-    Điều hướng đến **Connections → SSH** và nhập:
-    - **Host**: hostname hoặc IP, ví dụ: `server.example.com` hoặc `10.0.0.5`
-    - **User**: người dùng đăng nhập, ví dụ: `ubuntu`
-    - **Port**: cổng SSH (tùy chọn, mặc định là `22`)
-    - **Private key**: toàn bộ khóa riêng tư, bao gồm các dòng `BEGIN`/`END`
-    - **Passphrase**: tùy chọn, chỉ cần nếu khóa riêng tư có passphrase
+    Mở **More → Workspace settings → Connections**, chọn **SSH**, nhấn **Connect**, rồi điền **Host**, **User**, **Port** và **Private key**. Chỉ điền **Passphrase** nếu key có passphrase. Nhấn **Connect**.
 
-    CloudThinker kiểm tra kết nối và hiển thị trạng thái **Connected** khi thành công.
+    CloudThinker kết nối, ghi lại host key của server và chạy kiểm tra. Lượt kiểm tra thường xong trong 30 giây và hết thời gian chờ sau 45 giây.
+
+    **Trạng thái thành công:** hộp thoại hiển thị **Connected** kèm thông báo "SSH connection verified and saved."
   </Step>
 </Steps>
 
-### Xác minh host key
-
-Lần đầu kết nối, CloudThinker ghi lại host key của máy chủ. Ở mỗi lần kết nối sau, hệ thống kiểm tra xem key có còn khớp không, để cảnh báo nếu danh tính máy chủ thay đổi bất ngờ.
-
-Nếu key thay đổi, kết nối dừng lại và CloudThinker hiển thị cả fingerprint đã tin cậy trước đó lẫn fingerprint mới. Điều này thường xảy ra sau khi rebuild máy chủ hoặc xoay vòng SSH key. Sau khi xác nhận thay đổi là dự kiến, chọn **Trust new host key** để tiếp tục.
-
-<Warning>
-Nếu bạn không dự kiến danh tính máy chủ thay đổi, đừng tin cậy key mới ngay. Thay đổi bất ngờ có thể là dấu hiệu kết nối đang bị chặn. Hãy xác minh fingerprint mới với máy chủ trước.
-</Warning>
+Mỗi server là một kết nối SSH riêng. Lặp lại bước cuối cho mọi server bạn muốn CloudThinker truy cập. Để hướng prompt tới một server cụ thể, chọn kết nối của server đó bằng `#` trong ô nhập prompt.
 
 ## Chi tiết kết nối
 
-| Trường | Mô tả | Ví dụ |
-|-------|-------------|---------|
-| **Host** | Hostname hoặc địa chỉ IP của máy chủ đích | `server.example.com` |
-| **User** | Người dùng đăng nhập có quyền truy cập shell | `ubuntu` |
-| **Port** | Cổng SSH | `22` |
-| **Private key** | Toàn bộ khóa riêng tư bao gồm header `BEGIN`/`END` | `-----BEGIN OPENSSH PRIVATE KEY-----...` |
-| **Passphrase** | Passphrase nếu khóa được mã hóa | — |
+| Trường | Bắt buộc | Mô tả | Ví dụ |
+|-------|----------|-------------|---------|
+| **Host** | Có | Hostname hoặc địa chỉ IP | `server.example.com` hoặc `203.0.113.10` |
+| **User** | Có | User đăng nhập có quyền shell | `ubuntu` |
+| **Port** | Không | Port SSH. Mặc định `22` | `22` |
+| **Private key** | Có | Toàn bộ key, gồm cả dòng `BEGIN` và `END` | `-----BEGIN OPENSSH PRIVATE KEY-----` |
+| **Passphrase** | Không | Chỉ dùng cho key đã mã hóa. Để trống nếu không có | Ẩn |
 
-## Quyền bắt buộc
+## Quyền yêu cầu
 
-CloudThinker chạy lệnh với quyền của người dùng đăng nhập. Không cần quyền root trừ khi agent cần chạy lệnh có đặc quyền.
+Lệnh chạy dưới user đăng nhập, với đúng quyền của user đó. Quyền của user này chính là ranh giới thực sự cho những gì CloudThinker làm được trên server.
 
 <Tip>
-Giới hạn người dùng đăng nhập chỉ với các lệnh và đường dẫn mà agent thực sự cần. Sử dụng tùy chọn `command=` và `from=` trong `authorized_keys` để hạn chế những gì key có thể làm và từ đâu.
+Tạo một user không phải root cho CloudThinker, có quyền đọc các log và đường dẫn bạn quan tâm, và không có quyền ghi vào đường dẫn production. Phần lớn các lượt kiểm tra sức khỏe và đọc log không cần gì hơn.
 </Tip>
+
+Lệnh chạy không có terminal, nên không thể trả lời prompt hỏi password của `sudo`. Nếu muốn CloudThinker chạy một lệnh cần đặc quyền, hãy cho phép riêng lệnh đó chạy không cần password trong `/etc/sudoers.d/`:
+
+```text
+cloudthinker ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx
+```
 
 ## Khả năng của agent
 
-Sau khi kết nối, CloudThinker chạy lệnh shell trên máy chủ của bạn qua SSH.
-
-| Khả năng | Mô tả |
-|------------|-------------|
-| **Kiểm tra hệ thống** | Đĩa, bộ nhớ, CPU, tiến trình và trạng thái service |
-| **Phân tích log** | Đọc và tìm kiếm log ứng dụng và hệ thống |
-| **Chẩn đoán** | Điều tra lỗi, kết nối mạng và cấu hình trên host |
-| **Kiểm tra vận hành** | Chạy lệnh chỉ đọc để báo cáo trạng thái máy chủ |
+| Khả năng | CloudThinker làm gì | Phê duyệt |
+|------------|------------------------|----------|
+| **Kiểm tra hệ thống** | Kiểm tra ổ đĩa, bộ nhớ, CPU, uptime, tiến trình và trạng thái service | Không |
+| **Phân tích log** | Đọc và tìm kiếm log ứng dụng và log hệ thống | Không |
+| **Chẩn đoán** | Điều tra lỗi, kết nối mạng và cấu hình trên host | Không |
+| **Thay đổi** | Chạy lệnh làm thay đổi server, như khởi động lại một service | Có |
 
 ### Xác minh kết nối
 
 ```text
-Show system uptime, disk usage, and top memory processes on the server
+Show uptime, disk usage per filesystem, and the top 5 processes by memory on the server
 ```
+
+Kết quả mong đợi: uptime, bảng các filesystem kèm mức sử dụng, và năm tiến trình kèm lượng bộ nhớ.
 
 ### Ví dụ prompt
 
 ```text
-Check disk usage on all filesystems and flag anything above 80%
-Tail /var/log/app/error.log and summarize the last 100 error lines
-Show which processes are using the most CPU and memory right now
+Flag any filesystem above 80% full and list the largest directories on it
+Summarize the last 100 lines of /var/log/app/error.log and group them by error type
+Is nginx running, and when did it last restart?
 ```
 
+## Quyền ghi
+
+Lệnh đọc chạy mà không cần hỏi. Lệnh làm thay đổi server đi qua Approvals, và CloudThinker hiển thị lệnh đó trong yêu cầu phê duyệt.
+
+<ApprovalDefault />
+
+Lệnh shell có dạng tự do, và CloudThinker tự quyết định lệnh nào được tính là thay đổi. Hãy coi bước phê duyệt là lớp kiểm tra thứ hai, và dựa vào quyền của user đăng nhập để chặn những gì CloudThinker tuyệt đối không được làm.
+
+## Xác minh host key
+
+Ở lần kết nối đầu tiên, CloudThinker tin cậy và ghi lại host key của server. Mọi lần kết nối sau đều kiểm tra key còn khớp hay không. CloudThinker không hiển thị fingerprint, nên hãy đảm bảo lần kết nối đầu tiên tới đúng server.
+
+Nếu key thay đổi, kết nối dừng lại và hiển thị **Host key changed**. Điều này là bình thường sau khi dựng lại server hoặc xoay vòng host key. Để chấp nhận key mới, nhấn biểu tượng khiên (**Trust new host key**) cạnh server và xác nhận bằng **Trust**.
+
 <Warning>
-Các lệnh chạy với quyền của người dùng đăng nhập. Hãy giới hạn người dùng đó chỉ với những gì agent thực sự cần.
+Đừng tin cậy một host key mới mà bạn không chờ đợi. Thay đổi bất ngờ có thể nghĩa là ai đó đang chặn bắt kết nối. Hãy kiểm tra fingerprint trên server trước, từ một console bạn tin cậy:
+
+```bash
+for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$f"; done
+```
 </Warning>
 
 ## Khắc phục sự cố
 
-<Accordion title="Xác thực thất bại">
-- Xác nhận khóa công khai có trong file `~/.ssh/authorized_keys` của người dùng đăng nhập
-- Xác minh **User** khớp với tài khoản được ủy quyền cho key đó
-- Đảm bảo khóa riêng tư được dán đầy đủ, bao gồm các dòng `BEGIN`/`END`
-- Nếu key có passphrase, hãy cung cấp **Passphrase**
+<Accordion title="Authentication failed">
+- Kiểm tra public key đã nằm trong `~/.ssh/authorized_keys` của user đăng nhập.
+- Kiểm tra **User** đúng là tài khoản đã được cấp quyền cho key.
+- Dán toàn bộ private key, gồm cả dòng `BEGIN` và `END`.
+- Nhập **Passphrase** nếu key có passphrase.
 </Accordion>
 
-<Accordion title="Không thể tiếp cận host">
-- Xác minh **Host** và **Port** chính xác
-- Xác nhận máy chủ chấp nhận SSH từ CloudThinker (firewall, security group hoặc allowlist)
-- Kiểm tra SSH daemon đang chạy và lắng nghe trên cổng đó
+<Accordion title="Could not reach the host">
+- Kiểm tra **Host** và **Port**.
+- Cho phép kết nối SSH từ CloudThinker trong tường lửa, security group hoặc allowlist.
+- Xác nhận `sshd` đang chạy và lắng nghe trên port đó.
+- Lượt kiểm tra chạy quá 45 giây sẽ hết thời gian chờ và hiển thị cùng lời khuyên này.
 </Accordion>
 
-<Accordion title="Host key đã thay đổi">
-- Thường xảy ra sau khi rebuild máy chủ hoặc xoay vòng SSH key: xem xét fingerprint mới và chọn **Trust new host key**
-- Nếu thay đổi là bất ngờ, hãy điều tra trước khi tin cậy lại
+<Accordion title="Host key changed">
+Bình thường sau khi dựng lại server hoặc xoay vòng key: hãy kiểm tra fingerprint trên server, rồi chọn **Trust new host key**. Nếu bạn không chờ đợi thay đổi này, hãy điều tra trước khi tin cậy.
 </Accordion>
 
-<Accordion title="Lệnh từ xa thất bại">
-- Kết nối hoạt động bình thường nhưng lệnh trả về exit code khác 0
-- Kiểm tra lệnh, quyền của người dùng và đường dẫn trên host từ xa
+<Accordion title="The remote command exited with a non-zero code">
+SSH hoạt động, nhưng lệnh thất bại trên server. Kiểm tra lệnh, đường dẫn, và user đăng nhập có quyền chạy lệnh đó hay không.
 </Accordion>
 
 ## Bảo mật
 
 <ConnectionSecurity />
 
-- **Khóa riêng biệt** — tạo cặp khóa chỉ dùng cho CloudThinker để có thể thu hồi độc lập.
-- **Xoay vòng và xác minh** — thay thế khóa định kỳ và luôn xác nhận thay đổi host key trước khi tin cậy lại.
+- **Dùng key riêng.** Key chỉ CloudThinker dùng có thể gỡ khỏi `authorized_keys` mà không ảnh hưởng tới ai khác.
+- **Xoay vòng key.** Tạo cặp key mới và thêm public key mới vào `authorized_keys`. Mở **More → Workspace settings → Connections**, chọn **SSH**, nhấn biểu tượng bút chì (**Edit**) cạnh server, dán **Private key** mới và nhấn **Save**. Chạy prompt xác minh, và khi đã hoạt động, gỡ public key cũ khỏi server.
+- **Xác nhận trước khi tin cậy lại.** Coi mọi thay đổi host key là đáng ngờ cho tới khi bạn đã kiểm tra fingerprint.
 
 ## Liên quan
 
 <CardGroup cols={2}>
-  <Card title="Agent" icon="cloud" href="/vi/guide/agents/overview">
-    Vận hành cloud engineering và hạ tầng
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Kiểm soát cách CloudThinker hỏi trước khi thay đổi một server.
   </Card>
   <Card title="Kết nối Kubernetes" icon="/images/icons/kubernetes.svg" href="/vi/guide/connections/kubernetes">
-    Kết nối cluster để phân tích và vận hành workload
+    Kết nối cluster để kiểm tra workload.
   </Card>
 </CardGroup>

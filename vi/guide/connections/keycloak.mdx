@@ -1,48 +1,57 @@
 ---
 title: Keycloak
-description: "Kết nối Keycloak với CloudThinker để thực hiện các thao tác quản lý danh tính và quyền truy cập"
+description: "Kết nối một realm Keycloak để agent rà soát user, client, role, group và luồng xác thực, và thay đổi danh tính qua Approvals"
 icon: "/images/icons/keycloak.svg"
 ---
 
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
 import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
 
-Kết nối realm Keycloak của bạn để [CloudThinker](/vi/guide/agents/overview) có thể kiểm tra realm, kiểm toán client, xem xét người dùng và role, đồng thời phân tích cấu hình quản lý danh tính và quyền truy cập.
-
-Keycloak xác thực bằng **client service-account bảo mật** được gắn các role `realm-management` trên realm mục tiêu.
-
-## Nền tảng được hỗ trợ
-
-| Nền tảng | Hỗ trợ |
-|----------|---------|
-| **Keycloak tự host** | Tất cả phiên bản |
-| **Phase Two** | Dịch vụ Keycloak được quản lý |
+Kết nối một realm Keycloak để các agent CloudThinker rà soát user, client, role, group, identity provider và luồng xác thực, và thay đổi danh tính qua Approvals của workspace. Kết nối đăng nhập bằng **service account**: một confidential client trong realm dùng client credentials grant, với các role `realm-management` quyết định agent thấy và thay đổi được gì.
 
 ## Điều kiện tiên quyết
 
-- Một **realm Keycloak** mà bạn muốn CloudThinker kiểm tra.
-- **Quyền admin** để tạo client bảo mật và gán service-account roles — `kcadm.sh` (tự host) hoặc realm console (Phase Two).
-- **Base URL** và **tên realm** của realm.
+- Một máy chủ Keycloak mà CloudThinker truy cập được qua mạng. Với máy chủ nằm sau firewall, xem [Truy cập dịch vụ nội bộ](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ). CloudThinker không chặn `http`, nhưng khi đó client secret được gửi đi không mã hóa, nên hãy dùng `https`.
+- Một quản trị viên có quyền tạo client trong realm đích và gán service account role cho client đó.
+- Tên realm.
+- Role **Admin** trong workspace CloudThinker, role có quyền thêm và sửa kết nối. Xem [Roles](/vi/guide/security/roles).
 
 <Info>
-Kết nối được phạm vi hóa theo các role bạn cấp cho service account `cloudthinker-svc`. Hãy gán các role `realm-management` có đặc quyền tối thiểu đáp ứng nhu cầu của CloudThinker.
+Mỗi workspace có một kết nối Keycloak, và kết nối đó nhắm tới một realm. Agent lấy token từ `<KEYCLOAK_URL>/realms/<KEYCLOAK_REALM>/protocol/openid-connect/token`, nên base URL phải là phần đứng trước `/realms`.
 </Info>
 
 ## Thiết lập
 
-Cả hai cách đều tạo ra cùng một artifact: một client bảo mật `cloudthinker-svc` với các role `realm-management` trên service account. Tự host dùng `kcadm.sh`; Phase Two dùng realm console.
+Cả hai tab đều tạo cùng một thứ: confidential client tên `cloudthinker-svc` đã bật service account, với các role `realm-management` gán cho service account đó.
 
 <Tabs>
-  <Tab title="Keycloak tự host">
-
-    Cung cấp client bằng `kcadm.sh`, CLI admin của Keycloak. Chạy từ bất kỳ shell nào có sẵn công cụ này.
+  <Tab title="Admin console">
+    Dùng được cho Keycloak tự vận hành và Keycloak được quản lý như Phase Two.
 
     <Steps>
-      <Step title="Xác thực">
+      <Step title="Tạo client">
+        Trong admin console, chuyển sang realm của bạn, mở **Clients** và chọn **Create client**. Đặt **Client ID** là `cloudthinker-svc` rồi chọn **Next**. Bật **Client authentication**, chọn **Service accounts roles**, và để tắt các luồng còn lại. Chọn **Next**, rồi **Save**.
+      </Step>
+      <Step title="Gán role realm-management">
+        Mở client, vào **Service accounts roles** và chọn **Assign role**. Lọc theo client, tìm `realm-management` và chọn role. Để rà soát chỉ đọc, chọn `view-realm`, `view-users`, `query-users`, `view-clients`, `query-clients` và `query-groups`. Để cho phép thay đổi, xem [Quyền yêu cầu](#quyền-yêu-cầu). Danh sách có thể dài hơn một trang.
+      </Step>
+      <Step title="Sao chép client secret">
+        Trên cùng client đó, mở **Credentials** và sao chép **Client Secret**.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="kcadm.sh">
+    Dùng CLI quản trị của Keycloak từ bất kỳ máy nào truy cập được máy chủ Keycloak.
+
+    <Steps>
+      <Step title="Đăng nhập">
         ```bash
         kcadm.sh config credentials \
-          --server http://localhost:8080 --realm master \
-          --user admin --password '<admin-password>'
+          --server https://keycloak.example.com --realm master \
+          --user admin
         ```
+
+        Bỏ `--password` để `kcadm.sh` hỏi mật khẩu, nhờ vậy mật khẩu không nằm trong lịch sử shell. Thêm `/auth` vào `--server` nếu máy chủ phục vụ dưới đường dẫn đó.
       </Step>
       <Step title="Tạo client">
         ```bash
@@ -51,21 +60,19 @@ Cả hai cách đều tạo ra cùng một artifact: một client bảo mật `c
           -s publicClient=false \
           -s serviceAccountsEnabled=true \
           -s standardFlowEnabled=false \
-          -s directAccessGrantsEnabled=false \
-          -s 'redirectUris=[]'
+          -s directAccessGrantsEnabled=false
         ```
       </Step>
-      <Step title="Gán realm-management roles">
+      <Step title="Gán role realm-management chỉ đọc">
         ```bash
         kcadm.sh add-roles -r <your-realm> \
           --uusername service-account-cloudthinker-svc \
           --cclientid realm-management \
-          --rolename realm-admin
+          --rolename view-realm --rolename view-users --rolename query-users \
+          --rolename view-clients --rolename query-clients --rolename query-groups
         ```
-
-        Sử dụng các role hẹp hơn (ví dụ: `view-realm`, `view-users`) nếu bạn muốn đặc quyền tối thiểu.
       </Step>
-      <Step title="Lấy client secret">
+      <Step title="Sao chép client secret">
         ```bash
         CID=$(kcadm.sh get clients -r <your-realm> \
           -q clientId=cloudthinker-svc --fields id --format csv --noquotes | tail -n1)
@@ -74,151 +81,129 @@ Cả hai cách đều tạo ra cùng một artifact: một client bảo mật `c
           --fields value --format csv --noquotes | tail -n1
         ```
       </Step>
-      <Step title="Thêm kết nối trong CloudThinker">
-        Điều hướng đến **Connections → Keycloak** và nhập:
-
-        - **KEYCLOAK_URL**: `http://<host-ip>:8080`
-        - **KEYCLOAK_REALM**: tên realm của bạn
-        - **KEYCLOAK_CLIENT_ID**: `cloudthinker-svc`
-        - **KEYCLOAK_CLIENT_SECRET**: secret từ bước trước
-
-        Nhấn **Connect**. CloudThinker hiển thị trạng thái **Connected** khi thành công.
-      </Step>
     </Steps>
-
-  </Tab>
-
-  <Tab title="Phase Two">
-
-    Dành cho Keycloak được quản lý qua [Phase Two](https://dash.phasetwo.io/realms).
-
-    <Steps>
-      <Step title="Mở realm console">
-        Trong [Phase Two dashboard](https://dash.phasetwo.io/realms), mở console cho realm bạn muốn kết nối.
-      </Step>
-      <Step title="Tạo client">
-        Vào tab **Clients** → **Create client** và cấu hình:
-
-        - **Client ID**: `cloudthinker-svc`
-        - Nhấn **Next**
-        - Bật **Client authentication** và **Authorization**
-        - Nhấn **Next**, rồi **Save**
-      </Step>
-      <Step title="Gán realm-management roles">
-        Mở client mới → **Service account roles** → **Assign roles**.
-
-        Tìm kiếm `realm-management` và gán các role bạn muốn CloudThinker sử dụng. Chúng tôi khuyến nghị gán tất cả role `realm-management` — kiểm tra cả hai trang để tránh bỏ sót.
-      </Step>
-      <Step title="Lấy client secret">
-        Trong cùng client đó, mở **Credentials** và sao chép giá trị trong **Client Secret**.
-      </Step>
-      <Step title="Lấy URL realm">
-        Quay lại [https://dash.phasetwo.io/realms](https://dash.phasetwo.io/realms), mở thẻ realm và nhấn **Details**. Sao chép giá trị trong **Host** (ví dụ: `https://<region>.auth.ac/auth`).
-      </Step>
-      <Step title="Thêm kết nối trong CloudThinker">
-        Điều hướng đến **Connections → Keycloak** và nhập:
-
-        - **KEYCLOAK_URL**: URL Host từ realm details (ví dụ: `https://<region>.auth.ac/auth`)
-        - **KEYCLOAK_REALM**: tên realm của bạn
-        - **KEYCLOAK_CLIENT_ID**: `cloudthinker-svc`
-        - **KEYCLOAK_CLIENT_SECRET**: secret từ bước credentials
-
-        Nhấn **Connect**. CloudThinker hiển thị trạng thái **Connected** khi thành công.
-      </Step>
-    </Steps>
-
   </Tab>
 </Tabs>
+
+Sau đó thêm kết nối:
+
+<Steps>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Mở **More → Workspace settings → Connections**, chọn **Keycloak**, và điền các trường trong [Chi tiết kết nối](#chi-tiết-kết-nối). Nhấn **Connect**.
+
+    **Trạng thái thành công:** kết nối hiện **Connecting** và **Verifying**, rồi **Connected**. CloudThinker đăng nhập bằng service account và đếm số user trong realm, qua đó chứng minh cả secret lẫn role `view-users` đều đúng.
+  </Step>
+</Steps>
 
 ## Chi tiết kết nối
 
 | Trường | Mô tả | Ví dụ |
 |-------|-------------|---------|
-| **KEYCLOAK_URL** | Base URL của Keycloak | `http://<host-ip>:8080` |
-| **KEYCLOAK_REALM** | Tên realm mục tiêu | `my-realm` |
-| **KEYCLOAK_CLIENT_ID** | Client ID của service account | `cloudthinker-svc` |
-| **KEYCLOAK_CLIENT_SECRET** | Client secret từ bước credentials | — |
+| **KEYCLOAK_URL** | Base URL của Keycloak, không có `/realms/...`. Thêm `/auth` nếu máy chủ phục vụ dưới đường dẫn đó, như các bản Keycloak cũ và Phase Two | `https://keycloak.example.com` |
+| **KEYCLOAK_REALM** | Realm chứa client và là nơi agent làm việc | `production` |
+| **KEYCLOAK_CLIENT_ID** | Client ID của client dùng làm service account | `cloudthinker-svc` |
+| **KEYCLOAK_CLIENT_SECRET** | Client secret lấy từ tab **Credentials** | |
 
-## Quyền bắt buộc
+Với Phase Two, sao chép base URL từ thẻ realm trên dashboard Phase Two: chọn **Details** và sao chép **Host**.
 
-Service account `cloudthinker-svc` cần các role `realm-management` trên realm mục tiêu. Các role phổ biến:
+## Quyền yêu cầu
 
-| Role | Mục đích |
-|------|---------|
-| `view-realm` | Đọc cài đặt realm |
-| `view-users` | Liệt kê và kiểm tra người dùng |
-| `view-clients` | Liệt kê và kiểm tra client |
-| `query-users`, `query-clients`, `query-groups` | Chạy các truy vấn tra cứu |
-| `manage-users`, `manage-clients`, `manage-realm` | Thực hiện thay đổi (chỉ gán khi cần) |
+Gán client role `realm-management` cho service account. Chọn tập role hẹp nhất đủ cho nhu cầu của bạn.
+
+| Bạn muốn agent | Role |
+|--------------------|-------|
+| Vượt qua bước kiểm tra kết nối và rà soát user | `view-users`, `query-users` |
+| Rà soát thiết lập realm, identity provider và luồng xác thực | `view-realm` |
+| Rà soát client và client role | `view-clients`, `query-clients` |
+| Rà soát group và thành viên | `query-groups`, cùng `view-users` |
+| Tạo, cập nhật hoặc xóa user, group hay quan hệ thành viên | `manage-users` |
+| Tạo hoặc xóa client, client role, hoặc xoay vòng secret | `manage-clients` |
+| Thay đổi thiết lập realm hoặc luồng xác thực | `manage-realm` |
+
+`realm-admin` bao gồm mọi role ở trên. Đây là lựa chọn nhanh nhất nhưng cũng rộng nhất, nên chỉ dùng khi agent cần quản lý toàn bộ realm.
 
 <Tip>
-Để phân tích chỉ đọc, chỉ gán các role `view-*` và `query-*`. Thêm role `manage-*` chỉ khi bạn cần CloudThinker thực hiện thay đổi.
+Để rà soát, chỉ gán các role `view-*` và `query-*`. Thiếu role sẽ hiện thành `403 Forbidden` ở câu hỏi tương ứng, không làm kết nối thất bại, trừ khi role bị thiếu là `view-users`.
 </Tip>
 
 ## Khả năng của agent
 
-Sau khi kết nối, CloudThinker có thể:
+| Khả năng | Agent làm được gì | Phê duyệt |
+|------------|--------------------|----------|
+| **User** | Liệt kê và đếm user, tra cứu theo username, hiện role trực tiếp, role hiệu lực và group mà user thuộc về | Không |
+| **Client** | Liệt kê client và role của chúng, xem thiết lập như những luồng nào đang bật | Không |
+| **Role và group** | Liệt kê realm role, group và thành viên group | Không |
+| **Identity provider** | Liệt kê identity provider và mapper của chúng | Không |
+| **Luồng xác thực** | Liệt kê luồng xác thực và các execution của chúng | Không |
+| **Thay đổi user** | Tạo, cập nhật hoặc xóa user, đặt lại mật khẩu, gửi email xác minh, thay đổi role và group | Qua Approvals |
+| **Thay đổi client** | Tạo hoặc xóa client và client role, xoay vòng client secret | Qua Approvals |
+| **Thay đổi realm, group và luồng** | Tạo, đổi tên hoặc xóa group và subgroup, tạo hoặc xóa luồng, đổi requirement của một execution. Tạo realm còn cần role `create-realm`, role này chỉ có trong realm `master` | Qua Approvals |
 
-| Khả năng | Mô tả |
-|------------|-------------|
-| **Kiểm tra realm** | Xem xét cài đặt và cấu hình realm |
-| **Kiểm toán client** | Liệt kê client, xem xét flow và cài đặt authorization |
-| **Quản lý người dùng** | Xem người dùng, phiên làm việc và trạng thái credentials |
-| **Xem xét role và group** | Kiểm tra role, composite và cấu trúc phân cấp group |
-| **Phân tích quyền truy cập** | Xác định service account có đặc quyền thừa và client không còn dùng |
+Thao tác đọc chạy không cần hỏi. **Allow writes** trên bảng chi tiết của kết nối mặc định bật; tắt đi để từ chối mọi thay đổi. Mọi thay đổi đều đi qua [Approvals](/vi/guide/approvals/overview) trước.
+
+<ApprovalDefault />
+
+Thao tác đọc danh sách mặc định trả về tối đa 100 mục, nên với realm lớn, hãy hỏi về một group, một client hoặc một username thay vì toàn bộ.
+
+CloudThinker chuyển mật khẩu user mới cho Keycloak qua standard input, nên mật khẩu không xuất hiện trong log lệnh. Mật khẩu vẫn có thể hiện trong cuộc hội thoại nếu bạn gõ vào đó, nên tốt hơn là để user tự đặt lại mật khẩu qua Keycloak.
+
+<Warning>
+Xoay vòng client secret có hiệu lực ngay khi chạy, và secret cũ ngừng hoạt động. Báo cho chủ sở hữu client đó trước khi bạn yêu cầu.
+</Warning>
 
 ### Xác minh kết nối
 
 ```text
-List all clients in the realm to verify the Keycloak connection
+How many users are in my Keycloak realm?
 ```
+
+Kết quả mong đợi là số lượng user. Câu hỏi này chỉ cần `view-users`. Để kiểm tra cả quyền truy cập client, hãy hỏi client nào đang bật direct access grants, câu hỏi này cần `view-clients`.
 
 ### Ví dụ prompt
 
 ```text
-List all clients in the realm and flag any with direct access grants enabled
-Show service accounts with realm-admin and review whether each is needed
-Audit users without 2FA enabled
+What are the effective realm roles of the user alice?
+Which service accounts hold realm-admin, and does each one need it?
+Show the steps of the browser authentication flow and which are required
 ```
 
 ## Khắc phục sự cố
 
-<Accordion title="401 Unauthorized">
-- Xác minh client secret được sao chép chính xác
-- Xác nhận **Client authentication** được bật trên client
-- Đảm bảo service account đã được gán các role `realm-management`
+<Accordion title="Failed to connect to Keycloak">
+CloudThinker không lấy được token hoặc không đếm được user. Kiểm tra theo thứ tự:
+- **KEYCLOAK_URL** truy cập được từ CloudThinker và dừng trước `/realms`. Thêm `/auth` nếu máy chủ phục vụ dưới đường dẫn đó.
+- **KEYCLOAK_REALM** là realm nơi bạn đã tạo client. Tên phân biệt chữ hoa chữ thường.
+- **Client authentication** và **Service accounts roles** đã bật cho client, và secret được sao chép đầy đủ.
+- Service account có `view-users`.
 </Accordion>
 
-<Accordion title="403 Forbidden trên thao tác realm">
-- Service account thiếu role `realm-management` bắt buộc cho thao tác đó
-- Tự host: chạy lại `add-roles` với role còn thiếu
-- Phase Two: kiểm tra lại cả hai trang của danh sách gán role
+<Accordion title="Client không có secret">
+Client đang là public. Bật **Client authentication**, hoặc đặt `publicClient=false` bằng `kcadm.sh`, rồi sao chép secret từ **Credentials**.
 </Accordion>
 
-<Accordion title="Không thể tiếp cận Keycloak URL">
-- Tự host: xác nhận base URL khớp với hostname Keycloak của bạn
-- Phase Two: sao chép URL chính xác từ trường **Details → Host** của realm
+<Accordion title="403 Forbidden ở một số câu hỏi">
+Token hoạt động, nhưng service account thiếu role cho endpoint đó. Câu hỏi đọc cần role `view-*` hoặc `query-*`, còn thay đổi cần role `manage-*`. Thêm role theo [Quyền yêu cầu](#quyền-yêu-cầu). Role áp dụng từ token kế tiếp, nên hãy hỏi lại.
 </Accordion>
 
-<Accordion title="Client secret trống">
-- Client phải là bảo mật — `publicClient=false` (tự host) hoặc **Client authentication** được bật (Phase Two)
-- Client công khai không có secret
+<Accordion title="Agent chỉ hiện 100 user">
+Thao tác đọc danh sách mặc định dừng ở 100. Hỏi về một username hoặc group cụ thể, hoặc yêu cầu agent phân trang để lấy thêm kết quả.
 </Accordion>
 
 ## Bảo mật
 
 <ConnectionSecurity />
 
-- **Client riêng biệt** — sử dụng `cloudthinker-svc` làm client service-account riêng biệt, không dùng chung client admin.
-- **Xoay vòng secret** — định kỳ xoay vòng client secret qua tab **Credentials**.
+- **Dùng client riêng**: chỉ dùng `cloudthinker-svc` cho CloudThinker, để bạn thu hồi được mà không ảnh hưởng ứng dụng khác.
+- **Xoay vòng secret**: kết nối hỏng ngay khi bạn tạo lại secret, nên hãy làm cả hai bước cùng lúc. Keycloak là dịch vụ chỉ có một kết nối, nên dòng của nó không có biểu tượng bút chì. Tạo lại secret trong **Credentials** của Keycloak, rồi mở **More → Workspace settings → Connections** và chọn **Keycloak**. Khi kết nối hiện **Error**, nhấn **Replace credentials**, nhấn **Replace…** bên cạnh thông tin xác thực đã lưu, dán **KEYCLOAK_CLIENT_SECRET** mới và nhấn **Save and test**. Xem [Xoay vòng thông tin xác thực](/vi/guide/connections/overview#xoay-vòng-thông-tin-xác-thực).
+- **Tránh dùng `realm-admin` để rà soát**: các role chỉ đọc đã đủ cho mọi câu hỏi ở các dòng đọc phía trên.
 
 ## Liên quan
 
 <CardGroup cols={2}>
-  <Card title="Agent" icon="shield-halved" href="/vi/guide/agents/overview">
-    Agent bảo mật và tuân thủ
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Quyết định thay đổi Keycloak nào được chạy, phải chờ một người, hoặc bị từ chối.
   </Card>
-  <Card title="Tổng quan kết nối" icon="plug" href="/vi/guide/connections/overview">
-    Tất cả kết nối hiện có
+  <Card title="Kết nối" icon="plug" href="/vi/guide/connections/overview">
+    Xem mọi dịch vụ bạn kết nối được và cách trạng thái kết nối hoạt động.
   </Card>
 </CardGroup>

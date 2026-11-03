@@ -1,0 +1,204 @@
+---
+title: Thiết lập OIDC SSO
+description: "Kết nối Google, Microsoft Entra ID, Okta hoặc bất kỳ nhà cung cấp danh tính OpenID Connect nào với CloudThinker bằng issuer URL và client ID."
+icon: id-badge
+---
+
+OpenID Connect (OIDC) là lớp đăng nhập trên nền OAuth 2.0. Bạn đăng ký CloudThinker làm OAuth client trong nhà cung cấp danh tính (IdP), rồi cung cấp cho CloudThinker ba giá trị: **Issuer URL**, **Client ID** và **Client Secret**.
+
+## Điều kiện tiên quyết
+
+- Tên miền email đã xác minh, vai trò organization **Owner** và một gói đủ điều kiện. Xem [Thiết lập single sign-on](/vi/guide/security/sso).
+- Quyền admin trên nhà cung cấp danh tính, có quyền tạo ứng dụng OAuth hoặc OIDC.
+
+## Các giá trị trao đổi
+
+| Chiều | Giá trị | Ghi chú |
+|---|---|---|
+| CloudThinker → IdP của bạn | Redirect URI: `https://<your-cloudthinker-api-host>/api/v1/sso/oidc/callback` | Đăng ký chính xác, dưới dạng redirect URI **Web** |
+| IdP của bạn → CloudThinker | **Issuer URL** | Địa chỉ gốc của issuer, không phải địa chỉ `.well-known`. CloudThinker tự tìm các endpoint từ `<issuer>/.well-known/openid-configuration`. |
+| IdP của bạn → CloudThinker | **Client ID** | Bắt buộc |
+| IdP của bạn → CloudThinker | **Client Secret** | Bắt buộc với confidential client (thiết lập web app thông thường). Chỉ để trống với public client dùng PKCE. |
+
+CloudThinker yêu cầu các scope `openid`, `email` và `profile`. CloudThinker đọc email của người dùng từ claim `email` (nếu không có thì dùng `preferred_username`) và tên từ `given_name` và `family_name`. CloudThinker không đọc group.
+
+| Cài đặt client | CloudThinker dùng |
+|---|---|
+| Grant type | Authorization Code |
+| PKCE | Luôn được gửi, với `S256`, cho cả confidential và public client |
+| Xác thực token endpoint | `client_secret_post` (secret nằm trong body của request). Bỏ qua với public client. |
+
+<Tip>
+  Trình hướng dẫn OIDC không hiển thị redirect URI. Để tìm host, bắt đầu **Setup SSO**, chọn **SAML 2.0** và nhấn **Next**. **ACS URL** ở bước **SP Metadata** dùng cùng host: thay `/api/v1/sso/saml/acs` bằng `/api/v1/sso/oidc/callback`. Sau đó nhấn **Back** và chọn OIDC.
+</Tip>
+
+## Cấu hình nhà cung cấp
+
+Vào **Admin Settings → Identity and access → Setup SSO**, chọn **OpenID Connect (OIDC)** và nhấn **Next**. Bước **IdP Config** yêu cầu **Display Name** (nhãn bất kỳ, ví dụ `Okta OIDC`), **Issuer URL**, **Client ID** và **Client Secret**.
+
+<Tabs>
+  <Tab title="Okta">
+    <Steps>
+      <Step title="Tạo ứng dụng OIDC">
+        Trong Okta Admin Console, vào **Applications → Applications → Create App Integration**. Chọn **OIDC - OpenID Connect** và **Web Application**. Trong **Grant type**, giữ **Authorization Code**.
+      </Step>
+      <Step title="Thêm redirect URI">
+        Trong **Sign-in redirect URIs**, dán redirect URI của CloudThinker. Gán người hoặc nhóm cần truy cập, rồi lưu.
+      </Step>
+      <Step title="Hoàn tất trong CloudThinker">
+        Từ tab **General** của ứng dụng, sao chép **Client ID** và **Client secret**. Ở bước **IdP Config**, nhập:
+
+        - **Issuer URL**: `https://your-org.okta.com`. Nếu dùng custom authorization server, hãy nhập issuer của server đó, ví dụ `https://your-org.okta.com/oauth2/default`.
+        - **Client ID** và **Client Secret**: từ ứng dụng Okta
+
+        Nhấn **Create Connection**.
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Microsoft Entra ID">
+    <Steps>
+      <Step title="Đăng ký ứng dụng">
+        Trong [Azure portal](https://portal.azure.com), vào **Microsoft Entra ID → App registrations → New registration**. Đặt tên **CloudThinker**. Trong **Redirect URI**, chọn **Web** và dán redirect URI của CloudThinker. Nhấn **Register**.
+      </Step>
+      <Step title="Tạo client secret">
+        Vào **Certificates & secrets → New client secret**. Sao chép **Value** của secret ngay; Entra chỉ hiển thị một lần. Ghi lại ngày hết hạn.
+      </Step>
+      <Step title="Thêm claim email">
+        Vào **Token configuration → Add optional claim → ID**, chọn **email** và nhấn **Add**. Ở **API permissions**, xác nhận Microsoft Graph `openid`, `email` và `profile` có trong danh sách.
+
+        Không có claim `email`, CloudThinker dùng `preferred_username`, tức UPN của người dùng. Cách này chỉ hoạt động khi UPN thuộc một tên miền đã xác minh.
+      </Step>
+      <Step title="Hoàn tất trong CloudThinker">
+        Ở bước **IdP Config**, nhập:
+
+        - **Issuer URL**: `https://login.microsoftonline.com/<tenant-id>/v2.0`, dùng **Directory (tenant) ID** từ trang tổng quan của ứng dụng
+        - **Client ID**: **Application (client) ID** từ trang tổng quan
+        - **Client Secret**: giá trị secret bạn đã sao chép
+
+        Nhấn **Create Connection**.
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Google">
+    <Steps>
+      <Step title="Cấu hình OAuth consent screen">
+        Trong [Google Cloud console](https://console.cloud.google.com), vào **APIs & Services → OAuth consent screen**. Chọn **Internal** làm loại người dùng để chỉ người dùng Workspace của bạn đăng nhập được, và thêm các scope `openid`, `email` và `profile`.
+      </Step>
+      <Step title="Tạo OAuth client">
+        Trong [Google Cloud console](https://console.cloud.google.com), vào **APIs & Services → Credentials → Create credentials → OAuth client ID**. Chọn **Web application** làm loại ứng dụng.
+      </Step>
+      <Step title="Thêm redirect URI">
+        Trong **Authorized redirect URIs**, thêm redirect URI của CloudThinker và nhấn **Create**. Sao chép **Client ID** và **Client secret**.
+      </Step>
+      <Step title="Hoàn tất trong CloudThinker">
+        Ở bước **IdP Config**, nhập:
+
+        - **Issuer URL**: `https://accounts.google.com`
+        - **Client ID** và **Client Secret**: từ OAuth client
+
+        Nhấn **Create Connection**.
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Nhà cung cấp OIDC khác">
+    Mọi nhà cung cấp đều dùng được nếu công bố tài liệu discovery tại `<issuer>/.well-known/openid-configuration`.
+
+    <Steps>
+      <Step title="Đăng ký CloudThinker làm web client">
+        Tạo một ứng dụng web OAuth 2.0 / OIDC trong nhà cung cấp. Thêm redirect URI của CloudThinker và cho phép các scope `openid`, `email` và `profile`.
+      </Step>
+      <Step title="Điền IdP Config">
+        | Trường | Giá trị cần nhập |
+        |---|---|
+        | **Display Name** | Nhãn bất kỳ, ví dụ `Okta OIDC` |
+        | **Issuer URL** | Issuer của nhà cung cấp, chính xác như trong trường `issuer` của tài liệu discovery |
+        | **Client ID** | Client ID mà nhà cung cấp cấp |
+        | **Client Secret** | Client secret, hoặc để trống với public client dùng PKCE |
+
+        Nhấn **Create Connection**.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+**Trạng thái thành công:** hộp thoại hiển thị **SSO Connection Created** và kết nối ở trạng thái **Active**. Tiếp theo, chạy kiểm tra kết nối và đăng nhập thử theo [Thiết lập single sign-on](/vi/guide/security/sso#tạo-kết-nối).
+
+## Bài kiểm tra kết nối kiểm tra những gì
+
+Trên **Manage → Overview**, **Run connection test** kiểm tra cấu hình mà không cần đăng nhập đầy đủ:
+
+| Kiểm tra | Đạt khi |
+|---|---|
+| **Discovery Reachable** | CloudThinker lấy được `<issuer>/.well-known/openid-configuration` |
+| **Issuer Match** | `issuer` trong tài liệu đó bằng **Issuer URL** của bạn |
+| **Required Endpoints Present** | Tài liệu liệt kê các endpoint authorization, token và signing key |
+| **Jwks Reachable** | CloudThinker lấy được signing key của nhà cung cấp |
+
+Kiểm tra không xác minh client secret hay redirect URI. Hãy đăng nhập thật để xác nhận hai giá trị này.
+
+## Điều xảy ra ở lần đăng nhập đầu tiên
+
+OIDC tuân theo cùng quy tắc như SAML:
+
+| Nếu | Thì |
+|---|---|
+| Provisioning là **Just-in-time** | CloudThinker tạo tài khoản ở lần đăng nhập SSO đầu tiên của người đó, với **Auto-assigned organization role** (mặc định **Viewer**) và **Auto-assigned workspaces** bạn đã đặt. |
+| Người đó có lời mời đang chờ | Vai trò và workspace của lời mời được áp dụng thay thế. Nếu organization không còn seat trống, đăng nhập thất bại với "This organization has reached its seat limit." |
+| Người đó đã có tài khoản CloudThinker cùng email | CloudThinker liên kết tài khoản đó với IdP của bạn. Không tạo bản trùng lặp. |
+| Provisioning là **Manual** và người đó không có tài khoản hay lời mời | Đăng nhập bị từ chối với "No account found. Contact your administrator for access." Hãy mời họ trước. |
+| Bạn muốn group trong IdP quyết định quyền truy cập | Đăng nhập OIDC không đọc group. Dùng [SCIM](/vi/guide/security/scim#ánh-xạ-nhóm-tới-workspace) để ánh xạ group vào workspace. |
+
+## Xoay vòng client secret
+
+CloudThinker lưu một client secret. Hầu hết IdP, bao gồm Entra ID và Okta, cho phép hai secret cùng hợp lệ, nên bạn có thể xoay vòng mà không gián đoạn:
+
+<Steps>
+  <Step title="Tạo secret mới trong IdP">
+    Thêm client secret thứ hai vào ứng dụng CloudThinker. Giữ nguyên secret cũ.
+  </Step>
+  <Step title="Lưu trong CloudThinker">
+    Mở **Manage → Configuration** trên thẻ **Single sign-on**, dán giá trị mới vào **Client Secret** và nhấn **Save Changes**.
+  </Step>
+  <Step title="Kiểm tra, rồi xóa secret cũ">
+    Đăng nhập qua SSO trong một cửa sổ riêng tư. Khi đăng nhập thành công, xóa secret cũ trong IdP.
+  </Step>
+</Steps>
+
+Nếu IdP chỉ cho phép một secret, đăng nhập sẽ thất bại trong khoảng thời gian từ lúc thay secret ở đó đến lúc lưu trong CloudThinker. Owner vẫn có thể đăng nhập bằng mã email. Xem [Nếu IdP không khả dụng](/vi/guide/security/sso#nếu-idp-không-khả-dụng).
+
+## Khắc phục sự cố
+
+<AccordionGroup>
+  <Accordion title="'Redirect URI mismatch' từ nhà cung cấp">
+    Redirect URI trong nhà cung cấp phải khớp chính xác với `https://<your-cloudthinker-api-host>/api/v1/sso/oidc/callback`, bao gồm `https://` và toàn bộ đường dẫn. Dùng mẹo ở trên để xác nhận host.
+  </Accordion>
+  <Accordion title="Issuer Match thất bại">
+    Sao chép giá trị `issuer` trực tiếp từ tài liệu discovery của nhà cung cấp. Lỗi thường gặp: dán toàn bộ địa chỉ `.well-known/openid-configuration`, hoặc bỏ sót `/v2.0` với Entra ID.
+  </Accordion>
+  <Accordion title="Discovery Reachable thất bại">
+    CloudThinker phải truy cập được issuer qua internet công cộng. Với issuer nằm trong mạng riêng hoặc sau VPN, CloudThinker không thể đọc được tài liệu discovery.
+  </Accordion>
+  <Accordion title="'Invalid client' hoặc đăng nhập thất bại ngay sau IdP">
+    Kiểm tra **Client ID** và **Client Secret**. Secret hết hạn là nguyên nhân thường gặp trên Entra ID. Làm theo [Xoay vòng client secret](#xoay-vòng-client-secret).
+  </Accordion>
+  <Accordion title="Đăng nhập thất bại vì không trả về email">
+    Nhà cung cấp không trả về claim `email` hoặc `preferred_username`. Cho phép scope `email` cho ứng dụng và đảm bảo người dùng có địa chỉ email trong thư mục.
+  </Accordion>
+  <Accordion title="'SSO authentication failed. Please try again or contact your administrator.'">
+    CloudThinker từ chối ID token hoặc quá trình trao đổi token. Kiểm tra **Issuer URL** khớp với tài liệu discovery, client secret còn hiệu lực, và IdP chấp nhận `client_secret_post` cùng PKCE cho client này.
+  </Accordion>
+</AccordionGroup>
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="Kiểm tra và bắt buộc SSO" icon="key" href="/vi/guide/security/sso">
+    Đăng nhập thử, chọn provisioning và bật Require SSO
+  </Card>
+  <Card title="SCIM provisioning" icon="users-gear" href="/vi/guide/security/scim">
+    Tự động đồng bộ người dùng và group từ IdP
+  </Card>
+</CardGroup>

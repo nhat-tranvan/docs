@@ -1,135 +1,129 @@
 ---
 title: Rollbar
-description: "Kết nối Rollbar với CloudThinker để phân loại lỗi, theo dõi lỗi hàng đầu và điều tra tương quan với deployment"
+description: "Kết nối các project Rollbar bằng access token để agent xếp hạng lỗi hàng đầu, gắn lỗi với lần deploy và cập nhật item"
 icon: "/images/icons/rollbar.svg"
 ---
 
 import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
 
-Kết nối các project Rollbar của bạn để cho phép các agent CloudThinker phân loại lỗi, xếp hạng các vấn đề hàng đầu, xem xét deployment, lấy ngữ cảnh session replay và cập nhật item trên một hoặc nhiều project. Rollbar xác thực bằng **project access token** — token có phạm vi đọc đủ cho điều tra; token có phạm vi ghi bổ sung các cập nhật item được kiểm soát bởi phê duyệt.
+Kết nối Rollbar để agent CloudThinker xếp hạng các lỗi hàng đầu, gắn lỗi mới với các lần deploy và phiên bản gần đây, lấy ngữ cảnh session replay, và đổi trạng thái item qua [Approvals](/vi/guide/approvals/overview) của bạn. Bạn dán một cấu hình JSON ánh xạ mỗi project Rollbar với project access token của nó, nên một kết nối có thể bao quát nhiều project.
 
 ## Điều kiện tiên quyết
 
-- Một **tài khoản Rollbar** với quyền truy cập vào các project bạn muốn CloudThinker xem.
-- Một **project access token** cho mỗi project (phạm vi đọc là đủ để điều tra).
-- Một **token có phạm vi ghi** chỉ khi bạn muốn agent cập nhật trạng thái item (được kiểm soát bởi phê duyệt).
-
-<Info>
-Token Rollbar được giới hạn phạm vi **theo project**. CloudThinker hỗ trợ nhiều project trong một kết nối — cung cấp một token cho mỗi project bạn muốn đưa vào.
-</Info>
+- Tài khoản Rollbar có quyền truy cập từng project bạn muốn agent đọc.
+- Một project access token cho mỗi project đó. Token của Rollbar gắn với từng project, nên một token không dùng được cho hai project.
 
 ## Thiết lập
 
 <Steps>
   <Step title="Tạo project access token">
-    Trong Rollbar, mở project và tạo (hoặc sao chép) một **project access token** với phạm vi **read**. Thêm token có phạm vi **write** nếu bạn muốn agent cập nhật item. Xem [MCP Server Setup](https://docs.rollbar.com/docs/mcp-server-setup#configuration) của Rollbar để biết chi tiết về token và cấu hình.
+    Trong Rollbar, mở project và vào **Settings → Project Access Tokens**. Nhấn **Create new access token**, đánh dấu **read**, và chỉ thêm **write** nếu bạn muốn agent đổi trạng thái item. Để trống **post_server_item** và **post_client_item**: hai scope này dùng để gửi lỗi vào Rollbar, việc CloudThinker không bao giờ làm. Lặp lại cho từng project.
   </Step>
-  <Step title="Thêm kết nối trong CloudThinker">
-    Điều hướng đến **Connections → Rollbar** và nhập:
-    - **Project config (JSON)**: một mảng `projects`, một mục cho mỗi project Rollbar, mỗi mục gồm `name` và `token`.
+  <Step title="Viết cấu hình project">
+    Tạo một object JSON có mảng `projects`, mỗi project một phần tử. Mỗi phần tử có `name` và `token`. `name` là nhãn riêng của bạn để dùng trong prompt, nên không cần trùng với tên project trên Rollbar. Tên ngắn như `backend` là dễ gõ nhất.
 
-    Nhấn **Connect**. CloudThinker xác minh thông tin xác thực và hiển thị trạng thái **Connected**.
+    ```json
+    {
+      "projects": [
+        { "name": "backend", "token": "<backend-project-token>" },
+        { "name": "frontend", "token": "<frontend-project-token>" }
+      ]
+    }
+    ```
+  </Step>
+  <Step title="Thêm kết nối">
+    Ở thanh bên, nhấn **More → Workspace settings → Connections**, rồi trên tab **Builtin Connections** chọn **Rollbar**, dán JSON vào **ROLLBAR_CONFIG_JSON** và nhấn **Connect**.
+
+    **Trạng thái thành công:** kết nối hiển thị **Connected**. Bước Connect không gọi Rollbar bằng từng token, nên token sai chỉ lộ ra ở yêu cầu đầu tiên. Hãy chạy ngay prompt trong [Xác minh kết nối](#xác-minh-kết-nối) ở một chat mới.
   </Step>
 </Steps>
 
 ## Chi tiết kết nối
 
 | Trường | Mô tả | Ví dụ |
-|--------|-------|-------|
-| **ROLLBAR_CONFIG_JSON** | Một mảng `projects` ánh xạ mỗi project Rollbar với access token của nó. Mỗi mục có `name` và `token`. | xem bên dưới |
+|-------|-------------|---------|
+| **ROLLBAR_CONFIG_JSON** | Mảng `projects`. Mỗi phần tử có `name` và `token`. Khóa là `token`, không phải `access_token` | `{"projects":[{"name":"backend","token":"..."}]}` |
 
-```json
-{
-  "projects": [
-    { "name": "backend",  "token": "tok_abc123" },
-    { "name": "frontend", "token": "tok_xyz789" }
-  ]
-}
-```
-
-<Info>
-Trường token là `token` (không phải `access_token`), và `projects` là một mảng. Định dạng khớp với [cấu hình multi-project MCP](https://docs.rollbar.com/docs/mcp-server-setup#configuration) của Rollbar.
-</Info>
+Định dạng này giống [cấu hình đa project cho MCP server](https://docs.rollbar.com/docs/mcp-server-setup#configuration) của Rollbar.
 
 ## Quyền yêu cầu
 
-Các thao tác đọc (danh sách project, item, lỗi hàng đầu, deployment, phiên bản, replay) hoạt động với **project access token** có phạm vi **read**. Cập nhật item bổ sung yêu cầu token có phạm vi **write** **và** [phê duyệt](/guide/approvals/overview) rõ ràng trong CloudThinker.
+| Scope của token | Cho phép |
+|-------------|----------------|
+| **read** | Project, item, lỗi hàng đầu, deployment, phiên bản và session replay |
+| **write** | Đổi trạng thái item, ví dụ resolve hoặc mute. Mỗi thay đổi còn đi qua Approvals của bạn |
 
 <Tip>
-Tuân theo nguyên tắc ít quyền nhất: dùng token có phạm vi đọc để điều tra, và chỉ thêm token có phạm vi ghi cho các project mà agent cần cập nhật item.
+Bắt đầu với token chỉ đọc. Chỉ thêm scope write trên những project mà bạn muốn agent resolve hoặc mute item.
 </Tip>
 
 ## Khả năng của agent
 
-Sau khi kết nối, các agent có thể điều tra và xử lý lỗi trên các project đã cấu hình của bạn.
+| Khả năng | Agent có thể làm gì |
+|------------|--------------------|
+| **Khám phá** | Liệt kê các project đã cấu hình và tự chọn project khi chỉ có một |
+| **Phân loại lỗi** | Liệt kê item hiện tại, đọc chi tiết item và số lần xuất hiện, và xếp hạng lỗi hàng đầu |
+| **Ngữ cảnh phát hành** | Xem các deployment gần đây và lấy chi tiết phiên bản từ revision của lần deploy |
+| **Session replay** | Lấy ngữ cảnh replay cho item có replay đã ghi. Cần thiết lập session replay cho project trong Rollbar |
+| **Cập nhật item (kiểm tra từng lần)** | Đổi trạng thái của một item. Bạn phải nêu rõ project, item và thay đổi mong muốn |
 
-### Khả năng đọc
+Agent không bao giờ thay đổi item khi đang phân loại, xem deploy hay đọc replay. Cập nhật chỉ chạy khi bạn yêu cầu trong cuộc hội thoại, và đi qua Approvals của bạn.
 
-| Danh mục | Chức năng của agent |
-|----------|---------------------|
-| **Project** | Liệt kê các project Rollbar đã cấu hình và tự động giới hạn phạm vi theo một project |
-| **Error item** | Liệt kê các item hiện tại và đang hoạt động, kiểm tra chi tiết item và tín hiệu xảy ra |
-| **Lỗi hàng đầu** | Hiển thị các lỗi có tác động cao nhất và tình trạng lỗi production hiện tại |
-| **Deployment** | Xem xét các deployment gần đây theo project |
-| **Release & phiên bản** | Lấy ngữ cảnh phiên bản và tương quan release với hoạt động lỗi |
-| **Session replay** | Lấy ngữ cảnh replay cho các item có replay được ghi |
-
-### Khả năng ghi
-
-| Danh mục | Chức năng của agent |
-|----------|---------------------|
-| **Cập nhật item** | Thay đổi trạng thái của item (ví dụ giải quyết, tắt tiếng) — **yêu cầu phê duyệt** |
-
-<Warning>
-Cập nhật item yêu cầu phê duyệt rõ ràng từ người dùng trước khi thực thi, và bạn phải nêu tên project, item và thay đổi mong muốn.
-</Warning>
+<ApprovalDefault />
 
 ### Xác minh kết nối
 
-```text
-List my Rollbar projects and show the current top errors
-```
-
-### Ví dụ lệnh
+Hỏi CloudThinker trong một chat mới:
 
 ```text
-Triage current Rollbar items and rank them by impact
-Show the top errors that appeared after the latest deployment
-Review recent deployments and correlate them with new error activity
+List my Rollbar projects and show the top errors in each
 ```
+
+Kết quả mong đợi gồm mọi tên project trong cấu hình, mỗi project kèm các item ảnh hưởng lớn nhất, level và số lần xuất hiện. Nếu thiếu project nào, project đó không có trong JSON bạn đã dán.
+
+### Ví dụ prompt
+
+```text
+Which errors in backend first appeared after the latest deployment?
+Rank the active items in frontend by impact and show replay context for the top one
+Resolve item #1042 in backend
+```
+
+Khi cấu hình nhiều project, hãy nêu tên project trong prompt. Nếu không, agent sẽ hỏi bạn dùng project nào. Với số item, dùng số `#` mà Rollbar hiển thị trên item.
 
 ## Khắc phục sự cố
 
-<Accordion title="Xác thực thất bại hoặc truy vấn trả về trống">
-JSON cấu hình project đã dán không hợp lệ, không bao gồm tên project được yêu cầu, hoặc ánh xạ project với token đã hết hạn. Hãy liệt kê các project đã cấu hình trước khi coi item hoặc deployment bị thiếu là "không có dữ liệu".
+<Accordion title="Lời gọi thất bại với 401 Unauthorized, hoặc trả về trống">
+Cấu hình đã dán không phải JSON hợp lệ, không chứa project bạn nêu tên, hoặc chứa token đã bị thu hồi, vô hiệu hóa hoặc giới hạn tần suất trong Rollbar. Yêu cầu agent liệt kê các project đã cấu hình, rồi sửa kết nối và chỉnh lại JSON hoặc token.
 </Accordion>
 
 <Accordion title="Agent hỏi nên dùng project nào">
-Điều này xảy ra khi nhiều project được cấu hình. Hãy nêu tên project trong lệnh (ví dụ "for my-app") để agent có thể giới hạn phạm vi truy vấn.
+Có nhiều hơn một project được cấu hình và prompt của bạn không nêu tên project. Thêm tên project trong cấu hình, ví dụ "in backend".
 </Accordion>
 
-<Accordion title="Không có replay cho một item">
-Ngữ cảnh session replay chỉ tồn tại cho các item có replay được ghi. Các item không có replay sẽ không trả về dữ liệu replay — đây là điều bình thường, không phải lỗi.
+<Accordion title="Item không có replay">
+Ngữ cảnh replay chỉ có với item có session replay đã ghi. Item không có replay sẽ không trả về dữ liệu replay. Đây là hành vi bình thường, không phải lỗi.
 </Accordion>
 
-<Accordion title="Cập nhật item bị chặn">
-Các cập nhật được kiểm soát bởi phê duyệt và cần token có phạm vi **write**. Xác nhận token cho project đó có phạm vi ghi, rồi phê duyệt hành động khi được nhắc.
+<Accordion title="Cập nhật item bị chặn hoặc thất bại">
+Token của project đó thiếu scope write, hoặc bạn đã từ chối phê duyệt. Thêm scope write cho token trong Rollbar, cập nhật kết nối rồi hỏi lại.
 </Accordion>
 
 ## Bảo mật
 
 <ConnectionSecurity />
 
-- **Token ít quyền nhất** — dùng token project có phạm vi đọc để điều tra; chỉ thêm phạm vi ghi khi agent cần cập nhật trạng thái item.
-- **Xoay vòng** — xoay vòng project access token thường xuyên và cập nhật trong CloudThinker.
+- **File cấu hình tạm**: token được lưu dưới dạng mã hóa. Khi agent dùng Rollbar, tiến trình Rollbar của agent đọc token từ một file tạm mà chỉ tiến trình đó đọc được, và file bị xóa khi tiến trình dừng.
+- **Xoay vòng token và thêm project**: JSON đã lưu không hiển thị khi bạn sửa kết nối. Dán lại toàn bộ JSON, với mọi project, mỗi khi bạn xoay vòng token hoặc thêm project.
 
 ## Liên quan
 
 <CardGroup cols={2}>
-  <Card title="Kết nối Datadog" icon="/images/icons/datadog.svg" href="/vi/guide/connections/datadog">
-    Log, số liệu và điều tra sự cố
+  <Card title="Sentry" icon="bug" href="/vi/guide/connections/sentry">
+    Issue, event và trace qua OAuth.
   </Card>
-  <Card title="Phê duyệt" icon="shield-check" href="/guide/approvals/overview">
-    Cách thức hoạt động của các hành động được kiểm soát bởi phê duyệt
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Cách CloudThinker hỏi trước khi chạy cập nhật item.
   </Card>
 </CardGroup>

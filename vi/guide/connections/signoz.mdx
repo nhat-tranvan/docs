@@ -1,154 +1,150 @@
 ---
 title: SigNoz
-description: "Kết nối SigNoz với CloudThinker để điều tra độ trễ dịch vụ, tìm kiếm log, kiểm tra quy tắc cảnh báo và đi sâu vào distributed trace"
+description: "Kết nối SigNoz để agent tìm các operation chậm, tìm kiếm log và trace, và rà soát alert rule bằng API key của Service Account"
 icon: "/images/icons/signoz.svg"
 ---
 
 import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
 
-Kết nối instance SigNoz của bạn để cho phép các agent CloudThinker điều tra độ trễ dịch vụ, tìm kiếm và tổng hợp log, kiểm tra quy tắc cảnh báo và đi sâu vào distributed trace trên toàn bộ stack của bạn.
-
-SigNoz xác thực bằng **Service Account API key** được giới hạn phạm vi theo vai trò (`signoz-viewer` để truy cập chỉ đọc, `signoz-admin` để truy cập ghi).
-
----
-
-## Các nền tảng được hỗ trợ
-
-| Nền tảng | Hỗ trợ |
-|----------|--------|
-| **SigNoz Cloud** | Tất cả tenant |
-| **SigNoz (tự lưu trữ)** | Các instance tự quản lý |
-
-SigNoz Cloud và tự lưu trữ dùng chung giao diện, vì vậy các bước thiết lập dưới đây giống nhau cho cả hai.
-
----
+Kết nối SigNoz Cloud hoặc một instance SigNoz tự host để agent CloudThinker xếp hạng các operation chậm nhất của một service, tìm kiếm và nhóm log, mở toàn bộ trace waterfall, truy vấn metric, và rà soát alert rule cùng lịch sử của chúng. Bạn cung cấp cho CloudThinker hai giá trị: base URL của SigNoz và một API key của Service Account. Cách thiết lập giống nhau cho SigNoz Cloud và bản tự host.
 
 ## Điều kiện tiên quyết
 
-- Một **instance SigNoz Cloud hoặc tự lưu trữ**.
-- Một **Service Account** để tạo API key (dùng `signoz-viewer` để truy cập chỉ đọc hoặc `signoz-admin` nếu CloudThinker cần thực hiện thay đổi).
-- **URL cơ sở SigNoz** của bạn.
-
----
+- Một instance SigNoz Cloud hoặc SigNoz tự host có ít nhất một service đã được instrument và đang gửi telemetry. SigNoz tạo service từ telemetry của ứng dụng, nên agent không thể tạo service giúp bạn.
+- Một user SigNoz có role SigNoz-Admin, có thể tạo Service Account và API key của account đó.
+- Base URL của SigNoz: `https://<your-tenant>.signoz.cloud` với SigNoz Cloud, hoặc địa chỉ bạn dùng để mở SigNoz với bản tự host, như `https://signoz.internal.example.com`.
+- Với SigNoz tự host: instance phải chấp nhận kết nối từ CloudThinker Cloud. Để đưa egress IP của CloudThinker vào allowlist, bạn cần danh sách hiện tại. Tài liệu này không công bố danh sách egress IP của CloudThinker: hãy hỏi đầu mối liên hệ CloudThinker của bạn, hoặc [liên hệ với chúng tôi](https://cloudthinker.io/contact). Xem [Truy cập dịch vụ private](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ) để biết các lựa chọn khác.
+- Vai trò **Admin** trong workspace CloudThinker, cần thiết để thêm kết nối. Xem [Vai trò](/vi/guide/security/roles).
 
 ## Thiết lập
 
 <Steps>
-  <Step title="Tạo service account">
-    Trong SigNoz, mở **Settings → Workspace Settings → Service Accounts** và nhấn **New Service Account**. Nhập tên (ví dụ `cloudthinker-svc`) và nhấn **Create Service Account**.
+  <Step title="Tạo Service Account">
+    Trong SigNoz, mở **Settings → Service Accounts**, nhấn **New Service Account** và đặt một tên dễ nhận ra về sau, như `cloudthinker`. Các bước giống nhau trên SigNoz Cloud và bản tự host.
   </Step>
-  <Step title="Gán vai trò">
-    Trên tab **Overview**, dùng dropdown **Roles** để chọn `signoz-viewer` để truy cập chỉ đọc hoặc `signoz-admin` nếu CloudThinker cần thực hiện thay đổi. Nhấn **Save Changes** để vai trò có hiệu lực.
+  <Step title="Chọn role">
+    Trên tab **Overview** của account, chọn role hẹp nhất trong danh sách **Roles**:
+
+    | Bạn muốn agent | Role |
+    |--------------------|------|
+    | Điều tra service, log, trace, metric, dashboard và alert | **SigNoz-Viewer** |
+    | Thêm quyền tạo, cập nhật hoặc xóa dashboard và alert | **SigNoz-Editor** |
+    | Thêm quyền quản lý saved view và notification channel | **SigNoz-Admin** |
+
+    Nhấn **Save** trước khi tạo key. SigNoz-Admin còn quản lý được user, role và service account, nên chỉ chọn role này khi thật sự cần.
   </Step>
   <Step title="Tạo API key">
-    Chuyển sang tab **Keys** và nhấn **Add Key**. Nhập tên key (ví dụ `cloudthinker-key`), tùy chọn đặt ngày hết hạn, nhấn **Create Key** và sao chép key.
+    Mở tab **Keys** của account, nhấn **Add Key**, đặt tên (ví dụ `cloudthinker-key`), đặt thời hạn nếu chính sách của bạn yêu cầu, rồi sao chép key. SigNoz chỉ hiển thị key một lần.
   </Step>
   <Step title="Thêm kết nối trong CloudThinker">
-    Điều hướng đến **Connections → SigNoz** và nhập:
-    - **SigNoz URL**: URL cơ sở của instance, ví dụ `https://<hash>.signoz.cloud` (chỉ URL cơ sở, không có path, nếu không các yêu cầu sẽ trả về 404)
-    - **API Key**: key vừa sao chép
-    - **Log Level** (tùy chọn): giữ là `info` trừ khi bạn đang gỡ lỗi
+    Trong thanh bên, nhấn **More → Workspace settings → Connections**, giữ nguyên tab **Builtin Connections** và chọn **SigNoz**. Điền:
 
-    Nhấn **Connect**. CloudThinker xác minh thông tin xác thực và hiển thị trạng thái **Connected**.
+    - **SIGNOZ_URL**: chỉ base URL, ví dụ `https://<your-tenant>.signoz.cloud`. Đừng thêm `/api/v1` hay bất kỳ đường dẫn nào khác.
+    - **SIGNOZ_API_KEY**: key bạn vừa sao chép.
+    - **LOG_LEVEL**: giữ ở **Info**. Trường này quyết định mức chi tiết kết nối ghi vào log chẩn đoán của CloudThinker, đội hỗ trợ dùng log này khi xử lý sự cố.
+
+    Nhấn **Connect**.
+
+    **Trạng thái thành công:** SigNoz hiển thị **Connected**.
   </Step>
 </Steps>
 
----
-
 ## Chi tiết kết nối
 
-| Trường | Mô tả | Ví dụ |
-|--------|-------|-------|
-| **SIGNOZ_URL** | URL cơ sở của instance, không có hậu tố path | `https://<hash>.signoz.cloud` |
-| **SIGNOZ_API_KEY** | Service Account key | Sao chép từ tab Keys |
-| **LOG_LEVEL** | Độ chi tiết log của MCP server: `debug`, `info`, `warn` hoặc `error` | `info` |
-
----
+| Trường | Bắt buộc | Mô tả | Ví dụ |
+|-------|----------|-------------|---------|
+| **SIGNOZ_URL** | Có | Base URL của instance, không kèm đường dẫn | `https://<your-tenant>.signoz.cloud` |
+| **SIGNOZ_API_KEY** | Có | API key của Service Account | Từ tab **Keys** của account |
+| **LOG_LEVEL** | Không | Mức chi tiết của log kết nối nội bộ của CloudThinker, đội hỗ trợ sử dụng. Mặc định **Info** | **Info** |
 
 ## Quyền yêu cầu
 
-- **`signoz-viewer`** cấp quyền truy cập chỉ đọc: truy vấn dịch vụ, log, trace, số liệu và kiểm tra cảnh báo, dashboard và view.
-- **`signoz-admin`** bổ sung quyền ghi: tạo, cập nhật hoặc xóa cảnh báo, dashboard, view và channel.
-- Các thao tác ghi cũng yêu cầu [phê duyệt](/guide/approvals/overview) rõ ràng trong CloudThinker trước khi thực thi.
+Agent làm được đúng những gì role của Service Account cho phép, và SigNoz thực thi giới hạn đó.
+
+- **SigNoz-Viewer** đủ cho mọi thao tác đọc trong bảng khả năng bên dưới.
+- **SigNoz-Editor** thêm quyền ghi dashboard và alert. SigNoz không ghi rõ quyền của Editor với saved view hay notification channel, nên hãy dùng SigNoz-Admin cho các mục đó.
+- **SigNoz-Admin** thêm mọi quyền ghi, cùng quyền quản lý user, role và service account trong SigNoz.
+
+<ApprovalDefault />
+
+Một [Rule](/vi/guide/approvals/rules) có thể buộc CloudThinker hỏi trước khi ghi, hoặc từ chối thẳng thao tác ghi.
 
 <Tip>
-Bắt đầu với `signoz-viewer` để điều tra chỉ đọc. Chỉ gán `signoz-admin` khi bạn muốn agent quản lý cảnh báo hoặc dashboard.
+Bắt đầu với SigNoz-Viewer. Chuyển sang SigNoz-Editor khi cần thay đổi dashboard và alert, và chỉ dùng SigNoz-Admin khi bạn muốn agent quản lý saved view hoặc channel thay bạn.
 </Tip>
-
----
 
 ## Khả năng của agent
 
-Sau khi kết nối, các agent có thể thực hiện các thao tác đọc trên dữ liệu quan sát của bạn và một tập hợp các thao tác ghi được kiểm soát bởi phê duyệt.
+| Khả năng | Agent làm được gì | Phê duyệt |
+|------------|--------------------|----------|
+| **Service** | Liệt kê các service đã instrument và xếp hạng các operation hàng đầu của một service theo độ trễ | Không |
+| **Log** | Tìm kiếm log với bộ lọc như mức nghiêm trọng, và tổng hợp theo một trường như service | Không |
+| **Trace** | Tìm kiếm và tổng hợp trace, mở toàn bộ trace waterfall theo trace ID | Không |
+| **Metric** | Liệt kê metric và chạy truy vấn time-series | Không |
+| **Dashboard** | Liệt kê dashboard và template, đọc toàn bộ định nghĩa của một dashboard | Không |
+| **Alert** | Liệt kê alert rule kèm trạng thái, đọc lịch sử thay đổi trạng thái của một rule | Không |
+| **Saved view và channel** | Đọc saved query view và notification channel | Không |
+| **Ghi** | Tạo, cập nhật hoặc xóa alert, dashboard, saved view và notification channel, và import dashboard từ JSON. Cần SigNoz-Editor (dashboard, alert) hoặc SigNoz-Admin (saved view, channel) | Đi qua Approvals |
 
-| Khả năng | Chức năng của agent |
-|----------|---------------------|
-| **Dịch vụ (APM)** | Liệt kê các dịch vụ được đo đạc, kiểm tra các thao tác hàng đầu theo độ trễ |
-| **Log** | Tìm kiếm log theo thời gian và bộ lọc, tổng hợp và nhóm theo mẫu |
-| **Trace** | Tìm kiếm trace, lấy toàn bộ waterfall trace, đi sâu vào các phụ thuộc |
-| **Số liệu** | Liệt kê số liệu và chạy truy vấn time-series |
-| **Dashboard** | Liệt kê và kiểm tra dashboard và template |
-| **Cảnh báo** | Liệt kê quy tắc cảnh báo, kiểm tra quy tắc và lịch sử chuyển đổi trạng thái; tạo, cập nhật hoặc xóa (chỉ admin) |
-| **View đã lưu** | Liệt kê, kiểm tra, tạo, cập nhật hoặc xóa view truy vấn đã lưu (chỉ admin) |
-| **Kênh thông báo** | Liệt kê, kiểm tra, tạo, cập nhật hoặc xóa channel (chỉ admin) |
-| **Tài liệu** | Tìm kiếm và lấy tài liệu SigNoz |
+Tìm kiếm log, trace và metric luôn chạy trong một khoảng thời gian. Agent bắt đầu với 15 phút gần nhất và mở rộng khi không có kết quả, nên hãy nêu khoảng thời gian trong prompt nếu bạn quan tâm tới một giai đoạn cụ thể.
 
 <Warning>
-Các thao tác ghi thay đổi cảnh báo và dashboard trực tiếp. CloudThinker yêu cầu [phê duyệt](/guide/approvals/overview) rõ ràng, nêu tên tài nguyên, trước khi bất kỳ thao tác ghi nào được thực thi. Các thao tác xóa không thể hoàn tác.
+Thao tác xóa trên SigNoz không thể hoàn tác: alert bị xóa mất toàn bộ lịch sử, còn xóa notification channel khiến các alert được định tuyến tới channel đó không còn nơi gửi. Agent hiển thị bản ghi hiện tại trước khi cập nhật hoặc xóa, nên hãy đọc kỹ trước khi phê duyệt.
 </Warning>
 
 ### Xác minh kết nối
 
 ```text
-List SigNoz services and confirm that metrics and traces are reachable
+List my SigNoz services, dashboards, and alert rules, and tell me which alerts are firing
 ```
 
-### Ví dụ lệnh
+Kết quả mong đợi: số lượng và một vài ví dụ về service, dashboard và alert rule, cùng số alert đang firing.
+
+### Ví dụ prompt
 
 ```text
-Find the slowest operations for the checkout service
-Search error logs and group spikes by service
-Audit SigNoz alert rules and flag misconfigured thresholds
+What are the slowest operations for the checkout service over the last hour?
+Search ERROR logs from the last 30 minutes and group them by service
+Review my SigNoz alert rules and flag any with no notification channel
 ```
-
----
 
 ## Khắc phục sự cố
 
-<Accordion title="Kết nối thất bại với 401 Unauthorized">
-Xác minh API key đúng và chưa bị thu hồi. Xác nhận bạn đã nhấn **Save Changes** sau khi gán vai trò, rồi tạo lại key.
+<Accordion title="Mọi request đều trả về 404">
+**SIGNOZ_URL** có đường dẫn ở cuối. Hãy đặt trường này về base URL, như `https://<your-tenant>.signoz.cloud`, không kèm `/api/v1`.
 </Accordion>
 
-<Accordion title="Mọi yêu cầu đều trả về 404">
-`SIGNOZ_URL` có hậu tố path thừa. Đặt thành URL cơ sở, ví dụ `https://<hash>.signoz.cloud`, không có `/api/v1`.
+<Accordion title="401 Unauthorized">
+Key sai, đã hết hạn hoặc đã bị thu hồi. Tạo key mới trên tab **Keys** của Service Account và cập nhật **SIGNOZ_API_KEY**.
 </Accordion>
 
 <Accordion title="403 Forbidden">
-Vai trò của service account quá thấp cho thao tác yêu cầu. Gán `signoz-admin` cho các thao tác ghi, rồi nhấn **Save Changes**.
+Role của Service Account không cho phép thao tác đó. Key SigNoz-Viewer trả về lỗi này với mọi thao tác ghi. Key SigNoz-Editor có thể trả về lỗi này khi ghi saved view và notification channel, vì SigNoz không ghi rõ quyền của Editor với các mục đó. Hãy đổi role trong SigNoz nếu bạn muốn agent thực hiện thay đổi đó.
 </Accordion>
 
-<Accordion title="Tìm kiếm không trả về kết quả">
-Tìm kiếm log, trace và số liệu cần khoảng thời gian. Yêu cầu agent dùng cửa sổ gần đây (ví dụ 15 phút qua) và mở rộng chỉ khi cần.
+<Accordion title="Tìm kiếm log hoặc trace không trả về gì">
+Không có gì khớp trong khoảng thời gian đã tìm. Hãy yêu cầu khoảng rộng hơn, như 6 giờ gần nhất, hoặc bỏ bộ lọc rồi thêm lại từng điều kiện một.
 </Accordion>
 
----
+<Accordion title="Lỗi 429 hoặc 503">
+Instance SigNoz của bạn đang giới hạn tốc độ hoặc đang khởi động lại. Chờ một phút rồi hỏi lại. Với SigNoz tự host, hãy kiểm tra sức khỏe của query service.
+</Accordion>
 
 ## Bảo mật
 
 <ConnectionSecurity />
 
-- **Chỉ URL cơ sở** — đặt `SIGNOZ_URL` thành URL gốc không có hậu tố path; đường dẫn thừa khiến mọi yêu cầu trả về 404.
-- **Phê duyệt cho các thao tác ghi** — giữ các thao tác ghi được kiểm soát bởi phê duyệt để các thay đổi cảnh báo và dashboard luôn có chủ ý.
-
----
+- **Một Service Account riêng cho CloudThinker**: đừng dùng lại key của đồng nghiệp. Account riêng cho phép bạn thu hồi quyền của CloudThinker mà không ảnh hưởng tới ai khác.
+- **Đặt thời hạn cho key**: xoay vòng key và cập nhật **SIGNOZ_API_KEY** trước khi key hết hạn, nếu không kết nối sẽ ngừng hoạt động với lỗi 401.
 
 ## Liên quan
 
 <CardGroup cols={2}>
-  <Card title="Kết nối Datadog" icon="/images/icons/datadog.svg" href="/vi/guide/connections/datadog">
-    Quan sát và giám sát
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Quyết định thao tác ghi SigNoz nào được chạy, phải chờ người duyệt hoặc bị từ chối.
   </Card>
-  <Card title="Kết nối Grafana" icon="/images/icons/grafana.svg" href="/vi/guide/connections/grafana">
-    Dashboard và số liệu
+  <Card title="Grafana" icon="/images/icons/grafana.svg" href="/vi/guide/connections/grafana">
+    Kết nối dashboard và data source của Grafana.
   </Card>
 </CardGroup>

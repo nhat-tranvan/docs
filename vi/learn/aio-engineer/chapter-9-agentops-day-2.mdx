@@ -1,0 +1,145 @@
+---
+title: "Chương 9 · AgentOps: Vận hành đội agent ngày thứ 2"
+description: "Vận hành đội agent sau giai đoạn thí điểm: phát hành có phiên bản, di chuyển model, bảo trì memory, postmortem cho agent theo tinh thần không đổ lỗi, và lịch làm việc hằng tuần của vai trò mới."
+icon: calendar-check
+---
+
+*Giai đoạn thí điểm kết thúc nhưng đội agent ở lại. Ngày thứ 2 là quản lý phiên bản, di chuyển model, bảo trì memory và postmortem cho một kiểu đồng đội mới, và chương này cung cấp cho bạn một quy trình làm việc cụ thể cho từng việc.*
+
+## 9.1 Mọi thứ đều là artifact, và mọi thay đổi đều là một lần deploy
+
+Đơn vị bạn vận hành là một gói có phiên bản:
+
+| Thành phần của gói | Ví dụ |
+|---|---|
+| Prompt và hướng dẫn agent | System prompt, hướng dẫn của một agent tùy chỉnh |
+| Schema công cụ | Tên công cụ, kiểu đối số và mô tả mà model đọc |
+| Skill | Các quy trình từng bước mà agent có thể nạp |
+| Tệp policy | Rule phê duyệt, nhóm người phê duyệt, cài đặt tự chủ |
+| Cấu hình truy xuất | Những gì được lập chỉ mục, cách chia chunk, xếp hạng |
+| Rubric của judge | Các prompt chấm điểm từ [Chương 7](/vi/learn/aio-engineer/chapter-7-evaluating-agents) |
+| Ghim model | Phiên bản model chính xác mà mỗi agent dùng |
+
+Phát hành gói giống như phát hành một dịch vụ. Review gói trong một pull request, cho gói đi qua các cổng eval của Chương 7, triển khai dần dần, và rollback cả gói như một đơn vị.
+
+Hãy truy lùng **thay đổi vô hình**: một prompt được sửa trong console, một model được cập nhật từ phía nhà cung cấp, một mô tả công cụ được chỉnh tại chỗ. Nếu một thay đổi không thể diff, chặn cổng và hoàn tác, sớm muộn thay đổi đó sẽ trở thành nguyên nhân gốc mà bạn không tìm ra, trong một hệ thống có nhiệm vụ chính là tìm nguyên nhân gốc.
+
+## 9.2 Quy trình di chuyển model
+
+Model thay đổi theo lịch của người khác: ngừng hỗ trợ, nâng cấp, thay đổi giá. Đổi model là thay đổi có độ biến động cao nhất trong toàn bộ stack, vì vậy hãy triển khai việc đổi model như một dự án:
+
+1. **Ghim phiên bản một cách tường minh.** Không bao giờ trỏ production vào "latest".
+2. **Chạy toàn bộ golden set trên ứng viên** và so sánh kết quả theo từng loại sự cố, không chỉ trung bình.
+3. **Canary trên các loại rủi ro thấp** và theo dõi metric trực tuyến: tỷ lệ chấp nhận, rollback, số bước và chi phí. Thay đổi về số bước là dấu hiệu kinh điển của hành vi đã thay đổi.
+4. **Giữ khả năng chạy song song** để các loại nhạy cảm có thể chạy model cũ và mới cạnh nhau và so sánh.
+5. **Thỏa thuận trước khung thời gian ngừng hỗ trợ với nhà cung cấp**, để việc di chuyển là công việc có kế hoạch, không phải tình huống khẩn cấp.
+
+Có đội agent kết hợp nhiều model: model nhỏ đã tinh chỉnh cho các loại thường gặp, frontier model cho các cuộc điều tra mới lạ. Áp dụng cùng quy trình cho từng luồng. Bạn cũng có thêm khả năng chống chịu, vì một cú sốc giá hoặc hồi quy ở một model chỉ trở thành vấn đề của một luồng, không phải toàn bộ đội agent.
+
+## 9.3 Bảo trì memory và tri thức
+
+[Chương 2](/vi/learn/aio-engineer/chapter-2-context-engineering) đã thiết kế memory. Vào ngày thứ 2, bạn bảo trì memory. Một chu kỳ hằng tháng hiệu quả như sau:
+
+1. **Xem xét các memory mới** được ghi từ chu kỳ trước. Lấy mẫu, bắt đầu từ các loại sự cố có tác động cao.
+2. **Giải quyết mâu thuẫn** khi bằng chứng mới phản bác một kết luận đã lưu.
+3. **Cắt bỏ hoặc cho hết hạn các memory** tham chiếu đến hệ thống đã ngừng hoạt động.
+4. **Lập chỉ mục lại lớp tri thức** sau các thay đổi lớn trong hệ thống của bạn.
+
+Hãy giao cho lớp tri thức một người phụ trách có tên. Đây là thành phần production thực thụ, không phải một wiki làm cho có. Và hãy khép vòng: postmortem của mọi sự cố đã giải quyết nên kết thúc bằng một dòng tường minh, "Chúng ta đã dạy hệ thống điều gì?"
+
+## 9.4 Postmortem cho agent
+
+Agent sẽ sai. Phản xạ bạn muốn có là phản xạ mà văn hóa SRE đã có: postmortem không đổ lỗi, tập trung vào cơ chế, giờ được áp dụng cho các đồng đội phần mềm.
+
+Khi một agent mắc một lỗi có hậu quả, hãy dựng lại sự kiện từ trace và bản ghi audit với bốn câu hỏi:
+
+| Kiểm tra | Câu hỏi |
+|---|---|
+| Ngữ cảnh | Agent đã biết gì? |
+| Suy luận | Agent đã kết luận gì, và từ bằng chứng nào? |
+| Quản trị | Policy đã cho phép agent làm gì? |
+| An toàn | Xác minh đã bắt được hoặc bỏ sót gì? |
+
+Sau đó hãy gọi tên cơ chế, vì mỗi cơ chế có cách sửa khác nhau:
+
+| Cơ chế | Cách sửa điển hình |
+|---|---|
+| Thiếu ngữ cảnh | Thêm nguồn hoặc kết nối còn thiếu |
+| Truy xuất bỏ sót | Sửa cách lập chỉ mục hoặc xếp hạng cho loại đó |
+| Prompt injection | Siết chặt xử lý đầu vào và egress ([Chương 5](/vi/learn/aio-engineer/chapter-5-threat-model)) |
+| Lỗi công cụ | Sửa công cụ hoặc mô tả công cụ |
+| Lỗ hổng policy | Thêm hoặc thu hẹp một rule phê duyệt ([Chương 6](/vi/learn/aio-engineer/chapter-6-policy-approvals)) |
+| Điểm mù của judge | Cập nhật rubric và kiểm tra lại judge |
+| Hồi quy model | Rollback phiên bản ghim và chạy lại quy trình di chuyển |
+
+"AI đã mắc lỗi" không phải là một cơ chế. Hãy thêm mọi sự kiện vào golden set dưới dạng một kịch bản mới, để cùng một lỗi không thể được phát hành hai lần.
+
+Giữ cùng một lập trường công khai cho cả con người và agent: lỗi được loại bỏ bằng kỹ thuật với cùng một kỷ luật, và không bên nào bị săn phù thủy. Không gì giết chết một chương trình agentic nhanh hơn một sự cố tồi tệ bị coi là sự phản bội thay vì một khiếm khuyết.
+
+## 9.5 Vai trò, cụ thể hóa
+
+Field Guide gọi tên **kỹ sư vận hành agent** ([§7](/vi/learn/aio/chapter-7-humans-on-the-loop)): người vận hành hệ thống vận hành hạ tầng của bạn. Đây là một tuần điển hình:
+
+| Ngày | Công việc |
+|---|---|
+| Thứ Hai | Xem xét các hành động tự chủ trong cuối tuần và mọi can thiệp của con người. Phân loại các cảnh báo drift. |
+| Thứ Ba | Chạy golden set trên bản phát hành gói đang chờ. Xem xét phần diff theo từng loại. |
+| Thứ Tư | Khối thời gian bảo trì memory. Kiểm tra ngẫu nhiên chất lượng truy xuất. |
+| Thứ Năm | Review policy với người phụ trách mức tự chủ: loại nào sẵn sàng được nâng cấp (tỷ lệ chấp nhận cao, rollback sạch) và loại nào nên bị hạ cấp. Gửi báo cáo độ trễ phê duyệt cho các trưởng nhóm on-call. |
+| Thứ Sáu | Kiểm tra các seed red-team ([Chương 5](/vi/learn/aio-engineer/chapter-5-threat-model)). Xem xét chi phí tại ranh giới giữa engine cảm nhận và engine giải quyết. |
+| Hằng tháng | Chạy chu kỳ memory từ mục 9.3. Công bố dashboard vận hành gồm các KPI chương trình ([Field Guide §8.2](/vi/learn/aio/chapter-8-measuring)) cho ban lãnh đạo. |
+
+<Info>
+**TRONG THỰC TẾ: NGÀY THỨ 2 TRONG CLOUDTHINKER**
+
+CloudThinker chạy như một đội agent theo thiết kế: một trợ lý tích hợp sẵn, **CloudThinker**, tạo các subagent tạm thời cho công việc chuyên môn, và các agent này dùng chung skill và memory của workspace. Vì vậy, bản sửa skill đến được mọi agent cùng lúc. Dưới đây là nơi áp dụng từng thói quen ngày thứ 2:
+
+| Thói quen | Nằm ở đâu |
+|---|---|
+| Giữ các thành phần của gói dưới dạng tệp có thể diff | Tải bất kỳ skill nào dưới dạng `.zip` và chỉnh sửa tệp `SKILL.md` bên trong ([Custom skills](/vi/guide/skills/custom-skills)). **Export active Rules** lưu Rule, nhóm người phê duyệt và Approval mode dưới dạng YAML mà bạn có thể giữ trong Git ([Rules](/vi/guide/approvals/rules)) |
+| Kiểm soát chi phí model theo agent | Trường **Model Tier** của agent tùy chỉnh (**Light**, **Pro** hoặc **Ultra**) đặt tier cho agent. Tier không phải là phiên bản model được ghim, vì vậy hãy coi thay đổi tier như một lần deploy và chạy lại golden set ([Agent tùy chỉnh](/vi/guide/agents/customize)) |
+| Biết khi nào model thay đổi | CloudThinker không công bố thời gian báo trước cho việc thay đổi model phía sau một tier. Các bản phát hành được liệt kê trong [changelog](/changelog), có RSS feed, vì vậy hãy chạy lại golden set sau mỗi bản phát hành có đề cập đến model |
+| Ghim chính xác model | Với [BYOK](/vi/guide/byok) (gói Scale trở lên), Owner của tổ chức chọn model cho từng loại công việc trên key Amazon Bedrock, Anthropic hoặc FPT Cloud của riêng bạn. Đó là cách gần nhất với việc ghim phiên bản |
+| Chạy cũ và mới song song | Không có chạy song song tích hợp sẵn. Tạo một agent tùy chỉnh thứ hai với cùng hướng dẫn trên tier khác, mention từng agent trên cùng các kịch bản golden set, và so sánh |
+| Bảo trì memory | **Dreaming**, bật theo mặc định, chạy hằng đêm. Dreaming hợp nhất các bản trùng lặp và xóa memory và custom skill mà các cuộc hội thoại mới hơn mâu thuẫn. Bản tóm tắt của mỗi lượt chạy trong **Run history** nêu tên các mục memory và skill mà lượt chạy đó đã thay đổi hoặc xóa. Skill đã xóa không thể khôi phục, vì vậy hãy tải skill xuống trước khi dựa vào tính năng này, và tắt **Allow Dreaming to delete redundant custom skills** trong **Customize** cho đến khi bạn tin tưởng kết quả. Để dừng hoàn toàn, tắt **Consolidate memory nightly (Dreaming)**. Tất cả nằm trong **Settings** của workspace, tại **Agent Configuration → Memory** ([Dreaming](/vi/guide/memory-dreaming)) |
+| Xem xét và sửa memory thủ công | **More → Workspace settings → Memory**: duyệt, chỉnh sửa hoặc xóa các mục ([Memory](/vi/guide/memory)) |
+| Khép vòng cho sự cố | Chốt từng đề xuất khắc phục bằng **Mark as Done** hoặc **Dismiss** kèm ghi chú về việc bạn đã làm. Bản sửa đã ghi nhận ở trạng thái **Unverified** cho đến khi một kiểm tra theo dõi đánh dấu bản sửa là **Verified** hoặc **Failed** ([Incident memory](/vi/guide/incident/incident-memory)) |
+| Xem xét công việc theo lịch | **Automations → Runs** liệt kê mọi lượt chạy kèm trạng thái và cuộc hội thoại ([Automations](/vi/guide/automation/automations)) |
+</Info>
+
+### Giờ đầu tiên của ngày thứ 2
+
+<Steps>
+  <Step title="Đưa custom skill vào Git">
+    Mở **Settings** của workspace, rồi **Skills**. Nhấn **Download** trên từng custom skill và commit các tệp `.zip`, hoặc các tệp `SKILL.md` đã giải nén, vào một repository có người phụ trách.
+
+    **Trạng thái thành công:** mọi custom skill trong workspace đều có một bản sao trong Git mà bạn có thể diff.
+  </Step>
+  <Step title="Kiểm tra Dreaming đã thay đổi gì">
+    Mở **More → Workspace settings → Memory**. Trong **Run history**, mở rộng lượt chạy **Succeeded** gần nhất và đọc bản tóm tắt.
+
+    **Trạng thái thành công:** bạn biết lượt chạy gần nhất đã ghi, hợp nhất hoặc xóa những mục memory và skill nào, và bạn đã tắt việc xóa skill nếu có skill bị xóa mà quan trọng.
+  </Step>
+  <Step title="Xem xét công việc theo lịch của tuần trước">
+    Mở **Automations**, rồi tab **Runs**. Mở mọi lượt chạy thất bại, hoặc mọi lượt chạy đã thay đổi gì đó, và đọc cuộc hội thoại của lượt chạy.
+
+    **Trạng thái thành công:** mỗi lượt chạy thất bại hoặc có thao tác ghi trong tuần trước đều có người phụ trách và bước tiếp theo.
+  </Step>
+</Steps>
+
+<Tip>
+**ĐIỀU CẦN NHỚ**
+
+Ngày thứ 2 là một kỷ luật. Phát hành các gói có phiên bản qua cổng eval, chạy di chuyển model như các dự án với diff theo từng loại, bảo trì memory theo lịch với người phụ trách có tên, và thực hiện postmortem không đổ lỗi để gọi tên cơ chế và mở rộng golden set. Giao cho một kỹ sư một tuần làm việc biến tất cả những điều này thành thường lệ. Những đội agent làm được điều này sẽ tiến bộ theo thời gian; những đội không làm sẽ suy thoái trở lại thành chính công việc lặp lại mà chúng đã thay thế.
+</Tip>
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="Chương 10 · Các trụ cột theo chiều dọc" icon="building-columns" href="/vi/learn/aio-engineer/chapter-10-vertical-pillars">
+    Áp dụng cùng phương pháp kỹ thuật cho độ phức tạp, chi phí và bảo mật.
+  </Card>
+  <Card title="Dreaming" icon="moon" href="/vi/guide/memory-dreaming">
+    Xem xét việc bảo trì memory hằng đêm và lịch sử các lượt chạy.
+  </Card>
+</CardGroup>

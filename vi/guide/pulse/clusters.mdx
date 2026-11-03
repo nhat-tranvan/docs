@@ -1,138 +1,139 @@
 ---
-title: "Clusters & Triệt tiêu tín hiệu"
-description: "Tìm hiểu cách Pulse nhóm tín hiệu thành cluster và lọc nhiễu qua bảy lớp triệt tiêu tự động."
+title: Signal Clusters
+description: "Phân loại cluster trong Pulse: hiểu vòng đời và cơ chế lọc nhiễu, rồi acknowledge, assign, escalate, attach, snooze hoặc resolve."
 icon: layer-group
 ---
 
-Hai khái niệm cốt lõi tạo nên giá trị của Pulse: **triệt tiêu** (lọc nhiễu trước khi đến tay bạn) và **clustering** (nhóm những gì còn lại thành một đơn vị hành động duy nhất).
+**Cluster** là một nhóm tín hiệu liên quan mà Pulse coi là một vấn đề (**tín hiệu** là một sự kiện đã vượt qua bước lọc nhiễu), nên một alarm chập chờn kích hoạt 18 lần sẽ thành một mục với 18 thành viên. Trang này trình bày cách cluster mở và đóng, những gì Pulse loại bỏ trước khi gom cluster, và tác dụng của từng thao tác. Mọi thao tác trên cluster, kể cả **Snooze**, đều cần vai trò workspace **Admin**. Developer và Viewer đọc được cluster nhưng không thấy các thao tác. Xem [Vai trò](/vi/guide/security/roles).
 
----
+## Vòng đời cluster
 
-## Triệt tiêu — lọc bỏ nhiễu
-
-Mỗi tín hiệu đến đều phải đi qua bảy lớp lọc trước khi xuất hiện trong feed của bạn. Nếu bất kỳ lớp nào kích hoạt, tín hiệu sẽ được lưu nhưng ẩn đi. Nó sẽ không tạo ra nhiễu, nhưng vẫn ở đó nếu bạn cần kiểm tra lại.
-
-<AccordionGroup>
-  <Accordion title="Duplicate" icon="copy">
-    Nếu một sự kiện giống hệt đã xuất hiện trong vòng một giờ qua, bộ đếm dedup trên tín hiệu hiện có sẽ tăng lên thay vì tạo một hàng mới. Bạn thấy một tín hiệu được đánh dấu "×47" thay vì 47 mục riêng lẻ. Đây thường là danh mục triệt tiêu lớn nhất.
-  </Accordion>
-  <Accordion title="Rate Limited" icon="gauge-high">
-    Nếu một nguồn phát ra hơn 100 tín hiệu mỗi phút, các tín hiệu vượt ngưỡng đó sẽ bị triệt tiêu trong suốt thời gian bùng phát. Ngăn chặn một cảnh báo bị cấu hình sai làm tràn ngập feed của bạn.
-  </Accordion>
-  <Accordion title="Snoozed" icon="clock">
-    Các tín hiệu khớp với quy tắc snooze đang hoạt động sẽ bị triệt tiêu. Đây là lớp duy nhất bạn kiểm soát trực tiếp — xem [Snooze](#snooze) bên dưới.
-  </Accordion>
-  <Accordion title="Noise Signature" icon="waveform">
-    Các mẫu AWS có nhiều nhiễu đã biết được tự động triệt tiêu — sự kiện vòng đời KMS grant, thay đổi EBS volume, hoạt động nội bộ AutoScaling, chuyển hướng token Signin. Đây là các sự kiện quản trị AWS hầu như không bao giờ chỉ ra vấn đề thực sự.
-  </Accordion>
-  <Accordion title="Flapping" icon="arrows-left-right">
-    Nếu một tín hiệu chuyển đổi trạng thái bốn lần trở lên trong vòng 10 phút, nó sẽ bị triệt tiêu trong 5 phút. Một tài nguyên dao động giữa trạng thái lành mạnh và không lành mạnh sẽ hợp nhất thành một thông báo duy nhất khi trạng thái ổn định.
-  </Accordion>
-  <Accordion title="Cascade" icon="sitemap">
-    Khi một tài nguyên cha bị triệt tiêu, các tín hiệu từ tài nguyên con của nó cũng bị triệt tiêu trong 30 phút — do đó bạn không nhận được cảnh báo từ con khi cái đó đã được xác định là nhiễu.
-  </Accordion>
-  <Accordion title="Severity Normalization" icon="arrow-down">
-    Các dịch vụ tự động hóa AWS đôi khi phát ra sự kiện với mức độ nghiêm trọng bị thổi phồng. Pulse phát hiện các sự kiện từ các tác nhân nội bộ AWS và hạ cấp mức độ nghiêm trọng trước khi định tuyến. Mức độ nghiêm trọng gốc được giữ lại để kiểm tra.
-  </Accordion>
-</AccordionGroup>
-
-<Frame>
-  <img src="/images/pulse/04-pulse-suppression-heatmap.jpg" alt="Biểu đồ triệt tiêu theo lý do cho thấy xu hướng hàng tuần của các lớp Duplicate, Flapping, Noise Signature, Rate Limited, Severity Normalized, Snoozed và Cascade cùng với heatmap tỷ lệ chuyển đổi" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Phân tích triệt tiêu theo thời gian — hiển thị trong tab Analytics</p>
-
-Để xem lại các tín hiệu bị triệt tiêu, hãy bật **Show suppressed** trong thanh lọc. Chúng xuất hiện với độ mờ thấp hơn cùng nhãn cho biết lớp nào đã lọc chúng.
-
-### Snooze
-
-Snooze là lớp triệt tiêu duy nhất bạn kiểm soát. Di chuột qua bất kỳ tín hiệu nào và nhấp nút snooze. Chọn thời lượng (1 phút đến 30 ngày) và phạm vi:
-
-| Phạm vi | Những gì bị im lặng |
-|---|---|
-| **Signal** | Chỉ tín hiệu cụ thể này |
-| **Pattern** | Tất cả tín hiệu có cùng nguồn, loại và mẫu tiêu đề |
-| **Resource** | Tất cả tín hiệu từ ID tài nguyên này |
-
-<Tip>
-  Dùng **Pattern** cho các cửa sổ bảo trì định kỳ. Dùng **Resource** khi ngừng sử dụng một tài nguyên trong quá trình tháo gỡ.
-</Tip>
-
----
-
-## Clusters — một đơn vị hành động
-
-Một **cluster** là đơn vị làm việc chính trong Pulse. Thay vì trình bày từng tín hiệu riêng lẻ, Pulse nhóm các tín hiệu liên quan lại — cùng một node pool EKS kích hoạt chín cảnh báo trong 15 phút trở thành một cluster duy nhất. Bạn điều tra một lần, hành động một lần, giải quyết một lần.
-
-### Vòng đời trạng thái
-
-Mỗi cluster đi qua bốn trạng thái:
-
-<div style={{display: 'flex', justifyContent: 'center'}}>
+Cluster có ba trạng thái. Chỉ tín hiệu của chính cluster, hoặc một người, mới chuyển được trạng thái.
 
 ```mermaid
 stateDiagram-v2
-    direction LR
-    [*] --> Forming : first signal
-    Forming --> Active : more signals arrive
-    Active --> Routed : Escalate → Incident created
-    Active --> Resolved : Resolve
-    Routed --> Resolved : Incident closed
+    [*] --> Forming: first signal
+    Forming --> Active: second signal joins
+    Forming --> Resolved: 12 hours quiet, or Resolve
+    Active --> Resolved: 12 hours quiet, or Resolve
     Resolved --> [*]
 ```
 
-</div>
+Cluster đã resolved không bao giờ mở lại. Tín hiệu khớp tiếp theo sẽ bắt đầu một cluster mới. Quy tắc 12 giờ chỉ xét tín hiệu của chính cluster, nên cũng đóng cả cluster đã được định tuyến.
 
 | Trạng thái | Ý nghĩa |
 |---|---|
-| **Forming** | Tín hiệu đầu tiên đã đến; đang thu thập các tín hiệu liên quan |
-| **Active** | Tín hiệu tiếp tục đến; đang mở và cần xử lý |
-| **Routed** | Đã được leo thang — một Incident được liên kết đã được tạo |
-| **Resolved** | Đã đóng bởi người dùng hoặc tự động |
+| **Forming** | Hiện mới có một tín hiệu. |
+| **Active** | Có từ hai tín hiệu trở lên. |
+| **Resolved** | Không có tín hiệu nào trong 12 giờ, hoặc một người đã resolve. Đây là trạng thái đóng duy nhất. |
 
-Dùng nút chuyển đổi **Active / All** trong feed để chuyển giữa chỉ xem cluster đang hoạt động (mặc định) hoặc tất cả các trạng thái.
+**Routed là một lane, không phải trạng thái.** Cluster được coi là routed khi một sự cố đang mở giữ cluster đó, và bên dưới cluster vẫn ở Forming hoặc Active. Từ đó có ba quy tắc:
 
-### Bảng chi tiết cluster
+- Tín hiệu khớp mới sẽ gia nhập cluster đã routed và cập nhật sự cố. Tín hiệu không bắt đầu cuộc điều tra thứ hai.
+- Đóng sự cố không đóng cluster. Nếu cùng lỗi đó kích hoạt lại, bước triage quyết định mở lại sự cố đó hay mở sự cố mới.
+- Khi sự cố đã đóng, bạn có thể escalate cluster lần nữa.
 
-Nhấp vào bất kỳ cluster nào để mở bảng chi tiết.
+## Tín hiệu gia nhập cluster như thế nào
 
-<Frame>
-  <img src="/images/pulse/02-pulse-cluster-detail.jpg" alt="Bảng chi tiết cluster cho thấy cluster node pool EKS với 9 tín hiệu tương quan qua time_window ở độ tin cậy 85%, dòng thời gian tín hiệu, metadata tài nguyên và các nút hành động" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Mô tả do AI tạo ra, dòng thời gian tín hiệu, chi tiết tài nguyên và các hành động</p>
+Pulse so sánh mỗi tín hiệu mới với các tín hiệu trong 6 giờ qua mà cluster của chúng vẫn đang mở. Quy tắc đầu tiên khớp sẽ quyết định tín hiệu đi về đâu:
 
-Bảng này hiển thị:
+1. **Cùng tài nguyên hoặc cùng tiêu đề.** Các tín hiệu có chung resource ID, hoặc chung tiêu đề (không phân biệt chữ hoa chữ thường). Chung tiêu đề không được tính khi hai tín hiệu mang resource ID khác nhau: cùng một tên cảnh báo trên hai tài nguyên là hai lỗi.
+2. **Cùng service.** Các tín hiệu có chung giá trị **Service**. Tín hiệu không có service (hiển thị là `unknown`) và tin nhắn chat bỏ qua quy tắc này. Quy tắc này không xét resource ID, nên hai lỗi trên hai tài nguyên khác nhau vẫn gộp chung khi cùng nêu một service.
 
-- **Mô tả do AI tạo ra** — tóm tắt bằng ngôn ngữ tự nhiên về những gì đã xảy ra và tác động có thể có
-- **Ngữ cảnh cluster** — tất cả tín hiệu thành viên được liệt kê theo thứ tự thời gian
-- **Thông tin tương quan** — kỹ thuật được sử dụng (ví dụ: `time_window`) và điểm tin cậy
-- **Metadata tài nguyên** — id, loại, khu vực, thẻ của tín hiệu được chọn
-- **Tab** — Overview để xem chi tiết tín hiệu, Routing để xem lịch sử leo thang, Raw để xem toàn bộ payload sự kiện
+Nếu không quy tắc nào khớp, tín hiệu mở một cluster mới ở trạng thái **Forming**. Cluster đã resolved không bao giờ nhận tín hiệu mới.
 
-### Hành động
+Resource ID lấy từ **Resource ID Path**, hoặc từ key `resource_id` ở cấp cao nhất khi không đặt path. Alarm CloudWatch dùng ARN của alarm khi cả hai cách đều không tìm thấy giá trị. Trường **Resource** (tên hiển thị) không được dùng. Vì vậy, với nguồn webhook:
 
-| Hành động | Chức năng |
-|---|---|
-| **Acknowledge** | Đánh dấu là đã xem mà không đóng. Báo hiệu cluster đang trong tầm kiểm soát của bạn. Có thể hoàn tác. |
-| **Assign** | Chuyển cho thành viên trong nhóm. Họ sẽ được thông báo và avatar của họ xuất hiện trong feed. |
-| **Escalate** | Tạo một Incident được liên kết. Cluster chuyển sang Routed và RCA bắt đầu tự động — tóm tắt cluster và tất cả tín hiệu thành viên được truyền cho tác nhân RCA làm ngữ cảnh ban đầu, do đó cuộc điều tra bắt đầu với toàn bộ lịch sử tín hiệu đã được tải. |
-| **Resolve** | Đóng cluster khi vấn đề đã được giải quyết và không cần Incident. |
+- Ánh xạ **Resource ID Path** để các lần lặp của cùng một lỗi được gộp chung dù tiêu đề khác nhau, và để cùng một cảnh báo trên hai tài nguyên được tách riêng.
+- Chỉ ánh xạ **Service Path** tới giá trị chỉ đúng một service, như `checkout-api`. Giá trị chung chung như `prod` sẽ gộp các lỗi không liên quan vào một cluster.
 
-### Leo thang tự động
+## Lọc nhiễu
 
-Pulse tự động leo thang các cluster có bất kỳ tín hiệu nào với mức độ nghiêm trọng **Critical** hoặc **High**, hoặc khi AI đánh dấu tín hiệu là **actionable** (cần xử lý). Những cluster này chuyển thẳng sang Routed và kích hoạt phân tích nguyên nhân gốc rễ — không cần leo thang thủ công.
+Trước khi một sự kiện thô trở thành tín hiệu, Pulse chạy bốn bước kiểm tra theo thứ tự. Bước đầu tiên khớp sẽ loại sự kiện.
 
----
+| Bước kiểm tra | Loại bỏ | Ngoại lệ |
+|---|---|---|
+| Dedup | Lần lặp y hệt: cùng nguồn, loại sự kiện, tài nguyên, tiêu đề và mức độ nghiêm trọng, với timestamp trong cùng phút với một sự kiện trước đó. Pulse nhớ mỗi sự kiện trong một giờ để bắt các lần lặp. | Không có. |
+| Rate limit | Sự kiện vượt quá 100 mỗi phút từ một nguồn. Giới hạn này cố định, không phải cài đặt. | Sự kiện critical và high luôn được đi qua. |
+| Snooze | Sự kiện khớp với một snooze ai đó đã đặt. | Không có. |
+| Verdict | Lần lặp của một mẫu mà CloudThinker đã học được là nhiễu trong lúc điều tra. Khoảng thời gian im lặng tăng dần từ 6 giờ lên 24 giờ rồi 7 ngày. | Sự kiện critical và high luôn được đi qua. |
 
-## Liên quan
+Timestamp là thời gian của chính sự kiện: với webhook, đó là trường mà **Timestamp Path** trỏ tới, hoặc key `timestamp` ở cấp cao nhất khi không đặt path. Khi trường đó thiếu hoặc không phải ngày giờ mà Pulse đọc được, Pulse dùng thời điểm nhận sự kiện. Ví dụ, công cụ gửi lại cảnh báo 20 phút sau với timestamp gốc sẽ bị loại như bản trùng. Hai lần gửi không có timestamp, cách nhau một phút, thì không bị loại.
+
+Dedup đếm mỗi lần lặp bị loại trên tín hiệu gốc. Rate limit, Snooze và Verdict giữ lại sự kiện, đánh dấu là đã bị triệt tiêu, thay vì xóa. Sự kiện bị triệt tiêu không gia nhập cluster. Để xem có bao nhiêu sự kiện như vậy, di chuột lên biểu đồ phễu ở đầu **Resolve → Pulse**, nơi đếm mọi sự kiện thô đã đến, hoặc mở **Resolve → Insights → Pulse analysis** để xem **Noise suppressed** và **Top noisy sources**. Xem [Pulse Analytics](/vi/guide/pulse/analytics).
+
+Các mẫu Verdict đã học không được liệt kê ở nơi nào bạn chỉnh sửa được. Có ba cách kết thúc sớm một mẫu: một sự kiện critical hoặc high cùng mẫu, được đi qua và xóa mẫu; **Unsnooze** trên một tín hiệu đang bị snooze khớp mẫu, cũng xóa mẫu; hoặc khoảng thời gian im lặng hết hạn, tối đa sau 7 ngày.
+
+Sau khi tín hiệu gia nhập cluster, CloudThinker phân loại tín hiệu. Tín hiệu bị đánh giá **Not actionable** không đưa cluster của nó sang triage, trừ các sự kiện vòng đời IAM, SSO và KMS key, vốn không bao giờ bị loại theo cách này.
+
+## Phân loại một cluster
+
+<Steps>
+  <Step title="Mở cluster">
+    Trong **Resolve → Pulse**, bắt đầu với lane **Needs you**, sau đó tới **Active**. Nhấn vào một cluster để mở bảng chi tiết. Bảng hiển thị **AI summary**, danh sách **Cluster members**, raw payload của từng tín hiệu, và các bước lọc nhiễu cùng làm giàu dữ liệu mà mỗi tín hiệu đã đi qua.
+  </Step>
+  <Step title="Acknowledge hoặc assign">
+    Nhấn **Acknowledge** để đánh dấu đã xem. Thao tác này đưa cluster ra khỏi **Needs you**, nhưng cluster vẫn mở và tín hiệu mới vẫn gia nhập. Nhấn **Acknowledged** để hoàn tác. Để giao cho người phụ trách, nhấn **Assign** và chọn một đồng đội. Assign không thông báo cho đồng đội, nên hãy tự báo cho họ.
+
+    **Trạng thái thành công:** cluster rời khỏi **Needs you**.
+  </Step>
+  <Step title="Chuyển cho một sự cố">
+    Nhấn **Escalate**, rồi **Send to triage**. Triage ghép cluster với một sự cố đang mở, một sự cố đã đóng nay tái diễn, hoặc một sự cố mới. Để tự chọn sự cố, dùng **Attach to incident...**. Sự cố đang mở được liệt kê trước, và chọn một sự cố đã đóng sẽ mở lại sự cố đó.
+
+    **Trạng thái thành công:** cluster chuyển sang lane **Routed**.
+  </Step>
+  <Step title="Đóng khi đã sửa xong">
+    Nhấn nút **Resolve** của cluster, rồi xác nhận trong **Resolve Cluster**. Không thể hoàn tác: nếu lỗi kích hoạt lại, tín hiệu khớp mới sẽ mở cluster mới. Cluster đã routed ẩn **Escalate** và **Resolve**, vì sự cố của cluster đang sở hữu nó.
+  </Step>
+</Steps>
+
+## Tham chiếu thao tác
+
+| Thao tác | Ở đâu | Kết quả |
+|---|---|---|
+| **Acknowledge** | Bảng cluster | Đánh dấu cluster đã xem và đưa ra khỏi **Needs you**. Cluster vẫn mở. |
+| **Assign** | Bảng cluster | Giao cluster cho một người phụ trách. |
+| **Escalate** | Bảng cluster | Gửi cluster sang triage. Bị ẩn khi một sự cố đang mở giữ cluster. |
+| **Attach to incident...** | Bảng cluster | Liên kết cluster với sự cố bạn chọn. Luôn khả dụng. Với cluster đã routed, thao tác này thêm liên kết thứ hai: cluster vẫn gắn với sự cố đầu tiên. |
+| **Resolve** | Bảng cluster | Đóng cluster vĩnh viễn. Bị ẩn khi đã routed. |
+| **Snooze** | Nút **Snooze** ở cuối bảng của một tín hiệu. Nút chỉ hiện trên dòng tín hiệu không thuộc cluster nào, ví dụ tín hiệu đã bị triệt tiêu. Bảng cluster và danh sách **Cluster members** không có nút này. | Tắt tiếng các tín hiệu khớp trong **1 hour**, **4 hours**, **1 day** hoặc **Forever**. Nhấn **Unsnooze** để hoàn tác. |
+
+Snooze trên tín hiệu có nêu tài nguyên chỉ tắt tiếng các cảnh báo tương tự trên tài nguyên đó. Nếu không, snooze tắt tiếng mọi cảnh báo cùng nguồn và cùng loại sự kiện, nên hãy đọc gợi ý trong menu trước khi chọn thời lượng. Snooze **Forever** không bao giờ hết hạn: các cảnh báo khớp vẫn bị tắt tiếng cho tới khi có người nhấn **Unsnooze** trên tín hiệu đó.
+
+## Khắc phục sự cố
+
+<AccordionGroup>
+  <Accordion title="Không thấy Escalate và Resolve">
+    Cluster đã routed: một sự cố đang mở giữ cluster. Hãy xử lý từ sự cố, hoặc đóng sự cố trước.
+  </Accordion>
+  <Accordion title="Triage không bắt đầu sau khi Escalate">
+    Bảng cluster hiển thị **Queued for triage** hoặc **Triage could not run**. Nếu triage không chạy được, nhấn **Retry** cạnh thông báo đó. Triage thất bại cũng đưa các cluster critical và high trở lại **Needs you**.
+  </Accordion>
+  <Accordion title="Một cảnh báo quan trọng không bao giờ xuất hiện">
+    Lần lượt kiểm tra từng nguyên nhân:
+
+    - **Snooze:** ai đó đã tắt tiếng nguồn hoặc tài nguyên đó. Mở một tín hiệu khớp và nhấn **Unsnooze**.
+    - **Rate limit:** cảnh báo low và medium vượt quá 100 mỗi phút từ một nguồn bị loại trong đợt bùng phát.
+    - **Verdict:** CloudThinker đã học được mẫu này là nhiễu. Các lần lặp low và medium bị im lặng tới 7 ngày; xem [Lọc nhiễu](#lọc-nhiễu) để xóa mẫu.
+    - **Not actionable:** cảnh báo đã đến và được gom cluster, nhưng bước phân loại đánh giá là không cần xử lý, nên không bao giờ sang triage. Tìm cluster của cảnh báo trong lane **All** và nhấn **Escalate**.
+
+    Di chuột lên biểu đồ phễu ở đầu **Resolve → Pulse** để xem sự kiện có đang bị triệt tiêu hay không.
+  </Accordion>
+</AccordionGroup>
+
+## Bước tiếp theo
 
 <CardGroup cols={2}>
-  <Card title="Pulse analytics" icon="chart-bar" href="/vi/guide/pulse/analytics">
-    Đo lường khối lượng tín hiệu, mức giảm nhiễu, thời gian giải quyết cluster và tỷ lệ chuyển đổi theo nguồn.
+  <Card title="Phân tích nguyên nhân gốc" icon="magnifying-glass" href="/vi/guide/incident/root-cause-analysis">
+    Theo một cluster đã routed vào cuộc điều tra của nó.
   </Card>
-  <Card title="Pulse setup" icon="bolt" href="/vi/guide/pulse/setup">
-    Kết nối các nguồn giám sát và cấu hình quy tắc phát hiện cho workspace của bạn.
+  <Card title="Pulse Analytics" icon="chart-line" href="/vi/guide/pulse/analytics">
+    Xem Pulse loại bỏ bao nhiêu nhiễu và cluster đóng nhanh tới đâu.
   </Card>
-  <Card title="Root cause analysis" icon="magnifying-glass" href="/vi/guide/incident/root-cause-analysis">
-    Tìm hiểu cách các tác nhân AI điều tra cluster được leo thang và xây dựng chuỗi bằng chứng.
+  <Card title="Kết nối nguồn Pulse" icon="plug" href="/vi/guide/pulse/setup">
+    Thêm nguồn webhook, polling hoặc chat.
+  </Card>
+  <Card title="On-call" icon="users" href="/vi/guide/incident/oncall">
+    Chọn ai được gọi vào khi một sự cố đủ điều kiện.
   </Card>
 </CardGroup>

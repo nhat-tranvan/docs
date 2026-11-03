@@ -1,0 +1,156 @@
+---
+title: Azure DevOps
+description: "Kết nối một project Azure DevOps để agent có thể đọc repo, pull request và build, và Review có thể bình luận trên pull request"
+icon: microsoft
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối Azure DevOps để các agent CloudThinker có thể đọc repository, pull request và build trong một project, và [Review](/vi/guide/code-review/overview) có thể đăng AI code review trên pull request. Bạn xác thực bằng **personal access token (PAT)**: một token bạn tạo trong Azure DevOps, hoạt động với quyền truy cập của tài khoản bạn và giới hạn trong các scope bạn chọn.
+
+## Điều kiện tiên quyết
+
+- Tài khoản Azure DevOps có quyền truy cập organization và project mà bạn muốn agent đọc.
+- **URL organization** của bạn, ví dụ `https://dev.azure.com/acme`, và **tên project** chứa các repository của bạn.
+- Với Review: quyền tạo service hook trong project (**Project Settings → Service hooks**).
+- Quyền tạo PAT. Kết nối chỉ chấp nhận PAT, nên nếu chính sách của organization hạn chế việc tạo PAT, hãy nhờ admin Azure DevOps cho phép tạo một PAT cho tài khoản bạn dùng.
+- Vai trò **Admin** trong workspace CloudThinker, cần để thêm và sửa kết nối. Xem [Vai trò](/vi/guide/security/roles).
+
+## Thiết lập
+
+<Steps>
+  <Step title="Tạo PAT trong Azure DevOps">
+    Vào `dev.azure.com/<org>`, nhấn biểu tượng **User settings** (góc trên bên phải, cạnh avatar), và chọn **Personal access tokens**. Nhấn **New Token**, chọn organization và đặt ngày hết hạn. Azure DevOps mặc định là 30 ngày và cho phép tối đa một năm, nên hãy chọn ngày phù hợp với chính sách xoay vòng của bạn. Chọn scope **Custom defined**:
+
+    - **Build**: Read
+    - **Code**: Read & Write
+    - **Pull Request Threads**: Read & Write
+
+    Nhấn **Create** và sao chép token ngay. Azure DevOps chỉ hiển thị token một lần.
+  </Step>
+  <Step title="Mở kết nối trong CloudThinker">
+    Trong thanh bên, nhấn **More → Workspace settings → Connections**. Trên tab **Builtin Connections**, tìm **Azure DevOps** và nhấn **Connect**.
+  </Step>
+  <Step title="Nhập chi tiết kết nối">
+    Điền **Organization URL**, **Project** và **Personal Access Token** theo [Chi tiết kết nối](#chi-tiết-kết-nối).
+  </Step>
+  <Step title="Kiểm tra và kết nối">
+    Nhấn **Validate PAT**. CloudThinker hiển thị **Token works** cùng số repository trong project mà token có thể truy cập. Sau đó nhấn **Connect**.
+
+    **Trạng thái thành công:** CloudThinker hiển thị **Connected to Azure DevOps** và Azure DevOps hiển thị **Connected** trên tab **Builtin Connections**.
+  </Step>
+</Steps>
+
+## Thêm service hook cho Review
+
+Azure DevOps không tự gửi sự kiện pull request đến CloudThinker. Câu hỏi cho agent vẫn hoạt động mà không cần service hook, nhưng Review cần chúng. Trình hướng dẫn thiết lập Review hiển thị **URL** và **Secret token** của webhook. [Cấu hình webhook](/vi/guide/code-review/provider-auth#cấu-hình-webhook) có đường dẫn thao tác đầy đủ.
+
+Tạo một subscription cho mỗi sự kiện trong **Project Settings → Service hooks → + Create subscription → Web Hooks**:
+
+| Sự kiện | Cần cho |
+|-------|------------|
+| **Pull request created** | Review (bắt buộc) |
+| **Pull request updated** | Review (bắt buộc) |
+| **Pull request commented on** | Lệnh mention. Đặt **Resource version** là **2.0** |
+| **Build completed** | Tùy chọn: [phân tích pipeline](/vi/guide/code-review/pipelines) |
+| **Code pushed** | Tùy chọn: chỉ cho **Analyze new release tags** |
+
+## Chi tiết kết nối
+
+| Trường | Mô tả | Ví dụ |
+|-------|-------------|---------|
+| **Organization URL** | URL organization Azure DevOps của bạn | `https://dev.azure.com/acme` |
+| **Project** | Project chứa các repository của bạn, viết đúng như trong Azure DevOps | `Payments` |
+| **Personal Access Token** | PAT bạn đã tạo, từ cùng organization với URL | `<your-pat>` |
+
+Một kết nối bao phủ một project, và một workspace chứa một kết nối Azure DevOps. Bước kiểm tra chỉ đếm các repository trong project đó.
+
+## Quyền yêu cầu
+
+Cấp cho PAT đúng các scope sau:
+
+| Scope | Quyền truy cập | Lý do |
+|-------|--------|-----|
+| **Build** | Read | Đọc kết quả và log của build |
+| **Code** | Read & Write | Đọc repository, và tạo branch hoặc pull request thông qua Approvals của bạn |
+| **Pull Request Threads** | Read & Write | Đọc thảo luận review và đăng bình luận Review |
+
+PAT không bao giờ có thể truy cập nhiều hơn tài khoản của chính bạn. Thao tác ghi của agent vẫn đi qua [Rules và Approval mode](/vi/guide/approvals/overview) của bạn trước khi có bất kỳ thay đổi nào.
+
+<Tip>
+Tạo PAT từ một service account chuyên dụng chỉ thuộc project mà CloudThinker cần thấy. Cấp cho tài khoản này access level **Basic**, vì quyền Stakeholder không dùng được Repos. Khi đó bình luận Review đến từ tài khoản này, và không có token của đồng nghiệp nào bị vô hiệu khi họ rời đi.
+</Tip>
+
+## Kiểm soát quyền truy cập trong CloudThinker
+
+Hai cài đặt trên bảng chi tiết của kết nối giúp thu hẹp những gì agent làm. Mở **More → Workspace settings → Connections**, chọn **Azure DevOps**, và xem trong **Settings**.
+
+| Cài đặt | Tùy chọn | Tác dụng |
+|---------|---------|--------------|
+| **Repository access** | **All** hoặc **Selected** | **All** cho phép agent đọc mọi repository mà PAT truy cập được, kể cả repository mới. **Selected** giới hạn agent trong các repository bạn chọn, và repository mới vẫn bị loại trừ cho đến khi bạn thêm vào. |
+| **Allow writes** | Bật (mặc định) hoặc tắt | Bật: agent có thể đề xuất thay đổi, và Rules cùng Approval mode của bạn quyết định từng thay đổi. Tắt: agent chỉ có thể đọc, và mọi thay đổi đều bị từ chối. |
+
+Các cài đặt này chỉ thu hẹp những gì PAT đã cấp. Chọn repository cho Review là một bước riêng trong [Thiết lập Review](/vi/guide/code-review/setup).
+
+## Khả năng của agent
+
+Thao tác đọc chạy mà không cần hỏi. Thao tác ghi cần bật **Allow writes** và đi qua Rules cùng Approval mode của bạn trước.
+
+| Khả năng | Agent có thể làm gì |
+|------------|--------------------|
+| **Repository** | Liệt kê các repository của project và đọc mã cùng lịch sử của chúng |
+| **Pull request** | Tóm tắt các pull request đang mở, người review và các luồng thảo luận |
+| **Build và pipeline** | Tìm build thất bại và đọc log để giải thích lỗi |
+| **Thay đổi** | Bình luận, tạo branch hoặc mở pull request, thông qua Approvals của bạn |
+
+### Xác minh kết nối
+
+```text
+List the Azure DevOps repositories you can reach and how many open pull requests each one has
+```
+
+Kết nối hoạt động tốt sẽ nêu tên các repository thực trong project của bạn. Nếu danh sách trống, hãy kiểm tra tên **Project**.
+
+### Ví dụ prompt
+
+```text
+Which open pull requests in the Payments project have had no reviewer vote for more than 3 days?
+Why did the latest build on main fail for the web repository?
+Summarize the pull requests completed into main this week
+```
+
+## Khắc phục sự cố
+
+<Accordion title="Validate PAT thất bại">
+PAT đã hết hạn hoặc bị thu hồi, thiếu một trong ba scope, hoặc thuộc organization khác với **Organization URL**. Tạo PAT mới trong đúng organization với **Build (Read)**, **Code (Read & Write)** và **Pull Request Threads (Read & Write)**, rồi kiểm tra lại.
+</Accordion>
+
+<Accordion title="Token works, nhưng hiển thị không có repository nào">
+Tên **Project** không khớp với project mà tài khoản của PAT có thể thấy, hoặc project không có repository nào. Sao chép tên từ danh sách project trong Azure DevOps và kiểm tra lại.
+</Accordion>
+
+<Accordion title="Agent và Review ngừng hoạt động sau vài tuần">
+PAT đã đến ngày hết hạn (30 ngày nếu bạn không chọn ngày khác). Tạo PAT mới với cùng scope. Sau đó mở **Review → Settings**, mở menu **Connection actions** (⋯) trong mục **Connection**, và nhấn **Update token**.
+</Accordion>
+
+<Accordion title="Đã kết nối, nhưng Review không bình luận trên pull request">
+Thiếu một hoặc nhiều service hook. Azure DevOps cần một subscription riêng cho mỗi sự kiện. Kiểm tra **Project Settings → Service hooks** đối chiếu với [Cấu hình webhook](/vi/guide/code-review/provider-auth#cấu-hình-webhook).
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Chỉ dùng ba scope.** Agent và Review không cần gì ngoài Build (Read), Code (Read & Write) và Pull Request Threads (Read & Write). Tránh dùng token **Full access**.
+- **Xoay vòng trước khi hết hạn.** Thay PAT trước ngày hết hạn để review không dừng giữa sprint.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Thiết lập Review" icon="code-pull-request" href="/vi/guide/code-review/setup">
+    Chọn repository và bắt đầu AI code review trên pull request
+  </Card>
+  <Card title="Xác thực provider" icon="key" href="/vi/guide/code-review/provider-auth">
+    Thêm service hook của Azure DevOps và so sánh với các Git provider khác
+  </Card>
+</CardGroup>

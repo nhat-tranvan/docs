@@ -1,0 +1,180 @@
+---
+title: Wazuh
+description: "Kết nối Wazuh để agent điều tra cảnh báo và agent, kiểm thử dòng log, và thay đổi rule, decoder, agent qua Approvals của bạn"
+icon: "/images/icons/wazuh.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
+
+Kết nối Wazuh để agent CloudThinker tìm kiếm cảnh báo, kiểm tra sức khỏe agent, tính toàn vẹn file, kiểm tra cấu hình và lỗ hổng, đồng thời thay đổi rule, decoder và agent qua [Approvals](/vi/guide/approvals/overview) của bạn. Một kết nối Wazuh chứa **hai tài khoản**: user của Wazuh server API (manager, port `55000`) và user của Wazuh indexer (nơi lưu cảnh báo, port `9200`).
+
+<Warning>
+Kết nối Wazuh mới bắt đầu với **Allow writes** đang bật. Nếu bạn chưa muốn agent thay đổi rule, decoder hoặc agent, hãy tắt tùy chọn này sau khi kết nối (xem [Thiết lập](#thiết-lập)), và chỉ gán vai trò `readonly` cho user server API.
+</Warning>
+
+## Điều kiện tiên quyết
+
+- Wazuh server API (port `55000`) và Wazuh indexer (port `9200`) mà CloudThinker truy cập được qua HTTPS từ internet. Dùng firewall giới hạn cả hai port chỉ cho các IP egress của CloudThinker. Tài liệu này không công bố danh sách IP egress của CloudThinker: hãy hỏi đầu mối CloudThinker của bạn, hoặc [liên hệ chúng tôi](https://cloudthinker.io/contact). Xem [Tiếp cận dịch vụ trong mạng riêng](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ) để biết các lựa chọn khác.
+- Quyền admin trên Wazuh dashboard, để tạo cả hai user.
+- Vai trò **Admin** trong workspace CloudThinker, cần thiết để thêm kết nối. Xem [Vai trò](/vi/guide/security/roles).
+
+## Thiết lập
+
+<Steps>
+  <Step title="Tạo user Wazuh server API">
+    Trong Wazuh dashboard, vào **Server management → Security → Users** và nhấn **Create user**. Nhập username như `cloudthinker` và mật khẩu, và dưới **Roles** chọn `readonly`, vai trò có thể đọc mọi thứ trong Wazuh. Lưu user.
+
+    Nếu agent cần kiểm thử dòng log với rule của bạn, hãy gán thêm cho user một vai trò có policy `logtest_all_*`.
+
+    Để agent thực hiện thay đổi, thay vào đó hãy gán cho user một vai trò chỉ có các policy bạn cho phép, như `rules_all_*`, `decoders_all_*`, `agents_all_*`, `agents_commands_*` và `cluster_all_*`. Tránh `administrator`: vai trò này còn quản lý được user và vai trò của Wazuh. Xem [cấu hình RBAC](https://documentation.wazuh.com/current/user-manual/api/rbac/configuration.html) của Wazuh để tạo vai trò tùy chỉnh.
+  </Step>
+  <Step title="Tạo user Wazuh indexer">
+    Trong Wazuh dashboard, vào **Indexer management → Security → Internal users** và nhấn **Create internal user**. Đặt **Username** là `cloudthinker` và một **Password**, rồi nhấn **Create**.
+
+    Sau đó mở **Roles**, nhấn **Create role** và đặt:
+    - **Name**: `cloudthinker_read`
+    - **Cluster permissions**: `cluster_composite_ops_ro`
+    - **Index**: `wazuh-*`
+    - **Index permissions**: `read`
+
+    Nhấn **Create**. Trên vai trò `cloudthinker_read`, mở **Mapped users**, nhấn **Manage mapping**, thêm `cloudthinker` và nhấn **Map**.
+  </Step>
+  <Step title="Mở Wazuh trong CloudThinker">
+    Trong thanh bên, nhấn **More → Workspace settings → Connections**. Trên tab **Builtin Connections**, tìm **Wazuh** và nhấn **Connect**.
+  </Step>
+  <Step title="Nhập cả hai tài khoản và kết nối">
+    Điền các trường trong [Chi tiết kết nối](#chi-tiết-kết-nối) và nhấn **Connect**. CloudThinker đăng nhập vào manager và indexer, và kiểm tra indexer có dữ liệu cảnh báo của Wazuh.
+
+    **Trạng thái thành công:** kết nối hiển thị trạng thái **Connected** và thông báo `Wazuh <version> connected.`
+  </Step>
+  <Step title="Quyết định về thao tác ghi">
+    **Allow writes** mặc định bật trên kết nối Wazuh mới. Hãy tắt tùy chọn này trừ khi có thay đổi bạn muốn agent thực hiện: mở **More → Workspace settings → Connections**, chọn **Wazuh** và tắt **Allow writes**. Với vai trò `readonly`, các nỗ lực ghi cũng thất bại ngay trong Wazuh.
+
+    <ApprovalDefault />
+
+    Điều đó có nghĩa là phán đoán của AI có thể phê duyệt việc xóa một agent Wazuh mà không có người tham gia. Trước khi để bật thao tác ghi, hãy chọn **Manual** để người phê duyệt duyệt mọi thay đổi. Khi CloudThinker bật [Rule enforcement](/vi/guide/approvals/rules#khắc-phục-sự-cố) cho workspace của bạn, [Rule](/vi/guide/approvals/rules) có thể nhắm riêng vào việc xóa agent: trong chat, gõ `/create-policy Deny deleting agents on the Wazuh connection` (hoặc **Ask first** thay cho **Deny** nếu cần người quyết định), rồi chấp nhận Rule đó trong **Approvals → Rules → Needs review**.
+  </Step>
+</Steps>
+
+## Chi tiết kết nối
+
+| Trường | Bắt buộc | Mô tả | Ví dụ |
+|-------|----------|-------------|---------|
+| **Manager URL** | Có | Địa chỉ Wazuh server API, có `https://` và không có path | `https://manager.example.com:55000` |
+| **Manager username** | Có | User của Wazuh server API | `cloudthinker` |
+| **Manager password** | Có | Mật khẩu của user đó | |
+| **Indexer URL** | Có | Địa chỉ Wazuh indexer, có `https://` và không có path | `https://indexer.example.com:9200` |
+| **Indexer username** | Có | User của Wazuh indexer | `cloudthinker` |
+| **Indexer password** | Có | Mật khẩu của user đó | |
+| **TLS certificate** | Có | **Allow self-signed** (mặc định) hoặc **Verify** | **Verify** |
+
+Wazuh mặc định dùng chứng chỉ tự ký. **Allow self-signed** mã hóa lưu lượng nhưng bỏ qua kiểm tra chứng chỉ, nên không phát hiện được endpoint giả mạo. Bạn không thể tải lên CA tùy chỉnh. Chỉ chọn **Verify** nếu cả hai endpoint đều có chứng chỉ từ CA được tin cậy công khai.
+
+## Quyền yêu cầu
+
+| Tài khoản | Chỉ đọc | Có thay đổi |
+|---------|-----------|--------------|
+| **Server API user** | Vai trò `readonly`, cộng `logtest_all_*` để kiểm thử dòng log | Một vai trò chỉ có các policy bạn cho phép (xem Thiết lập) |
+| **Indexer user** | `read` trên `wazuh-*` | Giống chỉ đọc. Agent đọc cảnh báo từ indexer và thực hiện thay đổi qua manager |
+
+<Tip>
+Bắt đầu với vai trò `readonly`, và chỉ thêm policy thay đổi khi bạn có một thay đổi cụ thể muốn agent thực hiện.
+</Tip>
+
+## Khả năng của agent
+
+| Khả năng | Mô tả | Phê duyệt |
+|------------|-------------|----------|
+| **Cảnh báo** | Tìm kiếm cảnh báo theo thời gian, agent, rule, level hoặc văn bản, và đếm theo level, agent và rule | Chạy không cần hỏi |
+| **Agent** | Trạng thái, inventory (package, port, process), thay đổi tính toàn vẹn file, kiểm tra cấu hình và lỗ hổng | Chạy không cần hỏi |
+| **Rule và decoder** | Đọc file rule và decoder, và kiểm thử một dòng log để xem rule nào khớp | Chạy không cần hỏi |
+| **Thay đổi rule và decoder** | Sửa hoặc xóa file rule và decoder tùy chỉnh, rồi khởi động lại Wazuh manager để áp dụng | Từng thay đổi |
+| **Thay đổi agent** | Khởi động lại, nhóm hoặc xóa agent, và chạy active response | Từng thay đổi |
+
+<Warning>
+Xóa agent sẽ gỡ agent đó khỏi Wazuh, và một active response như `firewall-drop` thêm một địa chỉ IP vào danh sách chặn firewall của agent. Áp dụng thay đổi rule hoặc decoder sẽ khởi động lại manager, nên hãy dự kiến một khoảng ngắt ngắn trong xử lý event. Giữ kết nối ở **Manual** để người phê duyệt duyệt từng thay đổi (xem [Thiết lập](#thiết-lập)), kiểm tra chính xác thay đổi trước khi phê duyệt, và phê duyệt việc khởi động lại trong khung giờ an toàn.
+</Warning>
+
+### Xác minh kết nối
+
+Bắt đầu một chat, gõ `#` và chọn **Wazuh**, rồi hỏi:
+
+```text
+Summarize my Wazuh: version, agents by status, and alerts from the last 24 hours
+```
+
+**Kết quả mong đợi:** phiên bản Wazuh, số agent theo trạng thái (như active, disconnected, never connected) và số cảnh báo theo level.
+
+### Ví dụ prompt
+
+```text
+Which Wazuh rules fired most on agent 003 in the last 48 hours?
+Test this log line against my Wazuh rules and tell me which rule matches: <paste log line>
+Show file integrity changes and failed configuration checks for Wazuh agent 003
+```
+
+Thay `003` bằng một agent ID trong danh sách agent Wazuh của bạn. Agent `000` chính là Wazuh manager. Nếu [vulnerability detection](https://documentation.wazuh.com/current/user-manual/capabilities/vulnerability-detection/index.html) đang tắt trong Wazuh, agent không có dữ liệu CVE để báo cáo.
+
+## Khắc phục sự cố
+
+Tiêu đề các accordion bên dưới là đúng nguyên văn các thông báo CloudThinker hiển thị khi kiểm tra kết nối thất bại.
+
+<Accordion title="Manager rejected the username or password.">
+Kiểm tra mật khẩu của user server API. User này tách biệt với tài khoản đăng nhập dashboard của bạn.
+</Accordion>
+
+<Accordion title="Indexer rejected the username or password.">
+Kiểm tra mật khẩu của user indexer trong **Indexer management → Security → Internal users**.
+</Accordion>
+
+<Accordion title="Manager account has no API access.">
+User server API đã đăng nhập, nhưng vai trò của user không đọc được thông tin manager. Gán vai trò `readonly`, hoặc thêm `cluster_read_*` vào vai trò tùy chỉnh, rồi kết nối lại. Chỉ dùng `cluster_all_*` cho vai trò áp dụng thay đổi, vì policy này còn có thể khởi động lại manager.
+</Accordion>
+
+<Accordion title="Indexer account cannot read wazuh-alerts-4.x-*.">
+Vai trò của user indexer thiếu `read` trên `wazuh-*`. Cập nhật vai trò và kết nối lại.
+</Accordion>
+
+<Accordion title="Indexer has no wazuh-alerts-4.x-* index.">
+**Indexer URL** trỏ đến một indexer không có dữ liệu cảnh báo của Wazuh. Dùng indexer mà Wazuh server ghi cảnh báo vào.
+</Accordion>
+
+<Accordion title="The Manager URL must start with https://.">
+Nhập địa chỉ có `https://`. Điều này cũng áp dụng cho **Indexer URL**.
+</Accordion>
+
+<Accordion title="Enter the Manager URL without a path, for example https://wazuh.example.com.">
+Bỏ mọi thứ sau port, như `/api`. Điều này cũng áp dụng cho **Indexer URL**.
+</Accordion>
+
+<Accordion title="Manager certificate is not trusted. Choose Allow self-signed.">
+**TLS certificate** đang đặt là **Verify**, nhưng endpoint dùng chứng chỉ tự ký. Chọn **Allow self-signed**, hoặc cài chứng chỉ tin cậy. Điều này cũng áp dụng cho indexer.
+</Accordion>
+
+<Accordion title="Manager URL is unreachable. Check the URL and port 55000.">
+CloudThinker không truy cập được địa chỉ. Kiểm tra URL và port, và Wazuh có chấp nhận kết nối từ CloudThinker không. Điều này cũng áp dụng cho indexer trên port `9200`.
+</Accordion>
+
+<Accordion title="Agent báo công cụ ghi bị tắt trên kết nối này">
+**Allow writes** đang tắt cho kết nối này. Bật tùy chọn này trong **More → Workspace settings → Connections** nếu bạn muốn agent thực hiện thay đổi, thêm Rule cho việc xóa agent trước (xem [Thiết lập](#thiết-lập)), rồi hỏi lại.
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Thao tác ghi bật sẵn ở đây.** Trên Wazuh, **Allow writes** bật cho kết nối mới, nên quyền chỉ đọc phụ thuộc vào việc bạn tắt tùy chọn này và dùng vai trò `readonly`.
+- **Dùng user chuyên dụng.** Tạo cả hai tài khoản chỉ cho CloudThinker, để bạn có thể xóa chúng mà không ảnh hưởng đến ai khác.
+- **Nội dung cảnh báo được coi là dữ liệu.** Agent đọc văn bản cảnh báo như bằng chứng và không làm theo chỉ dẫn nằm bên trong văn bản đó.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Approvals" icon="shield-halved" href="/vi/guide/approvals/overview">
+    Quyết định thay đổi Wazuh nào tự chạy, cần hỏi người hoặc bị từ chối
+  </Card>
+  <Card title="Kết nối Graylog" icon="/images/icons/graylog.svg" href="/vi/guide/connections/graylog">
+    Tìm kiếm log và điều tra cảnh báo
+  </Card>
+</CardGroup>

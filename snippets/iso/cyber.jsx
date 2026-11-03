@@ -376,9 +376,9 @@ export const CyberScene = ({ className }) => {
 
 
     /*
-     * Cyber's Attack, Prove, Fix spine, on the same isometric stage as the
-     * homepage workflow. A 12s loop: CloudThinker probes the web app, auth,
-     * API and code like a hacker; one probe gets through on the API; the exploit
+     * Cyber's Test, Prove, Fix spine, on the same isometric stage as the
+     * homepage workflow. A 12s loop: CloudThinker tests the web app, auth,
+     * API and code; one test gets through on the API; the request
      * is replayed read-only to prove it; the fix ships as a merge
      * request, engineers approve it, and a retest shows the hole is closed. The
      * case file reuses the page's existing mockup. Simulated product UI, so it
@@ -386,14 +386,14 @@ export const CyberScene = ({ className }) => {
      */
     const LOOP = 12;
     // Scene cues (authored seconds).
-    const cA = 0; // attack
+    const cA = 0; // test
     const cP = 2.4; // prove
     const cF = 5.2; // fix
     const cM = 7.0; // approve and merge
     const cR = 8.8; // retest
     const cL = 11; // settle
     const STEPS = [
-        ['Attack', cA],
+        ['Test', cA],
         ['Prove', cP],
         ['Fix', cF],
         ['Approve', cM],
@@ -432,7 +432,7 @@ export const CyberScene = ({ className }) => {
     ];
     // The case file on the left, in order of arrival.
     const FEED = [
-        { at: cA + 0.3, who: 'Attack', text: 'Probing web, auth, API and code' },
+        { at: cA + 0.3, who: 'Test', text: 'Testing web, auth, API and code' },
         {
             at: cA + 1.4,
             who: 'Finding',
@@ -463,14 +463,14 @@ export const CyberScene = ({ className }) => {
         const hitK = enter(T, cA + 1.3, cA + 1.6) * (1 - enter(T, cR + 0.7, cR + 1.0));
         const okK = enter(T, cR + 0.7, cR + 1.0) * out;
         const hitRing = prog(T, cA + 1.3, cA + 2.4);
-        const attackK = fade(T, cA + 0.1, cA + 0.3, cA + 1.8, cA + 2.2);
+        const testK = fade(T, cA + 0.1, cA + 0.3, cA + 1.8, cA + 2.2);
         const proveK = fade(T, cP + 1.0, cP + 1.3, cF - 0.1, cF + 0.3);
         const fixK = fade(T, cF + 0.2, cF + 0.5, cM + 1.4, cM + 1.8);
         const checkK = pop(T, cM + 0.9, cM + 1.2) * out;
         const provenPill = fade(T, cP + 1.5, cP + 1.8, cF + 0.3, cF + 0.6);
         const mrPill = fade(T, cF + 1.1, cF + 1.4, cM + 1.6, cM + 1.9);
         const fixedPill = fade(T, cR + 0.9, cR + 1.2, cL - 0.1, cL + 0.4);
-        const agentK = Math.max(attackK, fixK, fade(T, cR, cR + 0.2, cR + 0.8, cR + 1.1));
+        const agentK = Math.max(testK, fixK, fade(T, cR, cR + 0.2, cR + 0.8, cR + 1.1));
         const targetTop = (i) => {
             if (i === API)
                 return mix(mix(pal.top, pal.alertTop, hitK), pal.okTop, okK);
@@ -528,10 +528,10 @@ export const CyberScene = ({ className }) => {
 
             {/* wires */}
             {TARGETS.map((t, i) => (<Wire key={t.key} route={toTarget(i)} hot={i === API
-                    ? Math.max(attackK, fade(T, cP, cP + 0.15, cP + 0.8, cP + 1.0), fade(T, cR, cR + 0.15, cR + 0.8, cR + 1.0))
+                    ? Math.max(testK, fade(T, cP, cP + 0.15, cP + 0.8, cP + 1.0), fade(T, cR, cR + 0.15, cR + 0.8, cR + 1.0))
                     : i === CODE
-                        ? Math.max(attackK * 0.6, fixK)
-                        : attackK * 0.6} color={i === API && T >= cR - 0.2
+                        ? Math.max(testK * 0.6, fixK)
+                        : testK * 0.6} color={i === API && T >= cR - 0.2
                     ? pal.ok
                     : i === API && T < cF
                         ? pal.alert
@@ -623,7 +623,7 @@ export const CyberScene = ({ className }) => {
                 : null}
 
             {/* labels */}
-            <Label x={P(50, 150, agentZ)[0] + 110} y={P(50, 150, agentZ)[1] - 70} text="CLOUDTHINKER" sub="Attacks like a hacker"/>
+            <Label x={P(50, 150, agentZ)[0] + 110} y={P(50, 150, agentZ)[1] - 70} text="CLOUDTHINKER" sub="Tests your running app"/>
             <Label x={P(-230, -60)[0] + 40} y={P(-230, -60)[1] - 6} text="ENGINEERS" sub="Review and merge" anchor="start"/>
             <Label x={P(110, 500)[0] - 20} y={P(110, 500)[1] + 50} text="PROOF" sub="Read-only replay" anchor="middle"/>
             <Label x={P(740, 80)[0]} y={P(740, 80)[1] + 50} text="YOUR APPS AND APIS" sub="Web app, auth, API, code" anchor="middle"/>
@@ -634,7 +634,7 @@ export const CyberScene = ({ className }) => {
     }
     /** Cyber's proof loop on its stage. Starts from the first frame on mount. */
     function CyberProofStage({ className }) {
-        return (<IsoMotionStage loop={LOOP} label="CloudThinker attacks your web app, auth, API and code like a hacker. One probe gets through on the API, the exploit is replayed read-only to prove it, the fix ships as a merge request, engineers approve it, and a retest shows the hole is closed." className={className} frame={(T) => <CyberFrame T={T}/>}/>);
+        return (<IsoMotionStage loop={LOOP} label="CloudThinker tests your running web app, auth, API and code. One test gets through on the API, the request is replayed read-only to prove it, the fix ships as a merge request, engineers approve it, and a retest shows the hole is closed." className={className} frame={(T) => <CyberFrame T={T}/>}/>);
     }
 
     return CyberProofStage;

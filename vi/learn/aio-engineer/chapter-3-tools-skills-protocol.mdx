@@ -1,0 +1,98 @@
+---
+title: Chương 3 · Công cụ, skill và tầng giao thức
+description: "Thiết kế ít công cụ hơn và theo ý định, mã hóa quy trình thành skill, và chạy MCP server trong production mà không mở rộng bề mặt tấn công."
+icon: toolbox
+---
+
+*Công cụ là nơi suy luận của agent chạm vào hệ thống của bạn. Thiết kế của chúng quyết định độ an toàn và độ tin cậy nhiều hơn bất kỳ prompt nào, và công cụ tràn lan là lỗi tự chuốc lấy phổ biến nhất trong kỹ thuật agent.*
+
+## 3.1 Ít công cụ hơn, công cụ tốt hơn
+
+Bài học được công bố hữu ích nhất ở đây đến từ nhóm Azure SRE Agent của Microsoft (nguồn trong [Phụ lục D](/vi/learn/aio-engineer/appendix-d-sources)). Họ bắt đầu với hơn một trăm công cụ trải trên hơn năm mươi agent chuyên biệt hẹp, và kết thúc với năm công cụ cốt lõi (chủ yếu là các CLI rộng như `az` và `kubectl`) cùng một vài agent đa năng.
+
+Mỗi công cụ bạn thêm vào là ngữ cảnh mà model phải mang theo, một lựa chọn mà model có thể chọn sai, và một giao diện mà bạn phải quản lý phiên bản và kiểm thử. Có năm quy tắc thiết kế đã được kiểm chứng:
+
+1. **Công cụ là năng lực, không phải API endpoint.** Bọc ý định ("lấy các lần deploy gần đây của dịch vụ S", "các truy vấn chậm nhất trên cơ sở dữ liệu D"), không phải động từ thô. Một năng lực tốt thay được năm lớp bọc mỏng và loại bỏ lỗi đoán tham số.
+2. **Mô tả chính là prompt.** Model chọn công cụ dựa trên mô tả. Hãy viết chúng như tài liệu cho một nhân viên mới sắc sảo: khi nào dùng công cụ, khi nào không, kết quả chứa gì, và ghi chú về chi phí hoặc độ trễ cho các lệnh thăm dò tốn kém.
+3. **Đọc và ghi là hai loại hoàn toàn khác nhau.** Tách công cụ đọc, chạy tự do trong vòng lặp, khỏi công cụ ghi, phải qua cổng chính sách (Chương 6). Áp đặt sự tách biệt này ở giao diện, không phải bằng quy ước, để agent không thể thay đổi bất cứ thứ gì qua một đường đọc.
+4. **Kết quả là ngữ cảnh, nên hãy định hình chúng.** Trả về kết quả có cấu trúc, đã tóm tắt trước, giới hạn kích thước, kèm con trỏ đến dữ liệu đầy đủ. Công cụ trả về 80.000 dòng log thô là đang tấn công chính ngân sách ngữ cảnh của bạn (Chương 2).
+5. **Mọi thao tác ghi đều idempotent và xem trước được.** Công cụ thay đổi trạng thái phải hỗ trợ plan hoặc dry run, cho cùng kết quả khi thử lại, và trả về kết quả mà máy có thể kiểm tra. Điều đó biến việc xác minh (Chương 1) và rollback (Chương 6) thành kỹ thuật thay vì hy vọng.
+
+Quy tắc 1 và 2 đặt cạnh nhau:
+
+| | Công cụ yếu | Công cụ mạnh |
+|---|---|---|
+| **Chữ ký** | `cloudwatch_get_metric_data(namespace, metric, dims, start, end, period, stat)` | `service_error_rate(service, window)` |
+| **Mô tả** | "Calls the API." | "Use for any question about a service's failing requests. Not for latency. Returns the 5xx rate per minute and the top three error codes." |
+| **Model phải đoán gì** | Namespace, tên metric, dimension, period, statistic | Chỉ tên dịch vụ và khoảng thời gian |
+
+## 3.2 Skill và runbook: tri thức vận hành dưới dạng mã
+
+Phía trên các công cụ đơn lẻ là tầng mã hóa quy trình: **skill**, những đơn vị bí quyết vận hành có thể tái sử dụng và có phiên bản, chẳng hạn "xoay vòng thông tin xác thực cho X", "drain rồi thay mới node pool Y", hoặc "thu thập gói bằng chứng cho lớp sự cố Z".
+
+Skill là nơi ranh giới tất định từ Chương 1 trở nên tái sử dụng được. Model chọn một skill và điền tham số; các bước và script đã được kiểm thử của skill thực hiện công việc, với kiểm tra trước khi chạy, timeout và hook rollback riêng. Trong thực tế, điều đó có nghĩa là:
+
+- Skill nằm trong version control với người sở hữu, bài kiểm thử và changelog.
+- Skill khai báo phạm vi ảnh hưởng và khả năng hoàn tác, để chính sách (Chương 6) có thể phân loại chúng.
+- Lịch sử chạy của skill cung cấp dữ liệu cho việc đánh giá (Chương 7).
+
+Danh mục skill của một nền tảng (phong phú đến đâu, được kiểm thử thế nào, rõ ràng về rủi ro ra sao) là tín hiệu về mức độ trưởng thành tốt hơn bản demo của nó.
+
+<Info>
+**TRONG THỰC TẾ: KỸ NĂNG VÀ RỦI RO TRONG CLOUDTHINKER**
+
+[Skill](/vi/guide/skills/overview) của CloudThinker là tệp `SKILL.md`: frontmatter YAML với `name` và `description`, rồi đến hướng dẫn bằng Markdown. Agent chọn skill theo tên và mô tả, nên mô tả chính là prompt, đúng như quy tắc 2. Một gói `.zip` có thể mang các thư mục `scripts/`, `schemas/` và `references/` bên cạnh tệp, giúp giữ quy trình trong Git và ngoài khả năng ứng biến của model. Xem [Định dạng skill](/vi/guide/skills/skill-format).
+
+CloudThinker không quản lý phiên bản skill. Khi tải lên skill trùng tên với skill đã có, bạn sẽ thấy tùy chọn **Replace**, xóa skill cũ và tải skill mới lên; thay đổi có hiệu lực cho mọi agent trong workspace, và **Available in** được đặt lại thành chỉ **Chat**. Để rollback, hãy tải lại tệp `.zip` trước đó, nên hãy giữ các gói skill trong Git và coi lịch sử đó là changelog. Xem [Custom skill](/vi/guide/skills/custom-skills).
+
+Rủi ro được thực thi tại lệnh gọi, không dựa vào nhãn của skill. Mọi thao tác ghi mà agent thực hiện, từ bất kỳ skill nào, đều đi qua danh sách [Always blocked](/vi/guide/approvals/overview#cách-quyết-định-một-thao-tác-ghi) (các lệnh gọi có sẵn không bao giờ chạy, chẳng hạn dừng ghi log CloudTrail), rồi đến [Rule](/vi/guide/approvals/rules) của bạn, rồi đến [Approval mode](/vi/guide/approvals/approval-mode). Mỗi Rule hiển thị một huy hiệu truy cập để các Rule rủi ro nổi bật: **Write** cho lệnh gọi thay đổi tài nguyên, **Destructive** cho thao tác xóa và các lệnh tương tự như Git force push, **Session** cho lệnh gọi mở shell từ xa như `ssh`, **Sensitive read** cho thao tác đọc secret, và **Every operation** cho `*:*`. Xem [Một Rule chứa gì](/vi/guide/approvals/rules#rule-gồm-những-gì). Khi đánh giá bất kỳ nền tảng nào, hãy hỏi quyết định rủi ro diễn ra ở đâu và liệu một skill bị gắn nhãn sai có thể lách qua quyết định đó hay không.
+</Info>
+
+## 3.3 MCP trong production
+
+**Model Context Protocol (MCP)** là một tiêu chuẩn mở để cung cấp công cụ và dữ liệu cho agent AI. Đó là lý do một nền tảng có thể cắm vào một hệ thống observability hoặc hệ thống ticket mà không cần mã kết nối tùy chỉnh. Nếu nền tảng hỗ trợ MCP, agent và công cụ từ các nhà cung cấp khác nhau có thể kết hợp với nhau. Nếu không, mỗi công cụ mới cần mã kết nối do nhà cung cấp xây dựng, và bạn không thể mang công cụ của riêng mình.
+
+Dùng trong production không phải cắm là chạy. Danh sách kiểm tra:
+
+| Thực hành | Lý do | Việc cần làm |
+|---|---|---|
+| **Coi niềm tin vào server như niềm tin chuỗi cung ứng** | MCP server là mã có thông tin xác thực. Bản thân mô tả công cụ là một bề mặt injection (Chương 5). | Ghim phiên bản, review trước khi nâng cấp, chỉ cho phép các server đã được duyệt, và ưu tiên server chính hãng hoặc đã được kiểm toán cho mọi thứ chạm vào production. Coi metadata công cụ của bên thứ ba là đầu vào không đáng tin. |
+| **Giới hạn xác thực theo agent, không theo server** | Một service account dùng chung sau một server phổ biến biến một lần bị xâm phạm thành nhiều lần | Cấp thông tin xác thực ngắn hạn theo danh tính agent và theo môi trường, thông qua một broker |
+| **Quản lý phiên bản hợp đồng** | Schema công cụ thay đổi dần. Một lần nâng cấp có thể thay đổi ý nghĩa của một tham số bên dưới một skill hôm qua còn chạy tốt. | Kiểm thử hợp đồng các công cụ mà runbook của bạn phụ thuộc vào |
+| **Lập bản đồ egress cho mọi server** | Server có thể truy cập internet là một đường rò rỉ dữ liệu tiềm năng (Chương 5) | Biết server nào truy cập internet và server nào ở trong phạm vi mạng của bạn |
+
+Tích hợp không phải là cảm biến. Kết nối công cụ để agent có thể hành động trên hệ thống (tầng MCP) và đẩy sự kiện từ hệ thống để agent nhận biết (pipeline cảm biến, Chương 4) là hai cơ chế khác nhau với đặc tính độ tin cậy và bảo mật khác nhau. Một nền tảng, hay một sơ đồ, làm mờ ranh giới giữa chúng thường có lỗ hổng ở một trong hai.
+
+<Info>
+**TRONG THỰC TẾ: MCP SERVER LÀ MỘT KẾT NỐI**
+
+Trong CloudThinker, [MCP server](/vi/guide/connections/mcp) của riêng bạn là một kết nối như mọi kết nối khác:
+
+- Agent chỉ có thể gọi các công cụ mà server của bạn cung cấp, mỗi công cụ được đặt tên `prefix__tool_name` với tiền tố bạn đặt, để bạn thấy nguồn gốc trong yêu cầu phê duyệt và Rule.
+- Đặt MCP tool annotation trên server của bạn. Approvals chỉ coi công cụ là chỉ đọc khi công cụ khai báo `readOnlyHint: true`, và coi là thao tác phá hủy khi công cụ khai báo `destructiveHint: true`. Công cụ không có hint được coi là thao tác ghi, nên công cụ thiếu nhãn sẽ mặc định theo hướng an toàn.
+- Lệnh đọc chạy mà không hỏi. Thao tác ghi đi qua Rule và Approval mode của bạn.
+- URL trỏ đến địa chỉ loopback, địa chỉ riêng tư hoặc địa chỉ metadata của cloud đều bị từ chối, kể cả host name phân giải đến các địa chỉ đó.
+
+Ở những điểm CloudThinker chưa đáp ứng danh sách kiểm tra trên, hãy lấp khoảng trống ở phía bạn:
+
+- **Xác thực theo kết nối, không theo agent.** CloudThinker gửi các HTTP header tĩnh mà bạn đặt trên kết nối, nên mọi agent có kết nối đó đều dùng cùng một token. Không có OAuth và không có broker thông tin xác thực. Hãy cấp một token chỉ CloudThinker dùng, giới hạn token trong các công cụ bạn cung cấp, xoay vòng theo lịch, và chỉ gắn kết nối cho những [agent tùy chỉnh](/vi/guide/agents/customize) cần đến.
+- **Không ghim phiên bản.** CloudThinker gọi bất cứ thứ gì server của bạn cung cấp. CloudThinker chỉ tải lại và sắp xếp lại danh sách công cụ khi bạn lưu thay đổi URL, header hoặc transport. Hãy ghim và kiểm thử hợp đồng server trong pipeline deploy của riêng bạn.
+- **Egress.** Kết nối chạy từ CloudThinker Cloud và truy cập server của bạn qua internet. Bạn có thể đưa các IP egress của CloudThinker vào danh sách cho phép trên firewall; xem [Truy cập dịch vụ nội bộ](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ). Những gì server của bạn truy cập từ đó là do bạn kiểm soát.
+</Info>
+
+<Tip>
+**ĐIỂM CHÍNH**
+
+Thiết kế ít công cụ, theo ý định, với đường đọc và ghi được tách biệt ở giao diện. Mã hóa quy trình thành skill có phiên bản với rủi ro được khai báo, và thực thi rủi ro đó tại lệnh gọi. Coi MCP như chuỗi cung ứng production: được ghim phiên bản, có danh sách cho phép, kiểm thử hợp đồng và lập bản đồ egress. Tầng công cụ là nơi "agent đã làm điều gì đó kỳ lạ" trở nên hoặc không thể xảy ra, hoặc chắc chắn xảy ra.
+</Tip>
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="Chương 4 · Điều phối và kinh tế học hai động cơ" icon="diagram-project" href="/vi/learn/aio-engineer/chapter-4-orchestration-economics">
+    Cách agent được điều phối, và chi phí để bao phủ 24/7.
+  </Card>
+  <Card title="Kết nối MCP server" icon="plug" href="/vi/guide/connections/mcp">
+    Thêm MCP server của riêng bạn và kiểm soát công cụ nào được tính là thao tác ghi.
+  </Card>
+</CardGroup>

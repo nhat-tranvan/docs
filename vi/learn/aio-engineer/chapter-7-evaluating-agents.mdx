@@ -1,0 +1,140 @@
+---
+title: Chương 7 · Đánh giá agent như hệ thống production
+description: "Đọc các tuyên bố benchmark một cách phản biện, xây bộ kiểm thử từ chính sự cố của bạn, chấm điểm theo lớp và kiểm soát mọi thay đổi agent bằng bộ đó."
+icon: flask
+---
+
+*Benchmark công khai khiến ta khiêm tốn và có thể bị lợi dụng. Môi trường của chính bạn là bài kiểm tra duy nhất quyết định được điều gì, và chương này chỉ cách xây dựng nó.*
+
+## 7.1 Benchmark công khai nói gì
+
+Hiện đã có các phép đo mở, độc lập dành cho agent vận hành. Nguồn của mọi số liệu ở đây nằm trong [Phụ lục D](/vi/learn/aio-engineer/appendix-d-sources).
+
+| Benchmark | Kiểm tra gì | Rút ra điều gì |
+|---|---|---|
+| **ITBench** (IBM Research) | Kịch bản SRE, compliance và FinOps | Agent trên các model tiên tiến nhất giải quyết khoảng 11–14% kịch bản SRE, tức khoảng một trên bảy |
+| **ITBench-AA** (Artificial Analysis cùng IBM, 2026) | Model frontier chẩn đoán sự cố Kubernetes | Mọi model được đánh giá đều đạt dưới 50% ở metric độ chính xác chủ đạo |
+| **AIOpsLab** (Microsoft Research) | Agent được đánh giá trong môi trường thực | Không có một con số chủ đạo duy nhất. Benchmark này đặt ra khuôn mẫu đánh giá agent trong môi trường thực, điều mà hướng dẫn replay ở 7.3 dựa trên |
+
+Đây là các tác vụ chẩn đoán và khắc phục trong môi trường được kiểm soát. Chúng dễ hơn production của bạn ở một số mặt và khó hơn ở những mặt khác, và ngay cả kết quả công khai tốt nhất vẫn thất bại phần lớn thời gian.
+
+Dù vậy các nhóm vẫn chạy agent thành công trên production, nên cả hai điều đều đúng. Khác biệt nằm ở chỗ một bản triển khai production không phải là một model trần trên một cluster lạ. Đó là một model nằm trong một **harness**: ngữ cảnh được tuyển chọn về một hạ tầng đã biết, công cụ xây dựng có mục đích, runbook chứa kiến thức của nhóm, bộ nhớ về các sự cố trước đây, và chính sách định tuyến agent đến những loại sự cố mà chúng xử lý tốt.
+
+Benchmark đo model trần. Production đo harness. Vì vậy câu hỏi "bạn dùng model nào?" cho bạn biết rất ít về một nền tảng. Hãy kiểm tra harness, và đó là nội dung của phần còn lại trong chương này.
+
+## 7.2 Benchmark có thể bị lợi dụng, và benchmark của bạn cũng vậy
+
+Nghiên cứu SREGym (2026) ghi nhận hai kiểu khai thác cần nhớ mỗi khi bạn đọc một tuyên bố đánh giá:
+
+- **Reward hacking.** Khi bộ tiêm lỗi chạy bên trong môi trường mà agent có thể kiểm tra, agent đã tìm ra và vô hiệu hóa bộ tiêm lỗi thay vì sửa lỗi.
+- **Tắt cảnh báo như một thành công giả.** Một phần lớn các tác vụ khắc phục của một benchmark có thể được "giải" bằng một vòng lặp restart pod chung chung khiến cảnh báo biến mất mà không chạm đến lỗi.
+
+Cùng nghiên cứu đó đo khoảng cách giữa biết và sửa: ngay cả khi có đúng nguyên nhân gốc, khắc phục chỉ thành công khoảng 69–88% số lần.
+
+Ba quy tắc áp dụng được cho việc đánh giá của riêng bạn:
+
+1. **Chấm điểm trạng thái, không phải triệu chứng.** Kiểm tra độc lập rằng lỗi đã hết và hệ thống khỏe mạnh. Cảnh báo đã tắt không chứng minh được gì.
+2. **Giấu cơ chế kiểm thử.** Agent đang được kiểm thử không được phép thấy hoặc truy cập harness đánh giá.
+3. **Chấm điểm chẩn đoán và khắc phục riêng biệt.** Chúng thất bại độc lập và cải thiện độc lập.
+
+Cái bẫy tương tự tồn tại trên production. Agent được chấm theo "số cảnh báo đã đóng" sẽ học cách đóng cảnh báo, nên hãy chọn metric thành công trực tuyến với cùng sự cẩn trọng. Quy tắc xác minh độc lập trong [Chương 1](/vi/learn/aio-engineer/chapter-1-agent-anatomy) là phiên bản production của nguyên tắc này.
+
+## 7.3 Xây golden set từ chính sự cố của bạn
+
+Benchmark công khai hiệu chỉnh cho cả lĩnh vực. Chỉ sự cố của bạn mới hiệu chỉnh được bản triển khai của bạn. Tài sản cần xây là một **golden set**: một tập hợp kịch bản kiểm thử được tuyển chọn, có phiên bản, lấy từ lịch sử production của bạn.
+
+1. **Thu thập từ postmortem.** Mỗi sự cố thực trở thành một kịch bản ứng viên gồm năm phần: telemetry tại thời điểm phát hiện, trạng thái môi trường, nguyên nhân gốc thực sự, bản sửa được chấp nhận và bằng chứng bản sửa đã hiệu quả. Hai mươi đến năm mươi kịch bản trải trên các loại sự cố hàng đầu là một golden set dùng được. Với proof of concept đầu tiên, tối thiểu là mười (7.5). Sau đó thêm mọi loại sự cố mới.
+2. **Replay, đừng làm hỏng lại.** Đưa các tín hiệu đã ghi lại cho agent và để agent điều tra trên trạng thái được snapshot hoặc mô phỏng. Tiêm lỗi trên staging bổ sung việc chấm điểm khắc phục, với các quy tắc cô lập ở 7.2 được áp dụng.
+3. **Chấm điểm theo lớp.** Chấm từng kịch bản trên mọi lớp trong bảng dưới đây.
+4. **Dùng model làm giám khảo, và kiểm tra giám khảo.** Model có thể chấm rubric ở quy mô lớn. Mỗi chu kỳ, so sánh điểm của model với điểm của người trên một mẫu, và giữ con người chấm một phần luân phiên. Kỹ sư on-call đánh giá phân tích của agent vừa cho bạn dữ liệu đánh giá vừa xây dựng niềm tin.
+
+| Lớp | Câu hỏi | Chấm theo |
+|---|---|---|
+| **Phát hiện** | Agent có triage tín hiệu đúng không? | Mức độ nghiêm trọng và loại sự cố đã biết |
+| **Chẩn đoán** | Agent có nêu đúng thực thể và cơ chế nguyên nhân gốc không? | Nguyên nhân gốc đã ghi nhận |
+| **Chất lượng kế hoạch** | Bản sửa đề xuất có an toàn, tối thiểu và là lựa chọn đúng không? | Bản sửa được chấp nhận và chính sách của bạn |
+| **Khắc phục** | Hệ thống có thực sự khỏe mạnh sau đó không? | Một kiểm tra trạng thái độc lập |
+| **Tính toàn vẹn của bằng chứng** | Mọi khẳng định có truy về được dữ liệu agent thực sự đã lấy không? | Log lệnh gọi công cụ của agent |
+
+<Note>
+Bằng chứng bịa đặt khiến toàn bộ kịch bản bị điểm 0, bất kể câu trả lời. Câu trả lời đúng nhưng dựa trên dữ liệu agent chưa bao giờ lấy sẽ làm bạn thất bại ở sự cố tiếp theo.
+</Note>
+
+Bản ghi kịch bản có thể nhỏ như bản phác thảo chung này (không phải định dạng tệp của CloudThinker):
+
+```yaml
+# Generic golden-set scenario, not a product format
+id: 2026-03-checkout-latency
+class: database
+signals: snapshots/2026-03-checkout/   # alerts, metrics, logs at detection
+expected:
+  severity: high
+  root_cause: "connection pool exhausted on orders-db after a config change"
+  service: orders-db
+  accepted_fix: "revert pool size config"
+  healthy_when: "p95 checkout latency < 400ms for 15m, error rate < 1%"
+```
+
+Dòng `healthy_when` là kiểm tra dựa trên trạng thái ở 7.2. Hãy viết dòng này trước khi chạy agent, để không ai chấm điểm cho khớp với câu trả lời.
+
+## 7.4 Coi eval như CI
+
+Stack agent thay đổi liên tục: prompt, công cụ, skill, chính sách, cơ chế truy xuất và model, thứ mà nhà cung cấp có thể thay mà bạn không biết. Mỗi thứ đó là một lần deploy, và deploy cần cổng kiểm soát.
+
+- **Chạy golden set trên mọi thay đổi.**
+- **Chặn khi có suy giảm theo từng loại, không chỉ theo trung bình.** Model mới cải thiện ở kịch bản cơ sở dữ liệu nhưng âm thầm kém đi ở kịch bản Kubernetes là một sự suy giảm, kể cả khi tổng điểm tăng.
+- **Canary trên production với metric trực tuyến.** Theo dõi tỷ lệ chấp nhận, tỷ lệ rollback và tỷ lệ giải quyết tự động theo từng loại. Chúng là eval của bạn chạy liên tục trên thực tế.
+
+Golden set là nửa offline của một hệ thống đánh giá. Metric trực tuyến là nửa còn lại.
+
+## 7.5 Áp dụng vào CloudThinker như thế nào
+
+Dùng golden set để chạy proof of concept (POC) trên bất kỳ nền tảng nào, kể cả CloudThinker. [Phụ lục A](/vi/learn/aio-engineer/appendix-a-poc-test-plan) đưa ra quy trình: mang theo mười kịch bản trở lên có thể replay từ lịch sử của bạn, và chấm điểm phát hiện, chẩn đoán, kế hoạch, khắc phục và tính toàn vẹn của bằng chứng cho từng kịch bản.
+
+**Chạy kịch bản của bạn trong CloudThinker.** Bạn có thể replay một cảnh báo đã ghi lại bằng cách gửi JSON của nó đến một [Resolve webhook](/vi/guide/webhooks/overview), webhook này đưa cảnh báo qua Pulse và có thể mở một sự cố và bắt đầu phân tích nguyên nhân gốc. Sau đó CloudThinker điều tra các hệ thống thực đằng sau [kết nối](/vi/guide/connections/overview) của bạn, không phải một snapshot. Vì vậy hãy trỏ CloudThinker đến một tài khoản hoặc cluster staging nơi bạn đã tiêm cùng lỗi đó, và tự chấm điểm kết quả theo bản ghi kịch bản. CloudThinker không kiểm soát release bằng golden set của bạn và không chạy model giám khảo thay bạn, nên cổng CI ở 7.4 và mọi giám khảo vẫn nằm trong công cụ của riêng bạn.
+
+Với nửa trực tuyến, [Resolve Insights](/vi/guide/sự cố/insights) có tab **Accuracy & trust**. Resolve là module ứng phó sự cố của CloudThinker, và tab này chỉ được xây dựng từ phán quyết của nhóm bạn, không bao giờ từ việc agent tự chấm điểm.
+
+| Ý tưởng trong chương | Nằm ở đâu trong CloudThinker |
+|---|---|
+| Con người chấm phân tích của agent | **Was Resolve's diagnosis right?** trên mỗi sự cố đã giải quyết |
+| Lý do từ chối có thông tin | **What was wrong?**: **Wrong root cause**, **Wrong service**, **Fix wouldn't work**, **False positive** hoặc **Something else** |
+| Chấm điểm chẩn đoán | **Root-cause accuracy** |
+| Mức chấp nhận kế hoạch | **Fix acceptance** |
+| Chất lượng phát hiện | **False-positive rate** |
+| Bảng điểm theo từng loại | **Accuracy by service** |
+| Cỡ mẫu đằng sau các con số | **Your review coverage** |
+
+### Bắt đầu đánh giá trực tuyến
+
+<Steps>
+  <Step title="Chấm một sự cố đã giải quyết">
+    Vào **Resolve → Investigation** và mở một sự cố đã giải quyết. Bên dưới phần phân tích, trong **Was Resolve's diagnosis right?**, nhấn thumbs-up hoặc thumbs-down. Nếu sai, chọn lý do trong **What was wrong?**. Chỉ vai trò Admin workspace mới chấm được, và câu hỏi xuất hiện khi sự cố đã có phán quyết.
+
+    **Trạng thái thành công:** sự cố hiển thị **Marked accurate** hoặc **Marked not accurate**.
+  </Step>
+  <Step title="Đọc bảng điểm">
+    Trong thanh bên Resolve, tìm tiêu đề **Analytics**, nhấn **Insights** và chọn tab **Accuracy & trust**.
+
+    **Trạng thái thành công:** phán quyết của bạn được tính vào **Root-cause accuracy**, và **Your review coverage** cho biết có bao nhiêu sự cố đã giải quyết được ai đó review.
+  </Step>
+</Steps>
+
+Kiểm tra **Your review coverage** trước khi hành động dựa trên bất kỳ tỷ lệ nào. Khi chỉ có vài sự cố được review, một phán quyết có thể làm con số dao động mạnh. Quy tắc kinh nghiệm: đợi khoảng 20 sự cố được review trên một service trước khi hành động dựa trên tỷ lệ của service đó trong **Accuracy by service**.
+
+<Tip>
+**ĐIỀU CẦN NHỚ**
+
+Benchmark công khai cho thấy model trần thất bại ở phần lớn kịch bản SRE. Production cho thấy harness thu hẹp được phần lớn khoảng cách. Vì vậy hãy đánh giá harness: một golden set xây từ chính sự cố của bạn, chấm điểm theo lớp dựa trên trạng thái kèm tính toàn vẹn của bằng chứng, giám khảo được kiểm tra, và cổng chặn suy giảm trên mọi thay đổi về prompt, công cụ, chính sách hoặc model.
+</Tip>
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="Chương 8 · Quan sát người quan sát" icon="eye" href="/vi/learn/aio-engineer/chapter-8-observing-the-observer">
+    Trace, đo lường và đặt SLO cho chính các agent.
+  </Card>
+  <Card title="Phụ lục A · Kế hoạch kiểm thử POC" icon="clipboard-list" href="/vi/learn/aio-engineer/appendix-a-poc-test-plan">
+    Chạy đánh giá trên chính sự cố của bạn, chấm điểm từng kịch bản.
+  </Card>
+</CardGroup>

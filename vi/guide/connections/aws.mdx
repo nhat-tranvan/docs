@@ -1,286 +1,360 @@
 ---
-title: AWS
-description: "Kết nối AWS với CloudThinker để phân tích chi phí, kiểm tra bảo mật, và quản lý hạ tầng qua IAM role hoặc access key"
+title: Amazon Web Services
+description: "Kết nối tài khoản AWS bằng IAM role chỉ đọc để agent điều tra compute, lưu trữ, danh tính, chi phí và giám sát."
 icon: "/images/icons/aws.svg"
 ---
 
 import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
 
-Kết nối các tài khoản AWS của bạn để cho phép các agent CloudThinker phân tích chi phí, kiểm tra bảo mật, tối ưu tài nguyên và quản lý hạ tầng ở quy mô lớn.
-
-AWS xác thực bằng **IAM role (AssumeRole)** hoặc **IAM user access key**; xác thực dựa trên role được khuyến nghị mạnh mẽ vì sử dụng thông tin xác thực ngắn hạn qua AWS STS và tránh lưu trữ secret dài hạn.
-
----
+CloudThinker chạy AWS CLI trên tài khoản của bạn để trả lời các câu hỏi về compute, lưu trữ, danh tính, chi phí và giám sát. Bạn kết nối bằng IAM role mà CloudThinker assume để nhận thông tin xác thực ngắn hạn (khuyến nghị), hoặc bằng access key của một IAM user.
 
 ## Điều kiện tiên quyết
 
-- Tài khoản AWS với quyền quản trị IAM.
-- Quyền tạo IAM role hoặc IAM user trong tài khoản đích.
-- Truy cập vào [AWS CloudShell](https://console.aws.amazon.com/) hoặc [IAM console](https://console.aws.amazon.com/iam/) để thiết lập.
-
-<Info>
-Xác thực dựa trên role (AssumeRole) được ưu tiên mạnh mẽ. Chỉ dùng access key khi AssumeRole không khả thi trong môi trường của bạn.
-</Info>
-
----
+- Tài khoản AWS mà bạn có quyền tạo IAM role (hoặc IAM user, nếu dùng phương thức access key).
+- Quyền dùng [AWS CloudShell](https://console.aws.amazon.com/cloudshell/home) trong tài khoản đó. Script thiết lập chạy trong CloudShell nên bạn không cần cài gì.
+- Với câu hỏi về chi phí và [Optimize](/vi/guide/cost-optimization/overview): Cost Explorer phải được bật trong tài khoản (**Billing and Cost Management → Cost Explorer → Launch Cost Explorer**, trong management account nếu dùng organization). AWS có thể cần tới 24 giờ để kích hoạt Cost Explorer trên tài khoản mới.
+- Trong AWS Organization, hãy kiểm tra các service control policy (SCP). SCP chặn `sts:AssumeRole` từ principal bên ngoài sẽ chặn role, còn SCP chặn region sẽ ẩn các region đó khỏi agent. Từ management account, liệt kê SCP của tài khoản tại **AWS Organizations → AWS accounts → tài khoản của bạn → Policies**, hoặc chạy `aws organizations list-policies-for-target --target-id <account-id> --filter SERVICE_CONTROL_POLICY`.
+- Các region cần opt-in, như `ap-east-1` hoặc `me-south-1`, sẽ vô hình với agent cho đến khi bạn bật chúng tại **Account → AWS Regions** trong AWS console.
 
 ## Thiết lập
 
+Trước tiên, mở hộp thoại kết nối: ở thanh bên, nhấn **More → Workspace settings → Connections**, chọn **Amazon Web Services**, rồi nhấn **Connect**. Sau đó làm theo tab tương ứng với phương thức bạn chọn ở đầu hộp thoại.
+
 <Tabs>
-  <Tab title="Dựa trên Role (Khuyến nghị)">
-    ### IAM role với AssumeRole
+  <Tab title="Role-Based (khuyến nghị)">
+    Hộp thoại sinh ra một **External ID** (mã định danh duy nhất gắn role của bạn với workspace CloudThinker này và ngăn lỗi confused deputy; AWS không coi đây là bí mật) và dựng script thiết lập dựa trên mã đó.
 
-    Phương pháp này tạo một IAM role mà CloudThinker đảm nhận để truy cập tài nguyên của bạn. Ưu điểm:
-    - Không chia sẻ hoặc lưu trữ thông tin xác thực dài hạn
-    - Sử dụng AWS STS để có thông tin xác thực tạm thời, tự động xoay vòng
-    - External ID bảo vệ khỏi các cuộc tấn công confused deputy
-    - Dễ dàng kiểm tra và thu hồi quyền truy cập
-
-    #### Thiết lập nhanh qua CloudShell
+    <Warning>
+    Giữ hộp thoại mở cho đến khi bạn nhấn **Connect**. Đóng hộp thoại sẽ hủy External ID, và hộp thoại mới sẽ sinh một mã khác, nên role tạo từ mã cũ sẽ không khớp.
+    </Warning>
 
     <Steps>
-      <Step title="Mở AWS CloudShell">
-        Đăng nhập vào [AWS Console](https://console.aws.amazon.com/) và mở **CloudShell** từ thanh điều hướng trên cùng.
+      <Step title="Đặt tên tài khoản">
+        Điền **Alias** (ví dụ `production`) và **Description** (ví dụ `Production AWS account, main workloads`). Agent đọc phần mô tả để chọn đúng tài khoản. **Default AWS region (optional)** chỉ là điểm bắt đầu: agent có thể dùng bất kỳ region nào mà role truy cập được.
+      </Step>
+      <Step title="Mở CloudShell">
+        Nhấn **Open CloudShell** và đăng nhập vào tài khoản AWS bạn muốn kết nối.
       </Step>
       <Step title="Chạy script thiết lập">
-        Trong hộp thoại kết nối của CloudThinker, nhấp **Copy Script** và dán vào CloudShell. Script sẽ:
-        - Kiểm tra `CloudThinkerAccessRole` chưa tồn tại
-        - Tạo IAM role với quyền chỉ đọc
-        - Gắn trust policy với External ID của bạn
-      </Step>
-      <Step title="Sao chép Role ARN">
-        Sao chép Role ARN từ đầu ra:
+        Để đọc script trước, nhấn **View script** trong hộp thoại. Sau đó nhấn **Copy Script to Clipboard**, dán vào CloudShell và nhấn Enter. Script sẽ:
+
+        1. Dừng lại nếu đã có role tên `CloudThinkerAccessRole`.
+        2. Tạo `CloudThinkerAccessRole` với trust policy chỉ cho phép CloudThinker assume, và chỉ khi có External ID của bạn.
+        3. Gắn policy AWS managed `ReadOnlyAccess`.
+        4. In ra ARN của role.
+
+        <Accordion title="Toàn bộ script, để bạn xem trước khi chạy">
+        Hộp thoại điền sẵn External ID của bạn và principal của CloudThinker. Script cũng in các thông báo tiến trình, được lược bỏ ở đây.
+
+        ```bash
+        #!/bin/bash
+        set -e
+        ROLE_NAME="CloudThinkerAccessRole"
+
+        # Stop if the role already exists
+        if aws iam get-role --role-name "$ROLE_NAME" >/dev/null 2>&1; then
+          echo "ERROR: Role '$ROLE_NAME' already exists!"
+          exit 1
+        fi
+
+        # Trust policy: only the CloudThinker principal, only with your External ID
+        cat > trust-policy.json <<'EOF'
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": { "AWS": "<CloudThinker principal shown in the dialog>" },
+              "Action": "sts:AssumeRole",
+              "Condition": { "StringEquals": { "sts:ExternalId": "<your External ID>" } }
+            }
+          ]
+        }
+        EOF
+
+        aws iam create-role --role-name "$ROLE_NAME" \
+          --assume-role-policy-document file://trust-policy.json \
+          --description "Role for CloudThinker to access AWS resources"
+
+        aws iam attach-role-policy --role-name "$ROLE_NAME" \
+          --policy-arn arn:aws:iam::aws:policy/ReadOnlyAccess
+
+        rm -f trust-policy.json
+        aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text
         ```
+        </Accordion>
+
+        Phần cuối kết quả trông như sau:
+
+        ```text
+        ==========================================
+          ✅ Setup Complete!
+        ==========================================
+
+        Copy this Role ARN and paste it in the connection form:
+
         arn:aws:iam::123456789012:role/CloudThinkerAccessRole
         ```
       </Step>
-      <Step title="Hoàn tất kết nối">
-        Dán Role ARN vào CloudThinker, chọn region mặc định nếu cần và nhấp **Connect**. CloudThinker xác minh role và hiển thị trạng thái **Connected**.
+      <Step title="Dán Role ARN và kết nối">
+        Dán ARN vào **AWS Role ARN**. Giữ nguyên **AWS External ID**: trường này đã được điền sẵn và phải khớp với script. Nhấn **Connect**.
+
+        **Trạng thái thành công:** trạng thái chuyển qua **Connecting** và **Verifying**, rồi tài khoản hiển thị trạng thái **Connected**. Lúc này Discovery chạy một lần ở chế độ nền và tiêu tốn credit. Hãy xem mục **Discovery** trên bảng chi tiết trước khi gửi prompt đầu tiên. Xem [Điều gì xảy ra sau khi bạn kết nối](/vi/guide/connections/overview#điều-gì-xảy-ra-sau-khi-kết-nối).
+      </Step>
+      <Step title="Đặt môi trường">
+        Mở **Amazon Web Services** trong **More → Workspace settings → Connections**, nhấn biểu tượng bút chì trên hàng của tài khoản, rồi đặt **Environment** trong **Edit Instance**. Trường này gắn nhãn tài khoản cho cả người dùng lẫn agent. Xem [Đặt môi trường](/vi/guide/connections/overview#đặt-environment).
+      </Step>
+      <Step title="Đặt câu hỏi xác minh">
+        Mở một cuộc chat và hỏi [câu hỏi xác minh](#xác-minh-kết-nối). Câu trả lời phải nêu đúng account ID 12 chữ số của bạn.
       </Step>
     </Steps>
 
-    #### Đầu ra mong đợi
+    Bạn muốn tự tạo role, chẳng hạn bằng Terraform hoặc CloudFormation? Mở rộng **Manual steps** trong hộp thoại. Mục này hiển thị trust policy đã điền sẵn External ID của bạn và principal của CloudThinker. Principal giống nhau cho mọi workspace. Chỉ External ID thay đổi theo từng hộp thoại. Với cách làm thủ công, bạn có thể đặt role bất kỳ tên nào, vì CloudThinker dùng ARN bạn dán vào. Cấu trúc như sau:
 
-    ```
-    Starting CloudThinker IAM Role setup...
-    ✅ Role does not exist, proceeding...
-    ✅ Role created successfully
-    ✅ Policy attached successfully
-    ==========================================
-    ✅ Setup Complete!
-    ==========================================
-    Copy this Role ARN:
-    arn:aws:iam::123456789012:role/CloudThinkerAccessRole
-    ```
-
-    #### Tạo role thủ công
-
-    Nếu bạn muốn thiết lập thủ công:
-
-    **Trust policy:**
     ```json
     {
       "Version": "2012-10-17",
       "Statement": [
         {
           "Effect": "Allow",
-          "Principal": {
-            "AWS": "arn:aws:iam::CLOUDTHINKER_ACCOUNT_ID:root"
-          },
+          "Principal": { "AWS": "<CloudThinker principal shown in the dialog>" },
           "Action": "sts:AssumeRole",
           "Condition": {
-            "StringEquals": {
-              "sts:ExternalId": "YOUR_EXTERNAL_ID"
-            }
+            "StringEquals": { "sts:ExternalId": "<your External ID>" }
           }
         }
       ]
     }
     ```
 
-    **Permission policy:**
-    ```json
-    {
-      "Version": "2012-10-17",
-      "Statement": [
-        {
-          "Effect": "Allow",
-          "Action": [
-            "ec2:Describe*",
-            "rds:Describe*",
-            "s3:GetBucket*",
-            "s3:List*",
-            "cloudwatch:GetMetric*",
-            "cloudwatch:List*",
-            "ce:GetCost*",
-            "ce:GetReservation*",
-            "iam:GetRole",
-            "iam:ListRoles"
-          ],
-          "Resource": "*"
-        }
-      ]
+    Cùng role đó viết bằng Terraform, với hai giá trị truyền vào dưới dạng biến:
+
+    ```hcl
+    variable "cloudthinker_principal" {}
+    variable "cloudthinker_external_id" {}
+
+    resource "aws_iam_role" "cloudthinker" {
+      name = "CloudThinkerAccessRole"
+      assume_role_policy = jsonencode({
+        Version = "2012-10-17"
+        Statement = [{
+          Effect    = "Allow"
+          Principal = { AWS = var.cloudthinker_principal }
+          Action    = "sts:AssumeRole"
+          Condition = { StringEquals = { "sts:ExternalId" = var.cloudthinker_external_id } }
+        }]
+      })
+    }
+
+    resource "aws_iam_role_policy_attachment" "read_only" {
+      role       = aws_iam_role.cloudthinker.name
+      policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+    }
+
+    output "role_arn" {
+      value = aws_iam_role.cloudthinker.arn
     }
     ```
 
+    Sao chép cả hai giá trị từ một hộp thoại đang mở, và giữ hộp thoại đó mở cho đến khi `terraform apply` hoàn tất và bạn đã dán kết quả `role_arn` vào **AWS Role ARN**.
+
+    Hộp thoại không có giới hạn thời gian, nhưng External ID chỉ tồn tại trong tab trình duyệt đang mở đó. Đóng hộp thoại hoặc tải lại trang sẽ làm mất mã, và không có cách nào đưa External ID cũ vào hộp thoại mới. Đây là hạn chế với Terraform được review qua pull request, khi `apply` có thể chạy trong CI sau vài giờ: hãy giữ hộp thoại mở đến khi pipeline xong, hoặc mở hộp thoại mới và cập nhật External ID trong trust policy trước khi nhấn **Connect**.
   </Tab>
-
-  <Tab title="Access Key (Thay thế)">
-    ### IAM user với access key
-
-    Chỉ dùng phương pháp này khi AssumeRole không khả thi trong môi trường của bạn.
-
-    <Warning>
-    AWS khuyến nghị dùng IAM role thay vì access key dài hạn. Xoay vòng key thường xuyên nếu dùng phương pháp này.
-    </Warning>
+  <Tab title="Access Keys">
+    Chỉ dùng cách này khi tổ chức của bạn không cho phép role cross-account. Access key có thời hạn dài, nên bạn phải tự xoay vòng, chẳng hạn mỗi 90 ngày. Xem [Xoay vòng thông tin xác thực](/vi/guide/connections/overview#xoay-vòng-thông-tin-xác-thực).
 
     <Steps>
-      <Step title="Tạo IAM user">
-        Vào [IAM Console](https://console.aws.amazon.com/iam/) → **Users → Create user** và đặt tên `cloudthinker-readonly`.
+      <Step title="Đặt tên tài khoản">
+        Chọn **Access Keys** ở đầu hộp thoại. Điền **Alias**, **Description**, và tùy chọn **Default AWS region (optional)**.
       </Step>
-      <Step title="Gắn policy">
-        Chọn **Attach policies directly** và thêm:
-        - `ReadOnlyAccess` (toàn diện), hoặc
-        - Các policy cụ thể như `AmazonEC2ReadOnlyAccess`, `AmazonS3ReadOnlyAccess`
+      <Step title="Chạy script thiết lập trong CloudShell">
+        Nhấn **Open CloudShell**, rồi **Copy Script to Clipboard**, và chạy script trong CloudShell. Script tạo IAM user tên `CloudThinkerUser`, gắn `ReadOnlyAccess`, tạo access key, rồi in ra `AWS_ACCESS_KEY_ID` và `AWS_SECRET_ACCESS_KEY`.
+
+        AWS chỉ hiển thị secret một lần, nên hãy giữ CloudShell mở đến khi cả hai giá trị đã nằm trong hộp thoại. Secret vẫn còn trong kết quả terminal, vì vậy sau khi kết nối xong, hãy chạy `clear` và đóng phiên CloudShell.
       </Step>
-      <Step title="Tạo access key">
-        Chọn user → **Security credentials → Create access key**. Chọn **Third-party service** làm use case.
+      <Step title="Nhập key và kết nối">
+        Dán hai giá trị vào trường **AWS_ACCESS_KEY_ID** và **AWS_SECRET_ACCESS_KEY**, rồi nhấn **Connect**.
+
+        **Trạng thái thành công:** tài khoản hiển thị trạng thái **Connected**. Lúc này Discovery chạy một lần ở chế độ nền và tiêu tốn credit. Hãy xem mục **Discovery** trên bảng chi tiết trước khi gửi prompt đầu tiên. Xem [Điều gì xảy ra sau khi bạn kết nối](/vi/guide/connections/overview#điều-gì-xảy-ra-sau-khi-kết-nối).
       </Step>
-      <Step title="Lưu thông tin xác thực">
-        Sao chép và lưu trữ an toàn Access Key ID và Secret Access Key. Nhập chúng vào **Connections → AWS** và nhấp **Connect**. CloudThinker hiển thị trạng thái **Connected**.
+      <Step title="Đặt môi trường">
+        Mở **Amazon Web Services** trong **More → Workspace settings → Connections**, nhấn biểu tượng bút chì trên hàng của tài khoản, rồi đặt **Environment** trong **Edit Instance**. Trường này gắn nhãn tài khoản cho cả người dùng lẫn agent. Xem [Đặt môi trường](/vi/guide/connections/overview#đặt-environment).
       </Step>
     </Steps>
 
+    User được gắn `ReadOnlyAccess`, nên cũng đọc được object trong S3. Để chuyển sang bộ quyền hẹp hơn trong mục [Quyền yêu cầu](#quyền-yêu-cầu), hãy chạy lệnh sau trong CloudShell:
+
+    ```bash
+    USER=CloudThinkerUser
+    aws iam attach-user-policy --user-name $USER --policy-arn arn:aws:iam::aws:policy/job-function/ViewOnlyAccess
+    aws iam attach-user-policy --user-name $USER --policy-arn arn:aws:iam::aws:policy/SecurityAudit
+    aws iam put-user-policy --user-name $USER --policy-name CloudThinkerCostRead \
+      --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ce:Get*","Resource":"*"}]}'
+    aws iam detach-user-policy --user-name $USER --policy-arn arn:aws:iam::aws:policy/ReadOnlyAccess
+    ```
   </Tab>
 </Tabs>
 
-### Thiết lập đa tài khoản
+### Kết nối thêm tài khoản
 
-Đối với tổ chức có nhiều tài khoản AWS:
+Mỗi tài khoản AWS là một kết nối riêng. Nhấn **Connect** lần nữa trên **Amazon Web Services**, đặt alias riêng cho tài khoản, rồi chạy script từ hộp thoại đó trong CloudShell của tài khoản mới. Luôn sao chép script từ đúng hộp thoại bạn đang hoàn tất, để trust policy mang External ID mà hộp thoại đó hiển thị.
 
-<Steps>
-  <Step title="Tạo role trong từng tài khoản">
-    Triển khai IAM role bằng CloudFormation StackSets trên tất cả tài khoản đích.
-  </Step>
-  <Step title="Sử dụng AWS Organizations">
-    Kết nối tài khoản quản lý để có tầm nhìn toàn tổ chức.
-  </Step>
-  <Step title="Thêm từng tài khoản">
-    Thêm từng kết nối tài khoản riêng lẻ trong CloudThinker.
-  </Step>
-</Steps>
+Hiện chưa hỗ trợ onboard hàng loạt. Mỗi hộp thoại sinh External ID riêng, nên một StackSet hay một lần Terraform apply không thể tạo role cho nhiều kết nối cùng lúc. Mỗi tài khoản cần hộp thoại riêng và role riêng. Với nhiều tài khoản, cách nhanh nhất là dùng module Terraform ở trên, apply một lần cho mỗi tài khoản với các giá trị từ hộp thoại đang mở của tài khoản đó.
 
----
+Để xem chi phí trên toàn AWS Organization, hãy kết nối management account. Kết nối này chỉ cung cấp cho Optimize dữ liệu chi phí toàn tổ chức. Agent chỉ thấy tài nguyên trong một member account thông qua kết nối riêng của tài khoản đó.
 
 ## Chi tiết kết nối
 
-| Trường | Mô tả | Ví dụ |
-|-------|-------------|---------|
-| **Role ARN** | ARN của IAM role mà CloudThinker đảm nhận (phương pháp dựa trên role) | `arn:aws:iam::123456789012:role/CloudThinkerAccessRole` |
-| **External ID** | ID bí mật trong trust policy, được CloudThinker cung cấp | — |
-| **Region AWS mặc định (không bắt buộc)** | Region bắt đầu cho kết nối. Agent có thể dùng region khác trong phạm vi quyền truy cập và giới hạn bạn chỉ định. | `us-east-1` |
-| **Access Key ID** | Key ID của IAM user (chỉ phương pháp access key) | — |
-| **Secret Access Key** | Secret key của IAM user (chỉ phương pháp access key) | — |
+| Trường | Phương thức | Mô tả | Ví dụ |
+|---|---|---|---|
+| **Alias** | Cả hai | Tên ngắn của tài khoản. Để trống thì hệ thống tự đặt. | `production` |
+| **Description** | Cả hai | Tài khoản này dùng cho việc gì. Agent dựa vào đây để chọn giữa các tài khoản. | `Production AWS account` |
+| **Default AWS region (optional)** | Cả hai | Region bắt đầu. Agent có thể dùng các region khác mà thông tin xác thực cho phép. | `us-east-1` |
+| **AWS Role ARN** | Role-Based | ARN do script thiết lập in ra | `arn:aws:iam::123456789012:role/CloudThinkerAccessRole` |
+| **AWS External ID** | Role-Based | Do CloudThinker sinh ra. Chỉ đọc, phải khớp với trust policy. | Được điền sẵn |
+| **AWS_ACCESS_KEY_ID** | Access Keys | Access key ID của IAM user | `AKIA...` |
+| **AWS_SECRET_ACCESS_KEY** | Access Keys | Secret key của IAM user | AWS chỉ hiển thị một lần |
 
----
+**Environment** (**Production**, **Staging**, **Development** hoặc **Not set**) không có trong hộp thoại kết nối. Hãy đặt sau khi kết nối, như ở bước thiết lập cuối: trường này gắn nhãn tài khoản cho cả người dùng lẫn agent. [Rule phê duyệt](/vi/guide/approvals/rules) không đọc trường này, nên Rule muốn áp dụng cho một tài khoản phải nêu tên kết nối đó.
 
-## Quyền cần thiết
+## Quyền yêu cầu
 
-### Tối thiểu (phân tích chỉ đọc)
+Script thiết lập gắn policy AWS managed `ReadOnlyAccess`. Policy này cho phép agent describe và list tài nguyên trên các dịch vụ, đọc metric CloudWatch và đọc Cost Explorer. Policy không thể tạo, thay đổi hay xóa bất cứ thứ gì.
 
-```
-ec2:Describe*
-rds:Describe*
-s3:GetBucket*, s3:List*
-cloudwatch:GetMetric*, cloudwatch:List*
-ce:GetCost*, ce:GetReservation*
-iam:GetRole, iam:ListRoles
-```
-
-### Khuyến nghị (phân tích đầy đủ)
-
-```
-# Tất cả quyền tối thiểu, cộng thêm:
-elasticloadbalancing:Describe*
-autoscaling:Describe*
-lambda:List*, lambda:GetFunction*
-ecs:Describe*, ecs:List*
-eks:Describe*, eks:List*
-securityhub:Get*, securityhub:List*
-guardduty:Get*, guardduty:List*
-config:Describe*, config:Get*
-cloudtrail:Describe*, cloudtrail:Get*
-```
+| Bạn muốn | Cấp quyền |
+|---|---|
+| Câu hỏi về inventory, tình trạng và bảo mật | `ReadOnlyAccess` (policy mà script gắn) |
+| Dữ liệu chi phí cho Optimize | Đã có trong `ReadOnlyAccess`. Nếu dùng policy tùy chỉnh, thêm `ce:Get*`. |
+| Agent thực hiện một số thay đổi cụ thể | Chỉ thêm đúng các action đó vào role, rồi xem [Quyền ghi](#quyền-ghi) |
 
 <Tip>
-Bắt đầu với quyền tối thiểu và mở rộng khi cần. Bật Cost Explorer trong AWS Console trước khi kết nối — có thể mất tới 24 giờ để kích hoạt trên tài khoản mới.
+`ReadOnlyAccess` đọc được cả dữ liệu lẫn cấu hình, chẳng hạn object trong S3. Lựa chọn hẹp hơn là kết hợp AWS managed `ViewOnlyAccess` với `SecurityAudit`, cộng thêm quyền đọc `ce:Get*` cho Optimize. Bộ quyền này đủ để list và describe tài nguyên, nhưng không đọc được dữ liệu như nội dung object S3 hay log event. Thiếu quyền không bao giờ làm ngắt kết nối tài khoản: câu trả lời cần quyền đó sẽ thất bại với `AccessDenied`, kèm tên action bị thiếu, để bạn chỉ cần thêm đúng action đó vào inline policy.
 </Tip>
 
----
+Để chuyển một role hiện có sang bộ quyền hẹp hơn, hãy chạy lệnh sau trong CloudShell:
+
+```bash
+ROLE=CloudThinkerAccessRole
+aws iam attach-role-policy --role-name $ROLE --policy-arn arn:aws:iam::aws:policy/job-function/ViewOnlyAccess
+aws iam attach-role-policy --role-name $ROLE --policy-arn arn:aws:iam::aws:policy/SecurityAudit
+aws iam put-role-policy --role-name $ROLE --policy-name CloudThinkerCostRead \
+  --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ce:Get*","Resource":"*"}]}'
+aws iam detach-role-policy --role-name $ROLE --policy-arn arn:aws:iam::aws:policy/ReadOnlyAccess
+```
+
+Trong Terraform, thay attachment `read_only` bằng attachment cho hai policy ARN đó và một `aws_iam_role_policy` chứa statement `ce:Get*`.
 
 ## Khả năng của agent
 
-Sau khi kết nối, [CloudThinker](/vi/guide/agents/overview) có thể phân tích và tối ưu tài nguyên AWS của bạn.
-
-| Lĩnh vực | Khả năng AWS |
-|-------|------------------------------------------------------------------------------------------|
-| **Chi phí** | Phân tích chi phí, right-sizing EC2, đề xuất Reserved Instance, tối ưu tài nguyên |
-| **Bảo mật** | Phát hiện Security Hub, kiểm tra IAM, kiểm tra tuân thủ, đánh giá lỗ hổng bảo mật |
-| **Cơ sở dữ liệu** | Phân tích hiệu năng RDS, tối ưu Aurora, điều chỉnh DynamoDB |
-| **Kubernetes** | Quản lý cluster EKS, tối ưu Fargate, phân tích container |
+| Lĩnh vực | CloudThinker làm gì |
+|---|---|
+| **Inventory** | Liệt kê và mô tả compute, lưu trữ, mạng và các dịch vụ managed trên các region |
+| **Danh tính** | Rà soát IAM role, user và policy để tìm quyền truy cập rủi ro hoặc không dùng đến |
+| **Chi phí** | Phân tích chi tiêu theo dịch vụ, tài khoản và tag, kiểm tra mức bao phủ của Reserved Instance và Savings Plans. Cung cấp dữ liệu cho [Optimize](/vi/guide/cost-optimization/overview). |
+| **Giám sát** | Đọc metric và alarm CloudWatch để giải thích một đợt tăng đột biến hoặc sự cố ngừng hoạt động |
+| **Thay đổi** | Chỉ chạy lệnh ghi của AWS CLI khi **Allow writes** đang bật, role cho phép, và cài đặt phê duyệt của bạn đồng ý |
 
 ### Xác minh kết nối
 
 ```text
-Run an AWS account check and list the connected account ID and active regions
+Which AWS account ID and regions can you reach through my AWS connection?
 ```
 
-### Ví dụ câu lệnh
+Câu trả lời nêu đúng account ID 12 chữ số của bạn.
+
+### Ví dụ prompt
 
 ```text
-Analyze EC2 costs over the last 30 days and recommend right-sizing opportunities
-Audit IAM roles and flag any with excessive permissions or missing MFA requirements
-Check EKS cluster health across all connected regions and report any failing pods
+Break down last month's AWS spend by service and flag anything that grew more than 20% from the month before
+List IAM users and roles that haven't been used in 90 days
+Find EC2 instances in us-east-1 with average CPU under 10% over the last two weeks
 ```
 
----
+## Quyền ghi
 
-## Xử lý sự cố
+**Allow writes** trên bảng chi tiết của kết nối quyết định agent có được thay đổi gì trong AWS hay không. Với AWS, tùy chọn này bật theo mặc định, nhưng role do script tạo là chỉ đọc, nên chính AWS sẽ từ chối mọi thao tác ghi cho đến khi bạn cấp thêm quyền.
 
-<Accordion title="Lỗi Access Denied">
-Xác minh IAM role có đủ quyền cần thiết. Kiểm tra trust policy có chứa account ID của CloudThinker, xác nhận External ID khớp chính xác, và đảm bảo Role ARN đúng.
+| Quyền IAM | Allow writes | Kết quả |
+|---|---|---|
+| Chỉ có `ReadOnlyAccess` | Bật hoặc tắt | Chỉ đọc. AWS từ chối mọi thay đổi. |
+| Đã cấp thêm action ghi | Tắt | Chỉ đọc. CloudThinker từ chối mọi thay đổi trước khi yêu cầu tới AWS. |
+| Đã cấp thêm action ghi | Bật | Agent có thể đề xuất thay đổi. [Rules và Approval mode](/vi/guide/approvals/overview) của bạn quyết định từng thay đổi. |
+
+Để khóa thao tác ghi ngay trong CloudThinker, mở **Amazon Web Services** trong **More → Workspace settings → Connections** và tắt công tắc **Allow writes** trên bảng chi tiết.
+
+## Khắc phục sự cố
+
+<Accordion title="Script báo CloudThinkerAccessRole đã tồn tại">
+**Nguyên nhân:** một lần thiết lập trước đó trong tài khoản này đã tạo role, nhiều khả năng với External ID khác.
+
+**Cách khắc phục:** nếu không có kết nối CloudThinker nào khác dùng role đó, hãy gỡ các policy của role và xóa role, rồi chạy script mới. `delete-role` sẽ thất bại cho đến khi mọi policy được gắn và inline policy đều bị gỡ, nên hãy liệt kê chúng trước:
+
+```bash
+ROLE=CloudThinkerAccessRole
+aws iam list-attached-role-policies --role-name $ROLE
+aws iam list-role-policies --role-name $ROLE
+# For each attached policy ARN:
+aws iam detach-role-policy --role-name $ROLE --policy-arn <policy-arn>
+# For each inline policy name:
+aws iam delete-role-policy --role-name $ROLE --policy-name <policy-name>
+aws iam delete-role --role-name $ROLE
+```
+
+Để kiểm tra một kết nối CloudThinker còn dùng role hay không, mở **Event history** của CloudTrail, lọc **Event name** = `AssumeRole`, rồi tìm các event gần đây trên `CloudThinkerAccessRole` có session name bắt đầu bằng `cloudthinker-`. Nếu còn kết nối dùng role, đừng thay External ID của role. Thay vào đó, dùng **Manual steps** để tạo role thứ hai với tên khác cho workspace này.
 </Accordion>
 
-<Accordion title="Thiếu dữ liệu chi phí">
-Bật Cost Explorer trong AWS Console (mất tới 24 giờ để kích hoạt). Xác minh quyền `ce:GetCost*` đã được cấp và kiểm tra rằng tùy chọn thanh toán cho phép truy cập theo chương trình.
+<Accordion title="Kiểm tra thất bại với AccessDenied trên sts:AssumeRole">
+**Nguyên nhân:** trust policy không khớp với thông tin CloudThinker gửi lên.
+
+**Kiểm tra:** ARN bạn dán đúng là ARN do script in ra, và `sts:ExternalId` trong trust policy khớp chính xác với **AWS External ID** trong hộp thoại.
+
+**Cách khắc phục:** kiểm tra thất bại thì kết nối không được lưu. Sửa trust policy, rồi nhấn **Connect** lại trong chính hộp thoại đó để External ID giữ nguyên. Nếu bạn đã đóng hộp thoại, hãy chạy lại thiết lập từ một hộp thoại mới. **Retry** chỉ xuất hiện trên kết nối đã lưu và sau đó hiển thị **Error**.
 </Accordion>
 
-<Accordion title="Thiếu metric">
-Xác minh CloudWatch metric đang được thu thập. Kiểm tra rằng lựa chọn region bao gồm tất cả region liên quan và xác nhận các dịch vụ đang chạy và tạo ra dữ liệu.
+<Accordion title="Kết nối hiển thị Error và các tác vụ theo lịch đã dừng">
+**Nguyên nhân:** ba lần liên tiếp thông tin xác thực thất bại khi chạy nền (role bị xóa, trust policy hỏng, hoặc key bị thu hồi) sẽ chuyển kết nối sang **Error**. Việc làm mới chi phí của Optimize, các automation theo lịch và việc thăm dò của Pulse tạm dừng cho kết nối đó, và admin của workspace nhận một thông báo.
+
+**Cách khắc phục:** sửa role hoặc key trong AWS, rồi nhấn **Retry** trên kết nối, hoặc **Replace credentials** để nhập key mới. Các tác vụ theo lịch chạy lại ở chu kỳ kế tiếp khi trạng thái trở về **Connected**.
 </Accordion>
 
-<Accordion title="Timeout kết nối">
-Kiểm tra kết nối mạng tới AWS API. Xác minh không có VPC endpoint nào đang chặn quyền truy cập và thử kết nối từ region khác.
+<Accordion title="Câu hỏi về chi phí không trả về dữ liệu">
+**Kiểm tra:** Cost Explorer đã được bật trong AWS Billing console, và đã qua ít nhất 24 giờ kể từ khi bật. Với member account trong AWS Organizations, management account có thể chặn member account truy cập Cost Explorer.
+
+**Cách khắc phục:** bật Cost Explorer, hoặc kết nối management account để xem chi phí của toàn tổ chức.
 </Accordion>
 
----
+<Accordion title="Kiểm tra hiển thị Timed out">
+**Nguyên nhân:** bài kiểm tra không hoàn tất kịp thời. Endpoint của AWS là công khai, nên hiếm khi lỗi nằm ở mạng của bạn.
+
+**Cách khắc phục:** kết nối lại. Nếu vẫn tiếp tục hết thời gian chờ, hãy [liên hệ với chúng tôi](https://cloudthinker.io/contact).
+</Accordion>
+
+<Accordion title="Một region hoặc dịch vụ trả về AccessDenied với explicit deny">
+**Nguyên nhân:** một service control policy đang chặn. Lỗi của AWS cho biết yêu cầu bị từ chối `with an explicit deny in a service control policy`. Nếu SCP chặn `sts:AssumeRole`, chính bài kiểm tra kết nối sẽ thất bại.
+
+**Kiểm tra:** liệt kê các SCP trên tài khoản, như trong mục [Điều kiện tiên quyết](#điều-kiện-tiên-quyết).
+
+**Cách khắc phục:** nhờ admin AWS Organizations miễn trừ `CloudThinkerAccessRole` khỏi SCP, hoặc chấp nhận rằng agent không thấy được region hay dịch vụ đó.
+</Accordion>
+
 
 ## Bảo mật
 
 <ConnectionSecurity />
 
-- **Dùng IAM role** — ưu tiên AssumeRole hơn access key dài hạn; IAM role sử dụng thông tin xác thực STS ngắn hạn tự động xoay vòng và không cần lưu trữ secret.
-- **Bật CloudTrail** — kiểm tra tất cả lời gọi API được thực hiện qua kết nối CloudThinker để duy trì nhật ký hoạt động đầy đủ.
-
----
+- **Ưu tiên dùng role.** CloudThinker assume role qua AWS STS và nhận thông tin xác thực ngắn hạn, nên không có secret dài hạn nào có thể bị lộ. External ID ngăn người khác dùng role của bạn thông qua CloudThinker.
+- **Kiểm toán bằng CloudTrail.** Mọi lệnh gọi của agent đều là lệnh gọi AWS API thông thường. CloudThinker đặt tên mỗi role session là `cloudthinker-<8 ký tự đầu của workspace ID>-<Unix timestamp>`, và **Event history** của CloudTrail hiển thị session name đó ở cột **User name**. Để xem mọi lệnh gọi qua các session, lọc theo `userIdentity.sessionContext.sessionIssuer.userName` = `CloudThinkerAccessRole` trong CloudTrail Lake hoặc Athena. Với access key, lọc **Event history** theo **User name** = `CloudThinkerUser`.
 
 ## Liên quan
 
 <CardGroup cols={2}>
-  <Card title="Agent" icon="cloud" href="/vi/guide/agents/overview">
-    Agent tối ưu cloud tập trung vào AWS
+  <Card title="Bắt đầu nhanh với Optimize" icon="chart-line" href="/vi/guide/cost-optimization/quickstart">
+    Biến kết nối này thành các phát hiện về chi phí và đề xuất tiết kiệm.
   </Card>
-  <Card title="Bring Your Own Key (BYOK)" icon="key" href="/vi/guide/byok">
-    Sử dụng thông tin xác thực AWS Bedrock của bạn để dùng LLM không giới hạn
+  <Card title="Kết nối" icon="plug" href="/vi/guide/connections/overview">
+    Xoay vòng thông tin xác thực, đặt môi trường và đọc kết quả Discovery.
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Quyết định thay đổi nào cần người duyệt trước khi bạn cấp bất kỳ quyền ghi nào.
   </Card>
 </CardGroup>

@@ -1,0 +1,157 @@
+---
+title: Heroku
+description: "Kết nối Heroku để CloudThinker xem app, dyno, log, add-on và pipeline qua một kết nối chỉ đọc"
+icon: "/images/icons/heroku.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối Heroku để các agent CloudThinker liệt kê app, đọc dyno formation và log gần đây, xem add-on cùng gói của chúng, và cho biết mỗi app nằm ở stage nào của pipeline. CloudThinker chỉ đọc, nhưng dùng một **API token** của Heroku, và token đó có toàn quyền ghi trên mọi app và team mà người dùng sở hữu token tiếp cận được, nên hãy bảo vệ token cẩn thận.
+
+---
+
+## Điều kiện tiên quyết
+
+- Tài khoản Heroku thuộc các app, team và pipeline bạn muốn điều tra.
+- Tùy chọn: [Heroku CLI](https://devcenter.heroku.com/articles/heroku-cli), đăng nhập bằng tài khoản đó với `heroku login`. Bạn cũng có thể dùng Heroku Dashboard.
+- Vai trò **Admin** trong workspace CloudThinker, cần để thêm và sửa kết nối. Xem [Vai trò](/vi/guide/security/roles).
+
+---
+
+## Thiết lập
+
+<Steps>
+  <Step title="Tạo API token">
+    Đăng nhập bằng tài khoản mà CloudThinker sẽ dùng, rồi chọn một cách:
+
+    - **CLI**: chạy lệnh sau. `2592000` giây là 30 ngày. Không có `--expires-in`, token không bao giờ hết hạn.
+
+      ```bash
+      heroku authorizations:create -d cloudthinker --expires-in 2592000
+      ```
+
+    - **Dashboard**: vào **Account settings → Applications → Authorizations** và nhấn **Create authorization**. Nhập `cloudthinker` làm mô tả, đặt thời hạn và tạo.
+
+    Sao chép token. Với CLI, đó là giá trị trên dòng `Token:` của kết quả. Token bắt đầu bằng `HRKU-`. Giữ scope `global`; xem [Quyền yêu cầu](#quyền-yêu-cầu) để biết lý do.
+
+    Để thu hồi token sau này, chạy `heroku authorizations` để tìm id, rồi `heroku authorizations:revoke <id>`.
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Trong thanh bên, nhấn **More → Workspace settings → Connections**. Ở tab **Builtin Connections**, tìm **Heroku**, dán token vào **API token** và nhấn **Connect**.
+
+    **Trạng thái thành công:** thẻ Heroku hiển thị **Connected**.
+  </Step>
+  <Step title="Chạy prompt xác minh">
+    Chạy [prompt xác minh](#xác-minh-kết-nối) để xác nhận token đọc được tài khoản của bạn.
+
+    **Trạng thái thành công:** CloudThinker trả về các app cùng dyno formation.
+  </Step>
+</Steps>
+
+---
+
+## Chi tiết kết nối
+
+| Trường | Mô tả | Ví dụ |
+|-------|-------------|---------|
+| **API token** | Token ủy quyền từ `heroku authorizations:create`. Token kế thừa quyền truy cập của tài khoản đến mọi app và team mà tài khoản tiếp cận được. | `HRKU-...` |
+
+---
+
+## Quyền yêu cầu
+
+Token Heroku không thể giới hạn trong một số app. Token tiếp cận được mọi thứ mà người dùng sở hữu token tiếp cận được, nên quyền tối thiểu phụ thuộc vào tài khoản bạn dùng để tạo token.
+
+- **Dùng scope `global`.** Heroku CLI mà agent dùng sẽ xác định tài khoản của chính token trước khi liệt kê app hoặc pipeline. Scope `identity` của Heroku là chỉ đọc nhưng chỉ bao phủ thông tin tài khoản, còn các scope `read`, `write`, `read-protected` và `write-protected` loại trừ thông tin tài khoản. Không có scope hẹp hơn nào bao phủ cả hai, nên token với một trong các scope đó sẽ thất bại khi liệt kê app và pipeline.
+- **Dùng tài khoản riêng.** Chỉ thêm tài khoản vào các team và app mà CloudThinker cần.
+- **Nếu bạn đăng nhập bằng SSO**, hãy tạo token từ một người dùng riêng không dùng SSO cho việc tích hợp.
+
+<Warning>
+Token `global` có toàn quyền ghi trên Heroku. Nếu bị lộ, người nắm giữ có thể thay đổi hoặc xóa mọi app mà người dùng của token tiếp cận được. Dùng tài khoản riêng có ít quyền và thời hạn ngắn.
+</Warning>
+
+<Tip>
+Kết nối này chỉ đọc. Agent không thể restart, scale hay thay đổi app, bất kể token cho phép gì.
+</Tip>
+
+---
+
+## Khả năng của agent
+
+| Khả năng | Mô tả |
+|------------|-------------|
+| **Apps** | Liệt kê app và đọc stack, region và trạng thái maintenance của một app |
+| **Logs** | Đọc các dòng log ứng dụng mới nhất của một app, không có nhiễu từ router: mặc định 40 dòng, tối đa 200 nếu bạn yêu cầu |
+| **Dynos** | Hiển thị dyno formation: loại, kích thước, số lượng và trạng thái của từng process |
+| **Add-ons** | Liệt kê add-on theo app hoặc trên toàn tài khoản, và duyệt các dịch vụ và gói add-on |
+| **Teams và private spaces** | Liệt kê các team và private space mà tài khoản tiếp cận được |
+| **Pipelines** | Liệt kê pipeline và hiển thị các app trong từng stage |
+
+Agent không bao giờ đọc config var, giá trị môi trường hay thông tin xác thực cơ sở dữ liệu. Để truy vấn cơ sở dữ liệu Heroku Postgres, hãy thêm một [kết nối PostgreSQL](/vi/guide/connections/postgresql) riêng.
+
+### Xác minh kết nối
+
+```text
+Check my Heroku connection and list my apps with their dyno formation
+```
+
+### Ví dụ prompt
+
+```text
+My checkout app on Heroku is throwing errors. Read its recent logs and dynos, and tell me what's wrong
+List the add-on plans attached to each of my Heroku apps as a table
+Which stage of the web pipeline is each app in, and is any app in maintenance mode?
+```
+
+Nêu tên app hoặc pipeline trong prompt khi tài khoản có nhiều app. Câu trả lời sẽ tập trung vào đó.
+
+---
+
+## Khắc phục sự cố
+
+<Accordion title="401 Unauthorized">
+Token sai, đã hết hạn hoặc bị thu hồi. Tạo token mới, rồi mở kết nối, nhấn biểu tượng sửa trên instance, nhấn **Replace…** trong **Edit Instance**, dán token và nhấn **Save and test**.
+</Accordion>
+
+<Accordion title="403 Forbidden trên một app hoặc team">
+Tài khoản của token không phải thành viên của app hoặc team đó. Thêm tài khoản trong Heroku, rồi hỏi lại.
+</Accordion>
+
+<Accordion title="404 Couldn't find that user">
+Token không đọc được chính tài khoản sở hữu token, đây là dấu hiệu của scope quá hẹp. Add-on và team vẫn liệt kê được, nhưng app và pipeline thất bại. Tạo authorization mới với scope mặc định `global` và thay vào kết nối. Xem [Xoay vòng thông tin xác thực](/vi/guide/connections/overview#xoay-vòng-thông-tin-xác-thực).
+</Accordion>
+
+<Accordion title="404 cho một app, add-on hoặc pipeline được nêu tên">
+Tên sai, hoặc thuộc về một tài khoản mà token không thấy được. Yêu cầu CloudThinker liệt kê app hoặc pipeline, rồi dùng tên từ danh sách đó.
+</Accordion>
+
+<Accordion title="429 Too Many Requests">
+Heroku đã giới hạn tốc độ tài khoản. Chờ vài phút, rồi hỏi về từng app một để mỗi lượt chạy thực hiện ít lệnh gọi hơn.
+</Accordion>
+
+<Accordion title="Không có private space nào được liệt kê">
+Private space là tính năng của Heroku Enterprise. Nếu tài khoản không có, danh sách trống là câu trả lời đúng.
+</Accordion>
+
+---
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Heroku không có token chỉ đọc**: lời khuyên về chỉ đọc ở trên không áp dụng tại đây. Kết nối cần token `global`, vốn luôn có toàn quyền ghi trên Heroku, và scope hẹp hơn sẽ làm kết nối hỏng. Bản thân CloudThinker chỉ đọc, nên hãy giảm rủi ro bằng tài khoản riêng ít quyền và thời hạn ngắn.
+- **Lên kế hoạch xoay vòng**: truyền `--expires-in` khi tạo token. Khi không còn cần, tìm id bằng `heroku authorizations` và chạy `heroku authorizations:revoke <id>`.
+- **Coi log là dữ liệu nhạy cảm**: app có thể in secret vào log của chính nó. CloudThinker tránh trích dẫn các dòng trông giống token hoặc mật khẩu, nhưng đừng chỉ dựa vào điều đó.
+
+---
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Kết nối PostgreSQL" icon="/images/icons/postgresql.svg" href="/vi/guide/connections/postgresql">
+    Truy vấn cơ sở dữ liệu Heroku Postgres bằng thông tin xác thực riêng
+  </Card>
+  <Card title="Tổng quan kết nối" icon="plug" href="/vi/guide/connections/overview">
+    Xem mọi nền tảng bạn có thể kết nối và cách xoay vòng thông tin xác thực
+  </Card>
+</CardGroup>

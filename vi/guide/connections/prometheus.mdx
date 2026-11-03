@@ -1,185 +1,183 @@
 ---
 title: Prometheus
-description: "Kết nối Prometheus, Thanos, VictoriaMetrics hoặc Grafana Cloud để truy vấn PromQL chỉ đọc, khám phá metric, kiểm tra sức khỏe target và xem xét alert"
+description: "Kết nối một endpoint tương thích Prometheus để agent chạy PromQL, tìm scrape target bị down và đọc cảnh báo đang kích hoạt"
 icon: "/images/icons/prometheus.svg"
 ---
 
 import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
 
-Kết nối backend giám sát tương thích Prometheus của bạn để cho phép các agent CloudThinker chạy truy vấn PromQL, khám phá metric và label, kiểm tra sức khỏe scrape-target và tương quan các alert đang hoạt động — tất cả đều chỉ đọc.
+Kết nối Prometheus để CloudThinker chạy truy vấn PromQL, liệt kê metric và label, kiểm tra tình trạng scrape target, và đọc cảnh báo đang hoạt động cùng các alert rule. Kết nối này chỉ đọc và xác thực bằng một trong ba cách: không xác thực, bearer token hoặc HTTP Basic auth.
 
-<Info>
-Connector hoạt động với bất kỳ backend nào tuân theo Prometheus HTTP API tiêu chuẩn: self-hosted **Prometheus**, **Thanos**, **VictoriaMetrics** và **Grafana Cloud**. Xác thực hỗ trợ **None**, **Bearer Token** và **Basic Auth**.
-</Info>
+## Nền tảng được hỗ trợ
 
----
+Quy tắc: endpoint phải trả lời `<your URL>/api/v1/query` ngay tại gốc địa chỉ, với không xác thực, bearer token hoặc HTTP Basic auth.
 
-## Nền tảng hỗ trợ
-
-| Nền tảng | Hỗ trợ | Xác thực thông thường |
-|----------|--------|----------------------|
-| **Prometheus** | Self-hosted, tất cả phiên bản gần đây | None hoặc Bearer |
-| **Thanos** | Querier phía sau auth proxy | None, Bearer, hoặc Basic |
-| **VictoriaMetrics** | Single-node và cluster | None hoặc Basic |
-| **Grafana Cloud** | Endpoint Prometheus / Mimir | Basic |
-
-<Note>
-Với các endpoint managed, được Mimir hỗ trợ (Grafana Cloud), các đường dẫn `/api/v1/targets`, `/rules` và `/alerts` không được expose và trả về 404. Điều này là bình thường — query API (truy vấn tức thời, truy vấn phạm vi, label và metadata) hoạt động bình thường.
-</Note>
-
----
+| Nền tảng | Được hỗ trợ | Ghi chú |
+|----------|-----------|-------|
+| **Prometheus tự lưu trữ** | Có | |
+| **Thanos Querier** | Có | |
+| **Grafana Mimir, Cortex, Grafana Cloud metrics** | Không | API truy vấn nằm dưới một tiền tố đường dẫn như `/prometheus` hoặc `/api/prom`. Với Grafana Cloud, hãy dùng [kết nối Grafana](/vi/guide/connections/grafana) |
+| **Amazon Managed Service for Prometheus** | Không | Cần ký yêu cầu bằng AWS SigV4 |
+| **Google Cloud Managed Service for Prometheus** | Không | Cần xác thực Google Cloud |
 
 ## Điều kiện tiên quyết
 
-- Một **endpoint tương thích Prometheus** có thể truy cập từ CloudThinker qua HTTPS — Prometheus tự lưu trữ, Thanos, VictoriaMetrics hoặc Grafana Cloud.
-- Thông tin xác thực nếu endpoint yêu cầu: bearer token (chế độ Bearer Token) hoặc tên người dùng và mật khẩu (chế độ Basic Auth).
-- Với **Grafana Cloud**, cần numeric instance ID và access-policy token có phạm vi **metrics:read**.
-
----
-
-## Chọn chế độ xác thực
-
-Chọn chế độ phù hợp với cách endpoint của bạn được expose:
-
-| Chế độ | Khi nào dùng | Trường |
-|--------|-------------|--------|
-| **None** | Endpoint mở hoặc hạn chế mạng (Prometheus tự lưu trữ trong mạng nội bộ) | Chỉ URL |
-| **Bearer Token** | Endpoint phía sau proxy hoặc gateway yêu cầu `Authorization: Bearer <token>` | URL + token |
-| **Basic Auth** | Grafana Cloud, Thanos phía sau auth proxy, hoặc VictoriaMetrics với username/password | URL + username + password |
+- Prometheus HTTP API truy cập được từ internet. Kết nối chạy từ CloudThinker Cloud, không chạy bên trong mạng của bạn.
+- Chứng chỉ TLS được tin cậy công khai nếu URL dùng HTTPS. Không có trường nào để thêm CA riêng.
+- Bearer token hoặc username và password, nếu proxy hay gateway đặt trước Prometheus yêu cầu.
+- Quyền thêm kết nối trong workspace CloudThinker của bạn.
 
 <Tip>
-Với **Grafana Cloud**, username là numeric instance ID của bạn và password là access-policy token có phạm vi đọc metric.
+Prometheus chạy trong Kubernetes với địa chỉ riêng? Hãy công khai Prometheus qua một ingress có TLS và một auth proxy kiểm tra bearer token hoặc Basic auth, rồi đưa các egress IP của CloudThinker vào danh sách cho phép. Tài liệu này không công bố danh sách egress IP của CloudThinker: hãy hỏi đầu mối liên hệ CloudThinker của bạn, hoặc [liên hệ với chúng tôi](https://cloudthinker.io/contact). Xem [Truy cập dịch vụ riêng](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ) để biết các lựa chọn khác.
 </Tip>
 
----
+<Warning>
+URL không được chứa đường dẫn. Endpoint chỉ trả lời dưới một tiền tố, như `https://metrics.example.com/prometheus/api/v1`, sẽ không qua được bài kiểm tra kết nối. Hãy công khai API tại gốc của một hostname.
+</Warning>
 
 ## Thiết lập
 
 <Steps>
-  <Step title="Tìm URL Prometheus của bạn">
-    Xác định URL cơ sở của Prometheus HTTP API, ví dụ: `https://prometheus.your-domain.com` hoặc endpoint Prometheus query của Grafana Cloud. CloudThinker sẽ thêm các đường dẫn `/api/v1/...` tiêu chuẩn.
-  </Step>
-  <Step title="Chuẩn bị thông tin xác thực (nếu cần)">
-    - **None** — không cần chuẩn bị gì; endpoint có thể truy cập mà không cần xác thực.
-    - **Bearer Token** — lấy bearer token mà proxy hoặc gateway của bạn yêu cầu.
-    - **Basic Auth** — lấy username và password (với Grafana Cloud, cần numeric instance ID và access-policy token).
-  </Step>
-  <Step title="Thêm kết nối trong CloudThinker">
-    Điều hướng đến **Connections → Prometheus** và nhập:
-    - **PROMETHEUS_URL**: endpoint của bạn, ví dụ: `https://prometheus.your-domain.com`
-    - **PROMETHEUS_AUTH_TYPE**: chọn **None**, **Bearer Token** hoặc **Basic Auth**
+  <Step title="Tìm URL gốc">
+    Dùng địa chỉ đứng trước `/api/v1`, không có đường dẫn và không có dấu gạch chéo ở cuối, ví dụ `https://prometheus.example.com` hoặc `http://prometheus.example.com:9090`.
 
-    Các trường thông tin xác thực xuất hiện dựa trên lựa chọn của bạn:
-    - **Bearer Token** → **PROMETHEUS_TOKEN**
-    - **Basic Auth** → **PROMETHEUS_USERNAME** và **PROMETHEUS_PASSWORD**
+    Kiểm tra từ terminal trước khi kết nối:
 
-    Nhấn **Connect**. CloudThinker xác minh endpoint và hiển thị trạng thái **Connected**.
+    ```bash
+    # No auth
+    curl -s "https://prometheus.example.com/api/v1/query?query=count(up)"
+    # Bearer token
+    curl -s -H "Authorization: Bearer <token>" "https://prometheus.example.com/api/v1/query?query=count(up)"
+    # Basic auth
+    curl -s -u <user>:<password> "https://prometheus.example.com/api/v1/query?query=count(up)"
+    ```
+
+    Chạy lệnh từ một máy bên ngoài mạng của bạn, với đúng thông tin xác thực bạn sẽ cung cấp cho CloudThinker.
+
+    **Trạng thái thành công:** phản hồi bắt đầu bằng `{"status":"success","data":{"resultType":"vector"`.
+  </Step>
+  <Step title="Chọn chế độ xác thực">
+    | Chế độ | Dùng khi | Trường hiện ra |
+    |------|-------------|--------------------|
+    | **None** | Endpoint mở hoặc được giới hạn bằng quy tắc mạng | Chỉ URL |
+    | **Bearer Token** | Proxy yêu cầu `Authorization: Bearer <token>` | **PROMETHEUS_TOKEN** |
+    | **Basic Auth** | Proxy yêu cầu username và password | **PROMETHEUS_USERNAME**, **PROMETHEUS_PASSWORD** |
+
+    <Warning>
+    Prometheus để lộ cấu hình đã nạp, hostname nội bộ và địa chỉ target cho bất kỳ ai truy cập được. Chỉ dùng **None** khi có quy tắc tường lửa chỉ cho phép các egress IP của CloudThinker. Không bao giờ dùng **None** cho endpoint mở với toàn bộ internet.
+    </Warning>
+  </Step>
+  <Step title="Thêm kết nối">
+    Ở thanh bên, nhấn **More → Workspace settings → Connections**, giữ nguyên tab **Builtin Connections**, rồi chọn **Prometheus**. Điền:
+    - **Alias** (tùy chọn): tên ngắn như `prod-metrics`. Chỉ gồm chữ thường, số và dấu gạch ngang.
+    - **Description** (tùy chọn): Prometheus này bao phủ những gì. Khi bạn kết nối nhiều instance, agent đọc phần mô tả để chọn đúng instance.
+    - **PROMETHEUS_URL**: URL gốc ở bước 1.
+    - **PROMETHEUS_AUTH_TYPE**: **None**, **Bearer Token** hoặc **Basic Auth**, rồi điền các trường thông tin xác thực hiện ra.
+    - **LOG_LEVEL**: giữ ở **Info**.
+
+    Nhấn **Connect**. CloudThinker chạy `count(up)` trên endpoint, hiển thị **Connecting** và **Verifying**, rồi chuyển sang trạng thái **Connected**. Nếu xác minh thất bại, kết nối hiển thị **Failed** kèm thông báo lỗi. Đối chiếu thông báo với mục [Khắc phục sự cố](#khắc-phục-sự-cố).
   </Step>
 </Steps>
 
----
-
 ## Chi tiết kết nối
 
-| Trường | Mô tả | Ví dụ |
-|--------|-------|-------|
-| **PROMETHEUS_URL** | URL cơ sở của Prometheus HTTP API | `https://prometheus.your-domain.com` |
-| **PROMETHEUS_AUTH_TYPE** | Chế độ xác thực: `none`, `bearer` hoặc `basic` | `basic` |
-| **PROMETHEUS_TOKEN** | Bearer token (chỉ chế độ Bearer Token) | `eyJhbGci...` |
-| **PROMETHEUS_USERNAME** | Username, hoặc numeric instance ID cho Grafana Cloud (chỉ Basic Auth) | `1234567` |
-| **PROMETHEUS_PASSWORD** | Password hoặc access-policy token (chỉ Basic Auth) | `glc_xxxxx...` |
-
----
+| Trường | Bắt buộc | Mặc định | Mô tả |
+|-------|----------|---------|-------------|
+| **Alias** | Không | Hệ thống tự đặt | Tên ngắn như `prod-metrics`. Chỉ gồm chữ thường, số và dấu gạch ngang |
+| **Description** | Không | `Prometheus` | Endpoint này bao phủ những gì. Agent đọc phần này để chọn đúng instance |
+| **PROMETHEUS_URL** | Có | Không có | URL gốc của Prometheus HTTP API, không có đường dẫn, ví dụ `https://prometheus.example.com` |
+| **PROMETHEUS_AUTH_TYPE** | Có | **None** | **None**, **Bearer Token** hoặc **Basic Auth** |
+| **PROMETHEUS_TOKEN** | Chế độ Bearer Token | Không có | Token gửi dưới dạng `Authorization: Bearer` |
+| **PROMETHEUS_USERNAME** | Chế độ Basic Auth | Không có | Username của HTTP Basic |
+| **PROMETHEUS_PASSWORD** | Chế độ Basic Auth | Không có | Password của HTTP Basic |
+| **LOG_LEVEL** | Không | **Info** | Mức chi tiết log của connector. Giữ ở **Info** trừ khi bộ phận hỗ trợ yêu cầu |
 
 ## Quyền yêu cầu
 
-Connector Prometheus **chỉ đọc** — agent truy vấn và kiểm tra nhưng không bao giờ ghi vào backend giám sát.
+Prometheus không có phân quyền người dùng sẵn có, nên quyền truy cập là những gì proxy hoặc gateway của bạn cho phép. CloudThinker cần quyền đọc (`GET`) dưới `/api/v1/` cho:
 
-- Với **Grafana Cloud**, tạo access-policy token chỉ với phạm vi **metrics:read**.
-- Với endpoint được bảo vệ, đảm bảo thông tin xác thực có thể truy cập các đường dẫn API query, label, target, rule và alert.
+| Lĩnh vực | Dùng cho |
+|------|----------|
+| Query API | Truy vấn PromQL tức thời và theo khoảng thời gian, tra cứu series |
+| Metadata | Tên metric, tên label, kiểu và mô tả trợ giúp |
+| Targets | Tình trạng scrape target |
+| Alerts và rules | Cảnh báo đang hoạt động và định nghĩa alert rule |
+| Status config | Đọc cấu hình đã nạp, chỉ khi bạn yêu cầu |
 
 <Tip>
-Trên Grafana Cloud, giới hạn access-policy token chỉ với `metrics:read` — không cần phạm vi nào khác cho CloudThinker.
+Nếu proxy hỗ trợ, hãy cấp cho CloudThinker token riêng chỉ được gửi yêu cầu `GET` dưới `/api/v1/`. Kết nối không ghi bất cứ thứ gì vào Prometheus.
 </Tip>
-
----
 
 ## Khả năng của agent
 
-Connector Prometheus chỉ đọc — agent truy vấn và kiểm tra, nhưng không bao giờ sửa đổi backend giám sát.
+| Khả năng | CloudThinker làm gì |
+|------------|------------------------|
+| **Khám phá** | Đếm scrape target (up và down), cảnh báo đang kích hoạt, alert rule và tình trạng của chúng, metric, và các label như `job`, `instance`, `namespace` |
+| **Truy vấn tức thời** | Tính một biểu thức PromQL tại một thời điểm |
+| **Truy vấn theo khoảng** | Tính PromQL trên một khoảng thời gian với bước nhảy. Bắt đầu với 15 phút gần nhất và mở rộng nếu không có dữ liệu |
+| **Khám phá metric và label** | Liệt kê tên metric, kiểu và mô tả trợ giúp, cùng tên label, để truy vấn dùng đúng tên thật |
+| **Tình trạng target** | Liệt kê scrape target và những target đang down |
+| **Cảnh báo** | Liệt kê cảnh báo đang kích hoạt và đang chờ, cùng các alert rule đã cấu hình |
+| **Cấu hình** | Đọc cấu hình đã nạp khi được yêu cầu và che giá trị thông tin xác thực trong câu trả lời |
 
-| Khả năng | Những gì agent có thể làm |
-|----------|--------------------------|
-| **Truy vấn tức thời** | Chạy biểu thức PromQL tại một thời điểm cụ thể |
-| **Truy vấn phạm vi** | Chạy biểu thức PromQL trong khoảng thời gian với bước interval |
-| **Khám phá metric** | Liệt kê tên metric có sẵn, tùy chọn lọc theo prefix |
-| **Liệt kê label** | Liệt kê tên label và kiểm tra các dimension mà metric được phân chia |
-| **Sức khỏe target** | Kiểm tra các scrape target và phát hiện những target đang down hoặc không lành mạnh |
-| **Kiểm tra alert** | Liệt kê các alert đang hoạt động và xem lại quy tắc alert đã cấu hình |
-| **Health probe** | Chạy truy vấn `up` chung để xác nhận backend và các target của nó có thể truy cập |
+Khi kết nối lần đầu đạt trạng thái **Connected**, CloudThinker chạy [discovery](/vi/guide/connections/overview#điều-gì-xảy-ra-sau-khi-kết-nối) chỉ đọc trên endpoint và lưu những gì học được cho các cuộc chat sau.
 
 ### Xác minh kết nối
 
 ```text
-Run the Prometheus health probe and confirm all scrape targets are reachable
+Run Prometheus discovery and tell me how many scrape targets are up and down, and how many alerts are firing
 ```
+
+Câu trả lời đúng sẽ cho số target theo trạng thái, số cảnh báo đang kích hoạt, và vài tên metric mẫu từ endpoint của bạn.
 
 ### Ví dụ prompt
 
 ```text
-Query node_cpu utilization across the cluster for the last hour and report anything sustained above 85%
-List scrape targets that are currently down and report which jobs they belong to
-Show all active alerts and recommend which to investigate first
+Which scrape targets are down right now, and which jobs do they belong to?
+Show 5xx rate by service from http_requests_total over the last hour and flag anything above 1%
+List firing alerts and the alert rule behind each one
 ```
 
-<Note>
-Prometheus không expose công cụ nào cho **giá trị** label — liệt kê label chỉ trả về **tên** label. Hãy chỉ rõ metric và các label bạn quan tâm để agent có thể xây dựng PromQL selector chính xác.
-</Note>
+Hãy nêu tên metric và các label bạn quan tâm. CloudThinker liệt kê được tên label, nên prompt như "split by `namespace`" sẽ cho selector chính xác nhanh hơn.
 
----
+Để chuyển cảnh báo Prometheus vào Resolve và tự động mở sự cố, hãy thiết lập [tích hợp webhook](/vi/guide/incident/webhook-integrations/overview).
 
-## Xử lý sự cố
+## Khắc phục sự cố
 
-<Accordion title="Kết nối hoặc truy vấn thất bại với 401 Unauthorized">
-- Xác nhận **PROMETHEUS_AUTH_TYPE** khớp với những gì endpoint yêu cầu.
-- Với **Bearer**, xác minh token còn hiện hành và chưa bị thu hồi.
-- Với **Basic**, xác minh username/password — trên Grafana Cloud, username là numeric instance ID và password là access-policy token.
+<Accordion title="Prometheus rejected the credentials">
+Endpoint trả về 401 hoặc 403. Kiểm tra **PROMETHEUS_AUTH_TYPE** khớp với yêu cầu của proxy, rồi nhập lại token hoặc username và password. Token bị thu hồi ở proxy cũng thất bại theo cách tương tự.
 </Accordion>
 
-<Accordion title="Target, rule hoặc alert trả về 404">
-- Được kỳ vọng trên các endpoint managed, được Mimir hỗ trợ (Grafana Cloud) — các đường dẫn này không được expose.
-- Query API (tức thời, phạm vi, label, metadata) vẫn hoạt động; dùng truy vấn thay vì kiểm tra target/rule.
+<Accordion title="Prometheus has no query API at that URL">
+Endpoint trả về 404. Nhiều khả năng URL chứa đường dẫn, như `/api/v1` hoặc `/prometheus`. Chỉ nhập scheme, host và port. Nếu API của bạn chỉ trả lời dưới một tiền tố, cấu hình đó không được hỗ trợ.
 </Accordion>
 
-<Accordion title="Kết nối không thể đến endpoint">
-- Xác minh **PROMETHEUS_URL** có thể truy cập từ CloudThinker qua HTTPS.
-- Với endpoint tự lưu trữ hoặc hạn chế mạng, xác nhận có đường dẫn mạng từ CloudThinker.
-- Bỏ bất kỳ `/api/v1` đuôi nào khỏi URL — chỉ nhập URL cơ sở.
+<Accordion title="That URL answered, but not as a Prometheus query API">
+Một thành phần đứng trước Prometheus đã trả lời thay, thường là trang đăng nhập hoặc SSO proxy. Hãy trỏ URL tới chính API, hoặc dùng bearer token hay Basic auth mà proxy chấp nhận không cần đăng nhập qua trình duyệt.
 </Accordion>
 
-<Accordion title="Truy vấn trả về kết quả rỗng">
-- Xác nhận metric tồn tại bằng truy vấn khám phá trước khi lọc theo label.
-- Mở rộng cửa sổ thời gian — series có thể không có sample trong phạm vi được yêu cầu.
+<Accordion title="Prometheus is unreachable or didn't answer in time">
+CloudThinker không mở được kết nối. Kiểm tra hostname, port và chứng chỉ TLS, và xác nhận endpoint nhận lưu lượng từ internet. CloudThinker không truy cập được địa chỉ riêng như `10.0.0.5`.
 </Accordion>
 
----
+<Accordion title="Truy vấn không trả về dữ liệu">
+Trước tiên, yêu cầu CloudThinker liệt kê các metric khớp với một tên để xác nhận metric tồn tại. Sau đó mở rộng khoảng thời gian, vì truy vấn theo khoảng bắt đầu từ 15 phút.
+</Accordion>
 
 ## Bảo mật
 
 <ConnectionSecurity />
 
-- **Thiết kế chỉ đọc** — connector không bao giờ ghi vào backend giám sát; không cần quyền ghi
-- **Thông tin xác thực quyền tối thiểu** — trên Grafana Cloud, giới hạn access-policy token chỉ cho phạm vi đọc metric
-
----
+- **Không ghi**: kết nối chỉ đọc Prometheus HTTP API, nên token chỉ được gửi yêu cầu `GET` là đủ.
+- **Cấu hình chứa secret**: `/api/v1/status/config` có thể chứa thông tin xác thực dùng để scrape và hostname nội bộ. Hãy chặn đường dẫn này ở proxy nếu bạn không muốn nó bị đọc.
 
 ## Liên quan
 
 <CardGroup cols={2}>
   <Card title="Kết nối Grafana" icon="/images/icons/grafana.svg" href="/vi/guide/connections/grafana">
-    Dashboard và quan sát hợp nhất
+    Dashboard và alert rule dựa trên metric của bạn
   </Card>
-  <Card title="Kết nối Datadog" icon="/images/icons/datadog.svg" href="/vi/guide/connections/datadog">
-    Tìm kiếm log, metric và giám sát hạ tầng
+  <Card title="Kết nối Kubernetes" icon="/images/icons/kubernetes.svg" href="/vi/guide/connections/kubernetes">
+    Ghép metric với các workload tạo ra chúng
   </Card>
 </CardGroup>

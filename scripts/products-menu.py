@@ -31,7 +31,7 @@ MENU = [
     ]),
     ("Cyber", "shield-halved", [
         ("Get started", ["guide/security/cyber-overview", "guide/security/cyber-quickstart"]),
-        ("Run tests", ["guide/security/pentest", "guide/security/pentest-deep-dive", "guide/security/captcha",
+        ("Run tests", ["guide/security/security-testing", "guide/security/deep-dive-testing", "guide/security/captcha",
                        "guide/security/code-audit"]),
         ("Results", ["guide/security/cyber-findings", "guide/security/cyber-reports",
                      "guide/security/cyber-libraries"]),

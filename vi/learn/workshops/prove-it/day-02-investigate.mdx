@@ -1,0 +1,349 @@
+---
+title: "Prove It Ngày 02: Điều tra"
+description: "Lọc nhiễu cảnh báo xuống còn những gì đáng điều tra, kiểm chứng các giả thuyết cạnh tranh trên một cluster Kubernetes chỉ đọc, và viết báo cáo sự cố."
+icon: magnifying-glass
+---
+
+Ngày 02 của [Prove It](/vi/learn/workshops/prove-it/overview). Đến cuối buổi, bạn sẽ kết nối một agent chỉ đọc với cluster Kubernetes của chính mình, giữ ít nhất hai cách giải thích cho một sự cố đang diễn ra, chạy truy vấn loại trừ một trong số đó, và nộp một báo cáo sự cố cho mỗi nhóm. Buổi trực tiếp diễn ra vào ngày 12/09/2026. Bạn có thể tự làm lại bài lab trên bất kỳ cluster nào bạn kiểm soát.
+
+Ngày 01 hỏi trong một tài khoản có những gì. Ngày 02 hỏi điều gì đã gây ra sự cố này, ngay lúc này. Quyền truy cập không thay đổi: thông tin xác thực vẫn ở với chủ sở hữu, và agent vẫn không thể thay đổi bất cứ thứ gì.
+
+<Info>
+**Dùng trang này với CloudThinker.** Dán URL của trang này vào một cuộc chat và thử:
+
+- "Explain the noise reduction section of this page like I'm new to on-call."
+- "Quiz me on the difference between a trigger, a root cause and a contributing factor."
+- "Help me outline my Day 02 incident report using the five blocks on this page."
+</Info>
+
+## Quy tắc của buổi học
+
+- **Bốn phần.** Learn 35 phút, keynote 25 phút, Practice 30 phút không nghỉ, Share 20 phút.
+- **Cluster Kubernetes của bạn được kết nối ở chế độ chỉ đọc.** Dùng cluster staging nếu có thể. Agent có thể kiểm tra. Agent không thể khởi động lại, scale, deploy hay sửa bất cứ thứ gì, và không thể đọc secret.
+- **Thông tin xác thực ở với chủ sở hữu.** Chủ sở hữu cluster tự kết nối trên màn hình của mình bằng một kubeconfig chỉ đọc (`get`, `list`, `watch`).
+- **Agent đề xuất. Con người quyết định.** Hôm nay không áp dụng bản sửa nào.
+- **Che thông tin.** ID tài khoản, ARN, endpoint, hostname và dữ liệu khách hàng phải được loại khỏi báo cáo trước khi chia sẻ hoặc hiển thị trên màn hình.
+- **Mỗi nhóm một tệp báo cáo**, nộp trước khi phần Share bắt đầu.
+
+## Learn: 35 phút
+
+Ngày 01 đã đặt ranh giới cho agent. Ngày 02 bắt đầu sớm hơn một bước, với ranh giới mà hầu hết các nhóm chưa bao giờ đặt: những tín hiệu nào thực sự đáng được chú ý.
+
+Ý tưởng 1 đến 4 là kiến thức nền về nhiễu cảnh báo. Ý tưởng 5 đến 8 là những gì bạn dùng trong bài lab.
+
+### 1. Bạn không thể điều tra những gì bạn không thể xếp hạng
+
+Một đêm tồi tệ không chỉ mang đến một sự cố. Bạn nhận cả một dòng cảnh báo: một cảnh báo truy cập trên role production, một loạt dòng AccessDenied trong audit log trong cùng phút đó, ba cảnh báo gần như giống hệt nhau từ ba dịch vụ, và năm lần page cho cùng một vấn đề. Vào giờ đó, điều tra không phải là phần khó. Chọn điều gì để điều tra mới là phần khó.
+
+Nhóm nào cũng đã có cách đối phó với khối lượng cảnh báo, và mỗi câu trả lời đều có cái giá:
+
+| Cách xử lý thường gặp | Cái giá phải trả |
+|---|---|
+| Tuyển thêm người on-call | Kiệt sức, và quý sau khối lượng lại như cũ |
+| Nâng ngưỡng | Cảnh báo nghiêm trọng duy nhất thực sự quan trọng giờ lại nằm dưới ngưỡng |
+| Tắt tiếng kênh ồn ào | Một điểm mù mà không ai sở hữu hay nhớ đã tạo ra |
+| Thêm một dashboard | Thêm một màn hình không ai đọc lúc 2 giờ sáng |
+
+Mỗi cách là một quyết định về những gì bạn chấp nhận đánh mất, thường được đưa ra một lần, không chính thức, và không bao giờ được ghi lại. Đó lại là khoảng trống quản trị của Ngày 01, lần này hướng vào tín hiệu thay vì agent.
+
+### 2. Nhiễu bị loại bỏ qua các lớp có thứ tự
+
+Giảm nhiễu là một pipeline: **thu nhận**, **loại bỏ**, **nhóm**, rồi **phân loại và định tuyến**. Loại bỏ không phải là một bộ lọc. Đó là một chuỗi kiểm tra chạy theo thứ tự cố định, và kiểm tra đầu tiên khớp sẽ thắng, nên thứ tự chính là chính sách.
+
+Các lớp phổ biến, bất kể bạn dùng công cụ nào:
+
+| Lớp | Loại bỏ gì |
+|---|---|
+| Khử trùng lặp | Các lần lặp lại chính xác của cùng một sự kiện |
+| Giới hạn tốc độ | Các đợt bùng nổ vượt mức trần từ một nguồn |
+| Snooze | Tín hiệu mà một người đã cố ý tắt tiếng |
+| Phán quyết trước đó | Một mẫu đã được đánh giá là nhiễu |
+| Flapping | Một metric dao động qua lại một ngưỡng, kích hoạt liên tục cho cùng một điều kiện |
+| Cascade | Các ảnh hưởng hạ nguồn của một tín hiệu gốc mà bạn đã biết |
+
+Loại bỏ cascade loại được nhiều nhất, nhưng sẽ che giấu một sự cố thật nếu tín hiệu gốc được dùng để gộp là sai. Mức độ nghiêm trọng cũng chỉ là phỏng đoán: mức độ nghiêm trọng mà một công cụ gắn cho sự kiện chỉ là ý kiến của công cụ đó, và bạn được phép đánh giá lại.
+
+Trong CloudThinker, pipeline này là [Pulse](/vi/guide/pulse/overview). Pulse chạy bốn kiểm tra theo thứ tự (dedup, rate limit, snooze, verdict), rồi phân loại những gì còn lại và loại bỏ các tín hiệu mà Pulse đánh giá là không cần hành động. Kiểm tra verdict là kiểm tra biết học: khi CloudThinker xác nhận một mẫu là nhiễu trong lúc điều tra, các lần lặp lại của mẫu đó sẽ bị loại bỏ. Chi tiết: [Loại bỏ nhiễu](/vi/guide/pulse/clusters#lọc-nhiễu).
+
+### 3. Mọi quy tắc loại bỏ đều cần lối thoát
+
+Việc tắt tiếng phải có hạn và phải ghi đè được, nếu không sẽ trở thành điểm mù. Kiểm tra verdict của Pulse thể hiện cả hai đặc tính:
+
+| Đặc tính | Cách hoạt động trong Pulse |
+|---|---|
+| Cửa sổ tăng dần | Một mẫu được xác nhận là nhiễu sẽ im lặng trong 6 giờ. Xác nhận lần nữa, 24 giờ. Lần nữa, 7 ngày. |
+| Lối vượt luôn thắng | Sự kiện critical và high luôn vượt qua kiểm tra rate limit và verdict. Chúng vẫn có thể bị khử trùng lặp, và snooze do một người đặt vẫn được áp dụng. |
+
+<Warning>
+Quy tắc không có lối vượt rồi sẽ che giấu chính sự cố mà quy tắc đó được viết ra để bắt. Cửa sổ có thời hạn buộc hệ thống xác nhận lại rằng một mẫu vẫn là nhiễu. Tắt tiếng vĩnh viễn là quyết định không ai xem lại.
+</Warning>
+
+### 4. Giảm nhiễu là điều giúp agent có chi phí hợp lý
+
+Agent điều tra là bước tốn kém. Hãy hình dung một cảnh báo flapping suốt buổi sáng, mỗi lần kích hoạt lại mở một phân tích nguyên nhân gốc riêng: nhiều cuộc điều tra cho một vấn đề, nhiều câu trả lời cho cùng một câu hỏi, và một hóa đơn cho mỗi lần. Cho agent xử lý dòng cảnh báo thô thì đó chính là thứ bạn phải trả tiền.
+
+Ba cổng cần áp dụng trước khi một nhóm tín hiệu đáng được điều tra, dù có agent hay không:
+
+| Cổng | Lý do |
+|---|---|
+| Ít nhất một tín hiệu cần hành động | Nhóm chỉ gồm các tín hiệu đã bị loại bỏ không bao giờ tốn chi phí cho một cuộc điều tra |
+| Có điều gì đó mới, không phải lặp lại | Chỉ khối lượng thì không nên mở lại câu hỏi. Sự mới mẻ mới nên. |
+| Không có cuộc điều tra gần đây cho cùng nhóm | Thời gian chờ ngăn cùng một câu hỏi bị hỏi hai lần trong một giờ |
+
+Trong CloudThinker, các cảnh báo liên quan có cùng nguyên nhân khả dĩ được nhóm dưới một sự cố cha với một cuộc điều tra duy nhất. Xem [Điều tra và RCA](/vi/guide/incident/root-cause-analysis#sự-cố-tương-quan).
+
+### 5. Chia nhỏ câu hỏi, không chia nhỏ công việc
+
+Cuộc điều tra tốt thu thập ngữ cảnh, rồi chia thành các **giả thuyết**: những cách giải thích được phát biểu đủ chính xác để một truy vấn có thể bác bỏ chúng. Mỗi giả thuyết được kiểm chứng với cùng bằng chứng, và cuối cùng chỉ viết ra một phán quyết.
+
+Kỹ năng cần mang về là câu hỏi mà mỗi lần chia nhỏ đang tìm kiếm: **truy vấn có kết quả khác nhau tùy theo giả thuyết nào đúng**. Đó là truy vấn loại trừ được một giả thuyết. Mọi truy vấn khác chỉ xác nhận những gì bạn đã tin.
+
+Trong CloudThinker, cuộc điều tra có thể giao các kiểm tra tập trung cho subagent tạm thời (agent trợ giúp ngắn hạn), và **Investigation timeline** của sự cố ghi lại từng cách giải thích đã kiểm chứng, cùng kết quả xác nhận hay loại trừ. Để xem, vào **Resolve → Investigation**, chọn một sự cố và cuộn đến **Investigation timeline**. Chỉ đọc cũng có nghĩa là agent không thể kiểm chứng một ý tưởng bằng cách thay đổi thứ gì đó. Agent phải suy luận, và bạn phải kiểm tra được suy luận đó, đó là lý do timeline quan trọng hơn câu trả lời.
+
+### 6. Thứ tự thời gian không phải bằng chứng về nguyên nhân
+
+Ba cách một timeline đầy tự tin không chứng minh được gì:
+
+| Dạng | Biểu hiện |
+|---|---|
+| **Sau không có nghĩa là vì** | Deploy lúc 10:02, độ trễ tăng lúc 10:05, và không ai vẽ được đường đi giữa hai sự kiện. Đó là sự trùng hợp có thời điểm đẹp. |
+| **Cả hai đều là triệu chứng** | Hai metric cùng tăng vì một thứ ở thượng nguồn thay đổi. Không cái nào gây ra cái kia. |
+| **Nguyên nhân kích hoạt đã biến mất** | Đợt tăng đột biến khởi đầu sự việc đã kết thúc một giờ trước, và hệ thống vẫn chưa phục hồi. Thứ đã thay đổi không còn ở đó để tìm. |
+
+Nếu bạn không vẽ được đường đi, bạn có một sự trùng hợp, không phải nguyên nhân. Dạng thứ ba là dạng không ai tin cho đến khi họ tận mắt thấy:
+
+| Thời gian | Điều gì xảy ra |
+|---|---|
+| 10:00 | Một cơ sở dữ liệu failover sang bản dự phòng. Mất ba mươi giây, đúng như một lần failover nên diễn ra. |
+| 10:01 | Mọi kết nối đang mở bị ngắt cùng lúc, nên mọi client thất bại cùng lúc và thử lại cùng lúc. |
+| 10:06 | Failover đã xong từ lâu và traffic từ bên ngoài đã trở lại bình thường. |
+| 10:30 | Vẫn chậm. |
+
+Giờ đây các lần thử lại chính là tải. Timeout gây ra thử lại, thử lại gây ra tải, tải gây ra timeout. Hãy gọi tên ba phần riêng biệt:
+
+- **Nguyên nhân kích hoạt (trigger):** lần failover. Lần failover đã kết thúc, và không có gì để rollback.
+- **Nguyên nhân gốc (root cause):** chính sách thử lại không có giới hạn và không có backoff, được phát hành trong bản client tuần trước. Đó là tài nguyên mà bạn có thể xác định ngày thay đổi, và nó vẫn sai ngay lúc này.
+- **Yếu tố góp phần (contributing factor):** thiếu circuit breaker. Circuit breaker lẽ ra đã ngăn được sự cố, nhưng bạn không chứng minh được thành phần này từng thay đổi.
+
+### 7. Nguyên nhân gốc là tài nguyên đã thay đổi
+
+Đồ thị nhân quả có năm loại nút, và chỉ một loại là câu trả lời.
+
+| Nút | Ý nghĩa |
+|---|---|
+| **Trigger** | Sự kiện khởi đầu sự cố. Sự kiện này có thể đã kết thúc. |
+| **Root cause** | Tài nguyên duy nhất có cấu hình của chính nó lệch khỏi đường cơ sở, phiên bản trước hoặc các tài nguyên cùng loại |
+| **Contributing factor** | Một điều kiện mà bạn không thể chứng minh đã thay đổi |
+| **Impact** | Những gì khách hàng mất, theo cách họ diễn đạt |
+| **Recovery** | Điều gì đã khôi phục hệ thống, nếu có |
+
+Độ lệch là một khẳng định về thời gian, nên hãy giải quyết bằng cách xác định ngày cho từng ứng viên: thời điểm tạo, lịch sử phiên bản, cấu hình được áp dụng gần nhất. Đừng bao giờ dựa vào tài nguyên nào trông bất thường nhất lúc này. Tài nguyên có triệu chứng tệ nhất thường là nạn nhân, và sửa một nạn nhân chỉ là giải pháp tạm thời.
+
+Yếu tố góp phần là nhãn trung thực cho bất cứ thứ gì bạn nghi ngờ nhưng không xác định được ngày. Yếu tố góp phần không phải là nguyên nhân gốc kém chắc chắn hơn, mà là một loại khẳng định khác.
+
+### 8. Hệ thống tự chấm điểm cho mình thì không chứng minh được gì
+
+Hãy đòi hỏi mọi khẳng định, của agent và của chính bạn, phải có căn cứ:
+
+| Khẳng định | Cần có căn cứ gì |
+|---|---|
+| "Cái này gây ra cái kia" | Một đường đi bạn có thể lần theo từ thay đổi đến tác động lên khách hàng |
+| "Bản sửa đã giữ vững" | Một lần kiểm tra lại đã thực sự chạy, và kết quả nó trả về |
+| "Tôi tự tin" | Một cách giải thích cạnh tranh đã được kiểm chứng và thua |
+| "Kết quả chính xác" | Một phán quyết do con người viết, không bao giờ là agent tự chấm điểm lượt chạy của mình |
+
+CloudThinker áp dụng cùng ý tưởng này. Mọi phán quyết đều mang một nhãn bằng chứng: **Verified** (đã xác nhận với dữ liệu từ hệ thống của bạn), **Inferred** (được suy luận, chưa xác nhận) hoặc **Cause unproven** (dựa trên một giả định). Trong báo cáo của bạn, **Assumed** tương ứng với **Cause unproven**, và **Blocked** không có nhãn tương ứng trong sản phẩm. Mọi thay đổi đều đi qua một [runbook](/vi/guide/incident/runbooks) và thiết lập [Approvals](/vi/guide/approvals/overview) của bạn. Và khi **On duty** của Resolve đang tạm dừng, Pulse vẫn phát hiện và nhóm cảnh báo và vẫn ghi nhận sự cố với trạng thái **Open**, nhưng không cuộc điều tra nào tự bắt đầu cho đến khi có người nhấn **Investigate**. Sự cố do một người ghi nhận vẫn được điều tra ngay. Xem [Điều gì khởi động một cuộc điều tra](/vi/guide/incident/settings#điều-gì-khởi-động-một-cuộc-điều-tra).
+
+## Keynote: 25 phút
+
+**The Integration Problem Was a Context Problem:** vì sao agent chỉ điều tra tốt khi nó truy cập được dữ liệu.
+
+## Practice: 30 phút
+
+**Nhiệm vụ:** một sự cố đang diễn ra trên một cluster Kubernetes. Một nhóm, một agent chỉ đọc, một báo cáo. Ba mươi phút, không nghỉ.
+
+Tại sự kiện, mọi nhóm đều xử lý sự cố bên dưới. Trên cluster của riêng bạn, hãy chọn một triệu chứng thật từ staging, chẳng hạn một endpoint chậm hoặc một cảnh báo gần đây, và chạy cùng các bước.
+
+> **Hotel Search Degradation After Traffic Recovery**
+
+Đó là tiêu đề mà người on-call sẽ nhận được. Dashboard sẽ không khớp với người dùng, nên hãy bắt đầu từ những gì khách hàng mất.
+
+| Bạn có thể | Bạn không thể |
+|---|---|
+| Đọc deployment, pod, event, log, cấu hình và telemetry traffic | Khởi động lại, scale, deploy, sửa bất cứ thứ gì, hoặc đọc secret |
+
+Các quyền này là thật. Nếu nhóm bạn gặp rào cản, rào cản đó là một phần của bài tập. Gắn nhãn blocked, như ở Ngày 01.
+
+| Thời gian | Bước | Hoàn thành khi |
+|---|---|---|
+| T+00 | Kết nối và đọc triệu chứng | Một cuộc chat đã mở trên cluster |
+| T+05 | Viết câu hỏi sự cố | Bạn có một dòng: cái gì hỏng, với ai, từ khi nào |
+| T+10 | Giữ ít nhất hai giả thuyết | Hai cách giải thích, cả hai đều nhất quán với bằng chứng đến lúc này |
+| T+18 | Tìm truy vấn loại trừ một giả thuyết | Bạn có đầu ra thô của nó |
+| T+25 | Hoàn thành báo cáo | Tệp đã được nộp |
+
+Soạn khối 01 và 02 trong quá trình làm từ T+05. Năm phút đủ để hoàn thành một báo cáo, không đủ để bắt đầu viết. Lịch trình là nhịp độ, không phải quy tắc. Hai giả thuyết là mức tối thiểu, không phải mục tiêu. Nhóm nào đến T+18 mà chỉ có một giả thuyết là đã bỏ qua phần quan trọng.
+
+### Kết nối cluster Kubernetes
+
+Dùng cluster của riêng bạn, lý tưởng là staging, qua một kubeconfig chỉ đọc. Chủ sở hữu cluster tự kết nối trên màn hình của mình, và muốn thêm kết nối cần vai trò **Admin** của workspace. Tài liệu tham khảo đầy đủ là [Kết nối Kubernetes](/vi/guide/connections/kubernetes).
+
+<Steps>
+  <Step title="Tạo kubeconfig chỉ đọc">
+    Làm theo [Kết nối Kubernetes](/vi/guide/connections/kubernetes): áp dụng manifest `cloudthinker-reader`, rồi tạo `cloudthinker-kubeconfig.yaml` cho service account đó. ClusterRole chỉ cấp `get`, `list` và `watch`, và không bao gồm Secrets.
+
+    **Trạng thái thành công:** `kubectl --kubeconfig cloudthinker-kubeconfig.yaml get nodes` liệt kê các node của bạn.
+  </Step>
+  <Step title="Tải lên trong Connections">
+    Đăng nhập tại [app.cloudthinker.io](https://app.cloudthinker.io). Trên thanh bên, nhấn **More → Workspace settings** và chọn **Connections**. Chọn **Kubernetes**, tải tệp lên trường **KUBECONFIG** và nhấn **Connect**.
+
+    **Trạng thái thành công:** Kubernetes hiển thị trạng thái **Connected**.
+  </Step>
+  <Step title="Mở một cuộc chat">
+    Bắt đầu một cuộc chat mới và gửi "Give me an overview of this Kubernetes cluster."
+
+    **Trạng thái thành công:** agent trả lời với các namespace và workload mà nó nhìn thấy.
+  </Step>
+</Steps>
+
+<Warning>
+**Không thêm được kết nối?** Việc thêm kết nối cần quyền chỉnh sửa connector, mà chỉ vai trò **Admin** của workspace có. Hãy nhờ một Admin của workspace kết nối cluster, hoặc thay đổi vai trò của bạn. Xem [Vai trò workspace](/vi/guide/workspace-users#vai-trò-workspace).
+</Warning>
+
+Không ai nhập thông tin xác thực vào slide, chat hay tài liệu dùng chung. Chủ sở hữu cluster tự kết nối trên màn hình của mình.
+
+### Hỏi agent điều gì
+
+Hầu hết các nhóm hỏi có gì sai và chấp nhận câu trả lời đầu tiên. Hãy đi xa hơn. Bắt đầu với những câu sau, theo thứ tự:
+
+```text
+Something is degraded in this cluster. Describe the symptom in terms of what a user would notice, and tell me what your role could not read.
+```
+
+Câu trả lời hữu ích mô tả trải nghiệm của người dùng (tìm kiếm chậm hoặc thất bại), không phải tình trạng của pod. Danh sách "could not read" được đưa thẳng vào phần phạm vi của bạn.
+
+```text
+Give me at least two different explanations for this symptom that are both consistent with the evidence so far.
+```
+
+Câu trả lời hữu ích đưa ra các cách giải thích dự đoán những điều khác nhau. Nếu cả hai đều cho cùng dữ liệu, hãy hỏi lại.
+
+```text
+Which single query would come out differently depending on which of those explanations is true? Run it and show me the raw output.
+```
+
+Đây là bước T+18. Dán đầu ra thô vào báo cáo làm bằng chứng đã loại trừ một cách giải thích.
+
+```text
+Which resource here can you show actually changed, with a timestamp? Which ones are you only assuming changed?
+```
+
+Tài nguyên có thay đổi được xác định ngày là ứng viên nguyên nhân gốc của bạn. Mọi thứ không có ngày là yếu tố góp phần.
+
+Giữ lại đầu ra thô. Bạn cần nó cho mọi khẳng định trong báo cáo.
+
+### Bị mắc kẹt?
+
+| Vấn đề | Việc cần làm |
+|---|---|
+| Agent báo hệ thống khỏe mạnh | Hỏi người dùng đang thấy gì, không phải dashboard nói gì. Dashboard khỏe mạnh là một phần của bài tập. |
+| Agent đưa ra ngay một nguyên nhân đầy tự tin | Hỏi cách giải thích cạnh tranh, rồi hỏi truy vấn phân biệt hai cách đó. |
+| Agent nói không đọc được thứ gì đó | Tốt. Hãy gắn nhãn blocked. Kiểm tra bị chặn cũng là một kết quả. |
+| Bạn hết thời gian | Nộp những gì bạn có kèm khoảng trống được nêu rõ. Đó là một báo cáo hoàn chỉnh. |
+
+## Đầu ra của bạn: một báo cáo
+
+PDF, doc hoặc markdown. Không có template. Năm khối sau là mức tối thiểu.
+
+| Khối | Nội dung |
+|---|---|
+| **01: Câu hỏi sự cố và phạm vi** | Cái gì hỏng, với ai, từ khi nào. Những gì role không đọc được. |
+| **02: Ít nhất hai giả thuyết, một bị loại trừ** | Bằng chứng cho từng giả thuyết, và truy vấn đã loại trừ giả thuyết thua |
+| **03: Bằng chứng chính** | Nguồn, phạm vi và thời gian cho từng bằng chứng, như ở Ngày 01 |
+| **04: Cơ chế của bạn** | Cái gì gây ra cái gì, và mắt xích bạn không chứng minh được |
+| **05: Nguyên nhân gốc và yếu tố góp phần** | Cái nào bạn xác định được ngày, và cái nào không |
+
+### Đầu ra mẫu
+
+Nếu làm một mình, hãy đối chiếu báo cáo của bạn với mẫu này. Đây là minh họa cho định dạng, không phải kết quả thật: cluster, thời gian và nguyên nhân của bạn sẽ khác.
+
+```markdown
+# Day 02: Incident report
+
+## 01 Incident question and scope
+- Hotel search is slow or returns no results for some users, since 14:05 ICT
+- Scope: staging cluster, namespace search, read-only kubeconfig, checked 2026-09-12 14:40 ICT
+- Blocked: Secrets (not granted to this role)
+
+## 02 Hypotheses
+1. search-api pods ran short of CPU when traffic came back (ruled out)
+   - Query: CPU use for search-api pods since 14:00. It stayed under 40% of the limit.
+2. A new search-api revision cut the result cache size (kept)
+
+## 03 Key evidence
+- Deployment search-api revision 7 sets CACHE_SIZE lower than revision 6; its ReplicaSet was created at 14:02 (Verified, raw output in appendix A)
+- p95 search latency rose from about 0.3 s to 2 s from 14:05 (Verified, appendix B)
+
+## 04 Mechanism
+- Smaller cache, more calls to the search backend, slower searches
+- Not shown: load on the search backend (Blocked: outside this cluster)
+
+## 05 Root cause vs contributing factors
+- Root cause: search-api revision 7, dated 14:02
+- Contributing: traffic recovery raised load (no dated change)
+```
+
+Kiểm tra ba điều: mỗi giả thuyết có bằng chứng riêng, giả thuyết thua nêu tên truy vấn đã loại trừ nó, và nguyên nhân gốc có ngày.
+
+Báo cáo ghi "không đủ bằng chứng" và trình bày log là báo cáo hoàn chỉnh. Câu trả lời tự tin mà không có đường đi thì giá trị thấp hơn. Không cần đề xuất bản sửa.
+
+Nộp mỗi nhóm một tệp trước khi phần Share bắt đầu. Che ID tài khoản, ARN, endpoint, hostname và dữ liệu khách hàng trước.
+
+Khi xong, kết nối vẫn ở trong workspace cho đến khi Admin của workspace gỡ bỏ: **More → Workspace settings → Connections**, chọn **Kubernetes**, rồi **Disconnect**.
+
+## Share: 20 phút
+
+Các nhóm tình nguyện trình bày, mỗi nhóm 5 phút, nên khoảng bốn nhóm có thể trình bày. Mọi nhóm trình bày đều nhận giải thưởng. Không chấm điểm, xếp hạng hay bình chọn.
+
+| Phút | Trình bày |
+|---|---|
+| 3 | **Cơ chế và bằng chứng.** Bạn đã giữ những giả thuyết nào, truy vấn nào đã loại trừ một giả thuyết, và nó trả về gì. |
+| 2 | **Câu hỏi từ khán giả.** |
+
+Sau đó cả phòng so sánh: cùng cluster, cùng quyền truy cập, câu trả lời khác nhau. Chính phép so sánh đó là lý do các trường log và bằng chứng quan trọng hơn phán quyết.
+
+## Thuật ngữ
+
+| Thuật ngữ | Ý nghĩa trong Ngày 02 |
+|---|---|
+| Signal | Một sự kiện vận hành đã vượt qua các kiểm tra nhiễu |
+| Signal cluster | Các tín hiệu liên quan được nhóm thành một vấn đề ứng viên (thuật ngữ của Pulse). Không giống với cluster Kubernetes trong bài lab. |
+| Suppression | Loại bỏ hoặc tắt tiếng một sự kiện theo một quy tắc có thứ tự và được nêu rõ, thay vì tắt tiếng một kênh |
+| Flapping | Một metric dao động qua lại một ngưỡng, kích hoạt liên tục cho cùng một điều kiện |
+| Cascade | Các ảnh hưởng hạ nguồn của một tín hiệu gốc đã được biết |
+| Trigger | Sự kiện khởi đầu sự cố. Sự kiện này có thể đã kết thúc. |
+| Root cause | Tài nguyên duy nhất có cấu hình của chính nó lệch khỏi đường cơ sở, phiên bản trước hoặc các tài nguyên cùng loại |
+| Contributing factor | Một điều kiện mà bạn không thể chứng minh đã thay đổi |
+| Hypothesis | Một cách giải thích được phát biểu đủ rõ để một truy vấn có thể bác bỏ nó |
+| Blocked | Role không thể xem. Hãy ghi lại; đó là một kết quả hợp lệ. |
+
+## Đọc thêm
+
+- [Google SRE Book: Effective troubleshooting](https://sre.google/sre-book/effective-troubleshooting/)
+- [Google SRE Book: Postmortem culture](https://sre.google/sre-book/postmortem-culture/)
+- [NIST SP 800-61r3: Incident response recommendations](https://csrc.nist.gov/pubs/sp/800/61/r3/final)
+- [AWS Well-Architected: Reliability pillar](https://docs.aws.amazon.com/wellarchitected/latest/reliability-pillar/welcome.html)
+- [Anthropic: Building effective agents](https://www.anthropic.com/engineering/building-effective-agents)
+
+## Bước tiếp theo
+
+[Ngày 03: Prove It Arena](/vi/learn/workshops/prove-it/day-03-prove-it-arena). Một môi trường xa lạ, một sự cố bất ngờ, và ban giám khảo. Hãy mang theo từ vựng của hôm nay: trigger, root cause, contributing factor, và khoảng trống bạn không thể lấp.
+
+<CardGroup cols={2}>
+  <Card title="Ngày 03: Prove It Arena" icon="trophy" href="/vi/learn/workshops/prove-it/day-03-prove-it-arena">
+    Các vòng thi, cách chấm báo cáo, và cách tham gia cùng nhóm trong Arena.
+  </Card>
+  <Card title="Điều tra và RCA" icon="magnifying-glass-chart" href="/vi/guide/incident/root-cause-analysis">
+    Xem cách CloudThinker chạy và ghi lại một cuộc điều tra thực tế.
+  </Card>
+</CardGroup>

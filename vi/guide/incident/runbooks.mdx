@@ -1,217 +1,229 @@
 ---
 title: Runbooks
-description: "Kết nối runbook vận hành của nhóm để các AI agent có thể tìm kiếm và thực thi các bước khắc phục sự cố trong quá trình xử lý incident"
+description: "Cung cấp cho Resolve các quy trình khắc phục của nhóm từ Confluence, GitHub, GitLab hoặc file Markdown, và xem lại mọi thao tác runbook."
 icon: book-open
+tag: "Legacy"
 ---
 
-Khi một incident xảy ra trên môi trường production, nhóm của bạn có các runbook—quy trình từng bước cho các sự cố phổ biến như pod restart, database failover hoặc các thao tác scaling. Vấn đề là tìm đúng runbook lúc 3 giờ sáng và thực thi chính xác dưới áp lực.
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
 
-CloudThinker Runbooks lấp đầy khoảng cách đó. Trong quá trình [điều tra RCA](/vi/guide/incident/root-cause-analysis), các AI agent tự động tìm kiếm trong các nguồn runbook đã kết nối, tìm quy trình phù hợp và thực thi các lệnh khắc phục—với các kiểm soát phê duyệt theo chính sách để con người luôn tham gia vào các thao tác nguy hiểm.
+**Runbook** là quy trình được viết sẵn để khắc phục một vấn đề đã biết, chẳng hạn "restart các pod checkout" hoặc "failover cơ sở dữ liệu". Khi bạn kết nối runbook với Resolve, CloudThinker đọc chúng trong lúc phân tích nguyên nhân gốc (RCA) và đề xuất cách khắc phục tương ứng thay vì tự ứng biến.
 
-<Frame>
-  <img src="/images/incidents/runbooks/02-runbook-sources-dashboard.jpg" alt="Bảng điều khiển Runbook Sources hiển thị các file upload thủ công và nguồn kết nối GitHub với nút bật/tắt" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Bảng điều khiển Runbook Sources với các file upload thủ công và các kho lưu trữ đã kết nối</p>
+<Note>
+**Legacy.** Runbooks mang nhãn **Legacy** bên cạnh tên ở thanh bên và ở đầu trang. Tính năng hoạt động như mô tả ở đây, và chưa có thông báo nào về sản phẩm thay thế hay ngày gỡ bỏ. Các nguồn đã kết nối vẫn nằm trong Confluence, GitHub hoặc GitLab, nên quy trình của bạn vẫn dùng được dù trang này có thay đổi thế nào. Nếu bạn đang cân nhắc nên đầu tư bao nhiêu vào tính năng này, hãy hỏi [support@cloudthinker.io](mailto:support@cloudthinker.io).
+</Note>
 
----
+## Cách hoạt động
 
-## Cách hoạt động của runbook
+1. Bạn thêm một **nguồn runbook**: một space Confluence, một repository GitHub hoặc GitLab, hoặc các file Markdown bạn tải lên.
+2. Trong lúc [phân tích nguyên nhân gốc](/vi/guide/incident/root-cause-analysis), CloudThinker tìm trong các nguồn đang bật một quy trình phù hợp với vấn đề đã phát hiện.
+3. Nếu quy trình có lệnh thay đổi hệ thống, mỗi thay đổi đi qua [Approvals](/vi/guide/approvals/overview) của workspace, như mọi thao tác ghi khác của agent. Khi cần một người quyết định, lượt chạy dừng tại **Action requires approval**. Banner này hiện trong phần phân tích của sự cố trên **Resolve → Investigation**, bên dưới phần đánh giá.
+4. Mỗi lần thử được ghi lại trên tab **Execution history** cùng quyết định của policy, phê duyệt và kết quả.
+
+<ApprovalDefault />
+
+Lệnh chỉ đọc (lệnh chỉ xem, như `kubectl get pods`) không bao giờ phải chờ phê duyệt runbook, dù đến từ file tải lên hay nguồn đã kết nối. Lệnh thay đổi hạ tầng, như `kubectl rollout restart`, đi qua Approvals. Mục [Kiểm soát effect của lệnh](#kiểm-soát-effect-của-lệnh) giải thích effect riêng của runbook nằm ở đâu trong quy trình này.
+
+## Cách CloudThinker tìm runbook
+
+CloudThinker tìm trong từng nguồn đang bật bằng mô tả về vấn đề đã phát hiện:
+
+| Nguồn | Cách tìm |
+|---|---|
+| **Confluence** | Tìm kiếm toàn văn các trang trong space và label bạn đặt. Trang nhắc đến các dịch vụ bị ảnh hưởng được xếp hạng đầu. |
+| **GitHub**, **GitLab** | Liệt kê các file trên branch (mặc định `main`) khớp **File Patterns** dưới **Path Prefix**, đọc từng file và đánh giá mức liên quan. File nhắc đến các dịch vụ bị ảnh hưởng được xếp hạng đầu. |
+| **Upload** | Xem 200 ký tự đầu của mỗi file tải lên khi chọn |
+
+CloudThinker gom các ứng viên từ mọi nguồn đang bật, rồi đọc kỹ ứng viên phù hợp nhất trước khi lên kế hoạch khắc phục.
+
+Vì vậy, hãy viết runbook theo cách cảnh báo của bạn được diễn đạt. Đặt triệu chứng và tên dịch vụ ở tiêu đề và những dòng đầu, ví dụ `# checkout-api pods in CrashLoopBackOff`, thay vì `# Procedure 7`. Với file tải lên, những dòng đầu đó gần như là tất cả những gì CloudThinker thấy khi chọn. Mỗi trang hoặc file chỉ nên chứa một quy trình.
+
+## Lệnh chạy ở đâu
+
+Lệnh trong runbook chạy như mọi lệnh khác của agent, qua [kết nối](/vi/guide/connections/overview) tới hệ thống đích, với thông tin xác thực và quyền của kết nối đó. Thông tin xác thực quyết định phạm vi. Thông tin xác thực chỉ đọc không thể ghi, dù runbook viết gì, và kết nối tắt **Allow writes** cũng từ chối thao tác ghi. Mọi thao tác ghi còn đi qua [Approvals](/vi/guide/approvals/overview#cách-quyết-định-một-thao-tác-ghi), kể cả danh sách các lệnh gọi không bao giờ được chạy. Về máy mà lệnh chạy trên đó, xem [Agent chạy ở đâu](/vi/guide/security/overview#agent-chạy-ở-đâu).
+
+## Điều kiện tiên quyết
+
+- Vai trò **Admin** của workspace để thêm, sửa, publish hoặc xóa nguồn. Developer và Viewer xem được các nguồn và **Execution history**. Xem [Vai trò](/vi/guide/security/roles).
+- Người phê duyệt thao tác runbook tuân theo thiết lập Approvals của bạn, không theo vai trò Admin. Xem [người phê duyệt](/vi/guide/approvals/approvers).
+- Với Confluence, GitHub hoặc GitLab: một kết nối hoạt động và đọc được runbook. Biểu mẫu nguồn không lưu được nếu thiếu kết nối.
+  - Confluence: tài khoản đã cấp quyền cho [kết nối Atlassian](/vi/guide/connections/atlassian#quyền-yêu-cầu) phải mở được space.
+  - GitHub: app CloudThinker phải được [cài trên repository](/vi/guide/connections/github#quyền-yêu-cầu).
+  - GitLab: người dùng đã đăng nhập hoặc access token phải đọc được project, xem [quyền GitLab](/vi/guide/connections/gitlab#quyền-yêu-cầu).
+- Với file tải lên: các quy trình ở dạng file `.md`, với lệnh đặt trong code block có rào.
+
+## Chọn loại nguồn
+
+| Loại nguồn | Phù hợp khi | Những gì bạn có thể thu hẹp |
+|---|---|---|
+| **Confluence** | Runbook của bạn nằm trong một space wiki. | **Confluence Space Key** (để trống thì tìm mọi space) và **Labels** |
+| **GitHub** | Runbook là các file trong repository. | **Repository**, **Branch**, **Path Prefix**, **File Patterns** |
+| **GitLab** | Giống GitHub, nhưng trên GitLab. | **Repository**, **Branch**, **Path Prefix**, **File Patterns** |
+| **Upload a runbook** | Bạn có vài quy trình và không có wiki hay repo cho chúng. | Không có gì để thu hẹp: CloudThinker lưu file trong workspace của bạn |
+
+Nguồn đã kết nối vẫn nằm trong hệ thống gốc. CloudThinker đọc chúng vào lúc RCA, nên một chỉnh sửa trong Confluence hay một thay đổi đã merge trong Git sẽ được dùng ngay ở cuộc điều tra kế tiếp mà không cần đồng bộ lại.
+
+Trước khi thêm nguồn, hãy kiểm tra nguồn runbook có phải nơi phù hợp cho quy trình đó không: [Dạy CloudThinker](/vi/guide/teach-cloudthinker) so sánh nguồn runbook với skill và knowledge base.
+
+## Kết nối nguồn Confluence, GitHub hoặc GitLab
 
 <Steps>
-  <Step title="Kết nối nguồn của bạn">
-    Liên kết các kho lưu trữ runbook hiện có của bạn—Confluence, GitHub, GitLab—hoặc upload trực tiếp các file markdown.
+  <Step title="Mở Runbooks">
+    Ở thanh bên, mở **Resolve → Runbooks** (trong **Configuration**). Trang có hai tab: **Runbook sources** và **Execution history**. Nếu bạn chưa có nguồn nào, trang liệt kê từng loại nguồn: loại đã kết nối hiển thị tên kết nối, loại chưa kết nối hiển thị **Connect first**.
   </Step>
-  <Step title="Agent tìm kiếm trong quá trình RCA">
-    Khi một incident kích hoạt [Phân tích nguyên nhân gốc rễ](/vi/guide/incident/root-cause-analysis), AI agent tìm kiếm trong các nguồn đã kết nối để tìm runbook phù hợp dựa trên ngữ cảnh incident và các dịch vụ bị ảnh hưởng.
+  <Step title="Thêm nguồn">
+    Nhấn **Add source** (hoặc loại nguồn trong trạng thái trống). Trong **Add Runbook Source**, nhập **Source Name**, ví dụ `SRE Runbooks`, chọn **Source Type**, rồi chọn kết nối.
   </Step>
-  <Step title="Đánh giá chính sách">
-    Trước khi thực thi bất kỳ lệnh nào, hệ thống đánh giá [chính sách phê duyệt](/guide/approvals/overview) của workspace. Tùy theo chính sách, các lệnh có thể được tự động thực thi, xếp hàng chờ phê duyệt hoặc bị chặn.
-  </Step>
-  <Step title="Thực thi với phê duyệt">
-    Với các lệnh cần phê duyệt, bạn nhận được thông báo qua email, Slack và trong ứng dụng. Phê duyệt hoặc từ chối trực tiếp từ bất kỳ kênh nào. Các lệnh được phê duyệt sẽ thực thi ngay lập tức.
+  <Step title="Thu hẹp phạm vi CloudThinker tìm kiếm">
+    Với Confluence, đặt **Confluence Space Key** như `SRE` và các **Labels** nếu có. Với GitHub hoặc GitLab, chọn **Repository**, rồi tùy chọn **Branch**, **Path Prefix** như `docs/runbooks`, và **File Patterns** như `*.md`. Nhấn **Add Source**.
   </Step>
 </Steps>
 
----
+**Trạng thái thành công:** nguồn xuất hiện trong danh sách cùng loại và phạm vi, ví dụ `GitHub · acme/runbooks · docs/runbooks`, và công tắc của nguồn đang bật.
 
-## Kết nối nguồn runbook
+CloudThinker không trích xuất hay phân loại lệnh từ trang đã kết nối như cách làm với file tải lên. Thông báo trên biểu mẫu cho biết mọi lệnh từ nguồn đều cần phê duyệt. Trên thực tế, điều đó áp dụng cho mọi lệnh có thay đổi: lệnh chỉ đọc chạy mà không cần phê duyệt runbook, còn thay đổi đi qua Approvals của workspace. Không có effect riêng cho từng lệnh với các nguồn này.
 
-Điều hướng đến **Resolve > Runbooks** để quản lý nguồn của bạn. CloudThinker hỗ trợ bốn loại nguồn, mỗi loại phù hợp với các quy trình làm việc khác nhau.
+## Tải lên runbook Markdown
 
-<Frame>
-  <img src="/images/incidents/runbooks/01-add-runbook-source-dialog.jpg" alt="Hộp thoại Add Runbook Source với tên nguồn, lựa chọn loại nguồn và các trường cấu hình Confluence" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Thêm nguồn runbook mới với cấu hình Confluence</p>
+<Steps>
+  <Step title="Mở hộp thoại tải lên">
+    Trên **Resolve → Runbooks**, nhấn **Upload runbook** (hoặc **Upload a runbook** trong trạng thái trống).
+  </Step>
+  <Step title="Thêm file">
+    Kéo vào tối đa 20 file `.md`, mỗi file tối đa 5 MB. Mỗi file có một **Runbook name**, bạn có thể sửa trước khi tải lên.
+  </Step>
+  <Step title="Tải lên">
+    Nhấn **Upload**. Mỗi file hiển thị **Uploading...** rồi **Extracting commands...** trong lúc CloudThinker trích các lệnh từ code block.
+  </Step>
+</Steps>
 
-### Confluence
+**Trạng thái thành công:** mỗi file xuất hiện thành một nguồn riêng trong danh sách, đã được publish và tìm kiếm được ngay. File tải lên không bao giờ được tạo ở dạng bản nháp. Nhấn biểu tượng cuốn sách trên hàng để mở bản xem trước chỉ đọc, kèm nút **Download** để tải file Markdown gốc.
 
-Kết nối cơ sở tri thức Confluence để cho phép agent tìm kiếm các trang wiki về quy trình vận hành.
+Runbook viết như sau cho CloudThinker các lệnh rõ ràng, tách bạch:
 
-**Thiết lập:**
-1. Nhấp **Add Source** trên trang Runbooks
-2. Nhập tên (ví dụ: "SRE Runbooks")
-3. Chọn **Confluence** làm loại nguồn
-4. Chọn kết nối Atlassian của bạn (được thiết lập trong [Connections > Atlassian](/vi/guide/connections/atlassian))
-5. Tùy chọn giới hạn tìm kiếm theo **Space Key** cụ thể (ví dụ: `SRE`)
-6. Thêm **Labels** để lọc trang (ví dụ: `runbook`, `incident-response`)
-7. Nhấp **Add Source**
+````md
+# Checkout pods in CrashLoopBackOff
 
-**Cách agent tìm kiếm:** Trong quá trình RCA, agent sử dụng ngôn ngữ truy vấn CQL của Confluence để tìm các trang phù hợp với ngữ cảnh incident trong không gian và bộ lọc nhãn đã cấu hình.
+## Check
+```bash
+kubectl get pods -n checkout
+kubectl logs deploy/checkout-api -n checkout --tail=200
+```
 
-### GitHub
+## Fix
+```bash
+kubectl rollout restart deploy/checkout-api -n checkout
+```
+````
 
-Trỏ agent đến một kho lưu trữ GitHub chứa các file markdown runbook của bạn.
+Từ file này, CloudThinker ghi nhận `kubectl rollout restart` là lệnh có thay đổi và cần phê duyệt. Hai lệnh chỉ đọc không được ghi nhận, và CloudThinker có thể chạy chúng trong lúc RCA mà không cần phê duyệt runbook.
 
-**Thiết lập:**
-1. Nhấp **Add Source**
-2. Chọn **GitHub** làm loại nguồn
-3. Chọn kết nối GitHub của bạn (được thiết lập trong [Connections](/vi/guide/connections/overview))
-4. Chọn **repository** chứa runbook của bạn
-5. Đặt **branch** (mặc định là `main`)
-6. Tùy chọn đặt **path prefix** để giới hạn tìm kiếm (ví dụ: `docs/runbooks/`)
-7. Cấu hình **file patterns** để khớp (mặc định là `*.md`)
-8. Nhấp **Add Source**
+Khi tải lên, một AI model do backend của CloudThinker gọi sẽ đọc các code block có rào và chỉ giữ lại những lệnh có thay đổi. Một pipeline được coi là có thay đổi nếu bất kỳ phần nào của nó ghi dữ liệu. Mỗi lệnh được giữ phải nằm trong code block, nên không có gì được ghi nhận từ văn xuôi. Nếu bước dùng model thất bại, một danh sách cố định các lệnh chỉ xem (như `kubectl get`, `kubectl logs`, `cat` và `grep`) sẽ quyết định thay, và mọi lệnh không có trong danh sách đó được coi là có thay đổi. Về nơi các lệnh gọi model được gửi tới, xem [Dữ liệu CloudThinker xử lý](/vi/guide/security/overview#dữ-liệu-cloudthinker-xử-lý).
 
-**Cách agent tìm kiếm:** Agent sử dụng GitHub API để liệt kê và đọc các file khớp với bộ lọc đường dẫn và mẫu, sau đó phân tích nội dung để xác định mức độ liên quan đến incident hiện tại.
+Lệnh bị phân loại sai không thể bỏ qua phê duyệt. Thao tác ghi mà model bỏ sót vẫn chạy qua thông tin xác thực và thiết lập **Allow writes** của kết nối, và qua [Approvals](/vi/guide/approvals/overview), như mọi thao tác ghi khác của agent (xem [Lệnh chạy ở đâu](#lệnh-chạy-ở-đâu)). Nếu workspace của bạn hiển thị **Policies**, bạn có thể xem lại các lệnh đã ghi nhận, xem [Kiểm soát effect của lệnh](#kiểm-soát-effect-của-lệnh).
 
-### GitLab
+Để thay đổi runbook đã tải lên, hãy xóa nguồn và tải phiên bản mới lên. File tải lên không sửa trực tiếp được. Các hàng **Execution history** cũ vẫn giữ tiêu đề runbook, nhưng không còn gắn với nguồn đã xóa.
 
-Quy trình tương tự GitHub, sử dụng kết nối GitLab thay thế.
+<Warning>
+File tải lên mới nhận policy mới, nên mọi lệnh bắt đầu lại ở **Require Approval**. Mọi thiết lập **Allow** hoặc **Deny** bạn đã đặt trên file cũ đều mất.
+</Warning>
 
-**Thiết lập:**
-1. Nhấp **Add Source**
-2. Chọn **GitLab** làm loại nguồn
-3. Chọn kết nối GitLab của bạn
-4. Chọn **repository**, **branch**, **path prefix** và **file patterns**
-5. Nhấp **Add Source**
+## Kiểm soát effect của lệnh
 
-**Cách agent tìm kiếm:** Agent sử dụng GitLab API để tìm kiếm và lấy các file khớp từ kho lưu trữ của bạn.
+**Effect** là quy tắc riêng của runbook cho một lệnh có thay đổi. Chế độ [Approvals](/vi/guide/approvals/overview) của workspace cũng áp dụng cho mọi thay đổi. Khi **Policies** tắt, như ở phần lớn các bản triển khai, effect không được áp dụng và chỉ Approvals quyết định: ở chế độ mặc định **Auto · Rules + AI · Ask me**, AI có thể đánh giá và cho thay đổi chạy mà không hỏi, và một Allow Rule cũng vậy khi CloudThinker bật [Rule enforcement](/vi/guide/approvals/rules#khắc-phục-sự-cố) cho workspace của bạn. Để mọi thay đổi từ runbook đều chờ người duyệt, hãy chọn **Manual**. Effect bạn dùng được tùy thuộc vào loại nguồn:
 
-### Upload thủ công
+| Loại nguồn | Effect | Mặc định |
+|---|---|---|
+| Confluence, GitHub, GitLab | Luôn là **Require Approval** | Require Approval |
+| Upload | **Allow**, **Require Approval** hoặc **Deny**, theo từng lệnh, chỉ khi **Policies** được bật. Phần lớn các bản triển khai: chỉ có **Require Approval**. | Require Approval |
 
-Upload trực tiếp các file markdown runbook khi quy trình của bạn không được lưu trữ trong hệ thống bên ngoài.
+| Effect | Điều gì xảy ra |
+|---|---|
+| **Allow** | Chạy mà không cần hỏi |
+| **Require Approval** | Chờ tại **Action requires approval** cho đến khi có người quyết định |
+| **Deny** | Không bao giờ chạy |
 
-**Thiết lập:**
-1. Nhấp **Upload Runbook** trên trang Runbooks
-2. Kéo và thả các file `.md` (tối đa 20 file, mỗi file 5 MB)
-3. Chỉnh sửa tên file nếu cần trước khi xác nhận
-4. Nhấp **Confirm Upload**
+Mỗi file tải lên có policy riêng tên `Manual Runbook: <runbook name>`, với một statement cho mỗi lệnh được trích xuất. Mục **Policies** trên **Resolve → Settings** tắt ở phần lớn các bản triển khai. Khi mục này bật, bạn có thể mở policy đó tại đây và đổi effect của một lệnh, ví dụ sang **Allow** cho một lần restart an toàn mà bạn chạy thường xuyên. Khi mục này tắt, mọi lệnh giữ **Require Approval** trên policy, và chế độ Approvals quyết định thay đổi có phải chờ hay không. Để hỏi có thể bật mục này cho bản triển khai của bạn không, hãy email [support@cloudthinker.io](mailto:support@cloudthinker.io).
 
-Sau khi upload, CloudThinker tự động trích xuất các lệnh ghi (như `kubectl apply`, các mutation của `aws`, `helm install`) từ các code block trong file markdown. Các lệnh được trích xuất này trở thành cơ sở cho [quyền theo từng lệnh](#quyền-theo-từng-lệnh).
+## Phê duyệt thao tác runbook
 
----
+Khi CloudThinker muốn chạy một lệnh có thay đổi trong lúc xử lý sự cố, phần phân tích của sự cố hiển thị banner **Action requires approval** kèm runbook mà lệnh đến từ đó.
 
-## Quyền theo từng lệnh
+<Steps>
+  <Step title="Mở cuộc hội thoại">
+    Trên sự cố, nhấn **Go to conversation**.
+  </Step>
+  <Step title="Quyết định">
+    Đọc lệnh được đề xuất trên thẻ phê duyệt và nhấn **Approve** hoặc **Decline**. Phê duyệt cho phép lượt chạy tiếp tục. Từ chối sẽ dừng thao tác đó. Thẻ không có trường để sửa lệnh: muốn chạy lệnh khác, hãy từ chối và nói điều bạn muốn trong cuộc hội thoại.
+  </Step>
+</Steps>
 
-Runbook thủ công mở khóa một tính năng an toàn độc đáo: **kiểm soát quyền theo từng lệnh**. Khi bạn upload một file markdown, AI của CloudThinker đọc qua các code block và trích xuất mọi lệnh ghi/thay đổi—cho bạn kiểm soát chi tiết những gì agent có thể thực thi tự động.
+**Trạng thái thành công:** banner biến mất, và lần thực thi hiển thị **Approved** trên tab **Execution history**. Thao tác bị từ chối hiển thị là **Rejected** ở đó.
 
-<Frame>
-  <img src="/images/incidents/runbooks/03-per-command-permissions.jpg" alt="Hộp thoại quyền theo từng lệnh hiển thị các lệnh kubectl được trích xuất với dropdown Require Approval riêng cho từng lệnh" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Kiểm soát quyền theo từng lệnh cho runbook pod-crashloopbackoff</p>
+Lượt chạy chờ ở bước đó cho đến khi có người quyết định. Ai được phê duyệt tuân theo thiết lập phê duyệt của workspace, xem [người phê duyệt](/vi/guide/approvals/approvers). Nếu bạn không có quyền phê duyệt, thẻ sẽ báo đang chờ người phê duyệt. Người bắt đầu cuộc hội thoại cũng thấy nút **Notify approvers** trên thẻ. Để nhận yêu cầu phê duyệt qua email hoặc chat, bật **Agent approvals** trong [Notifications](/vi/guide/notifications).
 
-### Cách hoạt động
+## Xem lại những gì đã chạy
 
-1. **Trích xuất tự động**: Sau khi upload, hệ thống phân tích tất cả code block và xác định các lệnh shell thay đổi cơ sở hạ tầng (ví dụ: `kubectl set resources`, `kubectl rollout restart`, `kubectl delete`)
-2. **Bỏ qua lệnh chỉ đọc**: Các lệnh như `kubectl get`, `kubectl describe` và `kubectl logs` không được trích xuất—agent luôn có thể chạy các lệnh chỉ đọc
-3. **Mỗi lệnh nhận một quyền**: Mỗi lệnh ghi được trích xuất bắt đầu với **Require Approval** theo mặc định
+Mở tab **Execution history** trên **Resolve → Runbooks**. Mỗi hàng là một thao tác runbook:
 
-### Các mức quyền
+| Cột | Giá trị | Cho bạn biết |
+|---|---|---|
+| **Runbook** | Tiêu đề runbook, liên kết tới nguồn | CloudThinker đã dùng quy trình nào |
+| **Policy** | Auto Execute, Requires Approval, Denied, Per Command | Policy đã quyết định gì trước khi hỏi ai đó: **Auto Execute** cho phép thao tác, **Requires Approval** chuyển thao tác cho một người, **Denied** chặn thao tác. **Per Command** đánh dấu runbook tải lên, nơi mỗi lệnh được đối chiếu với effect riêng khi chạy. |
+| **Approval** | Pending, Approved, Rejected | Người được hỏi đã quyết định gì, nếu có |
+| **Status** | Xem bảng bên dưới | Điều gì đã xảy ra khi chạy |
+| **Created** | Dấu thời gian | Thời điểm CloudThinker đề xuất |
 
-| Quyền | Hành vi |
-|------------|----------|
-| **Allow** | Agent thực thi lệnh ngay lập tức mà không cần phê duyệt từ con người |
-| **Require Approval** | Agent yêu cầu phê duyệt trước khi thực thi. Bạn được thông báo qua email, Slack và trong ứng dụng |
-| **Deny** | Agent không thể thực thi lệnh này |
+| Status | Ý nghĩa |
+|---|---|
+| Trống | Không có gì chạy: thao tác đang chờ người duyệt, đã bị từ chối, hoặc bị policy chặn |
+| **Not Started** | Đã được phê duyệt hoặc policy cho phép. Thao tác có thể đang xếp hàng hoặc đang chạy, vì không có trạng thái "đang chạy" riêng. Làm mới để xem **Completed** hoặc **Failed**. Nếu trạng thái không đổi, mở sự cố và nhấn **Go to conversation** để xem lệnh còn đang chạy không. |
+| **Completed** | Lệnh đã chạy và hoàn tất |
+| **Failed** | Lệnh đã chạy và trả về lỗi. Đọc kết quả trước khi thử lại. |
 
-### Quản lý lệnh
+Hãy kiểm tra **Status** trước khi đóng sự cố. **Approved** nghĩa là một người đã đồng ý. Chỉ **Completed** mới có nghĩa là lệnh đã chạy.
 
-Từ hộp thoại chi tiết runbook:
+Để xem xu hướng qua nhiều sự cố, mở tab **Runbook analytics** trong [Resolve Insights](/vi/guide/incident/insights).
 
-- **Đặt tất cả quyền cùng lúc**: Sử dụng dropdown "Set all to..." để thay đổi hàng loạt tất cả lệnh sang Allow, Require Approval hoặc Deny
-- **Thay đổi quyền từng lệnh**: Nhấp vào dropdown bên cạnh bất kỳ lệnh nào để điều chỉnh mức quyền
-- **Thêm lệnh**: Nhập mẫu lệnh mới và nhấn Enter để thêm vào danh sách
-- **Xóa lệnh**: Nhấp vào biểu tượng xóa để xóa lệnh khỏi chính sách
-- **Xem lệnh đầy đủ**: Nhấp vào mũi tên mở rộng để xem lệnh nhiều dòng hoặc lệnh dài ở dạng đầy đủ
+## Quản lý nguồn
 
-<Note>
-  Quyền theo từng lệnh hiện có sẵn cho runbook được upload thủ công. Với các nguồn bên ngoài (Confluence, GitHub, GitLab), tất cả lệnh yêu cầu phê duyệt theo mặc định. Kiểm soát theo từng lệnh cho các nguồn bên ngoài sẽ sớm ra mắt.
-</Note>
+Di chuột lên một hàng nguồn để xem các thao tác:
 
----
+| Thao tác | Tác dụng |
+|---|---|
+| Công tắc | Tắt nguồn mà không xóa. CloudThinker không tìm trong nguồn đã tắt. |
+| Edit | Đổi tên hoặc phạm vi của nguồn đã kết nối. |
+| Preview (biểu tượng cuốn sách) | Hiển thị nội dung của runbook đã tải lên. |
+| Publish | Chỉ xuất hiện trên nguồn tải lên cũ vẫn mang nhãn **Draft**. File tải lên mới luôn được publish. CloudThinker không tìm trong bản nháp cho đến khi Admin publish. |
+| Delete | Xóa nguồn sau khi xác nhận. |
 
-## Quy trình phê duyệt
+## Khắc phục sự cố
 
-Khi agent tìm thấy runbook phù hợp trong quá trình RCA và chính sách yêu cầu phê duyệt, quy trình sau sẽ xảy ra:
-
-### Luồng phê duyệt
-
-1. **Agent phát hiện runbook**: Trong quá trình điều tra, agent tìm kiếm trong các nguồn và xác định quy trình phù hợp
-2. **Đánh giá chính sách**: Hệ thống kiểm tra các chính sách phê duyệt của workspace với runbook và các lệnh của nó
-3. **Gửi thông báo**: Nếu cần phê duyệt, bạn nhận được thông báo trên tất cả các kênh đã cấu hình:
-   - **Email**: Tiêu đề runbook, liên kết nguồn và lý do chính sách
-   - **Slack**: Thông báo tương tác với ngữ cảnh incident
-   - **Trong ứng dụng**: Badge trên incident hiển thị các phê duyệt đang chờ
-4. **Bạn phê duyệt hoặc từ chối**: Nhấp Approve để cho phép agent tiếp tục, hoặc Reject để chặn thực thi
-5. **Agent tiếp tục**: Khi được phê duyệt, agent thực thi các lệnh runbook. Khi bị từ chối, agent tiếp tục điều tra mà không thực thi
-
-### Trạng thái phê duyệt
-
-| Trạng thái | Ý nghĩa |
-|--------|---------|
-| **Pending** | Đang chờ phê duyệt từ con người—agent đang tạm dừng ở bước này |
-| **Approved** | Con người đã phê duyệt—các lệnh đang thực thi hoặc đã hoàn thành |
-| **Rejected** | Con người đã từ chối—agent đã bỏ qua runbook này và tiếp tục điều tra |
-
-### Trạng thái thực thi
-
-Sau khi phê duyệt, mỗi lần thực thi theo dõi kết quả:
-
-| Trạng thái | Ý nghĩa |
-|--------|---------|
-| **Not Started** | Đã được phê duyệt nhưng các lệnh chưa chạy |
-| **Completed** | Tất cả lệnh đã thực thi thành công |
-| **Failed** | Một hoặc nhiều lệnh gặp lỗi trong quá trình thực thi |
-| **Skipped** | Thực thi bị bỏ qua (ví dụ: phê duyệt đã hết hạn hoặc bị thay thế) |
-
-### Xem lịch sử thực thi
-
-Chuyển sang tab **Execution History** trên trang Runbooks để xem tất cả lần thực thi runbook qua các incident. Bạn có thể:
-
-- Tìm kiếm theo tiêu đề runbook
-- Xem quyết định chính sách, trạng thái phê duyệt và kết quả thực thi
-- Theo dõi runbook nào được sử dụng cho incident nào
-
----
-
-## Thực tiễn tốt nhất
-
-**Tổ chức nguồn:**
-- Đặt tên nguồn mô tả rõ ràng (ví dụ: "K8s Emergency Runbooks", "Database Failover Procedures")
-- Sử dụng path prefix và file pattern để giữ tìm kiếm có trọng tâm và nhanh chóng
-- Với Confluence, sử dụng nhãn để phân loại runbook theo lĩnh vực (ví dụ: `kubernetes`, `database`, `networking`)
-
-**Chiến lược quyền:**
-- Bắt đầu với **Require Approval** cho tất cả lệnh (mặc định) cho đến khi bạn xây dựng được sự tin tưởng
-- Dần dần chuyển các lệnh đã được kiểm tra kỹ và ít rủi ro sang **Allow** (ví dụ: thao tác scaling, thu thập log)
-- Giữ các lệnh phá hủy (delete, drop, force) ở **Require Approval** vĩnh viễn
-- Sử dụng **Deny** cho các lệnh không bao giờ nên được tự động hóa (ví dụ: xóa database production)
-
-**Chất lượng runbook:**
-- Viết runbook bằng markdown với code block rõ ràng sử dụng gợi ý ngôn ngữ shell (` ```bash `)
-- Dùng một lệnh mỗi dòng để có kết quả trích xuất tốt nhất
-- Bao gồm ngữ cảnh về thời điểm sử dụng mỗi quy trình—agent dùng thông tin này để khớp runbook với incident
-- Giữ runbook tập trung: một quy trình mỗi file hoạt động tốt hơn một tài liệu duy nhất bao quát tất cả
-
----
+<AccordionGroup>
+  <Accordion title="Một loại nguồn bị mờ hoặc hiển thị Connect first">
+    Biểu mẫu nguồn cần một kết nối tới nền tảng đó. Nhấn vào hàng để kết nối, hoặc thêm từ [Kết nối](/vi/guide/connections/overview), rồi quay lại và nhấn **Add source**.
+  </Accordion>
+  <Accordion title="CloudThinker không dùng runbook của tôi trong lúc RCA">
+    Kiểm tra công tắc của nguồn đang bật và nguồn không mang nhãn **Draft**. Sau đó kiểm tra phạm vi: giá trị **Confluence Space Key**, **Path Prefix** hoặc **File Patterns** sai sẽ làm ẩn file. Đặt cho runbook tiêu đề nêu rõ triệu chứng và dịch vụ, xem [Cách CloudThinker tìm runbook](#cách-cloudthinker-tìm-runbook).
+  </Accordion>
+  <Accordion title="File tải lên bị từ chối">
+    Chỉ chấp nhận file `.md` tối đa 5 MB, và tối đa 20 file mỗi lần tải lên. Hãy tách runbook lớn thành mỗi quy trình một file.
+  </Accordion>
+  <Accordion title="Không có lệnh nào được lấy ra từ file tải lên">
+    Lệnh phải nằm trong code block có rào. Lệnh nằm trong đoạn văn thường, hoặc chỉ toàn lệnh chỉ đọc, sẽ không tạo ra gì để phê duyệt.
+  </Accordion>
+  <Accordion title="Sự cố bị kẹt ở trạng thái chờ">
+    Có một thao tác runbook đang chờ. Mở sự cố, nhấn **Go to conversation**, rồi nhấn **Approve** hoặc **Decline**.
+  </Accordion>
+</AccordionGroup>
 
 ## Bước tiếp theo
 
 <CardGroup cols={2}>
-  <Card title="Phân tích nguyên nhân gốc rễ" icon="magnifying-glass" href="/vi/guide/incident/root-cause-analysis">
-    Tìm hiểu cách AI agent điều tra incident và thời điểm runbook được kích hoạt trong quy trình phân tích.
+  <Card title="Xem RCA dùng runbook như thế nào" icon="magnifying-glass" href="/vi/guide/incident/root-cause-analysis">
+    Theo dõi một cuộc điều tra từ bằng chứng đến cách khắc phục được đề xuất.
   </Card>
-  <Card title="Chính sách phê duyệt" icon="shield-check" href="/guide/approvals/overview">
-    Cấu hình chính sách phê duyệt cấp workspace kiểm soát những gì agent có thể thực thi tự động.
+  <Card title="Thiết lập phê duyệt" icon="circle-check" href="/vi/guide/approvals/overview">
+    Quyết định ai phê duyệt các thao tác có thay đổi và phê duyệt như thế nào.
   </Card>
 </CardGroup>

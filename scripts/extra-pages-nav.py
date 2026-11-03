@@ -13,7 +13,7 @@ PLACE = [
     # guide/capabilities is placed by platform-nav.py (Admin Settings); entry removed.
     (("Resources", "Tài nguyên", "リソース", "리소스"), ("Scenarios", "Tình huống thực tế", "シナリオ", "시나리오"),
      None, ["guide/use-cases/resolve-checkout-incident", "guide/use-cases/review-risky-pull-request",
-            "guide/use-cases/cyber-pentest-staging"]),
+            "guide/use-cases/cyber-staging-testing"]),
 ]
 
 

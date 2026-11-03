@@ -1,187 +1,267 @@
 ---
-title: Google Cloud
-description: "Kết nối Google Cloud với CloudThinker để quản lý tài nguyên, tối ưu chi phí, và giám sát bảo mật qua service account"
+title: Google Cloud Platform
+description: "Kết nối một project Google Cloud bằng JSON key của service account để agent điều tra compute, GKE, BigQuery, danh tính và chi phí."
 icon: "/images/icons/gcp.svg"
 ---
 
 import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
 
-Kết nối các project GCP của bạn để cho phép các agent CloudThinker phân tích chi phí, tối ưu tài nguyên, kiểm tra bảo mật và quản lý hạ tầng trên các dịch vụ Google Cloud.
+CloudThinker chạy Google Cloud CLI trên các project của bạn để trả lời câu hỏi về compute, GKE, BigQuery, lưu trữ, danh tính và chi phí. Bạn kết nối bằng JSON key của một service account, và các IAM role của service account đó quyết định agent truy cập được những gì.
 
-GCP xác thực bằng **service-account key** (file JSON); các IAM role của service account xác định những gì mỗi agent có thể truy cập.
-
----
+<Warning>
+Kết nối chỉ nhận JSON key của service account. Workload Identity Federation và impersonation không được hỗ trợ.
+</Warning>
 
 ## Điều kiện tiên quyết
 
-- Một GCP project với quyền quản trị IAM.
-- Quyền tạo service account và gán IAM role trong project.
-- [Google Cloud Console](https://console.cloud.google.com/) có thể truy cập trong trình duyệt của bạn.
+- Một project Google Cloud mà bạn có quyền tạo service account và cấp IAM role.
+- Quyền tạo key cho service account. Nếu tổ chức của bạn áp dụng `constraints/iam.disableServiceAccountKeyCreation` (mặc định trên các tổ chức tạo từ tháng 5 năm 2024), hãy nhờ admin quản lý organization policy cấp ngoại lệ cho project này trước khi bắt đầu. Thay đổi policy có thể mất vài phút mới có hiệu lực.
+- API của các dịch vụ bạn muốn hỏi phải được bật trong mọi project mà kết nối bao phủ. Agent sẽ nhận lỗi `API not enabled` với bất kỳ dịch vụ nào đang tắt. Bật API cần vai trò **Service Usage Admin** (`roles/serviceusage.serviceUsageAdmin`) hoặc Owner trên project. Bộ API thường dùng, bao gồm project, inventory, GKE, BigQuery, rà soát IAM, metric, log và Cloud Storage:
 
-<Info>
-Service account cấp viewer là đủ để phân tích chi phí, kiểm tra bảo mật, và kiểm tra tài nguyên. Chỉ mở rộng role khi bạn cần khả năng ghi.
-</Info>
+  ```bash
+  APIS="cloudresourcemanager.googleapis.com serviceusage.googleapis.com \
+    compute.googleapis.com container.googleapis.com bigquery.googleapis.com \
+    iam.googleapis.com monitoring.googleapis.com logging.googleapis.com storage.googleapis.com"
 
----
+  # One project
+  gcloud services enable $APIS --project=PROJECT_ID
+
+  # Every project you can see, for a folder or organization grant
+  for P in $(gcloud projects list --format="value(projectId)"); do
+    gcloud services enable $APIS --project="$P"
+  done
+  ```
+- Vai trò **Admin** trong workspace CloudThinker, vai trò có quyền thêm và sửa kết nối. Xem [Vai trò](/vi/guide/security/roles).
+- Với câu hỏi về chi phí và [Optimize](/vi/guide/cost-optimization/overview): một bản export **Standard usage cost** của Cloud Billing sang BigQuery. Dataset export phải nằm cùng project với service account, vì Optimize chỉ đọc bảng billing trong project đã kết nối. Để tạo export, một **Billing Account Administrator** vào **Billing → Billing export → BigQuery export**, rồi trong mục **Standard usage cost** nhấn **Edit settings**. Xem [hướng dẫn thiết lập của Google](https://cloud.google.com/billing/docs/how-to/export-data-bigquery-setup). Export mới có thể mất vài giờ mới có những hàng dữ liệu đầu tiên, nên Optimize có thể trống trong ngày đầu.
 
 ## Thiết lập
 
+Trước tiên, tạo service account trong Google Cloud, sau đó tải key của service account lên CloudThinker.
+
+<Tabs>
+  <Tab title="Google Cloud console">
+    <Steps>
+      <Step title="Tạo service account">
+        Trong [Google Cloud console](https://console.cloud.google.com/), chọn project và vào **IAM & Admin → Service Accounts**. Nhấn **Create service account**, đặt tên `cloudthinker-readonly`, rồi nhấn **Create and continue**.
+      </Step>
+      <Step title="Cấp role chỉ đọc">
+        Thêm **Viewer** (`roles/viewer`). Với Optimize, thêm cả **BigQuery Job User** (`roles/bigquery.jobUser`). Nhấn **Done**. Nếu tổ chức của bạn cấm các basic role như Viewer, hãy dùng các predefined role trong mục [Quyền yêu cầu](#quyền-yêu-cầu).
+      </Step>
+      <Step title="Với Optimize: chia sẻ dataset billing">
+        Vào **BigQuery**, chọn dataset billing export, rồi nhấn **Sharing → Permissions → Add principal**. Nhập email của service account, chọn **BigQuery Data Viewer**, rồi nhấn **Save**. Bỏ qua bước này nếu bạn không dùng Optimize.
+      </Step>
+      <Step title="Tạo JSON key">
+        Mở service account, vào tab **Keys**, rồi nhấn **Add key → Create new key**. Chọn **JSON** và nhấn **Create**. File key chỉ tải xuống một lần và không thể tải lại.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="gcloud CLI">
+    Chạy các lệnh sau trong [Cloud Shell](https://shell.cloud.google.com/) hoặc bất kỳ terminal nào đã đăng nhập Google Cloud. Thay `PROJECT_ID` bằng project ID của bạn.
+
+    ```bash
+    PROJECT_ID=your-project-id
+    SA=cloudthinker-readonly@$PROJECT_ID.iam.gserviceaccount.com
+
+    gcloud iam service-accounts create cloudthinker-readonly \
+      --project="$PROJECT_ID" --display-name="CloudThinker read-only"
+
+    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+      --member="serviceAccount:$SA" --role="roles/viewer"
+
+    # Optimize only: skip these two commands if you don't use Optimize.
+    # Replace BILLING_DATASET with the billing export dataset's name
+    # and DATASET_LOCATION with its location, for example US or EU.
+    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+      --member="serviceAccount:$SA" --role="roles/bigquery.jobUser"
+    bq query --project_id="$PROJECT_ID" --location=DATASET_LOCATION --use_legacy_sql=false \
+      "GRANT \`roles/bigquery.dataViewer\` ON SCHEMA \`$PROJECT_ID.BILLING_DATASET\` TO 'serviceAccount:$SA'"
+
+    gcloud iam service-accounts keys create cloudthinker-key.json --iam-account="$SA"
+    ```
+
+    Lệnh cuối ghi key vào `cloudthinker-key.json`. Trong Cloud Shell, tải file về máy bằng `cloudshell download cloudthinker-key.json`, và sau khi đã tải lên CloudThinker, xóa bản trong Cloud Shell bằng `rm cloudthinker-key.json`.
+  </Tab>
+</Tabs>
+
+Sau đó kết nối trong CloudThinker:
+
 <Steps>
-  <Step title="Tạo service account">
-    Trong [Google Cloud Console](https://console.cloud.google.com/), chọn project của bạn và điều hướng đến **IAM & Admin → Service accounts**. Nhấp **Create Service Account** và nhập:
-    - **Name**: `cloudthinker-readonly`
-    - **Description**: Read-only access for CloudThinker monitoring
+  <Step title="Mở hộp thoại kết nối">
+    Ở thanh bên, nhấn **More → Workspace settings → Connections**, chọn **Google Cloud Platform**, rồi nhấn **Connect**.
   </Step>
-  <Step title="Gán role">
-    Cấp các viewer role cần thiết:
-    - `Viewer` (quyền đọc cơ bản)
-    - `Monitoring Viewer` (dành cho dữ liệu giám sát)
-    - `Security Reviewer` (dành cho phân tích bảo mật)
+  <Step title="Đặt tên project">
+    Điền **Alias** (ví dụ `prod-gcp`) và **Description** (ví dụ `Production GCP project, GKE workloads`). Khi bạn có nhiều kết nối, agent đọc phần mô tả để chọn đúng kết nối.
   </Step>
-  <Step title="Tạo JSON key">
-    Nhấp vào service account vừa tạo từ danh sách, vào tab **Keys** → **Add key** → **Create new key**, chọn định dạng **JSON** và nhấp **Create**. Tải xuống file key và lưu trữ an toàn.
+  <Step title="Tải key lên và chọn region">
+    Kéo file JSON key vào **GOOGLE_SERVICE_ACCOUNT_KEY**, hoặc nhấn để chọn file. Chọn region chính của bạn từ danh sách **GCP_DEFAULT_REGION**. Mặc định là `us-central1`. Nhấn **Connect**.
+
+    **Trạng thái thành công:** trạng thái chuyển qua **Connecting** và **Verifying**, rồi project hiển thị trạng thái **Connected**. Lúc này Discovery chạy một lần ở chế độ nền và tiêu tốn credit. Hãy xem mục **Discovery** trên bảng chi tiết trước khi gửi prompt đầu tiên. Xem [Điều gì xảy ra sau khi bạn kết nối](/vi/guide/connections/overview#điều-gì-xảy-ra-sau-khi-kết-nối).
   </Step>
-  <Step title="Thêm kết nối trong CloudThinker">
-    Điều hướng đến **Connections → GCP** và tải lên file JSON key (hoặc dán nội dung của nó). Nhấp **Connect**. CloudThinker xác minh thông tin xác thực và hiển thị trạng thái **Connected**.
+  <Step title="Đặt môi trường">
+    Mở **Google Cloud Platform** trong **More → Workspace settings → Connections**, nhấn biểu tượng bút chì trên hàng của project, rồi đặt **Environment** trong **Edit Instance**. Trường này gắn nhãn project cho cả người dùng lẫn agent.
+  </Step>
+  <Step title="Đặt câu hỏi xác minh">
+    Mở một cuộc chat và hỏi [câu hỏi xác minh](#xác-minh-kết-nối). Câu trả lời phải liệt kê đúng các project ID của bạn.
   </Step>
 </Steps>
+
+### Kết nối thêm project
+
+| Lựa chọn | Cách làm | Phù hợp khi |
+|---|---|---|
+| Một service account, nhiều project | Cấp cùng các role cho service account trong từng project, hoặc cấp một lần trên folder hay organization | Bạn muốn một kết nối nhìn được qua nhiều project |
+| Mỗi project một kết nối | Lặp lại thiết lập trong từng project và nhấn **Connect** lần nữa trên **Google Cloud Platform** với alias mới | Các project thuộc những nhóm khác nhau, hoặc nằm trên các billing account khác nhau, mỗi billing account có export trong project đã kết nối |
 
 <Warning>
-Lưu trữ file JSON key an toàn. Không bao giờ commit vào version control hoặc chia sẻ công khai.
+[Rule phê duyệt](/vi/guide/approvals/rules) áp dụng cho toàn bộ một kết nối, nên quyền cấp trên folder gộp cả project production lẫn dev sẽ nhận cùng một bộ rule cho tất cả. Hãy dùng mỗi project một kết nối khi chúng cần rule phê duyệt khác nhau.
 </Warning>
 
-### Thiết lập đa project
+Dù bạn chọn cách nào, Optimize chỉ đọc billing từ project chứa key (`project_id` của key). Kết nối theo từng project mà project đó không có billing export sẽ không có dữ liệu chi phí cho Optimize. Billing export bao phủ mọi project trên billing account của nó, vì vậy hãy đặt service account trong project chứa export, cấp **Viewer** trên folder hoặc organization, rồi kết nối một lần. Để cấp quyền trên folder, bạn cần **Folder IAM Admin** (`roles/resourcemanager.folderIamAdmin`). Để cấp quyền trên organization, bạn cần **Organization Administrator** (`roles/resourcemanager.organizationAdmin`):
 
-Đối với tổ chức có nhiều GCP project:
+```bash
+BILLING_PROJECT=your-billing-project-id
+SA=cloudthinker-readonly@$BILLING_PROJECT.iam.gserviceaccount.com
 
-<Steps>
-  <Step title="Cấp quyền ở cấp tổ chức">
-    Cấp role cho service account ở cấp tổ chức hoặc folder để nó có thể truy cập tất cả project đích.
-  </Step>
-  <Step title="Thêm quyền truy cập billing account">
-    Thêm **Billing Account Viewer** để phân tích chi phí đa project.
-  </Step>
-  <Step title="Thêm project">
-    CloudThinker tự động khám phá các project có thể truy cập sau khi kết nối.
-  </Step>
-</Steps>
+# Find the organization ID, then the folder ID
+gcloud organizations list
+gcloud resource-manager folders list --organization=ORGANIZATION_ID
 
----
+# Grant on one folder
+gcloud resource-manager folders add-iam-policy-binding FOLDER_ID \
+  --member="serviceAccount:$SA" --role="roles/viewer"
+
+# Or grant on the whole organization
+gcloud organizations add-iam-policy-binding ORGANIZATION_ID \
+  --member="serviceAccount:$SA" --role="roles/viewer"
+```
 
 ## Chi tiết kết nối
 
 | Trường | Mô tả | Ví dụ |
-|-------|-------------|---------|
-| **Service Account Key (JSON)** | Toàn bộ JSON của GCP service-account key, tải lên hoặc dán vào hộp thoại kết nối | `{"type": "service_account", "project_id": "your-project-id", ...}` |
+|---|---|---|
+| **Alias** | Tên ngắn của kết nối. Để trống thì hệ thống tự đặt. | `prod-gcp` |
+| **Description** | Project này dùng cho việc gì. Agent dựa vào đây để chọn giữa các kết nối. | `Production GCP project` |
+| **GOOGLE_SERVICE_ACCOUNT_KEY** | File JSON key của service account, được tải lên | `cloudthinker-key.json` |
+| **GCP_DEFAULT_REGION** | Region bắt đầu cho các lệnh của agent, chọn từ danh sách có ô tìm kiếm. Mặc định là `us-central1`. | `us-central1` |
 
-File key có cấu trúc như sau:
+File key là JSON với các trường như `type`, `project_id`, `private_key` và `client_email`. Hãy tải lên nguyên vẹn, không chỉnh sửa.
 
-```json
-{
-  "type": "service_account",
-  "project_id": "your-project-id",
-  "private_key_id": "key-id",
-  "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
-  "client_email": "cloudthinker-readonly@your-project.iam.gserviceaccount.com",
-  "client_id": "123456789012345678901",
-  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-  "token_uri": "https://oauth2.googleapis.com/token"
-}
-```
+**Environment** (**Production**, **Staging**, **Development** hoặc **Not set**) không có trong hộp thoại kết nối. Hãy đặt sau khi kết nối, như ở các bước thiết lập: trường này gắn nhãn project cho cả người dùng lẫn agent. Rule phê duyệt không đọc trường này, nên Rule muốn áp dụng cho một project phải nêu tên kết nối đó.
 
----
+## Quyền yêu cầu
 
-## Quyền cần thiết
+| Bạn muốn | Role | Cấp trên |
+|---|---|---|
+| Câu hỏi về inventory, tình trạng và IAM | Viewer (`roles/viewer`) | Từng project, hoặc một folder hay organization |
+| Dữ liệu chi phí cho Optimize | BigQuery Data Viewer (`roles/bigquery.dataViewer`) | Dataset billing export (hoặc project) |
+| Truy vấn chi phí cho Optimize | BigQuery Job User (`roles/bigquery.jobUser`) | Project đã kết nối |
+| Agent thực hiện một số thay đổi cụ thể | Chỉ các role hẹp cho đúng những thay đổi đó | Nơi thay đổi diễn ra. Xem [Quyền ghi](#quyền-ghi). |
 
-### Tối thiểu (phân tích chỉ đọc)
+Nếu tổ chức của bạn cấm basic role, hãy cấp các predefined role chỉ đọc cho từng lĩnh vực bạn cần thay cho Viewer:
 
-```
-roles/viewer                    # Quyền đọc cơ bản
-roles/monitoring.viewer         # Truy cập Cloud Monitoring
-roles/logging.viewer            # Truy cập Cloud Logging
-```
-
-### Khuyến nghị (phân tích đầy đủ)
-
-```
-# Tất cả các role trên, cộng thêm:
-roles/compute.viewer            # Chi tiết Compute Engine
-roles/container.viewer          # Truy cập cluster GKE
-roles/cloudsql.viewer           # Truy cập Cloud SQL
-roles/bigquery.dataViewer       # Phân tích BigQuery
-roles/billing.viewer            # Dữ liệu thanh toán và chi phí
-roles/securitycenter.viewer     # Security Command Center
-```
+| Lĩnh vực | Role |
+|---|---|
+| Liệt kê project và folder | Browser (`roles/browser`) |
+| Compute Engine | Compute Viewer (`roles/compute.viewer`) |
+| GKE | Kubernetes Engine Viewer (`roles/container.viewer`) |
+| Rà soát IAM | Security Reviewer (`roles/iam.securityReviewer`) |
+| Metric | Monitoring Viewer (`roles/monitoring.viewer`) |
+| Log | Logs Viewer (`roles/logging.viewer`) |
 
 <Tip>
-Bắt đầu với các role tối thiểu và thêm dần khi cần. Viewer role ở cấp project là đủ cho phân tích chi phí và hầu hết các kiểm tra bảo mật.
+**Viewer** không thay đổi được gì, nên là điểm khởi đầu an toàn. Tuy vậy, Viewer đọc được cả dữ liệu lẫn cấu hình: trong BigQuery, Viewer đọc được mọi dataset còn giữ quyền đọc mặc định ở cấp project. Để agent không truy cập một dataset nhạy cảm, hãy gỡ quyền mặc định đó khỏi dataset, hoặc dùng custom role thay cho Viewer.
 </Tip>
-
----
 
 ## Khả năng của agent
 
-Sau khi kết nối, [CloudThinker](/vi/guide/agents/overview) có thể phân tích và tối ưu tài nguyên GCP của bạn.
-
-| Lĩnh vực | Khả năng GCP |
-|-------|------------------|
-| **Chi phí** | Phân tích chi phí, right-sizing VM, đề xuất committed use, tối ưu tài nguyên |
-| **Bảo mật** | Phát hiện Security Command Center, kiểm tra IAM, kiểm tra tuân thủ |
-| **Cơ sở dữ liệu** | Hiệu năng Cloud SQL, tối ưu BigQuery, điều chỉnh Spanner |
-| **Kubernetes** | Quản lý cluster GKE, tối ưu workload, phân tích Autopilot |
+| Lĩnh vực | CloudThinker làm gì |
+|---|---|
+| **Inventory** | Liệt kê và mô tả Compute Engine, GKE, Cloud Storage, BigQuery và các tài nguyên khác trên những project mà service account thấy được |
+| **Danh tính** | Rà soát IAM binding và service account để tìm quyền truy cập quá rộng hoặc không dùng đến |
+| **Container** | Kiểm tra cấu hình và tình trạng của GKE cluster và node pool |
+| **Chi phí** | Đọc billing export trong BigQuery để phân tích chi tiêu theo project, dịch vụ và label. Cung cấp dữ liệu cho [Optimize](/vi/guide/cost-optimization/overview). |
+| **Thay đổi** | Chỉ chạy lệnh ghi của Google Cloud CLI khi **Allow writes** đang bật, service account cho phép, và cài đặt phê duyệt của bạn đồng ý |
 
 ### Xác minh kết nối
 
 ```text
-Run a GCP account check and list connected projects and active services
+Which Google Cloud projects can you reach through my GCP connection, and which services are enabled in each?
 ```
 
-### Ví dụ câu lệnh
+Câu trả lời liệt kê đúng các project ID của bạn. Nếu cấp quyền trên folder hoặc organization, mọi project bên dưới đều phải xuất hiện.
+
+### Ví dụ prompt
 
 ```text
-Analyze Compute Engine costs over the last 30 days and recommend right-sizing opportunities
-Audit GCP IAM bindings and flag any over-permissioned service accounts
-Inspect GKE cluster health and report any pod failures or resource pressure
+List Compute Engine instances that have been stopped for more than 30 days and the disks still attached to them
+Find service accounts with the Owner or Editor role in my projects
+Break down last month's Google Cloud spend by project and service
 ```
 
----
+## Quyền ghi
 
-## Xử lý sự cố
+**Allow writes** trên bảng chi tiết của kết nối quyết định agent có được thay đổi gì trong Google Cloud hay không. Tùy chọn này bật theo mặc định, nhưng service account chỉ có **Viewer** và các role đọc BigQuery thì không thay đổi được gì, nên Google Cloud sẽ từ chối mọi thao tác ghi cho đến khi bạn cấp thêm quyền.
 
-<Accordion title="Lỗi Permission denied">
-Xác minh service account có các role cần thiết. Kiểm tra IAM binding ở cấp project, đảm bảo API được bật (Compute, Monitoring, v.v.) và xác nhận JSON key hợp lệ và chưa hết hạn.
+| IAM role | Allow writes | Kết quả |
+|---|---|---|
+| Chỉ có role chỉ đọc | Bật hoặc tắt | Chỉ đọc. Google Cloud từ chối mọi thay đổi. |
+| Đã cấp thêm role ghi | Tắt | Chỉ đọc. CloudThinker từ chối mọi thay đổi trước khi yêu cầu tới Google Cloud. |
+| Đã cấp thêm role ghi | Bật | Agent có thể đề xuất thay đổi. [Rules và Approval mode](/vi/guide/approvals/overview) của bạn quyết định từng thay đổi. |
+
+Để khóa thao tác ghi ngay trong CloudThinker, mở **More → Workspace settings → Connections**, chọn **Google Cloud Platform**, rồi tắt công tắc **Allow writes** trên bảng chi tiết.
+
+## Khắc phục sự cố
+
+<Accordion title="Không tạo được key: tính năng tạo key đã bị tắt">
+**Nguyên nhân:** organization policy `constraints/iam.disableServiceAccountKeyCreation` đang được áp dụng.
+
+**Cách khắc phục:** nhờ admin quản lý organization policy cho phép tạo key trên project này, hoặc tạo key giúp bạn. Nếu ngoại lệ đã được cấp, hãy chờ vài phút: thay đổi policy cần thời gian mới có hiệu lực. Đồng thời kiểm tra xem một policy đặt ở cấp thấp hơn, trên project hoặc folder chứa project, có còn áp dụng ràng buộc này không.
 </Accordion>
 
-<Accordion title="File key không hợp lệ">
-Xác minh file JSON đầy đủ và được định dạng đúng. Kiểm tra rằng private key không bị cắt bớt và không có khoảng trắng hoặc ký tự thừa. Thử tạo lại key từ GCP Console.
+<Accordion title="File tải lên bị từ chối hoặc bài kiểm tra thất bại ngay">
+**Nguyên nhân:** file không phải JSON key gốc. Các trường hợp thường gặp là key P12, một đoạn được sao chép, hoặc file đã bị chỉnh sửa và mất các dấu xuống dòng trong `private_key`.
+
+**Cách khắc phục:** tạo JSON key mới và tải lên đúng file đã tải xuống, không chỉnh sửa.
 </Accordion>
 
-<Accordion title="Thiếu dữ liệu thanh toán">
-Xác minh role **Billing Account Viewer** đã được gán. Bật Cloud Billing API và kiểm tra rằng billing export tới BigQuery đã được cấu hình.
+<Accordion title="Agent nhận PERMISSION_DENIED hoặc 'API not enabled'">
+**Kiểm tra:** service account có role trên project bạn hỏi, và API của dịch vụ đó (ví dụ Compute Engine hoặc Kubernetes Engine) đã được bật trong project.
+
+**Cách khắc phục:** cấp **Viewer** trên project hoặc folder chứa project, hoặc bật API trong **APIs & Services**. Không cần kết nối lại: yêu cầu tiếp theo sẽ dùng quyền mới.
 </Accordion>
 
-<Accordion title="Sự cố truy cập GKE">
-Đảm bảo role **Kubernetes Engine Viewer** đã được gán. Xác minh cluster trong project có thể truy cập và kiểm tra xem cluster có sử dụng Workload Identity không.
+<Accordion title="Optimize báo không tìm thấy billing export">
+**Nguyên nhân:** Optimize cần một bảng export Standard usage cost của Cloud Billing (tên dạng `gcp_billing_export_v1_...`) trong project đã kết nối.
+
+**Cách khắc phục:** bật export Standard usage cost trong **Billing → Billing export**, trỏ tới một dataset cùng project với service account. Nếu Optimize báo bảng nằm ngoài project đã kết nối, hãy chuyển export hoặc tạo service account trong project chứa export. Nếu Optimize yêu cầu chọn bảng, hãy chọn bảng bạn muốn Optimize dùng.
 </Accordion>
 
----
+<Accordion title="Kiểm tra hiển thị Timed out">
+**Nguyên nhân:** bài kiểm tra không hoàn tất kịp thời. Endpoint của Google Cloud là công khai, nên hiếm khi lỗi nằm ở mạng của bạn.
+
+**Cách khắc phục:** kết nối lại. Nếu vẫn tiếp tục hết thời gian chờ, hãy [liên hệ với chúng tôi](https://cloudthinker.io/contact).
+</Accordion>
+
+<Accordion title="Kết nối hiển thị Error">
+**Nguyên nhân:** key đã bị xóa hoặc vô hiệu hóa, hoặc một organization policy (`constraints/iam.serviceAccountKeyExpiryHours`) đã làm key hết hạn.
+
+**Cách khắc phục:** tạo key mới, rồi mở kết nối và nhấn **Replace credentials** để tải key lên. Thao tác này mở **Edit Instance**, cùng hộp thoại với **Replace…**. Các tác vụ theo lịch chạy lại khi trạng thái trở về **Connected**.
+</Accordion>
 
 ## Bảo mật
 
 <ConnectionSecurity />
 
-- **Phạm vi project** — giới hạn IAM role của service account chỉ ở các GCP project mà CloudThinker cần truy cập.
-- **Lưu trữ key** — lưu service-account JSON trong secret manager và xóa bản sao cục bộ sau khi tải lên CloudThinker.
-
----
+- **Xóa các bản sao key trên máy.** Sau khi tải file JSON lên, hãy xóa file khỏi thư mục tải xuống hoặc lưu vào secret manager. Bất kỳ ai giữ file đều có quyền truy cập của service account.
+- **Xoay vòng ít nhất mỗi 90 ngày.** Giới hạn thời hạn của key bằng policy [`constraints/iam.serviceAccountKeyExpiryHours`](https://cloud.google.com/resource-manager/docs/organization-policy/restricting-service-accounts#limit_key_expiry). Để xoay vòng, tạo key mới, nhấn biểu tượng bút chì trên hàng của project, tải key lên bằng **Replace…** trong **Edit Instance**, rồi xóa key cũ trong tab **Keys** của service account. Xem [Xoay vòng thông tin xác thực](/vi/guide/connections/overview#xoay-vòng-thông-tin-xác-thực).
 
 ## Liên quan
 
 <CardGroup cols={2}>
-  <Card title="Kết nối AWS" icon="/images/icons/aws.svg" href="/vi/guide/connections/aws">
-    Kết nối Amazon Web Services
+  <Card title="Bắt đầu nhanh với Optimize" icon="chart-line" href="/vi/guide/cost-optimization/quickstart">
+    Biến billing export thành các phát hiện về chi phí và đề xuất tiết kiệm.
   </Card>
-  <Card title="Agent" icon="dharmachakra" href="/vi/guide/agents/overview">
-    Agent tập trung vào Kubernetes cho GKE
+  <Card title="Kết nối" icon="plug" href="/vi/guide/connections/overview">
+    Xoay vòng thông tin xác thực, đặt môi trường và đọc kết quả Discovery.
   </Card>
 </CardGroup>

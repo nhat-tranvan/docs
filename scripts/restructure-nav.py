@@ -145,8 +145,8 @@ EN_TABS = [
                 "Cyber",
                 [
                     "guide/security/cyber-overview",
-                    "guide/security/pentest",
-                    "guide/security/pentest-deep-dive",
+                    "guide/security/security-testing",
+                    "guide/security/deep-dive-testing",
                     "guide/security/cyber-findings",
                     "guide/security/cyber-reports",
                     "guide/security/captcha",
