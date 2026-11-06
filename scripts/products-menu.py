@@ -13,7 +13,7 @@ import os
 MENU = [
     ("Resolve", "triangle-exclamation", [
         ("Get started", ["guide/incident/overview", "guide/incident/quickstart"]),
-        ("Set up", ["guide/incident/connect-alert-sources", "guide/incident/integrations", "guide/pulse/setup", "guide/incident/webhook-integrations/overview",
+        ("Set up", ["guide/incident/connect-alert-sources", "guide/incident/triggers-and-outcomes", "guide/pulse/setup", "guide/incident/webhook-integrations/overview",
                     "guide/incident/webhook-integrations/cloudwatch", "guide/incident/webhook-integrations/custom-source",
                     "guide/incident/settings"]),
         ("Work incidents", ["guide/pulse/overview", "guide/pulse/clusters", "guide/incident/root-cause-analysis",

@@ -108,7 +108,7 @@ EN_TABS = [
                             "guide/incident/root-cause-analysis",
                             "guide/incident/manual-logging",
                             "guide/incident/insights",
-                            "guide/incident/integrations",
+                            "guide/incident/triggers-and-outcomes",
                             g(
                                 "Webhook integrations",
                                 [
