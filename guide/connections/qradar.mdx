@@ -1,0 +1,173 @@
+---
+title: IBM QRadar SIEM
+description: "Connect IBM QRadar SIEM so agents can triage offenses, search events with AQL, check log sources, and update offenses through your Approvals"
+icon: "/images/icons/qradar.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+import ApprovalDefault from '/snippets/approval-default.mdx';
+
+Connect IBM QRadar SIEM and CloudThinker agents can triage offenses, search events with AQL, check log source health, and assign, hide, close, or add a note to an offense through your [Approvals](/guide/approvals/overview). The connection uses a QRadar **authorized service token**, whose user role and security profile decide what agents can see and do.
+
+<Note>
+IBM QRadar SIEM is available on [self-hosted deployments](/guide/deployment/overview) of CloudThinker. To use it on CloudThinker Cloud, [contact us](https://cloudthinker.io/contact).
+</Note>
+
+## Prerequisites
+
+- QRadar 7.4.3 or later. The connection uses version 16.0 of the QRadar REST API, which IBM introduced in QRadar 7.4.3.
+- An HTTPS path from your CloudThinker deployment to the QRadar console.
+- A QRadar administrator who can create user roles and authorized services on the **Admin** tab.
+- The **Admin** role in your CloudThinker workspace, which can add and edit connections. See [Roles](/guide/security/roles).
+
+## Setup
+
+<Steps>
+  <Step title="Create a user role">
+    In QRadar, open **Admin**. In the **User Management** section, click **User Roles**, then click **New**. Name the role `cloudthinker` and select:
+    - **Offenses**, so agents can read and update offenses
+    - **Log Activity**, so agents can run event searches
+    - **Assign Offenses to Users**, only if agents should assign offenses
+
+    Click **Save**, close the window, and click **Deploy Changes** on the **Admin** tab menu.
+  </Step>
+  <Step title="Create an authorized service">
+    On **Admin**, in the **System Configuration** section, click **Authorized Services**, then click **Add Authorized Service**. Fill in:
+    - **Service Name**: `cloudthinker`
+    - **User Role**: the `cloudthinker` role
+    - **Security Profile**: a profile that covers the networks and log sources agents should see
+    - **Expiry Date**: a date that matches your rotation schedule. **No Expiry** is also allowed.
+
+    Click **Create Service** and copy the token from the confirmation. QRadar can't show it again after you close the dialog.
+  </Step>
+  <Step title="Add the connection in CloudThinker">
+    In the sidebar, click **More → Workspace settings → Connections**. On the **Builtin Connections** tab, search for **IBM QRadar SIEM** and click **Connect**. Fill in the fields from [Connection details](#connection-details) and click **Connect**.
+
+    CloudThinker tests the token by reading the QRadar version and counting the offenses it can see.
+
+    **Success state:** the message reads `Connected to QRadar <version>; <number> offenses in scope.` and the connection shows **Connected**.
+  </Step>
+</Steps>
+
+## Connection details
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| **Console URL** | The QRadar console address, `https://` with no path | `https://qradar.example.internal` |
+| **Authorized service token** | The token you copied when you created the authorized service | `<your-token>` |
+| **TLS certificate** | **Skip SSL verification** (default) or **Verify SSL certificate** | **Skip SSL verification** |
+
+By default, QRadar's console certificate is signed by QRadar's own internal certificate authority, so CloudThinker can't verify it. Keep **Skip SSL verification** for that certificate. It still encrypts traffic, but it can't detect an impostor console. If you install a certificate from a publicly trusted CA on the console, choose **Verify SSL certificate**.
+
+## Required permissions
+
+The token can do what its user role allows, on the data its security profile covers.
+
+| Goal | QRadar setting |
+|------|----------------|
+| Read and update offenses, with their notes | **Offenses** permission |
+| Search events, and read an offense's contributing events | **Log Activity** permission |
+| Assign an offense to a QRadar user | **Assign Offenses to Users** permission |
+| Choose which networks and log sources agents see | **Security Profile** on the authorized service |
+
+If the role can't read log sources, the overview marks the log source section as failed and still shows offenses.
+
+<Tip>
+Leave out **Assign Offenses to Users** until you want agents to assign offenses. To keep the connection read-only, turn off **Allow writes** (see [Agent capabilities](#agent-capabilities)).
+</Tip>
+
+## Agent capabilities
+
+| Capability | What agents can do | Approval |
+|------------|--------------------|----------|
+| **Overview** | Report the QRadar version, open offenses by magnitude, hidden and recently closed counts, and log sources that are disabled, silent for 24 hours, or in an error state | Runs without asking |
+| **Offenses** | List offenses by status, magnitude, and last update (up to 365 days). Open one offense with its notes and latest contributing events | Runs without asking |
+| **Event search** | Run one AQL search over events, with a time window and a row limit or grouping. Returns up to 500 rows | Runs without asking |
+| **Offense changes** | Assign, hide, show, or close one offense with a closing reason, or add a note | Each change |
+
+Agents delete each search from QRadar after they read its results. Lists report the true total even when they show fewer rows.
+
+Before a change, the agent names the offense, its current status and assignee, and the change. After it, the agent reads the offense back and reports whether the change took effect. It can set a hidden offense or an assignment back. It can't reopen or reassign a closed offense, and it can't remove a note. In QRadar, more events for a closed offense create a new offense.
+
+Agents can't change rules, reference sets, log sources, or saved searches. Do those in QRadar.
+
+Writes also need **Allow writes** on, which starts on. To keep the connection read-only in CloudThinker, open **IBM QRadar SIEM** in **More → Workspace settings → Connections** and turn off **Allow writes**.
+
+<ApprovalDefault />
+
+### Verify the connection
+
+```text
+Summarize my QRadar: version, open offenses by magnitude, and log sources that stopped sending events
+```
+
+**Expected result:** the QRadar version, the top open offenses with their magnitude, and counts of disabled, silent, and failing log sources.
+
+### Example prompts
+
+```text
+Show QRadar offense 1234 with its notes and latest events
+Count failed logins by source IP in QRadar over the last 24 hours
+Assign QRadar offense 1234 to analyst1 and add a note that the source IP is our scanner
+```
+
+Replace `1234` with an offense ID and `analyst1` with a QRadar username.
+
+## Troubleshooting
+
+The accordion titles below are the exact messages CloudThinker shows when the connection test fails.
+
+<Accordion title="QRadar rejected the authorized service token. Check that it is active and not expired.">
+Check that you pasted the whole token. In **Admin → Authorized Services**, check the service's expiry date. QRadar can't show a token again, so create a new authorized service if you lost it, and paste its token into **Authorized service token**.
+</Accordion>
+
+<Accordion title="The token's user role lacks the Offenses permission. Add it to the role in QRadar, then test again.">
+The token works, but its role can't read offenses. In **Admin → User Roles**, select **Offenses** on the role, click **Deploy Changes**, and connect again.
+</Accordion>
+
+<Accordion title="The token's user role cannot use the QRadar API.">
+QRadar refused the token's first request. Check the user role and security profile on the authorized service, then connect again.
+</Accordion>
+
+<Accordion title="The console certificate is not trusted. Choose Skip SSL verification for a self-signed certificate.">
+**TLS certificate** is set to **Verify SSL certificate**, but the console doesn't have a publicly trusted certificate. Choose **Skip SSL verification**, or install a trusted certificate on the console.
+</Accordion>
+
+<Accordion title="Could not reach the QRadar console over HTTPS. CloudThinker connects to it directly: check the address and the network path.">
+Check the **Console URL** and that your CloudThinker deployment can open an HTTPS connection to the console.
+</Accordion>
+
+<Accordion title="That address answered, but not as the QRadar API. Use the console address root, with no path.">
+Enter only the console address, such as `https://qradar.example.internal`. The same fix applies to `That address did not expose the QRadar API` and `QRadar answered with a redirect. Use the exact HTTPS console address.` CloudThinker never follows a redirect, so the token isn't sent anywhere else.
+</Accordion>
+
+<Accordion title="The console URL must start with https://.">
+Enter the address with `https://`. CloudThinker sends the token on every request, so it connects only over HTTPS.
+</Accordion>
+
+<Accordion title="QRadar answered HTTP 422. Try again in a minute.">
+IBM uses HTTP 422 for a request that asks for an API version the console no longer supports. This connection asks for version 16.0. If the message stays after you retry, [contact us](https://cloudthinker.io/contact) with your QRadar version.
+</Accordion>
+
+<Accordion title="An agent says the QRadar write tool is off on this connection">
+**Allow writes** is off. Turn it on in **More → Workspace settings → Connections** if you want agents to update offenses, then ask again. If the change then fails with HTTP 403, the token's role lacks **Offenses** or **Assign Offenses to Users**.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- **Use a dedicated authorized service with an expiry date.** You can revoke it without affecting other integrations, and a leaked token stops working on its own.
+- **Narrow the security profile.** Agents see only the networks and log sources the profile covers.
+- **Token stays on your console address.** CloudThinker sends the token in a request header, only to the **Console URL** you enter, and never follows a redirect.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Decide which offense changes run, wait for a person, or are refused
+  </Card>
+  <Card title="Wazuh Connection" icon="/images/icons/wazuh.svg" href="/guide/connections/wazuh">
+    Security alerts and agent health from your Wazuh SIEM
+  </Card>
+</CardGroup>
