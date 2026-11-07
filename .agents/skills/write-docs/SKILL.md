@@ -23,6 +23,12 @@ Out of scope, so cut it and link the vendor: how to install, host, deploy, size,
 
 A sentence that does not help the reader produce a working credential, understand its limits, or read an error is a sentence to cut.
 
+### Self-hosted services and self-hosted CloudThinker
+
+Every public page is read by CloudThinker Cloud customers first, and some readers run CloudThinker as a self-hosted deployment. Never tell either reader about instance settings, an instance admin, runtime settings, feature flags, or developer-only commands. When a feature is gated, say "in beta" or "contact CloudThinker".
+
+For a service that lives on a private network (QRadar, PAN-OS, FortiGate, Wazuh, databases), or a connection offered only on self-hosted deployments, follow [references/self-host.md](references/self-host.md): which "self-hosted" you mean, how to map the product's availability to the page, how to word network reach, TLS, and proxies, where each note goes, and a checklist.
+
 ## Workflow
 
 **Explore -> Decide -> Write -> Verify Against the Vendor -> Verify Against Sibling Docs -> Audit the Wording -> Report.**
@@ -37,6 +43,7 @@ Steps 4, 5, and 6 are mandatory. They are never optional and the user should nev
 ### 2. Decide
 - Separate what is reference-backed from what would be inferred.
 - If the doc is procedural and the process is incomplete, stop and ask for the missing source material.
+- Look up where the product offers the connection (Cloud, self-hosted deployments only, or not yet released) and map it with [references/self-host.md](references/self-host.md#availability-read-it-from-the-product-then-map-it).
 - Decide whether the section's `overview.mdx` also needs updating. It does when the page belongs in section cards, summaries, or quick-start guidance. Not every new page requires it.
 
 ### 3. Write
@@ -143,6 +150,7 @@ Then:
 - Do not report completion while any of the three checks is unrun. Name the one you skipped and why instead.
 - Do not teach the reader to install, host, or scale the service. That is the vendor's documentation, not ours.
 - Do not put internal engineering vocabulary in customer-facing text.
+- Do not mention instance settings, an instance admin, runtime settings, feature flags, rollout levels, or developer-only commands. Say "in beta" or "contact CloudThinker" instead.
 - Do not delete a section most sibling pages carry without saying so and giving the reason.
 - Do not hide inferred content inside the report. Label it.
 - Do not rewrite unrelated docs for style consistency.
@@ -158,6 +166,7 @@ Then:
 - The page was compared against sibling pages for section set, field naming, depth, and components.
 - The wording was audited for jargon and leaked internals, and any internal term kept was flagged.
 - The page teaches credential acquisition only. No install, hosting, or scaling guidance leaked in.
+- For a private-network service or a self-hosted-only connection, the [self-host checklist](references/self-host.md#checklist) passes.
 - Frontmatter description, `llms.txt` entry, and overview row all say the same thing.
 - MDX frontmatter is valid and the structure matches the nearest existing pattern.
 - `docs.json` updated if navigation changed, `llms.txt` updated if page inventory changed, `overview.mdx` reviewed.
