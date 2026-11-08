@@ -1,321 +1,392 @@
 ---
 title: Kubernetes
-description: "Connect Kubernetes clusters to CloudThinker for workload analysis, resource optimization, and cluster operations"
+description: "Connect a Kubernetes cluster with a read-only kubeconfig so agents can triage failing pods, check node pressure, and review RBAC"
 icon: "/images/icons/kubernetes.svg"
 ---
 
+import ApprovalDefault from '/snippets/approval-default.mdx';
+
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your Kubernetes clusters to enable [Kai](/guide/agents/kai) to analyze workloads, optimize resources, and manage cluster operations.
-
-Kubernetes connects via **cloud provider auto-discovery** (for EKS, GKE, and AKS) or a **service-account token** with cluster endpoint details for self-managed clusters.
-
----
+Connect a Kubernetes cluster so CloudThinker can find crash-looping and pending pods, read logs and events, check node pressure, and review RBAC and network policies. You upload a **kubeconfig file** that signs in as a dedicated read-only service account; changes such as a rollout restart go through your workspace's Approvals, and run only if you grant write RBAC (see [Write access](#write-access)).
 
 ## Prerequisites
 
-Install Metrics Server before connecting — it is required for pod and node resource metrics:
+- A cluster whose API server CloudThinker can reach over the internet. Commands run in the CloudThinker cloud, so a private-only endpoint fails the connection test. If you restrict API access (EKS public access CIDRs, GKE authorized networks, AKS authorized IP ranges), add CloudThinker's egress IPs instead of opening it to `0.0.0.0/0`. These docs don't publish CloudThinker's egress IP list: ask your CloudThinker contact, or [contact us](https://cloudthinker.io/contact). See [Reaching private services](/guide/connections/overview#reaching-private-services) for other options.
+- `kubectl` access to that cluster with permission to create a namespace, a ClusterRole, and a ClusterRoleBinding.
+- Managed clusters (EKS, GKE, AKS) hand out kubeconfigs that sign in through `aws`, `gcloud`, or `az` exec plugins, which don't work in CloudThinker. Step 2 builds one that does. Kubernetes checks the service-account token itself, so you don't map it in cloud IAM (no EKS access entry, for example).
+- Optional: [Metrics Server](https://github.com/kubernetes-sigs/metrics-server) in the cluster. Without it, agents still report pod status and node conditions, but not live CPU and memory usage.
+- The **Admin** role in your CloudThinker workspace, which can add and edit connections. See [Roles](/guide/security/roles).
 
-```bash
-kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-```
-
-| Component | Purpose |
-|-----------|---------|
-| **Metrics Server** | Required for pod and node resource metrics |
-| **kube-state-metrics** | Enhanced cluster metrics (optional) |
-| **Network access** | CloudThinker must reach the cluster API server |
-
-### Supported platforms
-
-| Platform | Support |
-|----------|---------|
-| **Amazon EKS** | All versions |
-| **Google GKE** | Standard, Autopilot |
-| **Azure AKS** | All versions |
-| **Self-managed** | Kubernetes 1.24+ |
-| **Rancher** | RKE, RKE2 |
-| **OpenShift** | 4.x |
-
----
+<Info>
+You get **one** Kubernetes connection per workspace, and agents work in the kubeconfig's **current context**. Upload a kubeconfig for the one cluster you want inspected. For several clusters, use [one workspace per cluster](/guide/workspaces#create-a-workspace), or add a [Rancher connection](/guide/connections/rancher) for inventory and health across the clusters Rancher manages.
+</Info>
 
 ## Setup
 
-<Tabs>
-  <Tab title="Via Cloud Provider (Recommended)">
-    ### Auto-discovery from cloud connections
+<Steps>
+  <Step title="Create a read-only service account">
+    Save this manifest as `cloudthinker-reader.yaml`. It also creates one Secret, the service account's token, which only you read in step 2. [Required permissions](#required-permissions) covers what the role allows.
 
-    If you've already connected AWS, GCP, or Azure, your managed Kubernetes clusters are automatically discovered.
-
-    <Steps>
-      <Step title="Connect cloud provider">
-        Set up an [AWS](/guide/connections/aws), [GCP](/guide/connections/gcp), or [Azure](/guide/connections/azure) connection first.
-      </Step>
-      <Step title="Clusters auto-discovered">
-        EKS, GKE, or AKS clusters appear automatically in CloudThinker. Select which clusters to enable for analysis. CloudThinker shows a **Connected** status for each enabled cluster.
-      </Step>
-    </Steps>
-  </Tab>
-
-  <Tab title="Direct Kubeconfig">
-    ### Manual setup with service account
-
-    For self-managed clusters or additional access beyond what the cloud provider connection provides:
-
-    <Steps>
-      <Step title="Create a namespace (optional)">
-        Create a dedicated namespace:
-        ```yaml
-        apiVersion: v1
-        kind: Namespace
-        metadata:
-          name: cloudthinker
-        ```
-      </Step>
-      <Step title="Create a service account">
-        ```yaml
-        apiVersion: v1
-        kind: ServiceAccount
-        metadata:
-          name: cloudthinker-readonly
-          namespace: cloudthinker
-        ```
-      </Step>
-      <Step title="Create a ClusterRole">
-        ```yaml
-        apiVersion: rbac.authorization.k8s.io/v1
+    <Accordion title="cloudthinker-reader.yaml">
+      ```yaml
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: cloudthinker
+      ---
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: cloudthinker-reader
+        namespace: cloudthinker
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: cloudthinker-reader
+      rules:
+      - apiGroups: [""]
+        resources: ["pods", "pods/log", "nodes", "namespaces", "services", "endpoints", "events", "configmaps", "persistentvolumeclaims", "persistentvolumes", "resourcequotas", "limitranges", "serviceaccounts", "replicationcontrollers"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["apps"]
+        resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["batch"]
+        resources: ["jobs", "cronjobs"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["autoscaling"]
+        resources: ["horizontalpodautoscalers"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["networking.k8s.io"]
+        resources: ["ingresses", "networkpolicies"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["policy"]
+        resources: ["poddisruptionbudgets"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["storage.k8s.io"]
+        resources: ["storageclasses"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["metrics.k8s.io"]
+        resources: ["pods", "nodes"]
+        verbs: ["get", "list"]
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: cloudthinker-reader
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
         kind: ClusterRole
-        metadata:
-          name: cloudthinker-readonly
-        rules:
-        - apiGroups: [""]
-          resources: ["*"]
-          verbs: ["get", "list", "watch"]
-        - apiGroups: ["apps", "extensions"]
-          resources: ["*"]
-          verbs: ["get", "list", "watch"]
-        - apiGroups: ["autoscaling"]
-          resources: ["*"]
-          verbs: ["get", "list", "watch"]
-        - apiGroups: ["metrics.k8s.io"]
-          resources: ["pods", "nodes"]
-          verbs: ["get", "list"]
-        ```
-      </Step>
-      <Step title="Create a ClusterRoleBinding">
-        ```yaml
-        apiVersion: rbac.authorization.k8s.io/v1
-        kind: ClusterRoleBinding
-        metadata:
-          name: cloudthinker-readonly
-        roleRef:
-          apiGroup: rbac.authorization.k8s.io
-          kind: ClusterRole
-          name: cloudthinker-readonly
-        subjects:
-        - kind: ServiceAccount
-          name: cloudthinker-readonly
-          namespace: cloudthinker
-        ```
-      </Step>
-      <Step title="Create a long-lived token">
-        Starting from Kubernetes 1.24, create a Secret for long-lived tokens:
-        ```yaml
-        apiVersion: v1
-        kind: Secret
-        metadata:
-          name: cloudthinker-readonly-token
-          namespace: cloudthinker
-          annotations:
-            kubernetes.io/service-account.name: cloudthinker-readonly
-        type: kubernetes.io/service-account-token
-        ```
+        name: cloudthinker-reader
+      subjects:
+      - kind: ServiceAccount
+        name: cloudthinker-reader
+        namespace: cloudthinker
+      ---
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: cloudthinker-reader-token
+        namespace: cloudthinker
+        annotations:
+          kubernetes.io/service-account.name: cloudthinker-reader
+      type: kubernetes.io/service-account-token
+      ```
+    </Accordion>
 
-        Apply with:
-        ```bash
-        kubectl apply -f cloudthinker-token-secret.yaml
-        ```
-      </Step>
-      <Step title="Retrieve the token">
-        ```bash
-        kubectl get secret cloudthinker-readonly-token -n cloudthinker \
-          -o jsonpath='{.data.token}' | base64 --decode
-        ```
-      </Step>
-      <Step title="Get cluster info">
-        Get your cluster endpoint:
-        ```bash
-        kubectl cluster-info
-        ```
+    Apply it:
 
-        Extract the CA certificate:
-        ```bash
-        kubectl get secret cloudthinker-readonly-token -n cloudthinker \
-          -o jsonpath='{.data.ca\.crt}' | base64 --decode
-        ```
-      </Step>
-      <Step title="Add the connection in CloudThinker">
-        Navigate to **Connections → Kubernetes** and enter:
-        - Cluster API endpoint
-        - Service account token
-        - CA certificate (for self-signed clusters)
+    ```bash
+    kubectl apply -f cloudthinker-reader.yaml
+    ```
 
-        Click **Connect**. CloudThinker verifies access and shows a **Connected** status.
-      </Step>
-    </Steps>
-  </Tab>
-</Tabs>
+    It creates the `cloudthinker` namespace, a `cloudthinker-reader` service account, a read-only ClusterRole bound to it, and a long-lived token Secret.
 
----
+    **Success state:** `kubectl get secret cloudthinker-reader-token -n cloudthinker` lists the Secret with a `DATA` count of 3. Kubernetes fills the token in a few seconds after you apply, so if `DATA` shows 0, wait and run the command again.
+  </Step>
+  <Step title="Build a kubeconfig for that account">
+    Run this from a shell whose current `kubectl` context is the target cluster. First, read and check the API server address:
+
+    ```bash
+    SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+    echo $SERVER
+    ```
+
+    It must print a public hostname or IP. If it shows `127.0.0.1`, `localhost`, or a private address such as `10.x` or `192.168.x` (common on kind, minikube, k3d, or behind a local proxy), CloudThinker can't reach it, so stop and fix access first.
+
+    Then, in the same shell, write `cloudthinker-kubeconfig.yaml` with the token and CA certificate embedded:
+
+    ```bash
+    CA=$(kubectl get secret cloudthinker-reader-token -n cloudthinker -o jsonpath='{.data.ca\.crt}')
+    TOKEN=$(kubectl get secret cloudthinker-reader-token -n cloudthinker -o jsonpath='{.data.token}' | base64 --decode)
+
+    cat > cloudthinker-kubeconfig.yaml <<EOF
+    apiVersion: v1
+    kind: Config
+    clusters:
+    - name: target
+      cluster:
+        server: ${SERVER}
+        certificate-authority-data: ${CA}
+    users:
+    - name: cloudthinker-reader
+      user:
+        token: ${TOKEN}
+    contexts:
+    - name: cloudthinker
+      context:
+        cluster: target
+        user: cloudthinker-reader
+    current-context: cloudthinker
+    EOF
+    ```
+
+    On older macOS releases, replace `base64 --decode` with `base64 -D`, and keep the closing `EOF` at the very start of its line.
+
+    **Success state:** `kubectl --kubeconfig cloudthinker-kubeconfig.yaml get nodes` lists your nodes. This is the same command CloudThinker runs to test the connection.
+  </Step>
+  <Step title="Upload the kubeconfig in CloudThinker">
+    Open **More → Workspace settings → Connections**, select **Kubernetes**, and upload `cloudthinker-kubeconfig.yaml` in the **KUBECONFIG** field. Click **Connect**.
+
+    **Success state:** the connection shows **Connecting** and **Verifying**, then a **Connected** status.
+  </Step>
+</Steps>
 
 ## Connection details
 
-The kubeconfig format CloudThinker uses for direct connections:
+| Field | Required | Description | Example |
+|-------|----------|-------------|---------|
+| **KUBECONFIG** | Yes | A kubeconfig file. The file picker accepts the `.yaml` extension only, so a `.yml` file can't be selected. Rename it to `.yaml` first. CloudThinker uses its current context | `cloudthinker-kubeconfig.yaml` |
 
-```yaml
-apiVersion: v1
-kind: Config
-clusters:
-- cluster:
-    certificate-authority-data: <base64-encoded-ca-cert>
-    server: https://your-cluster-endpoint:6443
-  name: your-cluster
-contexts:
-- context:
-    cluster: your-cluster
-    user: cloudthinker-readonly
-  name: cloudthinker-context
-current-context: cloudthinker-context
-users:
-- name: cloudthinker-readonly
-  user:
-    token: <your-service-account-token>
-```
-
----
+Embed everything in the file. A kubeconfig that points to local certificate files, or signs in through an `exec` plugin, needs files and tools CloudThinker doesn't have. The token-based file from step 2 avoids both.
 
 ## Required permissions
 
-### Minimum (read-only)
+The manifest in [step 1](#setup) grants read access (`get`, `list`, `watch`) to the resources agents inspect, plus pod logs and metrics. It can't read Secrets.
 
-```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: cloudthinker-readonly
-rules:
-- apiGroups: [""]
-  resources: ["pods", "nodes", "services", "namespaces", "events", "configmaps"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["apps"]
-  resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["autoscaling"]
-  resources: ["horizontalpodautoscalers"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["metrics.k8s.io"]
-  resources: ["pods", "nodes"]
-  verbs: ["get", "list"]
-```
+Read access is cluster-wide, including `kube-system`, because a ClusterRoleBinding grants the role in every namespace. To cover only some namespaces, replace the ClusterRoleBinding with a RoleBinding to the same ClusterRole in each one. Cluster-scoped resources such as nodes, namespaces, and persistent volumes then drop out of answers, since a RoleBinding can't grant them.
 
-### Recommended (full analysis)
-
-```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: cloudthinker-full-analysis
-rules:
-- apiGroups: [""]
-  resources: ["pods", "nodes", "services", "namespaces", "events", "configmaps", "secrets", "persistentvolumeclaims", "resourcequotas", "limitranges", "replicationcontrollers"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["apps"]
-  resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["batch"]
-  resources: ["jobs", "cronjobs"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["networking.k8s.io"]
-  resources: ["ingresses", "networkpolicies"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["autoscaling"]
-  resources: ["horizontalpodautoscalers"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["metrics.k8s.io"]
-  resources: ["pods", "nodes"]
-  verbs: ["get", "list"]
-```
+Custom resources aren't covered, so agents can't see CRD-based objects such as Argo CD applications or Istio virtual services. To let them, add a rule with each resource's API group to the ClusterRole.
 
 <Tip>
-Start with the minimum ClusterRole and expand to the full-analysis role only when you need the broader capability set. Never grant write verbs — get, list, and watch are sufficient for all Kai capabilities.
+Trim the role to what you need. Drop `configmaps` if yours hold sensitive values, and drop the `rbac.authorization.k8s.io` rule if you don't want RBAC reviews. A `403` in an answer names the resource the role is missing.
 </Tip>
 
+## Write access
+
+Agents run a change such as `scale`, `rollout restart`, `cordon`, `drain`, or `apply` only when you ask for it in the conversation, and the read-only role above makes it fail with `403`. **Allow writes** on the connection's detail panel is the second control. It's on by default, but it can't widen what the role allows.
+
+| RBAC on the `cloudthinker-reader` service account | Allow writes | Result |
+|---|---|---|
+| Read-only rules only | On or off | Read-only. Kubernetes rejects every change with `403`. |
+| Write rules granted | Off | Read-only. CloudThinker refuses every change before it reaches the cluster. |
+| Write rules granted | On | Agents can propose changes. Your [Rules and Approval mode](/guide/approvals/overview) decide each one. |
+
+To lock writes in CloudThinker as well, open **More → Workspace settings → Connections**, select **Kubernetes**, and turn off the **Allow writes** switch on its detail panel.
+
+<ApprovalDefault />
+
+To allow a specific change, grant only what it needs:
+
+- **Scale and rollout restart** act on namespaced workloads. Use a Role in each namespace involved, with `patch` on `deployments` and `get` plus `patch` on `deployments/scale`. For StatefulSets, add the same for `statefulsets` and `statefulsets/scale`. For DaemonSets, add `daemonsets` (restart only, since they don't scale).
+- **Apply** needs `get`, `create`, and `patch` on each resource type in the manifest you apply, in the namespaces it targets.
+- **Cordon and drain** act on nodes, which are cluster-scoped, so a namespaced Role can't allow them. Use a ClusterRole with `patch` on `nodes` and `create` on `pods/eviction`. The read role already supplies the `get` and `list` on pods and DaemonSets that drain needs.
+
+The write grants bind to the same `cloudthinker-reader` service account, so one kubeconfig covers reads and changes. If you plan write access from the start, rename the account (for example `cloudthinker-agent`) in both manifests and in step 2.
+
+This example allows scaling deployments in one namespace, plus cordon and drain. Replace `payments` with your namespace, save it as `cloudthinker-write.yaml`, and run `kubectl apply -f cloudthinker-write.yaml`.
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cloudthinker-scale
+  namespace: payments
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["patch"]
+- apiGroups: ["apps"]
+  resources: ["deployments/scale"]
+  verbs: ["get", "patch"]
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cloudthinker-scale
+  namespace: payments
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cloudthinker-scale
+subjects:
+- kind: ServiceAccount
+  name: cloudthinker-reader
+  namespace: cloudthinker
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cloudthinker-node-ops
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["patch"]
+- apiGroups: [""]
+  resources: ["pods/eviction"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cloudthinker-node-ops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cloudthinker-node-ops
+subjects:
+- kind: ServiceAccount
+  name: cloudthinker-reader
+  namespace: cloudthinker
+```
+
+**Success state:** `kubectl auth can-i patch deployments/scale -n payments --as=system:serviceaccount:cloudthinker:cloudthinker-reader` prints `yes`.
 
 ## Agent capabilities
 
-Once connected, [Kai](/guide/agents/kai) can inspect and optimize your cluster.
-
-| Capability | Description |
-|------------|-------------|
-| **Resource analysis** | Pod CPU/memory usage, requests vs limits |
-| **Node health** | Node status, capacity, allocatable resources |
-| **Workload optimization** | Right-sizing recommendations, HPA tuning |
-| **Troubleshooting** | CrashLoopBackOff, OOMKilled, pending pods |
-| **Security audit** | RBAC review, pod security, network policies |
+| Capability | What agents do |
+|------------|----------------|
+| **Workload triage** | Find crash-looping, pending, and restarting pods, degraded deployments, and warning events, then read logs to explain why |
+| **Node pressure** | Report node conditions, capacity, and allocatable resources, and the top CPU and memory consumers when Metrics Server is installed |
+| **Capacity and scheduling** | Compare requests and limits with usage, and explain why pods cannot be scheduled |
+| **Security and RBAC** | Review role bindings, service accounts, network policies, and privileged workloads |
+| **Configuration** | Inspect ingresses, services, storage, autoscalers, and images across namespaces. Custom resources need a rule added to the role |
+| **Changes** | Scale, restart, cordon, drain, or apply. Each change goes through Approvals |
 
 ### Verify the connection
 
 ```text
-Check the cluster connection and list all namespaces and node count
+Check the Kubernetes connection: list the namespaces, the node count, and any nodes that are not Ready
 ```
+
+You get the namespace list, node count, and node status. If usage numbers are missing, the answer says Metrics Server is not installed.
 
 ### Example prompts
 
 ```text
-Analyze pod resource utilization in the production namespace and the top CPU and memory consumers
-Investigate crash loops in the payment service and a fix
-Check node resource pressure across the cluster and if any node is near capacity
+Which pods in the payments namespace are crash-looping, and what do their logs say?
+Which nodes are under memory or disk pressure, and what is using the most memory?
+Which service accounts are bound to cluster-admin?
 ```
 
----
+## Rotate the token
+
+Kubernetes is a single-connection service, so it has no pencil icon or **Edit Instance** dialog while it's healthy. Create the new token first and delete the old Secret last: deleting it first cuts the cluster off before you have a working replacement.
+
+<Steps>
+  <Step title="Create a second token Secret">
+    Save this as `cloudthinker-reader-token-2.yaml`: a second token for the same service account, so both work while you swap.
+
+    ```yaml
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: cloudthinker-reader-token-2
+      namespace: cloudthinker
+      annotations:
+        kubernetes.io/service-account.name: cloudthinker-reader
+    type: kubernetes.io/service-account-token
+    ```
+
+    Apply it:
+
+    ```bash
+    kubectl apply -f cloudthinker-reader-token-2.yaml
+    ```
+
+    **Success state:** `kubectl get secret cloudthinker-reader-token-2 -n cloudthinker` lists the Secret with a `DATA` count of 3.
+  </Step>
+  <Step title="Build a kubeconfig from the new token">
+    Repeat step 2 of [Setup](#setup) with `cloudthinker-reader-token-2` in place of `cloudthinker-reader-token`.
+
+    **Success state:** `kubectl --kubeconfig cloudthinker-kubeconfig.yaml get nodes` lists your nodes.
+  </Step>
+  <Step title="Swap it in CloudThinker">
+    While the connection shows **Connected**, click **Disconnect** on the **Kubernetes** detail panel, then connect again and upload the new kubeconfig. While it shows **Error**, click **Replace credentials** on the detail panel and upload the new kubeconfig instead, with no disconnect.
+
+    **Success state:** the connection shows **Connected**.
+  </Step>
+  <Step title="Delete the old Secret">
+    Only now, remove the token you replaced:
+
+    ```bash
+    kubectl delete secret cloudthinker-reader-token -n cloudthinker
+    ```
+  </Step>
+</Steps>
+
+A disconnect and reconnect starts a new connection:
+
+- Agents and scheduled [automations](/guide/automation/automations) can't use the cluster between the disconnect and the reconnect.
+- Discovery runs again and spends credits.
+- **Allow writes** goes back to on. Turn it off again if you had it off.
+- Check that [Rules](/guide/approvals/rules) naming the Kubernetes connection still list it.
+
+If your policy bans long-lived credentials, skip the Secret and build the kubeconfig with a short-lived token from `kubectl create token cloudthinker-reader -n cloudthinker --duration=<time>`. The connection breaks when that token expires, so you rebuild and upload the kubeconfig each time.
 
 ## Troubleshooting
 
-<Accordion title="Cannot connect to cluster">
-Verify the API server endpoint is accessible from the internet. Check that firewall rules and security groups allow CloudThinker's IPs. For private clusters, set up VPN or bastion access and confirm the API server certificate is valid.
+A failed test shows `Failed to connect to Kubernetes:` followed by the first error line from `kubectl get nodes`. Match that line to an entry below.
+
+<Accordion title="Unable to connect to the server">
+CloudThinker could not reach the API server in the kubeconfig. Check that the `server` address is reachable from the internet, not only from your VPN, and that any API server allowlist permits outside access. Run `kubectl --kubeconfig cloudthinker-kubeconfig.yaml get nodes` from a machine outside your network to confirm.
 </Accordion>
 
-<Accordion title="Unauthorized errors">
-Verify the service account token is correct. Check that the ClusterRoleBinding is applied and that the token hasn't expired. Confirm the service account exists in the correct namespace.
+<Accordion title="error: You must be logged in to the server (Unauthorized)">
+The token is wrong, expired, or was revoked. Check that the `cloudthinker-reader-token` Secret still exists, then rebuild the kubeconfig from step 2 and upload it through [Rotate the token](#rotate-the-token).
 </Accordion>
 
-<Accordion title="No metrics data">
-Verify Metrics Server is installed by running `kubectl top nodes`. Check that Metrics Server pods are running and that the `metrics.k8s.io` API is available.
+<Accordion title="Error from server (Forbidden) in an answer">
+The ClusterRole doesn't cover that resource. Confirm the ClusterRoleBinding is applied, then add the resource to the role.
 </Accordion>
 
-<Accordion title="Missing namespaces">
-Verify the ClusterRole includes namespace list permission. Check if RBAC restricts access to certain namespaces and confirm the service account binding is cluster-wide.
+<Accordion title="getting credentials: exec, or no such file or directory">
+The kubeconfig relies on a local command or file path. Replace it with the token-based kubeconfig from step 2.
 </Accordion>
 
----
+<Accordion title="No CPU or memory usage in answers">
+Metrics Server is not installed or not ready. Run `kubectl top nodes` to check. Pod status, events, and node conditions still work without it.
+</Accordion>
+
+<Accordion title="Connection 'k8s' already exists. Only one instance is allowed.">
+`k8s` is the Kubernetes connection, and a workspace holds one. There's no pencil icon to edit it, so to point CloudThinker at a different cluster, click **Disconnect** on the **Kubernetes** detail panel and connect again with the other kubeconfig.
+</Accordion>
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Read-only access** — never grant write verbs to the CloudThinker service account; get, list, and watch are sufficient for all agent capabilities.
-- **Namespace isolation** — keep the service account in a dedicated namespace (e.g., `cloudthinker`) to simplify auditing and revocation.
-
----
+- **Keep Secrets out of the role.** The manifest above never grants Secret reads, so agents can't read Secret objects. Pod logs and ConfigMaps are readable, so drop `pods/log` or `configmaps` from the role if they hold sensitive data. Env values set directly in a pod spec are readable through `pods`, so move sensitive ones into Secrets.
+- **Rotate the token.** The token Secret never expires on its own, so rotate it on your normal schedule. See [Rotate the token](#rotate-the-token).
+- **Revoke in one command.** Delete the token Secret to cut access immediately, or delete the `cloudthinker` namespace plus the ClusterRole and binding to remove everything.
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Kai Agent" icon="dharmachakra" href="/guide/agents/kai">
-    Kubernetes-focused optimization agent
+  <Card title="Rancher" icon="/images/icons/rancher.svg" href="/guide/connections/rancher">
+    Read cluster inventory and access across clusters Rancher manages
   </Card>
-  <Card title="AWS Connection" icon="/images/icons/aws.svg" href="/guide/connections/aws">
-    Connect AWS for EKS auto-discovery
+  <Card title="Kubernetes Health Monitoring" icon="heart-pulse" href="/guide/use-cases/kubernetes-health-monitoring">
+    Put this connection to work on a recurring cluster health check
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Decide which cluster changes run, wait for a person, or are refused
+  </Card>
+  <Card title="Connections Overview" icon="plug" href="/guide/connections/overview">
+    How connection status, testing, and discovery work
   </Card>
 </CardGroup>

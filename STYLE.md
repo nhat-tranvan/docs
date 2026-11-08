@@ -1,31 +1,47 @@
 # CloudThinker Docs Style Guide & Content System
 
-The rulebook for every page in this repo. Rewrite agents and human contributors follow it mechanically. Golden exemplars: `quickstart.mdx` (task/tutorial register), `guide/auto-mode.mdx` (concept), `guide/connections/coralogix.mdx` (connection), `guide/code-review/setup.mdx` (multi-procedure task page).
+The rulebook for every page in this repo. Rewrite agents and human contributors follow it mechanically. Golden exemplars: `quickstart.mdx` (task/tutorial register), `guide/approvals/approval-mode.mdx` (concept), `guide/connections/coralogix.mdx` (connection), `guide/code-review/setup.mdx` (multi-procedure task page).
 
 Source-of-truth hierarchy for facts: **current app UI → confirmed product facts (below) → CLAUDE.md canonical naming → current screenshots in repo → app-adjacent reference pages → everything else.** Marketing copy is never a source of facts.
 
 ## Confirmed product facts (override any conflicting page text)
 
-1. **Autonomy has exactly two modes: Manual / Auto.** Any 3-level (Suggest/Approve/Autonomous) or 4-level (notify→suggest→approve→autonomous) model is wrong — remove on sight. Use `/snippets/autonomy-modes.mdx`.
+1. **Autonomy has exactly two Approval modes: Manual / Auto** (Auto has four choices: Rules or Rules + AI, then Ask me or Refuse). Any 3-level (Suggest/Approve/Autonomous) or 4-level (notify→suggest→approve→autonomous) model is wrong — remove on sight. Use `/snippets/autonomy-modes.mdx`.
 2. **General finding statuses: New / Acknowledged / Active / Resolved / Dismissed.** Use `/snippets/finding-statuses.mdx`. **Optimize Findings** instead uses Pending / In Progress / Implemented / Ignored because those rows follow the recommendation workflow. Never conflate the two.
-3. **Prompt syntax: `@agent #tool instruction`** — tool tag immediately after the mention, instruction after. Verified picker tags: `#visualize` `#dashboard` `#report` `#tabular_engine` `#slide` `#alert` `#schedule` `#search` `#search-knowledge-base`; `#recommend` survives as a typed tag. `#chart` and `#kb` do NOT exist in the product — knowledge-base scoping is `#<knowledge-base-name>` from the picker or `#search-knowledge-base`. Canonical home: `/guide/language`.
+3. **Prompt syntax: `@agent #connection request`, both optional** — plain language works; with no mention, CloudThinker answers. The `#` picker selects a connection (or a knowledge base), not an output tool; `/` runs a skill or command. Output shapes such as dashboards or reports are asked for in words ("as a dashboard"). `#dashboard`, `#report`, `#recommend` survive only as typed text — don't teach them as picker tools. `#chart` and `#kb` do NOT exist. Canonical home: `/guide/commands` and the `prompt-syntax-basics` snippet.
 4. **Code-review bot mention: `@cloudthinker-ai`.** Re-review IS a mention command (`@cloudthinker-ai review`, aliases `review again` / `continue review`); skip-review is NOT a mention command — it is the `@cloudthinker:ignore` marker in the MR/PR description. Canonical home: `/guide/code-review/mention-commands`.
 
 5. **Roles**: org roles Owner / Admin / Developer / Viewer ("Member" is legacy = Developer); workspace roles Admin / Developer / Viewer. Org Owner and Admin hold workspace Admin in every workspace.
-6. **Plans: Free / Team / Scale / Scale+ / Enterprise**, spelled "Scale+" in docs. Never Standard/Advanced/Pro/Professional. (Product frontend renders "Scale Plus" — if the production billing UI settles on that spelling, update this fact first, then sweep.)
+6. **Plans: Free / Team / Scale / Enterprise**. Paid plans include unlimited members. Team is $99/month with 1,000 credits and 3 workspaces; Scale is $499/month with 5,000 credits and 10 workspaces; Enterprise is a private offer. Scale Plus (Scale+) and per-seat pricing belong to older subscriptions. Never use Standard/Advanced/Pro/Professional as current plan names. Source: the new pricing sheet supplied on November 2, 2026. Do not infer annual prices or migration rules from it.
 7. **BYOK = bring your own LLM credentials** (Admin Settings → BYOK) — never encryption/KMS keys. Canonical UI paths: identity = **Admin Settings → Identity and access**; audit logs = **Admin Settings → Audit Logs**; MFA = **Account Settings → 2FA**.
+8. **Agent model**: one built-in assistant, **CloudThinker** (always on, mention `@CloudThinker` or none), which spawns temporary subagents; plus workspace custom agents. The five personas are retired from customer-facing copy. New workspaces default to the **Auto · Rules + AI · Ask me** Approval mode. Rules decide before the mode; canonical home: `/guide/approvals/overview`.
+9. **On duty / Paused (Resolve)** — settled against the backend; this line has been flipped by five separate review passes, so do not "correct" it without reading the code first. While **Paused**, an actionable cluster **is still filed as an incident with status Open**: `backend/app/features/incidents/use_cases/match_cluster_use_case.py:426` constructs the `Incident` unconditionally with `status=IncidentStatus.OPEN`, and the `on_duty` check only stamps `metadata["created_while_paused"] = True`. What **Paused** actually withholds is automatic triage, investigation and declaration (`declare_incident_use_case._require_on_duty`, error `ON_DUTY_REQUIRED`); each incident waits for someone to click **Investigate**. Incidents filed while paused are **never replayed** when **On duty** returns — `created_while_paused` is only read back for identification — so never write that held triage "runs" or "goes ahead" later. The app's On duty tooltip agrees with this. Banned phrasings: "clusters don't become incidents on their own", "held triage runs once you switch back".
+
+## Core message (matches cloudthinker.io)
+
+CloudThinker builds **Frontier Investigation Agents**. They find the root cause. You approve the fix. Lead the home page with this, and open every product overview with its website headline below, then one plain sentence on what the product does. Never paraphrase the headlines.
+
+| Product | Website headline | Promise | How the overview introduces it |
+|---|---|---|---|
+| Resolve | Finds the root cause. In minutes. | Finds the root cause, proposes the fix. Every incident makes it smarter. | The Frontier Investigation Agent for production incidents |
+| Review | Nothing breaks in production. | Catches what would break production. Proposes the fix. | The Frontier Investigation Agent for code changes |
+| Cyber | Find the real vulnerabilities in your running app, and fix them. | Verified findings. Fix PRs. Only on apps you own. | The Frontier Investigation Agent for application security |
+| Optimize | Pays only for what you use. | Finds the why behind every cost spike. Ships the fix as a merge request. | The Frontier Investigation Agent for cloud cost |
+| Customize | Works the way your team works. | Your rules, runbooks and tools. You decide what runs alone. | How you shape the agents to your team |
+| Automation | Put routine cloud ops on autopilot. | Routine checks run on a schedule or an event. Writes wait for your approval. | How you run the agents on a schedule or an event |
+| OnCall | Every incident gets a room. | Every team shares one room. Incidents close faster. | Where agents and engineers work an incident together |
 
 ## Terminology (canonical → banned)
 
 | Canonical | Banned |
 |---|---|
-| Autonomous Cloud Operations / AgenticOps (category) | "Multi-Agent System (MAS) orchestration", "AI DevOps platform" |
+| **Frontier Investigation Agents** (the core message: what CloudThinker is, on the home page and in every product overview, capitalized); AgenticOps (the method: field guide and tutorial only) | "Self-healing ops platform" or "Autonomous Cloud Operations" as the category, "intelligent OS for your cloud", "Multi-Agent System (MAS) orchestration", "AI DevOps platform" |
 | Modules: Optimize · Review · Cyber · Resolve | `CostOps`, `Code Review`, `SecOps`, `App Pentesting`, `AppSec`, `Deep Response Engine`, `DRE`, Stack, or Infrastructure as product names |
 | Manual / Auto (autonomy modes) | any 3- or 4-level autonomy model |
-| `@agent #tool instruction` | `@agent [instruction] [#tool] [context]` |
-| Tool tags: `#visualize` `#dashboard` `#report` `#recommend` `#alert` `#schedule` `#search` `#tabular_engine` `#slide` `#search-knowledge-base`, plus `#<knowledge-base-name>` for KB scoping | `#chart`, `#kb`, or inventing tags in examples |
+| `@agent #connection request` (both optional), or plain language | `@agent #tool instruction` as required syntax; `@agent [instruction] [#tool] [context]` |
+| `#` = connection or knowledge base; `/` = skill or command | `#chart`, `#kb`, or presenting `#dashboard`/`#report` as picker tools |
 | `@cloudthinker-ai` (bot) | `@cloudthinker` |
-| Agents: Alex (Cloud Engineer), Oliver (Security Engineer), Tony (Database Engineer), Kai (Kubernetes Engineer), Anna (General Manager) | role-title drift |
+| Agents: **CloudThinker** (the built-in assistant, `@CloudThinker`), temporary subagents, and custom agents. Canonical home: `/guide/agents/overview` | Anna, Alex, Oliver, Tony, Kai as agents a customer picks or mentions; `@alex`/`@anna`-style prompts |
 | CloudThinker Language (the syntax; page `/guide/language`) | "Prompt" as a page title |
 | Agentic loop: Detect → Analyze → Resolve → Validate — full explanation lives on `index.mdx` ONLY; elsewhere one sentence + link | re-explaining the loop |
 | workspace, organization, connection, finding, recommendation, detection rule, run — lowercase mid-sentence | Capitalized Common Nouns |
@@ -34,7 +50,7 @@ Source-of-truth hierarchy for facts: **current app UI → confirmed product fact
 ## Style rules (enforceable)
 
 1. **Headings**: frontmatter `title` in Title Case; all body headings in **sentence case**. Never `## **bold heading**`. Fixed section names: `Prerequisites`, `Setup`, `How it works`, `Troubleshooting`, `Next steps`, `Related`, `FAQ`, `You're done when…`.
-2. **Voice**: second person, active, present tense. Steps imperative ("Click **Connect**"). Agents do things by name ("Alex queries CloudWatch"), never "the system will".
+2. **Voice**: second person, active, present tense. Steps imperative ("Click **Connect**"). Agents do things by name ("CloudThinker queries CloudWatch"), never "the system will".
 3. **Sentences** ≤25 words target, split at 35. Paragraphs ≤4 lines, one idea each.
 4. **Intro**: ≤2 sentences before the first `##`. No "Introduction"/"Overview" headings inside a page.
 5. **Components**:
@@ -45,7 +61,7 @@ Source-of-truth hierarchy for facts: **current app UI → confirmed product fact
    - `CardGroup` max 1 per page (the closing block); exceptions: `index.mdx` (3), module overviews (closing + none elsewhere).
    - `Frame`: keep at least one screenshot per UI procedure when a current screenshot exists. Remove a screenshot that contradicts the current UI or canonical product name when no current replacement exists.
    - Callouts max 1 per section, 4 per page (Troubleshooting excluded). `Warning` only for data-loss/lockout/cost risk.
-6. **Code blocks** (connection-page exemption: the single verify-connection prompt is exempt from the tool-tag requirement; the de-facto `## Write access` H2 is an approved optional section on connection pages): prompts fenced ` ```text `, shell ` ```bash `, JSON ` ```json `. Prompt caps: 5 blocks per reference page, 4 per scenario, 2 per connection page, ≤3 prompts per block. Every prompt names a real agent + real tool tag + verifiable output.
+6. **Code blocks** (connection-page exemption: the de-facto `## Write access` H2 is an approved optional section on connection pages): prompts fenced ` ```text `, shell ` ```bash `, JSON ` ```json `. Prompt caps: 5 blocks per reference page, 4 per scenario, 2 per connection page, ≤3 prompts per block. Every prompt is plain language with a verifiable output; mention a custom agent or `#connection` only when the example needs it.
 7. **Frontmatter**: `title` unique site-wide; `description` verb-first, 50–150 chars, states what the reader accomplishes, never restates the title.
 8. **Endings**: every guide page ends with exactly one CardGroup — `## Next steps` (sequential content) or `## Related` (reference/concept), `cols={2}`, 2–4 linked cards. Exempt: `learn/aio/*`, `learn/aio-engineer/*`, `api-reference/*`.
 9. **Links**: root-relative (`/guide/...`); first mention of another feature is a link, later mentions plain text.
@@ -53,13 +69,13 @@ Source-of-truth hierarchy for facts: **current app UI → confirmed product fact
 
 ## Page templates (hard body-word budgets; split the page rather than exceed 1.5×)
 
-**(a) Site landing** (`index.mdx`, 700w): intro (1 sentence, canonical category) → `## Start here` (CardGroup, 3 cards) → `## Choose your goal` (CardGroup 4–6) → `## How CloudThinker works` (THE agentic-loop home, ~120w + diagram) → `## The four modules` (CardGroup 4) → `## Why CloudThinker` (1 paragraph ≤120w).
+**(a) Site landing** (`index.mdx`, 700w): intro (1 sentence, canonical category; leads with frontier investigation agents — Resolve first, other modules as expansion) → `## Start here` (CardGroup, 3 cards) → `## Choose your goal` (CardGroup 4–6) → `## How CloudThinker works` (THE agentic-loop home, ~120w + diagram) → `## The four modules` (CardGroup 4) → `## Why CloudThinker` (1 paragraph ≤120w).
 
 **(b) Module overview** (400–800w): intro ≤2 sentences → optional ≤80w "why" paragraph → `## How it works` (3–5 stages, ordered list/table + 1 Frame — NOT Steps) → `## What you can do` (table: capability | description | link) → optional `## Key concepts` (table) → `## Get started` (CardGroup 2–4).
 
 **(c) Task/how-to** (500–1200w): intro ≤2 sentences → `## Prerequisites` (bullets, link don't re-teach) → one `##` + `Steps` per procedure (imperative titles, bold UI paths **Settings → Connections**, Frame per UI step, "**Success state:**" line when the outcome isn't obvious) → Tabs for provider forks → optional `## Troubleshooting` (Accordions: cause/check/fix) → `## Next steps`.
 
-**(d) Concept** (600–1200w, model = auto-mode.mdx): intro definition ≤2 sentences → `## Why <concept>` (≤5 bolded bullets) → `## Turn it on` (short Steps only if a toggle exists) → 2–4 behavior H2s (decision tables over prose) → optional `## Examples` (max 2, contrasting) → optional `## FAQ` (≤6) → `## Related`. One stated behavior per fact — never two descriptions of the same mechanism.
+**(d) Concept** (600–1200w, model = approvals/approval-mode.mdx): intro definition ≤2 sentences → `## Why <concept>` (≤5 bolded bullets) → `## Turn it on` (short Steps only if a toggle exists) → 2–4 behavior H2s (decision tables over prose) → optional `## Examples` (max 2, contrasting) → optional `## FAQ` (≤6) → `## Related`. One stated behavior per fact — never two descriptions of the same mechanism.
 
 **(e) Reference** (≤1500w): intro ≤2 sentences → canonical form in ONE code block + component table → reference H2s as tables (every enumerable thing is a table row) → `## Examples` (≤5 blocks) → `## Related`.
 

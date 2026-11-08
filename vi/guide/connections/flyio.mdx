@@ -1,0 +1,163 @@
+---
+title: Fly.io
+description: "Kết nối một tổ chức Fly.io để agent có thể liệt kê app, kiểm tra trạng thái và vị trí của machine, và rà soát volume bằng token chỉ đọc."
+icon: "/images/icons/flyio.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối một tổ chức Fly.io để CloudThinker có thể liệt kê app, cho biết machine nào đang chạy hay đã dừng và chạy ở đâu, đồng thời rà soát kích thước và trạng thái gắn của volume trong một sự cố hoặc một đợt đánh giá dung lượng. Kết nối dùng token tổ chức chỉ đọc và không thể thay đổi gì: CloudThinker không bao giờ gửi thay đổi đến Fly.io, và chính Fly.io cũng từ chối các thay đổi thực hiện bằng token này.
+
+---
+
+## Điều kiện tiên quyết
+
+- Một tổ chức Fly.io chứa các app bạn muốn kiểm tra.
+- CLI `flyctl` ([cài đặt](https://fly.io/docs/flyctl/install/)), đã đăng nhập bằng `fly auth login` với tư cách thành viên của tổ chức đó.
+- Một workspace CloudThinker mà bạn có quyền thêm kết nối.
+
+Mỗi token chỉ đọc chỉ áp dụng cho một tổ chức. Nếu app của bạn nằm ở nhiều tổ chức, hãy tạo một token và một kết nối cho mỗi tổ chức.
+
+---
+
+## Thiết lập
+
+<Steps>
+  <Step title="Tạo token tổ chức chỉ đọc">
+    Chạy lệnh này trong terminal:
+
+    ```bash
+    fly tokens create readonly --name cloudthinker --expiry 720h
+    ```
+
+    `720h` là 30 ngày. Luôn truyền `--expiry`: token Fly.io mặc định có thời hạn 20 năm. Nếu bạn thuộc nhiều tổ chức, thêm `--org <slug>` để chọn đúng tổ chức. Chạy `fly orgs list` để xem các slug.
+
+    Sao chép toàn bộ giá trị lệnh in ra, bao gồm cả tiền tố `FlyV1 ` (ví dụ `FlyV1 fm2_...`).
+
+    Ghi ngày hết hạn vào lịch của bạn. Sau ngày đó, các prompt sẽ thất bại với lỗi xác thực được nêu trong [Khắc phục sự cố](#khắc-phục-sự-cố).
+
+    Nếu làm mất token, hãy tìm id của token bằng `fly tokens list`, thu hồi bằng `fly tokens revoke <token-id>`, rồi tạo token mới.
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Trên thanh bên, nhấn **More → Workspace settings → Connections**. Ở tab **Builtin Connections**, tìm **Fly.io**, dán token vào **Access token** và nhấn **Connect**. CloudThinker dùng token để liệt kê các tổ chức nhằm kiểm tra token.
+
+    **Trạng thái thành công:** thẻ Fly.io hiển thị trạng thái **Connected**.
+  </Step>
+  <Step title="Chạy prompt xác minh">
+    Chạy [prompt xác minh](#xác-minh-kết-nối) trong một cuộc chat mới.
+
+    **Trạng thái thành công:** CloudThinker liệt kê các tổ chức của bạn và app của chúng.
+  </Step>
+</Steps>
+
+---
+
+## Chi tiết kết nối
+
+| Trường | Khóa môi trường | Nội dung cần nhập |
+|-------|-----------------|---------------|
+| **Access token** | `FLY_ACCESS_TOKEN` | Token tổ chức chỉ đọc từ `fly tokens create readonly` |
+
+Không cần nhập slug tổ chức hay region. CloudThinker đọc tổ chức từ token.
+
+---
+
+## Quyền yêu cầu
+
+Loại token chính là mô hình phân quyền. `fly tokens create readonly` tạo một token chỉ có thể đọc một tổ chức và tài nguyên của nó. Token không thể deploy, scale, khởi động lại hay hủy bất cứ thứ gì, và Fly.io không cung cấp phạm vi chi tiết hơn.
+
+<Warning>
+Đừng dùng `fly tokens create org` hoặc token xác thực cá nhân thay thế. Cả hai đều có thể thay đổi tổ chức của bạn, và kết nối này không cần quyền đó.
+</Warning>
+
+---
+
+## Khả năng của agent
+
+| Khả năng | CloudThinker đọc gì |
+|------------|-------------------------|
+| **Organizations** | Các tổ chức mà token có thể đọc, theo slug và tên |
+| **Apps** | Trạng thái của từng app, tổ chức sở hữu và trạng thái deployment |
+| **Machines** | Theo từng app: ID, tên, trạng thái, region và thời điểm cập nhật gần nhất của machine, cùng số lượng theo từng trạng thái, số machine chưa chạy, và số region đang dùng trên tổng số region Fly.io cung cấp (không tính region đã ngừng hỗ trợ) |
+| **Volumes** | Theo từng app: ID, tên, kích thước, region, trạng thái, trạng thái gắn và mã hóa của volume, cùng số GB chưa gắn và tổng số GB đã cấp phát |
+
+Mọi khả năng đều là thao tác đọc, nên không có gì trên kết nối này yêu cầu phê duyệt. Danh sách mặc định hiển thị 25 dòng và cho biết đã ẩn bao nhiêu dòng. Hãy yêu cầu xem rộng hơn (tối đa 100) khi cần.
+
+Kết nối này không thể truy cập:
+
+| Ngoài phạm vi | Thay vào đó nên làm gì |
+|--------------|--------------------|
+| Deploy, scale, khởi động hoặc dừng machine, thay đổi volume, secret | CloudThinker đưa cho bạn lệnh `fly` chính xác để tự chạy |
+| Log và metric ứng dụng | Kết nối công cụ log hoặc metric của bạn, chẳng hạn [Grafana](/vi/guide/connections/grafana) hoặc [Datadog](/vi/guide/connections/datadog) |
+| Secret và giá trị biến môi trường | Không đọc, theo thiết kế |
+| Dung lượng đĩa đã dùng | Kích thước volume là dung lượng đã cấp phát, không phải dung lượng đã dùng. Kiểm tra mức sử dụng bên trong machine hoặc trong công cụ metric của bạn. |
+| Chi phí | CloudThinker báo cáo theo GB, không bao giờ theo số tiền. Kiểm tra thanh toán trong dashboard Fly.io. |
+
+### Cách đọc kết quả
+
+Trạng thái app và trạng thái machine đến từ control plane của Fly.io. Chúng không phải là health check.
+
+- Machine `started` không có nghĩa là app của bạn phản hồi request.
+- Machine `stopped` không phải là lỗi. Fly.io dừng các machine có cấu hình autostop.
+- Machine đã dừng vẫn giữ volume gắn với nó, và Fly.io tính phí volume trong cả hai trường hợp. Volume đang gắn chưa chắc đã được dùng, còn volume chưa gắn thì đáng kiểm tra, vì bạn vẫn trả tiền cho volume đó dù không có machine nào dùng.
+- App không có machine nào là app chưa từng được deploy. Đó là một tên được giữ chỗ, không phải lỗi.
+
+### Xác minh kết nối
+
+```text
+Check the Fly.io connection and list my organizations and apps
+```
+
+### Ví dụ prompt
+
+```text
+Show my Fly.io apps with their status and deployment state as a table
+Which machines in my Fly.io app "api" aren't started, and in which regions?
+List unattached Fly.io volumes for my app "api" with total provisioned GB
+```
+
+---
+
+## Khắc phục sự cố
+
+<Accordion title="Error: You must be authenticated to view this">
+Token bị thiếu, không hợp lệ hoặc đã hết hạn. Tạo token mới bằng `fly tokens create readonly`. Sau đó mở kết nối, nhấn biểu tượng chỉnh sửa trên instance, nhấn **Replace…** trong **Edit Instance**, dán token và nhấn **Save and test**.
+</Accordion>
+
+<Accordion title="Error: Could not find App">
+Tên app sai, hoặc app thuộc một tổ chức mà token này không đọc được. Yêu cầu CloudThinker liệt kê app của bạn và dùng một tên trong danh sách đó.
+</Accordion>
+
+<Accordion title="Insufficient permissions hoặc 403 trên một danh sách">
+Token không có quyền với tài nguyên đó. Kiểm tra xem bạn đã tạo token cho tổ chức sở hữu app và token chưa hết hạn hay không.
+</Accordion>
+
+<Accordion title="Một mục báo là chưa đo được">
+Fly.io đã từ chối hoặc không thể trả lời lệnh gọi đó, nên CloudThinker báo một khoảng trống thay vì một con số. Hãy coi mục đó là chưa biết, không phải bằng không.
+</Accordion>
+
+<Accordion title="CloudThinker không deploy, scale hoặc khởi động lại">
+Đó là hành vi mong đợi. Kết nối này chỉ đọc. Hãy yêu cầu lệnh `fly` chính xác và tự chạy.
+</Accordion>
+
+---
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Chỉ đọc ở phía Fly.io:** token không thể thực hiện thay đổi, nên nếu bị lộ, token chỉ làm lộ quyền đọc đối với một tổ chức và không gì hơn.
+- **Thời hạn ngắn, thu hồi khi xong việc:** liệt kê token bằng `fly tokens list` và thu hồi bằng `fly tokens revoke <token-id>` khi công việc hoàn tất.
+
+---
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Kết nối Render" icon="server" href="/vi/guide/connections/render">
+    Kết nối một nền tảng app khác, có log và deploy cần phê duyệt
+  </Card>
+  <Card title="Tổng quan kết nối" icon="plug" href="/vi/guide/connections/overview">
+    Xem mọi nền tảng bạn có thể kết nối và cách kết nối hoạt động
+  </Card>
+</CardGroup>

@@ -1,101 +1,132 @@
 ---
-title: Incident Memory
-description: "Tăng tốc điều tra incident bằng AI học hỏi từ các giải pháp trong quá khứ để tìm nguyên nhân gốc rễ nhanh hơn."
+title: Bộ nhớ sự cố
+description: "Tìm hiểu CloudThinker ghi lại gì sau mỗi cuộc điều tra, dùng lại các ghi chú đó khi lỗi tái diễn ra sao, và cách xác nhận bản sửa có hiệu lực."
 icon: brain
 ---
 
-Mỗi incident mà nhóm của bạn giải quyết đều làm CloudThinker thông minh hơn. **Incident Memory** tự động ghi lại bài học từ các điều tra đã hoàn thành và áp dụng chúng khi các incident tương tự xảy ra trong tương lai.
+Bộ nhớ sự cố là tập ghi chú CloudThinker viết khi kết thúc một [cuộc điều tra nguyên nhân gốc](/vi/guide/incident/root-cause-analysis) và đọc lại khi bắt đầu cuộc điều tra tiếp theo. Khi cùng một dịch vụ lại hỏng theo cùng một cách, CloudThinker bắt đầu từ những gì nhóm bạn đã biết thay vì làm lại từ đầu.
 
----
+## Điều kiện tiên quyết
 
-## Cách hoạt động
+- Resolve đang nhận cảnh báo từ ít nhất một nguồn. Xem [Kết nối nguồn Pulse](/vi/guide/pulse/setup).
+- Không có gì cần bật, và cũng không có công tắc workspace nào để tắt. Mọi cuộc điều tra đi đến kết luận xử lý đều ghi vào bộ nhớ, dù **On duty** khởi động nó hay Admin nhấn **Investigate**. Mọi vai trò đều đọc được kết quả điều tra. Xem [Vai trò](/vi/guide/security/roles).
+
+## CloudThinker ghi lại những gì
+
+CloudThinker tự viết bộ nhớ. Bạn không phải điền form nào, và không phải sự cố nào cũng tạo ra một mục. Mỗi mục thuộc một trong ba loại:
+
+| Loại | Dùng để làm gì |
+|---|---|
+| **Recollection** | Câu chuyện của một sự cố: triệu chứng, nguyên nhân gốc, thứ đã thay đổi, bản sửa, và một phép kiểm tra chứng minh bản sửa có hiệu lực |
+| **Observation** | Một phát hiện từ cuộc điều tra đang chạy, kèm dòng `Action:` cho người xử lý biết cần làm gì |
+| **Lesson** | Một quy luật có ít nhất hai sự cố trong quá khứ làm chứng, để một sự cố bất thường đơn lẻ không thành quy tắc |
+
+CloudThinker viết hoặc cập nhật recollection sau mỗi lượt chạy thực sự điều tra và đi đến kết luận xử lý (đã lưu đánh giá, mức độ nghiêm trọng và quyết định đóng). CloudThinker không viết gì cho một câu hỏi đơn thuần, một lượt chạy bị hủy, hay một lượt chạy chưa đi đến kết luận. Khi một sự cố mở lại, CloudThinker cập nhật recollection sẵn có của sự cố đó thay vì thêm recollection thứ hai.
+
+Mọi recollection đều theo cùng một khuôn năm dòng. Ví dụ dưới đây cho thấy một recollection trông như thế nào:
+
+```text
+Symptom: checkout-api 5xx rate above 20% on target group tg-checkout at 14:02 (CloudWatch)
+Root cause: Inferred. Connection pool exhausted after max connections was lowered
+Origin changed: unknown
+Fix: operator-applied. Pool size restored to its previous value
+Verify-with: 5xx rate on tg-checkout over 15 minutes; expected below 1%
+```
+
+CloudThinker tách riêng dữ kiện quan sát được, suy luận và lịch sử chưa rõ. Trường nào không có căn cứ thì ghi `unknown` thay vì đoán.
+
+## Cách truy hồi hoạt động
+
+Khi một cuộc điều tra mới bắt đầu, CloudThinker đọc bộ nhớ trước khi đặt bất kỳ giả thuyết nào:
+
+1. CloudThinker tải 20 mục được cập nhật gần nhất trong workspace, gồm cả ba loại, không lọc theo dịch vụ. Trong workspace bận rộn hơn, một recollection cũ hơn chỉ được tìm thấy nếu CloudThinker tìm xa hơn 20 mục đó, trong toàn bộ danh sách recollection của workspace.
+2. CloudThinker tìm recollection khớp: cùng triệu chứng trên cùng dịch vụ hoặc thành phần.
+3. Nếu sự cố khớp đã được xử lý trước đó, CloudThinker chạy đúng một phép kiểm tra nhẹ mà recollection đó ghi lại để chứng minh bản sửa.
+   - **Kiểm tra đạt:** bản sửa cũ vẫn giữ được. CloudThinker đọc bằng chứng hiện tại để quyết định kết luận xử lý. Một báo cáo lặp lại của cùng một đợt sự cố không được tính là lần xảy ra mới.
+   - **Kiểm tra không đạt:** CloudThinker điều tra lỗi hiện tại theo đúng dữ kiện của nó, không mặc định rằng nguyên nhân cũ quay lại.
+4. CloudThinker coi mọi mục truy hồi được là manh mối, không phải bằng chứng. Kết luận vẫn dựa trên dữ liệu từ hệ thống của bạn, và bộ nhớ không bao giờ nâng một nguyên nhân **Inferred** lên **Verified**.
+
+<Tip>
+Giữ tên **Service** và **Resource ID Path** giống nhau trên mọi nguồn, để việc truy hồi khớp được cảnh báo mới với sự cố cũ.
+</Tip>
+
+Bộ nhớ sự cố không nằm trong **More → Workspace settings → Memory** (dưới **Agent Configuration**), nơi hiển thị các mục [bộ nhớ workspace](/vi/guide/memory). Để xem CloudThinker đã kiểm tra gì, nhấn **Watch live** khi đang chạy, hoặc mở **More actions → Open AI Conversation** sau đó. Khi một bản sửa cũ được kiểm tra lại, cuộc hội thoại hiển thị phép kiểm tra `Verify-with:` mà CloudThinker đã chạy. Không có bước riêng nào liệt kê các mục được truy hồi.
+
+## Xác nhận bản sửa có hiệu lực
+
+Recollection ghi một bản sửa đã áp dụng sẽ bắt đầu ở trạng thái **Unverified**. Một phép kiểm tra theo dõi sẽ chuyển nó thành **Verified** hoặc **Failed**, và kết quả này quyết định các cuộc điều tra sau có tin vào nó hay không.
 
 <Steps>
-  <Step title="Điều tra hoàn thành">
-    Khi một điều tra RCA xác định được nguyên nhân gốc rễ, CloudThinker tự động trích xuất các bài học quan trọng — vấn đề, nguyên nhân gốc rễ, các bước khắc phục, các dịch vụ bị ảnh hưởng và mức độ tin cậy.
+  <Step title="Mở cuộc hội thoại điều tra">
+    Vào **Resolve → Investigation**, chọn sự cố, rồi mở **More actions → Open AI Conversation**.
   </Step>
-  <Step title="Lưu trữ bộ nhớ">
-    CloudThinker tự động lưu trữ những bài học này để sử dụng trong tương lai.
+  <Step title="Bật thẻ kiểm tra theo dõi">
+    Khi CloudThinker tự áp dụng bản sửa và ghi lại phép kiểm tra `Verify-with:`, CloudThinker đề xuất một lần kiểm tra theo dõi dưới dạng thẻ trong cuộc hội thoại. Thẻ cho biết khi nào chạy và theo dõi điều gì. **Enable** và **Dismiss** cần vai trò Admin của workspace. Chưa có gì được lên lịch cho đến khi Admin nhấn **Enable**. Các thành viên khác thấy thẻ không có nút, kèm ghi chú **Only members who can create automations may enable this.** Hãy gửi liên kết cuộc hội thoại cho Admin, hoặc tự yêu cầu phép kiểm tra (bước tiếp theo).
+
+    Không có thẻ nào xuất hiện cho bản sửa nhóm bạn áp dụng thủ công, và thẻ không có bộ chọn thời gian. Trong cả hai trường hợp, hãy tự yêu cầu phép kiểm tra (bước tiếp theo).
+
+    **Trạng thái thành công:** thẻ hiển thị **Scheduled**, và lần kiểm tra theo dõi trở thành một [automation](/vi/guide/automation/automations) chạy vào thời điểm đã đề xuất.
   </Step>
-  <Step title="Incident mới xảy ra">
-    Khi một incident mới kích hoạt điều tra RCA, CloudThinker tìm kiếm các incident tương tự trong quá khứ trong workspace của bạn.
+  <Step title="Hoặc tự yêu cầu">
+    Nếu không có thẻ nào, hãy hỏi ngay trong cuộc hội thoại đó:
+
+    ```text
+    Tomorrow at 09:00 UTC, re-run the check that proves this incident's fix and update its recollection with the result.
+    ```
+
+    Ghi rõ múi giờ trong yêu cầu để thời điểm chạy không bị hiểu nhầm. **Trạng thái thành công:** lần kiểm tra theo dõi xuất hiện trong danh sách [automation](/vi/guide/automation/automations) của bạn với thời điểm bạn yêu cầu.
   </Step>
-  <Step title="Áp dụng tri thức">
-    Các điều tra trong quá khứ có liên quan được cung cấp cho AI agent như ngữ cảnh, giúp agent tập trung vào các nguyên nhân có khả năng nhất và bỏ qua các hướng sai.
+  <Step title="Đọc kết quả">
+    Khi chạy, lần kiểm tra theo dõi báo kết quả trong cuộc hội thoại và đặt kết quả xác minh cho recollection.
   </Step>
 </Steps>
 
----
+### Kết quả xác minh
 
-## Những gì được ghi lại
+Bạn chỉ thấy kết quả trong báo cáo của lần kiểm tra theo dõi trong cuộc hội thoại. Không màn hình nào khác hiển thị kết quả này.
 
-Mỗi điều tra hoàn thành tự động lưu:
+| Kết quả | Loại mục | Ý nghĩa | Ảnh hưởng đến các cuộc điều tra sau |
+|---|---|---|---|
+| **Unverified** | Bất kỳ | Chưa có phép kiểm tra nào cho kết luận rõ ràng. Mặc định cho mọi mục chưa có kết quả. | Dùng làm manh mối. CloudThinker không bao giờ biến nó thành quy trình chuẩn. |
+| **Verified** | Bất kỳ | Một phép kiểm tra theo dõi đã xác nhận kết quả mong đợi | Dùng làm manh mối, gắn nhãn là bản sửa đã giữ được |
+| **Failed** | Lesson | Quy luật không đúng | Không còn hiển thị làm hướng dẫn |
+| **Failed** | Recollection hoặc observation | Bản sửa đã ghi không giữ được | Giữ lại làm phản ví dụ, để không ai mặc định dùng lại bản sửa đó |
 
-| Thông tin | Ví dụ |
-|-------------|---------|
-| **Nguyên nhân gốc rễ** | "Cạn kiệt connection pool do database connection bị rò rỉ" |
-| **Các bước khắc phục** | Các hành động ưu tiên mà AI đề xuất |
-| **Dịch vụ bị ảnh hưởng** | Các dịch vụ liên quan đến incident |
-| **Mức độ nghiêm trọng** | Cấp độ nghiêm trọng của incident |
-| **Độ tin cậy** | Mức độ chắc chắn của AI về nguyên nhân gốc rễ |
+## Cách bộ nhớ luôn chính xác
 
----
+Không có màn hình nào để xem, xuất, sửa hay xóa bộ nhớ sự cố. Bộ nhớ được lưu theo từng workspace và không bao giờ chia sẻ sang workspace khác. Để biết CloudThinker lưu trữ và bảo vệ dữ liệu workspace ra sao, xem [tổng quan bảo mật](/vi/guide/security/overview). Nếu một mục sai hoặc chứa dữ liệu không nên có, hãy email [support@cloudthinker.io](mailto:support@cloudthinker.io) kèm tên workspace và ID sự cố. CloudThinker duy trì bộ nhớ trong khi làm việc:
 
-## Chỉ báo recall
+- Khi bằng chứng mới mâu thuẫn với một câu trong recollection cũ, CloudThinker sửa câu đó và nêu quan sát dùng để đính chính.
+- Một nhận định lịch sử thiếu căn cứ được đánh dấu chưa xác minh, không bị xóa. Lỗi hôm nay khác đi không xóa bỏ một sự cố cũ có căn cứ.
+- Hai lesson mâu thuẫn nhau được gộp thành một lesson đã đính chính, hoặc lesson lỗi thời bị xóa.
+- Mục lỗi thời được sửa tại chỗ, không tạo bản trùng lặp.
 
-Khi một điều tra sử dụng tri thức từ các incident trong quá khứ, bạn sẽ thấy một badge trên kết quả RCA:
+Bạn góp phần bằng cách để các cuộc điều tra chạy xong, chốt từng đề xuất trong mục **Remediation** của sự cố (bên dưới kết quả trên **Resolve → Investigation**) bằng **Mark as Done** hoặc **Dismiss** kèm ghi chú về việc bạn thực sự đã làm, và bật các phép kiểm tra theo dõi. Xem [Chốt từng đề xuất khắc phục](/vi/guide/incident/root-cause-analysis#xử-lý-từng-đề-xuất-khắc-phục).
 
-> **Được tham khảo từ N incident tương tự**
+## Khắc phục sự cố
 
-Điều này cho bạn biết AI đã tham chiếu các điều tra trước đó để hướng dẫn phân tích. Di chuột qua badge để xem chi tiết.
+<AccordionGroup>
+  <Accordion title="Sự cố lặp lại nhưng CloudThinker bắt đầu từ đầu">
+    **Nguyên nhân:** lượt chạy trước chưa đi đến kết luận xử lý, nên không có recollection nào được viết. Hoặc sự cố mới có triệu chứng, dịch vụ hay thành phần khác. Trong workspace có nhiều sự cố, recollection cũ cũng có thể nằm ngoài 20 mục gần nhất, xem [Cách truy hồi hoạt động](#cách-truy-hồi-hoạt-động). **Kiểm tra:** mở sự cố trước đó và xác nhận sự cố có **Current assessment** và kết quả đã đóng. **Cách xử lý:** để các cuộc điều tra chạy đến kết luận. Với webhook tùy chỉnh, hãy ánh xạ **Service** và **Resource ID Path** (trong màn hình chỉnh sửa nguồn) để các sự cố gọi tên thành phần nhất quán. Xem [nguồn tùy chỉnh](/vi/guide/incident/webhook-integrations/custom-source).
+  </Accordion>
+  <Accordion title="CloudThinker đề xuất bản sửa từng thất bại lần trước">
+    **Nguyên nhân:** bản sửa trước chưa từng được kiểm tra, nên recollection của nó vẫn ở **Unverified**. **Cách xử lý:** lần sau hãy bật thẻ kiểm tra theo dõi, hoặc yêu cầu phép kiểm tra theo dõi trong cuộc hội thoại như hướng dẫn ở trên.
+  </Accordion>
+  <Accordion title="Phép kiểm tra theo dõi không bao giờ chạy">
+    **Nguyên nhân:** thẻ chưa từng được bật. Lần kiểm tra theo dõi được đề xuất chưa phải là automation cho đến khi bạn bật. **Kiểm tra:** tìm lần kiểm tra theo dõi trong danh sách [automation](/vi/guide/automation/automations) của bạn. **Cách xử lý:** bật thẻ trong cuộc hội thoại, hoặc yêu cầu CloudThinker lên lịch phép kiểm tra.
+  </Accordion>
+</AccordionGroup>
 
----
-
-## Khi nào bộ nhớ hữu ích nhất
-
-- **Sự cố tái diễn** — Vấn đề kết nối database, rò rỉ bộ nhớ, suy giảm sau triển khai — các mẫu lặp đi lặp lại được chẩn đoán nhanh hơn mỗi lần.
-- **Nguyên nhân gốc rễ tương tự** — CPU tăng đột biến ở Service A do thay đổi cấu hình? Lần tới khi CPU tăng đột biến ở Service B, AI biết kiểm tra cấu hình trước.
-- **Duy trì tri thức nhóm** — Khi kỹ sư rời đi hoặc luân chuyển, những hiểu biết về debug của họ vẫn còn trong hệ thống.
-- **Giải quyết nhanh hơn** — Thay vì bắt đầu từ đầu, AI bắt đầu với các giả thuyết có cơ sở dựa trên những gì đã hiệu quả trước đây.
-
----
-
-## Cách cải thiện theo thời gian
-
-Incident Memory trở nên thông minh hơn khi nhóm của bạn sử dụng CloudThinker:
-
-- **Củng cố** — Khi cùng một nguyên nhân gốc rễ xuất hiện trong nhiều incident, mẫu đó được tăng cường và ưu tiên trong các tìm kiếm tương lai
-- **Thay thế** — Điều tra lại một incident sẽ thay thế bộ nhớ cũ bằng kết quả cập nhật, giữ tri thức luôn mới
-- **Loại bỏ trùng lặp** — Các kết quả giống nhau tự động được hợp nhất thay vì nhân đôi
-
----
-
-## Cấu hình
-
-Incident Memory được **bật theo mặc định** khi workspace của bạn có tính năng bộ nhớ hoạt động. Không cần thiết lập thêm.
-
-<Note>
-Incident Memory chỉ ghi lại bài học từ các điều tra RCA đạt được kết luận (xác định được nguyên nhân gốc rễ, báo động giả hoặc không tìm thấy). Các điều tra bị hủy hoặc thất bại không được lưu trữ.
-</Note>
-
----
-
-## Thực tiễn tốt nhất
-
-- **Cung cấp mô tả incident chi tiết** — ngữ cảnh phong phú hơn giúp AI tìm kiếm kết quả khớp tốt hơn từ các incident trong quá khứ
-- **Chạy RCA đến hoàn thành** — các điều tra đạt đến kết quả đóng góp những bộ nhớ hữu ích nhất
-- **Kết nối topology của bạn** — các incident với các dịch vụ bị ảnh hưởng được ánh xạ tạo ra kết quả khớp chính xác hơn trong tương lai
-- **Điều tra lại khi cần** — chạy RCA lần hai trên cùng một incident sẽ cập nhật bộ nhớ với kết quả tốt hơn
-
----
-
-## Liên quan
+## Bước tiếp theo
 
 <CardGroup cols={2}>
-  <Card title="Phân tích nguyên nhân gốc rễ" icon="magnifying-glass" href="/vi/guide/incident/root-cause-analysis">
-    Hiểu cách AI agent điều tra incident và xây dựng chuỗi bằng chứng mà bộ nhớ cung cấp thông tin.
+  <Card title="Điều tra và RCA" icon="magnifying-glass" href="/vi/guide/incident/root-cause-analysis">
+    Chạy một cuộc điều tra và đọc kết luận.
   </Card>
-  <Card title="Runbooks" icon="book-open" href="/vi/guide/incident/runbooks">
-    Kết nối runbook vận hành để agent có thể tìm kiếm và thực thi các bước khắc phục trong quá trình xử lý incident.
+  <Card title="Runbook" icon="book-open" href="/vi/guide/incident/runbooks">
+    Cung cấp cho Resolve các quy trình đã phê duyệt để áp dụng bản sửa.
+  </Card>
+  <Card title="Bộ nhớ workspace" icon="brain-circuit" href="/vi/guide/memory">
+    Xem agent ghi nhớ những gì qua mọi cuộc hội thoại.
   </Card>
 </CardGroup>

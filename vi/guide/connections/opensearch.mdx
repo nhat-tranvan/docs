@@ -1,0 +1,161 @@
+---
+title: OpenSearch
+description: "Kết nối OpenSearch để agent có thể kiểm tra tình trạng cluster, xem index và shard, tìm kiếm tài liệu và giải thích độ liên quan, ở chế độ chỉ đọc"
+icon: magnifying-glass-chart
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối một cluster OpenSearch để các agent CloudThinker có thể kiểm tra tình trạng cluster, xem index, mapping và shard, tìm kiếm và đếm tài liệu, và giải thích vì sao một tài liệu được chấm điểm như vậy. Kết nối đăng nhập bằng **username và password** (basic auth) và được thiết kế chỉ đọc: kết nối cung cấp tám công cụ đọc (tình trạng cluster, liệt kê index, mapping của index, shard, tìm kiếm, đếm, multi-search và explain) và không có gì ghi dữ liệu.
+
+## Điều kiện tiên quyết
+
+- Cluster OpenSearch có endpoint HTTPS mà CloudThinker truy cập được qua mạng. CloudThinker Cloud không truy cập được `localhost` và địa chỉ riêng. Nếu firewall hoặc domain access policy giới hạn bên gọi, hãy cho phép các egress IP của CloudThinker. Tài liệu này không công bố danh sách egress IP của CloudThinker: hãy hỏi đầu mối liên hệ CloudThinker của bạn, hoặc [liên hệ chúng tôi](https://cloudthinker.io/contact). Xem [Truy cập dịch vụ riêng tư](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ) để biết các lựa chọn khác.
+- Plugin bảo mật OpenSearch với một internal user mà bạn có thể tạo. Trên Amazon OpenSearch Service, điều này nghĩa là domain có fine-grained access control, vì kết nối dùng basic auth chứ không dùng AWS request signing.
+- Các index mà agent cần đọc, chẳng hạn `logs-app` hoặc `products`.
+
+## Thiết lập
+
+<Steps>
+  <Step title="Tạo role chỉ đọc">
+    Trong **OpenSearch Dashboards → Dev Tools**, tạo một role giới hạn trong các index agent cần. Thay `logs-*` bằng pattern của bạn.
+
+    ```http
+    PUT _plugins/_security/api/roles/cloudthinker_read
+    {
+      "cluster_permissions": ["cluster_monitor"],
+      "index_permissions": [
+        {
+          "index_patterns": ["logs-*"],
+          "allowed_actions": ["read", "indices_monitor", "indices:admin/mappings/get"]
+        }
+      ]
+    }
+    ```
+  </Step>
+  <Step title="Tạo user riêng và ánh xạ role">
+    Chạy từng yêu cầu riêng trong **Dev Tools**. Đầu tiên tạo user:
+
+    ```http
+    PUT _plugins/_security/api/internalusers/cloudthinker
+    {
+      "password": "<a long random password>"
+    }
+    ```
+
+    Sau đó ánh xạ role cho user:
+
+    ```http
+    PUT _plugins/_security/api/rolesmapping/cloudthinker_read
+    {
+      "users": ["cloudthinker"]
+    }
+    ```
+
+    Bạn cũng có thể làm tương tự trong **OpenSearch Dashboards → Security** ở mục **Roles** và **Internal users**.
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Trên thanh bên, nhấn **More → Workspace settings → Connections**, rồi ở tab **Builtin Connections** chọn **OpenSearch**. Nhập **Cluster URL**, **Username** và **Password**. Đặt **Connection timeout (seconds)** thành một giá trị như `15`. Nhấn **Connect**.
+
+    **Trạng thái thành công:** kết nối hiển thị **Connecting** và **Verifying**, rồi **Connected**.
+
+    Để đổi mật khẩu sau này, mở kết nối, nhấn biểu tượng bút chì trên dòng của kết nối, và trong **Edit Instance** nhấn **Replace…**. Xem [Xoay vòng thông tin xác thực](/vi/guide/connections/overview#xoay-vòng-thông-tin-xác-thực).
+  </Step>
+</Steps>
+
+<Tip>
+Trên **Amazon OpenSearch Service**, bật fine-grained access control với internal user database, đăng nhập OpenSearch Dashboards bằng master user và chạy các yêu cầu tương tự. Domain access policy cũng phải cho phép các yêu cầu của CloudThinker đi qua.
+</Tip>
+
+<Note>
+Luôn đặt **Connection timeout (seconds)**. Nếu để trống sẽ không có thời gian chờ, nên một cluster không truy cập được hoặc một lần kiểm tra TLS thất bại sẽ làm treo cuộc trò chuyện thay vì trả về lỗi.
+</Note>
+
+## Chi tiết kết nối
+
+| Trường | Bắt buộc | Mô tả | Ví dụ |
+|-------|----------|-------------|---------|
+| **Cluster URL** | Có | Endpoint của cluster, bao gồm scheme và cổng | `https://opensearch.example.com:9200` |
+| **Username** | Có | User riêng giới hạn trong các index workspace này cần truy cập, không phải admin của cluster | `cloudthinker` |
+| **Password** | Có | Mật khẩu của user đó | |
+| **Verify TLS certificate** | Không | Để trống để xác minh chứng chỉ (khuyến nghị). Chỉ nhập `false` cho cluster tự host dùng chứng chỉ tự ký | để trống |
+| **Connection timeout (seconds)** | Không, nhưng nên đặt | Thời gian một lệnh gọi chờ cluster. Để trống nghĩa là không giới hạn | `15` |
+
+## Quyền yêu cầu
+
+| Agent cần | Cấp quyền |
+|----------------|-------|
+| Kiểm tra tình trạng cluster | Cluster action group `cluster_monitor` |
+| Liệt kê index và đọc phân bổ shard | Index action group `indices_monitor` |
+| Đọc field mapping | Index action `indices:admin/mappings/get` |
+| Tìm kiếm, đếm, multi-search và explain | Index action group `read` |
+
+Quyền ghi trên user không bổ sung gì, vì kết nối không có công cụ nào dùng đến chúng.
+
+<Tip>
+Giới hạn `index_patterns` trong các index agent cần. Thông tin xác thực admin của cluster không cho agent thêm gì ở đây mà còn mở rộng thiệt hại nếu bị lộ.
+</Tip>
+
+## Khả năng của agent
+
+| Khả năng | Agent có thể làm gì |
+|------------|--------------------|
+| **Tình trạng cluster** | Báo cáo trạng thái cluster, số node và số shard chưa được phân bổ |
+| **Kiểm kê index** | Liệt kê index kèm tình trạng và số tài liệu, và đọc field mapping |
+| **Tìm kiếm và đếm** | Chạy tìm kiếm DSL, đếm và multi-search trên các index được nêu tên |
+| **Phân loại shard** | Hiển thị phân bổ shard cho một index và phân biệt primary chưa phân bổ (dữ liệu bạn không đọc được) với replica chưa phân bổ (mất dự phòng) |
+| **Giải thích độ liên quan** | Giải thích vì sao một tài liệu khớp, không khớp hoặc được chấm điểm như vậy cho một truy vấn |
+
+Hãy nêu tên index trong prompt khi có thể. Kiểm kê index và kiểm tra shard chạy trên tên index chính xác, không phải wildcard, nên một prompt như "check logs-app-2026.10.24" sẽ nhận câu trả lời nhanh và chính xác hơn "check the logs".
+
+### Xác minh kết nối
+
+```text
+Check OpenSearch cluster health and list the indices with their document counts
+```
+
+Kết quả gồm trạng thái green, yellow hoặc red, số node, các shard chưa phân bổ và danh sách index.
+
+### Ví dụ prompt
+
+```text
+Count authentication failures in logs-app over the last 24 hours, broken down by level
+Why does the products index return irrelevant results for "wireless charger"? Explain the top hit's score
+Which shards in logs-app-2026.10.24 are unassigned, and are any of them primaries?
+```
+
+## Khắc phục sự cố
+
+<Accordion title="401 Unauthorized">
+Username hoặc password sai, hoặc user đã bị xóa. Kiểm tra user trong **Security → Internal users**, rồi [thay thông tin xác thực](/vi/guide/connections/overview#xoay-vòng-thông-tin-xác-thực) trên kết nối.
+</Accordion>
+
+<Accordion title="Lệnh gọi bị treo thay vì thất bại">
+Cluster không truy cập được, hoặc xác minh TLS thất bại với chứng chỉ tự ký. Đặt **Connection timeout (seconds)** để lệnh gọi thất bại nhanh. Chỉ đặt **Verify TLS certificate** thành `false` nếu cluster thực sự dùng chứng chỉ tự ký.
+</Accordion>
+
+<Accordion title="security_exception, hoặc agent không thấy một index">
+Role của user không bao gồm index đó. Thêm index vào `index_patterns` trên role `cloudthinker_read`. Agent báo cáo index nào bị từ chối thay vì thử lại với pattern rộng hơn.
+</Accordion>
+
+<Accordion title="Kết nối thất bại trên Amazon OpenSearch Service">
+Domain chỉ dùng quyền truy cập IAM. Kết nối này đăng nhập bằng basic auth, nên domain cần fine-grained access control với internal user database.
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Chỉ có thao tác đọc**: kết nối không thể ghi, xóa hoặc thay đổi cài đặt cluster, bất kể quyền của user cho phép gì.
+- **Thông tin xác thực chỉ dùng cho cluster của bạn**: agent không thể trỏ username và password đã lưu tới một host khác. CloudThinker từ chối mọi yêu cầu ghi đè kết nối theo từng lệnh gọi trước khi gửi đi, kể cả khi một tài liệu yêu cầu điều đó.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Elasticsearch" icon="/images/icons/elasticsearch.svg" href="/vi/guide/connections/elasticsearch">
+    Kết nối cluster Elasticsearch bằng API key chỉ đọc.
+  </Card>
+  <Card title="Phân tích nguyên nhân gốc" icon="magnifying-glass" href="/vi/guide/incident/root-cause-analysis">
+    Xem cách agent dùng tìm kiếm log để tìm nguyên nhân gây ra sự cố.
+  </Card>
+</CardGroup>

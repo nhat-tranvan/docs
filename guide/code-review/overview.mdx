@@ -1,70 +1,138 @@
 ---
 title: Review
-description: "Catch bugs, security vulnerabilities, and quality issues on every pull request with context-aware AI reviews"
+description: "Get an AI review on every pull or merge request, with findings posted as comments in GitHub, GitLab, Bitbucket, Azure DevOps or CodeCommit."
 icon: code-pull-request
 ---
 
-CloudThinker reviews every pull request on your connected repositories — GitHub, GitLab, Bitbucket, and more — with full context of what the change is trying to do, not just individual lines. Findings appear as in-line comments with severity ratings and remediation guidance.
+import { ReviewLoopScene } from '/snippets/iso/review-loop.jsx';
 
-Rules-based scanners match syntax patterns; CloudThinker reads intent. It knows when code touches infrastructure — IAM policies, S3 permissions, database queries — and flags cloud-specific risks alongside logic bugs and vulnerabilities. Security and quality run in a single pass, so reviewers see one set of findings in the tools they already use.
+**Nothing breaks in production.**
+
+Review is the Frontier Investigation Agent for code changes: an AI reviewer for your pull requests (PRs) and merge requests (MRs). When someone opens one, CloudThinker reads the change, posts a summary comment and inline findings on it, and checks the fix when you push again.
+
+<ReviewLoopScene />
+
+A linter matches patterns. Review reads what the change is trying to do: the diff, the linked ticket, your team's convention files and, if you keep one, a `BUSINESS.md` that describes the rules your product must keep. That lets it flag a broken business rule or a risky migration, not only a style slip.
 
 ## How it works
 
-1. **Detect** — a developer opens a pull request on a connected repository. CloudThinker picks it up automatically.
-2. **Gather context** — [Oliver](/guide/agents/oliver) reads the full diff, any Jira ticket linked in the PR description or branch name, and relevant Confluence documentation.
-3. **Analyze** — the review runs in parallel across security, quality, and cloud-infrastructure dimensions.
-4. **Post findings** — in-line comments land on the PR with exact line references, severity ratings, and remediation guidance.
-5. **Track** — when a linked ticket provides acceptance criteria, the review records a ticket-compliance verdict. When you push a fix, the next review verifies it, and every finding feeds [Review Insights](/guide/code-review/analytics).
-
-<Frame>
-  <img
-    src="/images/code-review/devsecops/devsecops-03-workflow.webp"
-    alt="Review workflow: merge request, CLI, CI, and release triggers feed the agent runtime, which runs code and security reviewers and lands comments, fix PRs, release gates, and audit evidence"
-  />
+<Frame caption="Every PR or MR gets a review posted back on it, and each new push gets an incremental review.">
+  <img src="/images/code-review/diagram-code-review-light.svg" alt="When a PR or MR opens, the Git provider sends CloudThinker an event; CloudThinker gathers the diff, linked ticket and repository files, runs the review, and posts a summary and inline comments on the PR, and each new push gets an incremental review." className="block dark:hidden" style={{width: '100%'}} />
+  <img src="/images/code-review/diagram-code-review-dark.svg" alt="When a PR or MR opens, the Git provider sends CloudThinker an event; CloudThinker gathers the diff, linked ticket and repository files, runs the review, and posts a summary and inline comments on the PR, and each new push gets an incremental review." className="hidden dark:block" style={{width: '100%'}} />
 </Frame>
 
-<iframe
-  width="100%"
-  height="400"
-  src="https://www.youtube.com/embed/ume5mU4516M"
-  title="CloudThinker Tutorial 2025 - How to automate code review and fix critical bugs"
-  style={{ borderRadius: '12px', border: 'none' }}
-  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-  allowFullScreen
-></iframe>
+1. **A PR or MR opens.** You connect your Git provider and pick repositories once, and after that your provider sends CloudThinker an event whenever a PR or MR opens, with nobody starting a review. Draft PRs and MRs are skipped until they're marked ready for review.
+2. **CloudThinker gathers context.** It checks out the change and reads the diff, a ticket linked from the description (Jira, Linear, Backlog or a provider issue, once you add an [extension](/guide/code-review/extensions)), and the files listed in [What Review reads](#what-review-reads).
+3. **The review runs.** Depth depends on the workspace [review mode](/guide/code-review/setup#choose-a-review-mode): **Fast**, **Auto** or **Advanced**. Each review uses credits; see [usage and credits](/guide/billing/usage).
+4. **Findings land on the PR.** You get one summary comment plus inline comments. Each finding has a severity (Critical, High, Medium or Low) and a suggested fix.
+5. **New pushes get an incremental review.** Only the commits pushed since the last review are read, and the review checks whether earlier findings were fixed.
+
+The most severe unresolved finding sets the review's verdict, and a run that never finished or was skipped gets a status of its own instead. The verdict is CloudThinker's label on the change, and your provider's branch rules still decide whether it can merge. See [verdicts](/guide/code-review/review-workspace#triage-the-reviews-list) for all seven and what each one asks of you.
+
+<Note>
+  CloudThinker keeps its own copy of each selected repository to read it, and deletes those copies when you click **Remove setup**. Secrets in tool output are replaced with placeholders before the model sees them; see [data protection](/guide/security/data-protection).
+</Note>
+
+Changed test files, fixtures and test data, snapshots, generated code, Storybook stories, prototypes, HTML under `docs/` and vendored Jsonnet aren't reviewed: no finding is ever placed in one.
+
+<Accordion title="Full list of skipped path patterns">
+  ```text
+  **/test_*.py              **/conftest.py              **/*_test.go
+  **/src/test/java/**/*.java                            **/src/test/**/*.{kt,kts}
+  **/*.test.{js,jsx,ts,tsx} **/*.spec.{js,jsx,ts,tsx}   **/__tests__/**
+  **/test/**/*_test.py      **/tests/**/*_test.py       **/*_test.py
+  **/*_spec.rb              **/spec/**/*_spec.rb        **/*Test.java
+  **/*Tests.java            **/*_test.rs                **/oh_modules/**
+  **/*.test.ets             **/test/**/*.jl             **/test/**/*.hs
+  **/*Spec.hs               **/test/**/*.lhs            **/*Spec.lhs
+  **/tests/**/*.nim         **/tests/**/*.R             **/__snapshots__/**
+  **/*.snap                 **/testdata/**              **/fixtures/**
+  **/.ipynb_checkpoints/**  **/*.generated.*            **/*.gen.go
+  **/*.pb.go                **/*.pb.cc                  **/*.pb.h
+  **/*Test.swift            **/*Tests.swift             **/Tests/**/*.swift
+  **/tests/**/*.elm         **/vendor/**/*.{jsonnet,libsonnet}
+  **/test/**/*.zig          **/*_test.zig               **/kitex_gen/**/*.go
+  **/*.capnp.h              **/*.capnp.go               **/*.capnp.ts
+  **/*_capnp.rs             **/*_capnp.py               **/test/**/*.ml
+  **/tb_*.{v,sv,vhd,vhdl}   **/*_tb.{v,sv,vhd,vhdl}     lib/**/*.sol
+  **/*.t.sol                **/test/**/*.sol            **/tests/**/*.sol
+  **/test/**/*.vy           **/tests/**/*.vy            **/*.stories.{js,jsx,ts,tsx,mdx}
+  **/prototypes/**          **/docs/**/*.html
+  ```
+</Accordion>
+
+Matching is by file path only, against this built-in list that you can't add to. For the paths this catches by surprise, see [findings are wrong or noisy](/guide/code-review/troubleshooting#findings-are-wrong-or-noisy).
+
+## What Review reads
+
+Besides the diff, Review reads your team's own knowledge. All of it is optional, and it makes every review sharper over time.
+
+| File | Where it goes | What it does |
+|---|---|---|
+| [`BUSINESS.md`](/guide/code-review/business-flow) | Repository root, on the target branch | Describes your product's modules and the rules (invariants) they must keep. Business flow findings come from it. Read whenever it exists: it doesn't depend on **Repository conventions** |
+| Convention files | `AGENTS.md`, `CLAUDE.md`, `CONVENTIONS.md` and the rule files of coding agents such as Cursor or Copilot, in the repository root or any folder | Coding conventions Review follows, when **Repository conventions** is on. [Every path it recognizes](/guide/code-review/learnings#add-your-own-convention-files) |
+| [Learnings](/guide/code-review/learnings) | Kept by CloudThinker for each repository, no file needed | Rules CloudThinker learns from the findings your team resolved. Review applies them to every new review, so the same mistake gets caught the next time |
+
+You write `BUSINESS.md` by hand in a short, fixed format: see [Business flow checks](/guide/code-review/business-flow). If the file doesn't parse, the review still runs without it.
+
+## What it checks
+
+Each finding carries one category.
+
+| Category | What it catches | Example |
+|---|---|---|
+| Security | Injection, exposed secrets, unsafe auth or permissions | A query built from request input without parameters |
+| Correctness | Logic errors, null handling, race conditions | A lost update when two requests write the same row |
+| Performance | Slow queries, N+1 loops, blocking calls | A full table scan inside a request handler |
+| Pattern | Breaks a convention your repository already follows | A new handler that skips the shared error wrapper |
+| Deploy, migration, backward compatibility | Changes that break a rollout or existing clients | A migration that drops a column the current release still reads |
+| Test gap | Changed behavior that no test covers | A new error path with no test, in a PR that adds none |
+| Business flow | A change that breaks a rule in your `BUSINESS.md` | Code that lets a trial account use a feature an invariant reserves for paid plans |
 
 ## What you can do
 
-<Frame>
-  <img
-    src="/images/code-review/devsecops/devsecops-04-stack.webp"
-    alt="The review stack across the release pipeline: code review on every merge request and security review before production, sharing skills, memory, policy, and production context"
-  />
-</Frame>
+| Capability | What you get | Learn more |
+|---|---|---|
+| Automatic review | A summary and inline findings on every new PR or MR | [Set up Review](/guide/code-review/setup) |
+| Follow a walkthrough | One pull request that would break production: the finding, how you check it, and the fix before the merge | [Catch a risky pull request with Review](/guide/use-cases/review-risky-pull-request) |
+| Overview dashboard | Find changes waiting on you and check review activity | [Review Dashboard](/guide/code-review/dashboard) |
+| Codebase Atlas | See what your team merged, where it landed and what needs attention | [Codebase Atlas](/guide/code-review/codebase-atlas) |
+| Ultra review | A deeper review that posts only verified bugs worth fixing, started with one comment | [Ultra review](/guide/code-review/ultra-review) |
+| UI Review: Loupe | Screenshots of the pages a change touches, checked in your running app before merge | [UI Review: Loupe](/guide/code-review/loupe) |
+| Business flow checks | Findings when a change breaks a pricing, entitlement or money rule you describe | [Business flow checks](/guide/code-review/business-flow) |
+| Personalization | Set summary sections, tone and language for your team | [Review Personalization](/guide/code-review/customizations) |
+| Repository management | Control Review, Atlas mapping and Learnings per repository | [Manage Review Repositories](/guide/code-review/repository-management) |
+| Review workspace | Every reviewed change, its findings and status, in CloudThinker | [Review workspace](/guide/code-review/review-workspace) |
+| Mention commands | Ask a question, re-run a review or fix findings with `@cloudthinker-ai` in a PR comment | [Mention commands](/guide/code-review/mention-commands) |
+| Learnings | Recurring patterns from resolved findings, applied to future reviews | [Learnings](/guide/code-review/learnings) |
+| Pipeline analysis | An explanation and suggested fix for each failed CI run | [Pipeline Analysis](/guide/code-review/pipelines) |
+| Auto-resolve conflicts | A follow-up MR/PR that resolves merge conflicts on an open MR/PR. Not on Azure DevOps | [Auto-resolve conflicts](/guide/code-review/conflict-resolution) |
+| Release Risk | One ship-or-block verdict on every release tag, shared with the team, and a deploy that waits on blockers | [Release Risk](/guide/code-review/releases) |
+| Insights | Which finding categories hit your team, and how fast they get fixed | [Insights](/guide/code-review/analytics) |
+| Troubleshooting | Why a review didn't post, stopped or was skipped, with the cause, the check and the fix | [Review troubleshooting](/guide/code-review/troubleshooting) |
 
-| Capability | Description | Learn more |
-| --- | --- | --- |
-| Bug detection | Catch logic errors, null-pointer exceptions, off-by-one errors, and edge cases before merge | [Setup](/guide/code-review/setup) |
-| Security analysis | Flag SQL injection, cross-site scripting (XSS), server-side request forgery (SSRF), hardcoded secrets, and cloud-specific IAM risks | [Oliver](/guide/agents/oliver) |
-| Convention enforcement | Apply the convention files already in your repository to every review | [Learnings](/guide/code-review/convention-rules) |
-| PR commands | Mention `@cloudthinker-ai` in a PR comment to re-review or ask questions | [Mention commands](/guide/code-review/mention-commands) |
-| Conflict resolution | Detect merge conflicts on open PRs and open a follow-up merge request that resolves them automatically | [Auto-Resolve Conflicts](/guide/code-review/conflict-resolution) |
-| Issue-tracker context | Pull Jira requirements and Confluence standards into reviews; record compliance against linked ticket requirements | [Extensions](/guide/code-review/extensions) |
-| Team analytics | Track which finding domains — security, performance, correctness, patterns — affect reviewed merge requests, with links to the finding evidence | [Review Insights](/guide/code-review/analytics) |
+## Supported providers
+
+GitHub, GitLab (GitLab.com or self-hosted), Bitbucket Cloud, Azure DevOps and AWS CodeCommit. See [provider authentication](/guide/code-review/provider-auth) for what each one needs. Check these limits before you plan a rollout:
+
+- **One provider and one Azure DevOps project per workspace.** A second provider, or repositories in a second Azure DevOps project, need their own workspace.
+- **Self-hosted GitLab is the only instance URL you can enter.** GitHub Enterprise Server and Bitbucket Data Center aren't options, and a CodeCommit connection covers one AWS account and region.
+
+Automatic reviews run on all five providers. The actions on top of them don't:
+
+- Comment commands with `@cloudthinker-ai` differ by provider, and AWS CodeCommit takes top-level questions only. See [provider support](/guide/code-review/mention-commands#provider-support).
+- **Apply fix** is listed per provider in [Work the findings](/guide/code-review/review-workspace#work-the-findings); **Fix all findings** and **Merge** in [Re-run, fix, and merge](/guide/code-review/review-workspace#re-run-fix-and-merge).
+- [Auto-resolve conflicts](/guide/code-review/conflict-resolution) works on every provider except Azure DevOps.
+
+Two pieces of text look alike but go in different places: `@cloudthinker-ai` in a comment asks a question, a re-review or a fix, while `@cloudthinker:ignore` in the description [skips the review](/guide/code-review/mention-commands#skip-a-review) on that one change. See [mention commands](/guide/code-review/mention-commands).
 
 ## Get started
 
 <CardGroup cols={2}>
-  <Card title="Set up code review" icon="gear" href="/guide/code-review/setup">
-    Connect GitHub, GitLab, Bitbucket, and more in under 5 minutes
+  <Card title="Set up Review" icon="gear" href="/guide/code-review/setup">
+    Connect a provider, pick repositories and get your first review.
   </Card>
-  <Card title="Mention commands" icon="at" href="/guide/code-review/mention-commands">
-    Interact with CloudThinker directly from PR and MR comments
-  </Card>
-  <Card title="Learnings" icon="list-check" href="/guide/code-review/convention-rules">
-    Keep reviews aligned with your team's convention files and rules learned from past reviews
-  </Card>
-  <Card title="Review Insights" icon="chart-mixed" href="/guide/code-review/analytics">
-    See which finding domains affect your reviewed merge requests
+  <Card title="Provider authentication" icon="key" href="/guide/code-review/provider-auth">
+    Tokens, scopes and webhooks for each Git provider.
   </Card>
 </CardGroup>

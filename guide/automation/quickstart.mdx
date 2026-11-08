@@ -1,0 +1,154 @@
+---
+title: Automation Quickstart
+description: "Build a daily cost anomaly check that alerts a Slack channel, test it with Run now, and keep any write behind approvals."
+icon: rocket
+---
+
+In about 10 minutes you'll have an automation that checks yesterday's cloud spend every morning and alerts a Slack channel when a service jumps. It only reads billing data, and any write it attempts later still goes through your approvals.
+
+## Prerequisites
+
+- A Team plan or above. Automations and Slack delivery both need it. See [Pricing](/guide/billing/pricing).
+- The workspace Admin role. Only admins can create and edit automations.
+- A cloud connection that can read billing data, with at least 14 days of history:
+  - [AWS](/guide/connections/aws#required-permissions): Cost Explorer turned on, and `ce:GetCostAndUsage` (in `ReadOnlyAccess`)
+  - [Google Cloud](/guide/connections/gcp#required-permissions): a **Standard usage cost** billing export to BigQuery, in the same project as the connection's service account, plus the BigQuery Data Viewer and BigQuery Job User roles. You'll name the dataset in the instructions in step 2.
+  - [Azure](/guide/connections/azure#required-permissions): the Cost Management Reader role on the subscription
+- Slack connected to CloudThinker. If your Slack workspace uses app approval, a Slack Workspace Owner or app manager has to approve CloudThinker first. See [Slack integration](/guide/slack-integration).
+
+## Send agent alerts to Slack
+
+Agents can raise an alert with a severity as a built-in action, and this automation reports through one. CloudThinker sends those alerts to the channels on the **Agent alerts** row of [Notifications](/guide/notifications). Route them to a channel first, so the first test reaches you.
+
+<Steps>
+  <Step title="Pick a Slack channel">
+    Go to **More → Workspace settings → Notifications**. Under **Delivery channels**, find the Slack card (it reads **Pick a channel** until one is set). Click its settings icon (**Change Slack channel**), then search for and select the channel your team watches under **Slack Notification Channel**.
+
+    For a private channel, run `/invite @CloudThinker` in it first, or it won't show in the list.
+  </Step>
+  <Step title="Turn on agent alerts for Slack">
+    Under **What to notify me about**, open **Alerts** and turn on Slack for **Agent alerts**. Set the severity threshold to **High** or lower. This automation raises High alerts.
+
+    **Success state:** the Slack toggle on the **Agent alerts** row is on, with a threshold of **Low**, **Medium**, or **High**.
+  </Step>
+</Steps>
+
+## Create the automation
+
+<Steps>
+  <Step title="Open the template">
+    Open **Automations** in the sidebar and select **New automation**. Under **Or start from a template**, select **Daily cost anomaly alert**.
+
+    The form opens with the name, the instructions, and a **Schedule** trigger for every day at 08:00 already filled in.
+
+    <Frame caption="New automation: describe the job in plain words, or start from a template">
+      <img src="/images/v2/automation-new.webp" alt="New automation page with a chat box and a grid of templates, including Daily cost anomaly alert" />
+    </Frame>
+  </Step>
+  <Step title="Tell it to alert">
+    **What should the agent do?** already reads:
+
+    ```text
+    Compare yesterday's spend per service against its trailing 14-day average. Report only the services more than 20% above it, with the most likely cause for each.
+    ```
+
+    Append this sentence at the end, so a spike becomes a Slack alert:
+
+    ```text
+    If any service is more than 20% above its average, raise a high-severity alert that names the service, the increase, and the likely cause.
+    ```
+
+    On Google Cloud, also add this sentence, with your own project and dataset:
+
+    ```text
+    The billing export is in dataset <project>.<dataset>.
+    ```
+
+    If the workspace has more than one cloud connection, type `#` to pick the one to check. Without a `#` mention, the agent picks from the workspace's connections itself.
+  </Step>
+  <Step title="Check the schedule">
+    On the **Schedule** card, confirm **Daily** at 08:00, or change the time. Times are in your local time zone. In a daylight-saving zone the run lands an hour off for part of the year ([why](/guide/automation/automations#schedule)).
+  </Step>
+  <Step title="Leave the approval picker on its default">
+    Leave **Approval** (beside the model picker) on its **Default** option. This automation only reads, so approvals don't come into play ([see below](#what-happens-if-the-agent-tries-a-write)).
+  </Step>
+  <Step title="Create it">
+    Select **Create automation**.
+
+    **Success state:** the automation opens on its own page. Its **Next run** field shows the next 08:00, in your local time with the time zone named.
+  </Step>
+</Steps>
+
+## Test it now
+
+Don't wait for 08:00. Select **Run now** at the top of the automation's page.
+
+**Success state:** a run appears under **Past runs** on the automation's page as **Running**, then **Succeeded**. Open it to read the agent's comparison in the run's conversation. If any service was more than 20% above its average, an alert also posts in your Slack channel. To see the credits the run used, open [Usage](/guide/billing/usage).
+
+<Note>
+Cloud billing data for yesterday can still be incomplete early in the morning, so a test right after setup may report lower spend than the final bill. If the numbers look off, run it again later in the day.
+</Note>
+
+A quiet day produces no Slack message, which is the point. To check the Slack path without touching the real automation:
+
+1. Open its **…** menu in the **Automations** list and select **Duplicate**. The form opens with a copy, 08:00 schedule included. The copy counts toward your plan's automation limit until you delete it.
+2. Change its instructions to "Raise a high-severity test alert with yesterday's total spend". Remove the schedule with the trash icon on the **Schedule** card, then select **Create automation**. With no trigger, the copy runs only on **Run now**.
+3. Select **Run now** on the copy.
+4. Delete the copy once the alert arrives.
+
+## What happens if the agent tries a write
+
+This automation only reads, so no write ever reaches approvals. If you later extend it, for example "tag the resource that caused the spike", approvals decide each write before it runs. To check which mode the automation uses, open **Approvals** > **Approval mode** and find **Automations** under **Run types**. Common choices (the [full list](/guide/automation/autonomous-agents#how-a-write-is-decided) has five):
+
+| Approval choice for this automation | A write no Rule covers |
+|--------------------------------------|------------------------|
+| **Auto · Rules + AI · Refuse** (default) | [AI judgment](/guide/approvals/approval-mode#the-two-modes) can allow a write that matches what you asked for and stays in scope. A destructive write, or one with an unclear effect, is refused, and the run continues. |
+| **Auto · Rules + AI · Ask me** | Same, but the rest waits. The run shows **Required Approval** until someone selects **Approve** or **Decline** in its conversation. |
+| **Manual** | Waits for a person |
+
+In the Auto choices, a matching Rule decides before any of this, but only once CloudThinker turns on Rule enforcement for your workspace ([details](/guide/approvals/rules#troubleshooting)). In **Manual**, every write waits for a person, even one an Allow Rule covers.
+
+For a write the automation makes every day, add an **Allow** [Rule](/guide/approvals/rules) on **Approvals** > **Rules**, scoped to **Automations** under **Runs from**. While the **Rules** step says **In preview**, that Rule is only recorded, so AI judgment still decides the write. Once CloudThinker turns on Rule enforcement for your workspace, the Rule runs the write and the run no longer depends on AI judgment or on someone being online. To write one from scratch, type `/create-policy` in a chat (it proposes a Rule that an Admin then accepts) and describe the write. See the [steps](/guide/approvals/rules#ask-for-one-rule-in-chat).
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="The run succeeded but nothing posted in Slack">
+    Either no service crossed 20%, or alerts aren't routed. Read the run's conversation first. If it says it raised an alert, check that Slack is on for **Agent alerts** in **More → Workspace settings → Notifications**, that its threshold is **High** or lower, and that the CloudThinker bot is in the channel.
+  </Accordion>
+  <Accordion title="Too many alerts">
+    A noisy service crosses 20% most days. Edit the instructions: raise the percentage, add a minimum dollar increase (for example "and at least $50 above its average"), or name services to skip.
+  </Accordion>
+  <Accordion title="The run failed or says it has no cost data">
+    Open the run's conversation for the error. Most often the cloud connection lacks billing permissions. Check the required permissions on your connection's page, such as [AWS](/guide/connections/aws).
+  </Accordion>
+  <Accordion title="The run shows Required Approval">
+    The agent attempted a write and your approval choice asks a person. Open the run's conversation and select **Approve** or **Decline**. If you didn't expect a write, tighten the instructions.
+  </Accordion>
+  <Accordion title="The run stays on Pending">
+    It's queued, or its conversation is busy with another turn. It starts once the conversation is free. If **Run now** says "A run is already in progress for this task", wait for that run to finish.
+  </Accordion>
+  <Accordion title="You can't use Run now or New automation">
+    Only workspace Admins can create, edit, and run automations. Developers and Viewers can read them and their runs. Ask an Admin, or ask for the Admin role.
+  </Accordion>
+  <Accordion title="The automation turned itself off">
+    Ten runs in a row failed. Fix the cause using **Run now**, which still works, then turn the automation back on.
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Automations" icon="calendar-check" href="/guide/automation/automations">
+    Add webhook, repository, and probe triggers to the same automation
+  </Card>
+  <Card title="Autonomous operations" icon="robot" href="/guide/automation/autonomous-agents">
+    Set limits for everything that runs without a live prompt
+  </Card>
+  <Card title="Cost anomalies" icon="chart-line" href="/guide/cost-optimization/anomalies">
+    See the anomalies Optimize already detects for you
+  </Card>
+  <Card title="Approval Rules" icon="list-check" href="/guide/approvals/rules">
+    Name each routine write and the verdict it should get
+  </Card>
+</CardGroup>

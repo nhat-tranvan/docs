@@ -1,0 +1,180 @@
+---
+title: Wazuh
+description: "Connect Wazuh so agents can investigate alerts and agents, test log lines, and change rules, decoders, and agents through your Approvals"
+icon: "/images/icons/wazuh.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+import ApprovalDefault from '/snippets/approval-default.mdx';
+
+Connect Wazuh and CloudThinker agents can search alerts, check agent health, file integrity, configuration checks, and vulnerabilities, and change rules, decoders, and agents through your [Approvals](/guide/approvals/overview). One Wazuh connection holds **two accounts**: a Wazuh server API user (the manager, port `55000`) and a Wazuh indexer user (the alert store, port `9200`).
+
+<Warning>
+A new Wazuh connection starts with **Allow writes** on. If you don't want agents to change rules, decoders or agents yet, switch it off after you connect (see [Setup](#setup)), and give the server API user only the `readonly` role.
+</Warning>
+
+## Prerequisites
+
+- A Wazuh server API (port `55000`) and Wazuh indexer (port `9200`) that CloudThinker can reach over HTTPS from the internet. Firewall both ports to CloudThinker's egress IPs only. These docs don't publish CloudThinker's egress IP list: ask your CloudThinker contact, or [contact us](https://cloudthinker.io/contact). See [Reaching private services](/guide/connections/overview#reaching-private-services) for other options.
+- Admin access to the Wazuh dashboard, to create both users.
+- The **Admin** role in the CloudThinker workspace, which you need to add connections. See [Roles](/guide/security/roles).
+
+## Setup
+
+<Steps>
+  <Step title="Create a Wazuh server API user">
+    In the Wazuh dashboard, go to **Server management → Security → Users** and click **Create user**. Enter a username such as `cloudthinker` and a password, and under **Roles** select `readonly`, which can read everything in Wazuh. Save the user.
+
+    If agents should test log lines against your rules, also give the user a role with the `logtest_all_*` policy.
+
+    To let agents make changes, give the user a role with only the policies you allow instead, such as `rules_all_*`, `decoders_all_*`, `agents_all_*`, `agents_commands_*`, and `cluster_all_*`. Avoid `administrator`: it can also manage Wazuh users and roles. See Wazuh's [RBAC configuration](https://documentation.wazuh.com/current/user-manual/api/rbac/configuration.html) for custom roles.
+  </Step>
+  <Step title="Create a Wazuh indexer user">
+    In the Wazuh dashboard, go to **Indexer management → Security → Internal users** and click **Create internal user**. Set **Username** to `cloudthinker` and a **Password**, then click **Create**.
+
+    Then open **Roles**, click **Create role**, and set:
+    - **Name**: `cloudthinker_read`
+    - **Cluster permissions**: `cluster_composite_ops_ro`
+    - **Index**: `wazuh-*`
+    - **Index permissions**: `read`
+
+    Click **Create**. On the `cloudthinker_read` role, open **Mapped users**, click **Manage mapping**, add `cloudthinker`, and click **Map**.
+  </Step>
+  <Step title="Open Wazuh in CloudThinker">
+    In the sidebar, click **More → Workspace settings → Connections**. On the **Builtin Connections** tab, search for **Wazuh** and click **Connect**.
+  </Step>
+  <Step title="Enter both accounts and connect">
+    Fill in the fields in [Connection details](#connection-details) and click **Connect**. CloudThinker signs in to the manager and the indexer and checks that the indexer has Wazuh alert data.
+
+    **Success state:** the connection shows a **Connected** status and the message `Wazuh <version> connected.`
+  </Step>
+  <Step title="Decide on writes">
+    **Allow writes** is on by default on new Wazuh connections. Turn it off unless you have a change you want agents to make: open **More → Workspace settings → Connections**, select **Wazuh**, and switch off **Allow writes**. With the `readonly` role, write attempts also fail in Wazuh itself.
+
+    <ApprovalDefault />
+
+    That means AI judgment could approve deleting a Wazuh agent with no person involved. Before you leave writes on, choose **Manual** so a person approves every change. Once CloudThinker turns on [Rule enforcement](/guide/approvals/rules#troubleshooting) for your workspace, a [Rule](/guide/approvals/rules) can single out agent deletion: in a chat, type `/create-policy Deny deleting agents on the Wazuh connection` (or **Ask first** instead of **Deny** if a person should decide), then accept it under **Approvals → Rules → Needs review**.
+  </Step>
+</Steps>
+
+## Connection details
+
+| Field | Required | Description | Example |
+|-------|----------|-------------|---------|
+| **Manager URL** | Yes | Wazuh server API address, `https://` and no path | `https://manager.example.com:55000` |
+| **Manager username** | Yes | Wazuh server API user | `cloudthinker` |
+| **Manager password** | Yes | Password of that user | |
+| **Indexer URL** | Yes | Wazuh indexer address, `https://` and no path | `https://indexer.example.com:9200` |
+| **Indexer username** | Yes | Wazuh indexer user | `cloudthinker` |
+| **Indexer password** | Yes | Password of that user | |
+| **TLS certificate** | Yes | **Allow self-signed** (default) or **Verify** | **Verify** |
+
+Wazuh ships with self-signed certificates. **Allow self-signed** encrypts traffic but skips certificate checks, so it can't detect a spoofed endpoint. You can't upload a custom CA. Choose **Verify** only if both endpoints have certificates from a publicly trusted CA.
+
+## Required permissions
+
+| Account | Read only | With changes |
+|---------|-----------|--------------|
+| **Server API user** | `readonly` role, plus `logtest_all_*` to test log lines | A role with only the policies you allow (see Setup) |
+| **Indexer user** | `read` on `wazuh-*` | Same as read only. Agents read alerts from the indexer and make changes through the manager |
+
+<Tip>
+Start with the `readonly` role, and add change policies only when you have a specific change you want agents to make.
+</Tip>
+
+## Agent capabilities
+
+| Capability | Description | Approval |
+|------------|-------------|----------|
+| **Alerts** | Search alerts by time, agent, rule, level, or text, and count them by level, agent, and rule | Runs without asking |
+| **Agents** | Status, inventory (packages, ports, processes), file integrity changes, configuration checks, and vulnerabilities | Runs without asking |
+| **Rules and decoders** | Read rule and decoder files, and test a log line to see which rule matches | Runs without asking |
+| **Rule and decoder changes** | Edit or delete custom rule and decoder files, then restart the Wazuh manager to apply them | Each change |
+| **Agent changes** | Restart, group, or delete agents, and run active responses | Each change |
+
+<Warning>
+Deleting an agent removes it from Wazuh, and an active response such as `firewall-drop` adds an IP address to the agent's firewall deny list. Applying rule or decoder changes restarts the manager, so expect a short gap in event processing. Keep the connection on **Manual** so a person approves each one (see [Setup](#setup)), check the exact change before you approve it, and approve restarts during a safe window.
+</Warning>
+
+### Verify the connection
+
+Start a chat, type `#` and pick **Wazuh**, then ask:
+
+```text
+Summarize my Wazuh: version, agents by status, and alerts from the last 24 hours
+```
+
+**Expected result:** the Wazuh version, agent counts by status (such as active, disconnected, never connected), and alert counts by level.
+
+### Example prompts
+
+```text
+Which Wazuh rules fired most on agent 003 in the last 48 hours?
+Test this log line against my Wazuh rules and tell me which rule matches: <paste log line>
+Show file integrity changes and failed configuration checks for Wazuh agent 003
+```
+
+Replace `003` with an agent ID from your Wazuh agents list. Agent `000` is the Wazuh manager itself. If [vulnerability detection](https://documentation.wazuh.com/current/user-manual/capabilities/vulnerability-detection/index.html) is off in Wazuh, agents have no CVE data to report.
+
+## Troubleshooting
+
+The accordion titles below are the exact messages CloudThinker shows when the connection test fails.
+
+<Accordion title="Manager rejected the username or password.">
+Check the server API user's password. This user is separate from your dashboard login.
+</Accordion>
+
+<Accordion title="Indexer rejected the username or password.">
+Check the indexer user's password in **Indexer management → Security → Internal users**.
+</Accordion>
+
+<Accordion title="Manager account has no API access.">
+The server API user signed in, but its role can't read manager information. Give it the `readonly` role, or add `cluster_read_*` to your custom role, and connect again. Keep `cluster_all_*` for a role that applies changes, since it can also restart the manager.
+</Accordion>
+
+<Accordion title="Indexer account cannot read wazuh-alerts-4.x-*.">
+The indexer user's role is missing `read` on `wazuh-*`. Update the role and connect again.
+</Accordion>
+
+<Accordion title="Indexer has no wazuh-alerts-4.x-* index.">
+The **Indexer URL** points to an indexer without Wazuh alert data. Use the indexer your Wazuh server writes alerts to.
+</Accordion>
+
+<Accordion title="The Manager URL must start with https://.">
+Enter the address with `https://`. The same applies to the **Indexer URL**.
+</Accordion>
+
+<Accordion title="Enter the Manager URL without a path, for example https://wazuh.example.com.">
+Remove anything after the port, such as `/api`. The same applies to the **Indexer URL**.
+</Accordion>
+
+<Accordion title="Manager certificate is not trusted. Choose Allow self-signed.">
+**TLS certificate** is set to **Verify**, but the endpoint uses a self-signed certificate. Choose **Allow self-signed**, or install a trusted certificate. The same applies to the indexer.
+</Accordion>
+
+<Accordion title="Manager URL is unreachable. Check the URL and port 55000.">
+CloudThinker can't reach the address. Check the URL and port, and that Wazuh accepts connections from CloudThinker. The same applies to the indexer on port `9200`.
+</Accordion>
+
+<Accordion title="An agent says the write tool is disabled on this connection">
+**Allow writes** is off for this connection. Turn it on in **More → Workspace settings → Connections** if you want agents to make changes, add a Rule for agent deletion first (see [Setup](#setup)), then ask again.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- **Writes start on here.** On Wazuh, **Allow writes** is on for a new connection, so read-only access depends on you switching it off and using the `readonly` role.
+- **Use dedicated users.** Create both accounts only for CloudThinker, so you can remove them without affecting anyone else.
+- **Alert content is treated as data.** Agents read alert text as evidence and don't follow instructions found inside it.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Approvals" icon="shield-halved" href="/guide/approvals/overview">
+    Decide which Wazuh changes run on their own, ask a person, or are refused
+  </Card>
+  <Card title="Graylog Connection" icon="/images/icons/graylog.svg" href="/guide/connections/graylog">
+    Log search and alert investigation
+  </Card>
+</CardGroup>

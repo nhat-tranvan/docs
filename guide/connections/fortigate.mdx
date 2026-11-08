@@ -1,0 +1,163 @@
+---
+title: FortiGate
+description: "Connect a FortiGate firewall so agents can check device health, licenses, and interface traffic, and change configuration with approval"
+icon: "/images/icons/fortigate.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+import ApprovalDefault from '/snippets/approval-default.mdx';
+
+Connect a FortiGate firewall and CloudThinker agents can report device health, license expiry, and interface traffic, review policies and routes, and make configuration changes through your approvals. The connection uses a FortiGate **REST API token** (a token tied to a dedicated API administrator), and CloudThinker must be able to reach the FortiGate's management interface over HTTPS.
+
+## Prerequisites
+
+- A FortiGate whose HTTPS management interface CloudThinker can reach from the internet. Limit that access to CloudThinker's egress IPs, with **Trusted Hosts** on the API administrator (step 2) and a firewall rule or local-in policy in front of the interface. This connection runs from CloudThinker Cloud, so there's no private-network option. See [Reaching private services](/guide/connections/overview#reaching-private-services).
+- A FortiGate administrator with the **super_admin** profile. Only that profile can create a REST API administrator.
+- Edit permission on connections in your CloudThinker workspace.
+
+## Setup
+
+<Steps>
+  <Step title="Create an administrator profile">
+    In FortiGate, go to **System → Admin Profiles** and click **Create New**. Name it `cloudthinker` and set every permission to **Read**.
+
+    Set **Read/Write** only on the areas you want agents to change, such as **Firewall**. See [Required permissions](#required-permissions).
+  </Step>
+  <Step title="Create a REST API administrator">
+    Go to **System → Administrators** and click **Create New → REST API Admin**. Fill in:
+    - **Username**: `cloudthinker`
+    - **Administrator Profile**: the `cloudthinker` profile
+    - **PKI Group**: leave empty
+    - **Trusted Hosts**: recommended. Add CloudThinker's egress IP addresses so the token works from nowhere else. These docs don't publish CloudThinker's egress IP list: ask your CloudThinker contact, or [contact us](https://cloudthinker.io/contact).
+
+    Click **OK** and copy the token. FortiGate shows it only once.
+  </Step>
+  <Step title="Add the connection in CloudThinker">
+    In the sidebar, click **More → Workspace settings → Connections**. On the **Builtin Connections** tab, search for **FortiGate** and click **Connect**. Fill in the fields from [Connection details](#connection-details) and click **Connect**.
+
+    **FORTIGATE_VERIFY_SSL** starts on **Skip SSL verification**, so TLS isn't checked unless you change it. If the FortiGate already has a CA-signed certificate, pick **Verify SSL certificate** now. Otherwise, switch to it once you install one.
+
+    CloudThinker tests the token by reading the FortiGate's system status.
+
+    **Success state:** the test message reads `FortiGate connection verified` and the connection shows **Connected**.
+  </Step>
+</Steps>
+
+## Connection details
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| **FORTIGATE_HOST** | FortiGate address or hostname, without `https://` or a port | `fw.example.com` |
+| **FORTIGATE_PORT** | HTTPS management port. Default `443` | `443` |
+| **FORTIGATE_API_TOKEN** | The REST API administrator token | `<your-api-token>` |
+| **FORTIGATE_VDOM** | Virtual domain (VDOM) agents work in. Default `root` | `root` |
+| **FORTIGATE_VERIFY_SSL** | **Verify SSL certificate** (recommended, needs a trusted CA-signed certificate on the FortiGate) or **Skip SSL verification** (the default, for FortiGate's built-in self-signed certificate) | **Skip SSL verification** (default); **Verify SSL certificate** once a CA-signed certificate is installed |
+
+Agents only see the VDOM you enter. To cover several VDOMs, add one connection per VDOM. On a FortiGate without VDOMs, leave `root`.
+
+<Warning>
+**Skip SSL verification** is the default, and it means CloudThinker can't tell your FortiGate from an impostor. Don't leave it on a production firewall. Install a CA-signed certificate on the FortiGate's admin interface and switch to **Verify SSL certificate**.
+</Warning>
+
+## Required permissions
+
+The token has exactly the permissions of its administrator profile.
+
+| Goal | Profile access |
+|------|----------------|
+| Read device health, licenses, traffic, and configuration | **Read** on every area |
+| Change configuration objects, such as firewall addresses or policies | **Read/Write** on only those areas |
+
+<Tip>
+Start with **Read** everywhere. Add **Read/Write** to one area when a workflow needs it, and leave **System** and **Network** read-only so agents can't touch administrator or interface settings.
+</Tip>
+
+## Agent capabilities
+
+| Capability | What agents can do |
+|------------|--------------------|
+| **Device overview** | Report hostname, model, serial number, firmware version, and uptime |
+| **License health** | Show license and subscription status and expiry dates |
+| **Interface traffic** | Rank interfaces by transmitted and received traffic, with bandwidth |
+| **Configuration review** | Read firewall policies, addresses, routes, VPN settings, and other configuration |
+| **Configuration changes** | Create, update, or delete one configuration object per request |
+
+Reads run without asking. Every configuration change is a write: the agent states the exact object and change, and each object goes through your Approvals on its own. Agents can only write configuration objects, never run commands on the device.
+
+Writes also need **Allow writes** on, which starts on. To lock writes in CloudThinker, open **FortiGate** in **More → Workspace settings → Connections** and turn off the **Allow writes** switch on its detail panel.
+
+<ApprovalDefault />
+
+For a production firewall, choose **Manual** so every change reaches a person. Once CloudThinker turns on [Rule enforcement](/guide/approvals/rules#troubleshooting) for your workspace, an **Ask first** [Rule](/guide/approvals/rules) can cover this connection on its own.
+
+<Warning>
+Changing administrator or interface settings can lock you out of the FortiGate or open the firewall. When a change asks you, read the exact object and change in the approval card before you approve it.
+</Warning>
+
+Before you approve writes:
+
+- **Back up the configuration.** Save a FortiGate configuration backup first, so you can restore it if a change goes wrong.
+- **Keep the earlier values.** Ask the agent to read the object before it changes it. To undo, ask it to set those values back.
+- **Check for FortiManager.** If FortiManager manages this FortiGate, make changes there instead. Local changes can be overwritten on FortiManager's next install.
+
+### Verify the connection
+
+```text
+Summarize my FortiGate: model, firmware version, license status, and the five busiest interfaces
+```
+
+A working connection returns your device's model and serial number and lists named interfaces such as `wan1`. A `401` error means the token was rejected: see Troubleshooting.
+
+### Example prompts
+
+```text
+Check which FortiGate licenses and subscriptions expire in the next 90 days
+Show interface traffic on the FortiGate and flag any interface close to saturation
+List the firewall address objects on the FortiGate and flag any that no policy uses
+Create a firewall address object named blocklist-203.0.113.7 for 203.0.113.7/32
+```
+
+## Troubleshooting
+
+<Accordion title='The test fails with "returned error: 401"'>
+The token was rejected. Check that you copied the whole token, that **PKI Group** is empty on the REST API administrator, and that **Trusted Hosts** (if set) includes CloudThinker's addresses. FortiGate's system event log records the failed login and its source IP, so you can compare it with the Trusted Hosts list.
+</Accordion>
+
+<Accordion title='The test fails with "Failed to connect" or "Could not resolve host"'>
+CloudThinker couldn't reach the FortiGate. Check **FORTIGATE_HOST** and **FORTIGATE_PORT**, and that the management interface accepts HTTPS from CloudThinker.
+</Accordion>
+
+<Accordion title="SSL certificate problem">
+The FortiGate's certificate isn't trusted. Install a CA-signed certificate on the FortiGate. To test before then, set **FORTIGATE_VERIFY_SSL** to **Skip SSL verification**, and switch to **Verify SSL certificate** once the certificate is in place.
+</Accordion>
+
+<Accordion title="Invalid FortiGate connection configuration">
+**FORTIGATE_HOST** or **FORTIGATE_API_TOKEN** is empty. Fill in both and connect again.
+</Accordion>
+
+<Accordion title="Connected, but objects are missing">
+Agents only see the VDOM in **FORTIGATE_VDOM**. Set it to the VDOM that holds the objects, or add a second connection for that VDOM.
+</Accordion>
+
+<Accordion title="A configuration change fails with HTTP 403">
+The administrator profile doesn't allow that change. Give the profile **Read/Write** on that area, or make the change in FortiGate yourself.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- **Restrict trusted hosts.** Limit the REST API administrator to CloudThinker's egress addresses so a leaked token is useless elsewhere.
+- **Verify the certificate.** **Skip SSL verification** is the default, but treat it as a test setting. Use **Verify SSL certificate** once the FortiGate has a trusted certificate.
+- **Token stays redacted.** CloudThinker injects the token at run time and redacts it from command output, so it doesn't appear in chat.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Decide which changes run, wait for a person, or are refused
+  </Card>
+  <Card title="Wazuh Connection" icon="/images/icons/wazuh.svg" href="/guide/connections/wazuh">
+    Security alerts and agent health from your Wazuh SIEM
+  </Card>
+</CardGroup>

@@ -1,0 +1,179 @@
+---
+title: Microsoft SQL Server
+description: "Kết nối SQL Server hoặc Azure SQL để agent có thể lập bản đồ bảng, đọc và tổng hợp dòng, và thay đổi từng dòng thông qua Approvals của bạn"
+icon: "/images/icons/mssql.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
+
+Kết nối một cơ sở dữ liệu SQL Server hoặc Azure SQL để các agent CloudThinker có thể liệt kê bảng và cột, đọc và tổng hợp dòng, và thêm, cập nhật hoặc xóa từng dòng một thông qua [Approvals](/vi/guide/approvals/overview) của bạn. Kết nối đăng nhập bằng một **connection string** cho một SQL login riêng, và các quyền được cấp cho login đó quyết định agent có thể thấy những bảng nào.
+
+## Điều kiện tiên quyết
+
+- SQL Server 2016 trở lên, Azure SQL Database hoặc Azure SQL Managed Instance, mà CloudThinker truy cập được qua cổng SQL (mặc định `1433`).
+- Quyền tạo login hoặc contained database user và cấp quyền truy cập cho user đó.
+- SQL Server authentication được bật trên server. Server chỉ cho phép Windows authentication sẽ từ chối login. Trang này chỉ đề cập SQL login. Windows authentication và managed identity không thể hoạt động, vì kết nối chạy trên CloudThinker Cloud, bên ngoài domain và Azure tenant của bạn.
+
+<Info>
+Agent làm việc với bảng, không phải SQL thô. Kết nối này không có SQL console, không gọi stored procedure và không thay đổi schema. Các đối tượng trong `sys` và `INFORMATION_SCHEMA` luôn bị loại trừ.
+</Info>
+
+## Thiết lập
+
+<Steps>
+  <Step title="Tạo người dùng riêng">
+    <Tabs>
+      <Tab title="SQL Server hoặc Managed Instance">
+        Tạo login trong `master`, rồi tạo user cho login đó trong cơ sở dữ liệu của bạn:
+
+        ```sql
+        -- In master
+        CREATE LOGIN cloudthinker WITH PASSWORD = '<strong-password>';
+        -- In your database
+        CREATE USER cloudthinker FOR LOGIN cloudthinker;
+        ```
+      </Tab>
+      <Tab title="Azure SQL Database">
+        Tạo contained user trực tiếp trong cơ sở dữ liệu. Không cần login trong `master`:
+
+        ```sql
+        CREATE USER cloudthinker WITH PASSWORD = '<strong-password>';
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+  <Step title="Cấp quyền đọc các bảng agent cần thấy">
+    Cấp trên một schema, hoặc chặt hơn, từng bảng một:
+
+    ```sql
+    GRANT SELECT ON SCHEMA :: dbo TO cloudthinker;
+    -- or: GRANT SELECT ON OBJECT :: dbo.orders TO cloudthinker;
+    ```
+
+    Bảng mà user không đọc được sẽ hoàn toàn không hiển thị với agent.
+  </Step>
+  <Step title="Mở quyền truy cập mạng">
+    Tài liệu này không công bố danh sách egress IP của CloudThinker: hãy hỏi đầu mối liên hệ CloudThinker của bạn, hoặc [liên hệ chúng tôi](https://cloudthinker.io/contact).
+
+    - **Azure SQL**: trong Azure portal, mở SQL server, vào **Networking** và thêm một firewall rule cho mỗi IP của CloudThinker.
+    - **SQL Server**: cho phép TCP `1433` chiều vào từ các IP đó và xác nhận giao thức TCP/IP đã bật, vì một số bản cài đặt mặc định tắt giao thức này.
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Trên thanh bên, nhấn **More → Workspace settings → Connections**, rồi ở tab **Builtin Connections** chọn **Microsoft SQL Server**. Dán connection string vào **Connection string**:
+
+    ```ini
+    Server=sql.example.com,1433;Initial Catalog=sales;User ID=cloudthinker;Password=<password>;Encrypt=True;
+    ```
+
+    Nhấn **Connect**.
+
+    **Trạng thái thành công:** kết nối hiển thị trạng thái **Connected**. Chạy prompt xác minh bên dưới để xác nhận agent thấy được các bảng của bạn.
+  </Step>
+</Steps>
+
+## Chi tiết kết nối
+
+Trường **Connection string** duy nhất nhận một ADO.NET connection string.
+
+| Từ khóa | Giá trị cần điền | Ví dụ |
+|---------|-------------|---------|
+| `Server` | Host và cổng, phân tách bằng dấu phẩy, không phải dấu hai chấm | `sql.example.com,1433` |
+| `Initial Catalog` | Tên cơ sở dữ liệu. Bắt buộc với contained user trên Azure SQL | `sales` |
+| `User ID` / `Password` | User từ bước 1. Đặt mật khẩu chứa `;` hoặc `=` trong dấu nháy đơn, chẳng hạn `Password='a;b=c'` | `cloudthinker` |
+| `Encrypt` | `True` | `True` |
+| `TrustServerCertificate` | Không thêm, hoặc đặt `False`. Chỉ dùng `True` cho chứng chỉ tự ký hoặc do CA nội bộ cấp trên mạng riêng | `False` |
+| `ApplicationIntent` | Tùy chọn. `ReadOnly` định tuyến kết nối tới bản secondary có thể đọc trong Always On availability group, để thao tác đọc của agent không chạm vào primary. Thao tác ghi sẽ thất bại ở đó, nên chỉ dùng trên kết nối chỉ đọc | `ReadOnly` |
+
+## Quyền yêu cầu
+
+| Bạn muốn agent | Cấp quyền |
+|--------------------|-------|
+| Liệt kê bảng, đọc dòng và tổng hợp | `SELECT` trên schema hoặc bảng |
+| Thêm, cập nhật hoặc xóa dòng | `INSERT`, `UPDATE`, `DELETE` trên schema hoặc bảng cụ thể |
+
+```sql
+GRANT INSERT, UPDATE, DELETE ON SCHEMA :: dbo TO cloudthinker;
+```
+
+<Tip>
+Đừng dùng `db_datareader`: role này mở mọi bảng trong cơ sở dữ liệu. Cấp quyền theo schema hoặc đối tượng tạo ranh giới chặt hơn. Nếu agent không bao giờ được thay đổi dữ liệu, đừng cấp `INSERT`, `UPDATE` hay `DELETE`. Cách đó mạnh hơn việc từ chối từng yêu cầu phê duyệt.
+</Tip>
+
+## Khả năng của agent
+
+| Khả năng | Agent có thể làm gì | Được Approvals kiểm tra |
+|------------|--------------------|----------|
+| **Khám phá schema** | Liệt kê các bảng truy cập được và cột của chúng | Không |
+| **Đọc dòng** | Chọn cột, lọc, sắp xếp và phân trang trên từng bảng một | Không |
+| **Tổng hợp** | Count, sum, average, minimum và maximum, với group by và having | Không |
+| **Thêm một dòng** | Tạo một bản ghi | Có |
+| **Cập nhật hoặc xóa một dòng** | Thay đổi hoặc xóa một bản ghi, xác định theo khóa chính | Có |
+
+Mỗi lần đọc chỉ áp dụng cho một bảng, nên một lần gọi không thể join nhiều bảng. Thao tác đọc trả về 25 dòng theo mặc định và tối đa 100 dòng mỗi trang. Thao tác tổng hợp hết thời gian chờ sau 30 giây, và mỗi phản hồi giới hạn ở 4 MB.
+
+Mỗi thao tác thêm, cập nhật và xóa được kiểm tra riêng, từng lần gọi một. Phê duyệt một lần xóa không có nghĩa là lần xóa tiếp theo cũng được duyệt. Vì cập nhật và xóa nhắm vào khóa chính, một bộ lọc sai không thể quét sạch cả bảng.
+
+<ApprovalDefault />
+
+[Rule](/vi/guide/approvals/rules) cũng có thể từ chối thẳng một thay đổi, còn thiết lập người phê duyệt quyết định ai được phép đồng ý.
+
+### Xác minh kết nối
+
+```text
+List the SQL Server tables you can reach and their columns
+```
+
+Mỗi bảng sẽ có tên dạng `<schema>_<table>`, chẳng hạn `dbo_orders`, kèm danh sách cột. Trong prompt bạn có thể viết `dbo.orders` như thường lệ, và agent sẽ khớp với `dbo_orders`.
+
+### Ví dụ prompt
+
+```text
+How many orders were placed per status in the last 30 days?
+Show the ten most recent rows in dbo.orders
+Set status to shipped on order 4821 in dbo.orders
+```
+
+## Khắc phục sự cố
+
+<Accordion title="Login failed for user">
+User nằm sai chỗ, mật khẩu sai, hoặc server chỉ chấp nhận Windows authentication. Login nằm trong `master`. Contained user nằm trong cơ sở dữ liệu của bạn và cần đặt `Initial Catalog`. Kiểm tra mật khẩu có khoảng trắng ở đầu hoặc cuối không, và đặt trong dấu nháy đơn nếu chứa `;` hoặc `=`.
+</Accordion>
+
+<Accordion title="Kết nối thất bại do lỗi chứng chỉ">
+Với `Encrypt=True`, client từ chối chứng chỉ server mà client không xác minh được thay vì chuyển sang plaintext. Cài đặt một chứng chỉ đáng tin cậy. Với chứng chỉ tự ký hoặc do CA nội bộ cấp trên mạng riêng, thêm `TrustServerCertificate=True`. Lưu lượng vẫn được mã hóa, nhưng danh tính của server không còn được kiểm tra.
+</Accordion>
+
+<Accordion title="Không truy cập được server hoặc kết nối hết thời gian chờ">
+Kiểm tra `Server` dùng dấu phẩy (`host,1433`). Với Azure SQL, xác nhận firewall rule có bao gồm CloudThinker. Với SQL Server, xác nhận cổng `1433` chiều vào đã mở và TCP/IP đã bật.
+</Accordion>
+
+<Accordion title="Agent không tìm thấy một bảng">
+User cần quyền `SELECT` trên bảng đó hoặc schema của nó. Gọi tên bảng kèm schema, chẳng hạn `dbo.orders`, vì tên không kèm schema có thể mơ hồ.
+</Accordion>
+
+<Accordion title="Một thao tác cập nhật hoặc xóa bị từ chối">
+Bảng không có khóa chính, hoặc user thiếu quyền `UPDATE` hay `DELETE` tương ứng. Đọc và tổng hợp vẫn hoạt động. Thêm khóa chính hoặc cấp quyền nếu agent cần thay đổi bảng đó.
+</Accordion>
+
+<Accordion title="Agent không chạy câu lệnh SQL của tôi">
+Đúng như dự kiến. Kết nối này không có SQL console hay quyền gọi stored procedure. Thay vào đó, hãy yêu cầu kết quả bạn muốn, chẳng hạn một lần đọc có lọc hoặc một phép đếm theo nhóm.
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Cấp quyền theo schema, không theo cơ sở dữ liệu**: giới hạn `SELECT` trong schema chứa các bảng agent cần, mọi thứ khác sẽ không hiển thị với agent.
+- **Chỉ đọc nhờ không cấp quyền**: user chỉ có `SELECT` không thể ghi, bất kể điều gì được phê duyệt trong cuộc trò chuyện.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Quyết định thay đổi dòng nào được chạy, chờ người duyệt hay bị từ chối.
+  </Card>
+  <Card title="Kết nối PostgreSQL" icon="/images/icons/postgresql.svg" href="/vi/guide/connections/postgresql">
+    Kết nối cơ sở dữ liệu PostgreSQL bằng user chỉ đọc. Không như SQL Server, kết nối này chạy ở chế độ hạn chế, không có thao tác ghi, dù được phê duyệt hay không.
+  </Card>
+</CardGroup>

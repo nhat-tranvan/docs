@@ -1,0 +1,101 @@
+---
+title: Điều tra sự cố checkout từ đầu đến cuối
+description: "Theo dõi một sự cố production từ cảnh báo đầu tiên đến nguyên nhân gốc đã được xác minh, bản sửa đã được phê duyệt và sự cố đã đóng trong Resolve."
+icon: bell
+---
+
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
+
+Khi cảnh báo lỗi checkout kích hoạt, Resolve tiếp nhận từ đó: Resolve nhóm các cảnh báo, điều tra, và đưa cho bạn nguyên nhân gốc kèm bằng chứng. Hướng dẫn này theo dõi sự cố đó cho đến khi bạn đóng sự cố.
+
+## Kịch bản
+
+Lúc 14:05, công cụ giám sát của bạn báo `checkout-api` trên production đang trả về lỗi 5xx. Một bản deploy đã được phát hành 20 phút trước đó. Cảnh báo lặp lại mỗi phút, và một cảnh báo cơ sở dữ liệu kích hoạt bên cạnh. Bạn muốn biết liệu bản deploy có gây ra lỗi không, chỉ rollback nếu đúng là vậy, và giữ một bản ghi mà nhóm có thể tin tưởng.
+
+## Điều kiện tiên quyết
+
+- Nguồn cảnh báo gửi đến Resolve, chẳng hạn Datadog, Grafana hoặc CloudWatch. Xem [Tích hợp Resolve](/vi/guide/incident/integrations). Để thử với một cảnh báo test, làm theo [Resolve quickstart](/vi/guide/incident/quickstart).
+- [Kết nối](/vi/guide/connections/overview) cho các hệ thống phía sau checkout, ví dụ tài khoản cloud, Kubernetes cluster và công cụ observability của bạn. Resolve chỉ có thể xác minh những gì đọc được.
+- Vai trò **Admin** của workspace để bắt đầu điều tra và đóng sự cố. Xem [Vai trò](/vi/guide/security/roles).
+
+## Hướng dẫn từng bước
+
+<Steps>
+  <Step title="Kiểm tra Resolve đang On duty">
+    Vào **Resolve → Investigation** và xem công tắc trong header trang. **On duty** nghĩa là CloudThinker tự điều tra các cảnh báo từ Pulse. **Paused** nghĩa là Pulse vẫn tiếp tục phát hiện và nhóm cảnh báo và vẫn tạo sự cố với trạng thái **Open**, nhưng không cuộc điều tra nào tự bắt đầu cho đến khi ai đó nhấn **Investigate**. Sự cố do người ghi nhận hoặc chuyển cấp vẫn được điều tra ngay. Xem [Điều gì khởi động một cuộc điều tra](/vi/guide/incident/settings#điều-gì-khởi-động-một-cuộc-điều-tra).
+  </Step>
+  <Step title="Xem các cảnh báo trở thành một sự cố">
+    Vào **Resolve → Pulse**. Các cảnh báo 5xx lặp lại và cảnh báo cơ sở dữ liệu nằm trong một cluster thay vì mỗi cảnh báo gửi một page riêng. Sau đó bước phân loại mở một sự cố cho cluster đó.
+
+    **Bạn sẽ thấy:** cluster chuyển sang làn **Routed**, và một sự cố mới xuất hiện trên **Resolve → Investigation** trong **AI is handling**.
+  </Step>
+  <Step title="Theo dõi cuộc điều tra trực tiếp">
+    Mở sự cố và nhấn **Watch live**. Cuộc hội thoại hiển thị từng kiểm tra mà CloudThinker chạy: các bản deploy gần đây, tỷ lệ lỗi, pod restart, kết nối cơ sở dữ liệu. **Investigation timeline** trên sự cố được điền dần trong quá trình đó.
+  </Step>
+  <Step title="Đọc kết luận">
+    Khi sự cố chuyển sang **Needs your decision**, đọc **Current assessment** và nhãn bằng chứng đi kèm. **Verified** nghĩa là nguyên nhân đã được xác nhận dựa trên dữ liệu từ hệ thống của bạn. **Inferred** hoặc **Cause unproven** nghĩa là bạn cần kiểm tra timeline trước khi hành động.
+
+    **Bạn sẽ thấy:** một hàng ghi **Cause found**, một sơ đồ nhân quả trong **How it happened**, và các bản sửa trong **Remediation**, mỗi bản sửa có một mức ưu tiên.
+
+    ```text
+    Current assessment                                    Verified
+    checkout-api v4.2 opens a new database connection per cart item.
+    The pool ran out 18 minutes after the deploy, and checkout returned 5xx.
+
+    Remediation
+    High    Roll back checkout-api to v4.1 in production
+    Medium  Reuse the pooled connection in the cart loader
+    ```
+  </Step>
+  <Step title="Đặt câu hỏi tiếp theo">
+    Mở **More actions → Open AI Conversation** và kiểm chứng kết luận trước khi hành động:
+
+    ```text
+    Show the checkout-api error rate and database connection count for the hour around the v4.2 deploy, as one chart.
+    Did any other service call the same database in that window? If so, rule it out with data.
+    ```
+
+    **Bạn sẽ thấy:** câu trả lời với số liệu từ các kết nối của bạn. Kiểm tra mới làm thay đổi nguyên nhân sẽ thêm mục **Root cause revised** vào timeline.
+  </Step>
+  <Step title="Phê duyệt rollback">
+    Yêu cầu bản sửa trong cùng cuộc hội thoại:
+
+    ```text
+    Roll back checkout-api in production to v4.1 and confirm the 5xx rate drops back to its baseline.
+    ```
+
+    <ApprovalDefault />
+
+    Rollback cũng cần thông tin xác thực cho phép thao tác đó, và **Allow writes** được bật trong bảng chi tiết của kết nối. Nếu thẻ phê duyệt xuất hiện, hãy trả lời trong chat hoặc trong [Google Chat](/vi/guide/google-chat-integration). Từ Slack hoặc Microsoft Teams, hãy theo liên kết quay lại ứng dụng web để trả lời.
+  </Step>
+  <Step title="Chốt và đóng">
+    Trong **Remediation**, mở menu **More remediation actions** của từng đề xuất và chọn **Mark as Done** hoặc **Dismiss**, kèm ghi chú về những gì bạn đã làm. Trả lời **Was Resolve's diagnosis right?** bằng biểu tượng thích hoặc không thích. Sau đó nhấn huy hiệu trạng thái trong header sự cố, chọn **Resolved**, và nhấn **Change Status**.
+
+    **Bạn sẽ thấy:** sự cố chuyển sang nhóm **Resolved**, và đánh giá của bạn được tính vào **Resolve → Insights**.
+  </Step>
+</Steps>
+
+## Điều gì giúp quy trình này hiệu quả
+
+- **Pulse nhóm nhiễu lại.** Các cảnh báo lặp lại gia nhập một [cluster](/vi/guide/pulse/clusters), nên chỉ một sự cố được mở thay vì nhiều sự cố.
+- **Các kết nối đặt ra giới hạn.** Resolve xác minh được nguyên nhân vì Resolve đọc được lịch sử deploy, cluster và số liệu cơ sở dữ liệu.
+- **Kết luận cho thấy bằng chứng.** Nhãn và [investigation timeline](/vi/guide/incident/root-cause-analysis) cho bạn biết nên tin kết luận đến mức nào trước khi hành động.
+- **Bản sửa đi qua Approvals.** [Rules và Approval mode](/vi/guide/approvals/overview) của bạn quyết định rollback được chạy hay chờ một người.
+- **Phản hồi của bạn có giá trị.** Đánh dấu chẩn đoán đúng hay sai sẽ cung cấp dữ liệu cho [Insights](/vi/guide/incident/insights).
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="Đọc một cuộc điều tra" icon="magnifying-glass" href="/vi/guide/incident/root-cause-analysis">
+    Ý nghĩa của từng phần trong kết quả, và cách điều tra lại.
+  </Card>
+  <Card title="Kết nối một nguồn thực" icon="plug" href="/vi/guide/incident/integrations">
+    Trỏ cảnh báo Datadog, Grafana, PagerDuty hoặc CloudWatch đến Resolve.
+  </Card>
+  <Card title="Thiết lập On-call" icon="users" href="/vi/guide/incident/oncall">
+    Đưa người phản hồi vào một Incident Room khi sự cố cần con người.
+  </Card>
+  <Card title="Approval Rules" icon="circle-check" href="/vi/guide/approvals/rules">
+    Chỉ định thao tác ghi nào được tự chạy, thao tác nào hỏi trước, và thao tác nào không bao giờ chạy.
+  </Card>
+</CardGroup>

@@ -1,0 +1,149 @@
+---
+title: Handle CAPTCHA Logins
+description: "Configure CAPTCHA options so a password test user can sign in during a run, then confirm the run really tested behind the login."
+icon: key
+---
+
+If your app's login page shows a CAPTCHA (reCAPTCHA, hCaptcha or Cloudflare Turnstile), a [test run](/guide/security/security-testing) can't sign in with a saved password until you tell CloudThinker how to get past it, and without test keys, a bypass or automated fallback the login fails and the run ends as **Failed**. This page covers the four ways to handle that and how to check that the login really worked.
+
+## Pick an approach
+
+| Approach | Use it when | Set in the form as | What you need |
+| --- | --- | --- | --- |
+| **Target test keys** | You test a staging or test environment you control | **Customer bypass** = **Target test keys** | The CAPTCHA provider's test keys installed in both your login widget and your server-side verifier |
+| **Bypass header** | Your app already skips CAPTCHA when a specific header and secret are present | **Customer bypass** = **None** in the form, then set the header through chat | The header name, and a workspace Admin to store the secret as a `CAPTCHA_BYPASS_` credential |
+| **Automated fallback** (no target change) | You can't change the target | **Customer bypass** = **None**, **Automated fallback** = **Allow for this identity** | **CAPTCHA solver enabled** turned on for your whole CloudThinker. It can still fail |
+| **[Session token](/guide/security/security-testing#add-test-users)** instead of a password | None of the above work, the login needs MFA, or the login page is on another domain | A separate **Session token** test user, not the password form | A signed-in `GET` request copied as cURL from your browser's Network panel |
+
+Target test keys are the most reliable option. Automated fallback is a best effort, and it's set per test user, so you can allow it alongside a bypass as a backup.
+
+### What automated fallback can handle
+
+Fallback doesn't use a CAPTCHA-solving service. It works inside the same browser session as the login, within a solver deadline that sits inside the login deadline.
+
+| Provider | Fallback |
+| --- | --- |
+| **reCAPTCHA v2**, **hCaptcha** | Best effort. Image tile and drag challenges are sent to the AI vision model CloudThinker is configured with |
+| **reCAPTCHA v3** | Best effort, in the browser, only when the page supplies a reCAPTCHA action. Otherwise unsupported |
+| **Cloudflare Turnstile** | Best effort, in the browser. No image is sent |
+
+Fallback is off until **CAPTCHA solver enabled** is turned on. That setting covers a whole CloudThinker, not one workspace or organization, so ask CloudThinker support, or whoever runs CloudThinker for your company. Target test keys and a bypass header send no challenge images anywhere.
+
+## Before you start
+
+- A registered Cyber app and permission to edit its test users. See [Run a security test](/guide/security/security-testing).
+- A **test user**: a dedicated account in your app that the test run signs in with, using a username and password. Use one made for testing, never a real user's account. The button that adds one is named for where you are: see [Add test users](/guide/security/security-testing#add-test-users).
+- For test keys or a bypass header: access to the target app's CAPTCHA configuration.
+- For a bypass header: a workspace Admin who can add a [credential](/guide/credentials) whose key starts with `CAPTCHA_BYPASS_`, for example `CAPTCHA_BYPASS_STAGING`, with the bypass secret as its value.
+
+## Configure the login
+
+<Steps>
+  <Step title="Open the password form">
+    Open **Cyber**, pick your app under **Apps**, go to **Settings**, and find **Test identities**. Click **Add authentication** and choose **Password**.
+
+    Enter the username and password. Set **Login URL (optional)** to the page with the login form if it isn't the app's start page. It must use the same origin as the app's target and fit its [scope](/guide/security/security-testing#set-scope-and-context). A login hosted on a separate SSO or identity provider domain is refused, so use a **Session token** for those apps. For example, with a target of `https://staging.shop.com`, `https://staging.shop.com/login` works and `https://auth.shop.com/login` is refused.
+
+    Expand **CAPTCHA options (optional)**.
+
+    <Frame>
+      <img src="/images/security/cyber/14-captcha-options.png" alt="Customer bypass and Automated fallback options for a password test user." />
+    </Frame>
+  </Step>
+  <Step title="Set Customer bypass">
+    Choose one value in **Customer bypass**:
+
+    - **None**: no target-side exception. The run relies on automated fallback if it's allowed.
+    - **Target test keys**: pick the **CAPTCHA provider** (reCAPTCHA v2, reCAPTCHA v3, hCaptcha or Cloudflare Turnstile) and paste the public sitekey from your login widget into **Installed test sitekey**. The matching test secret stays on your server. CloudThinker never needs it. reCAPTCHA v3 has no always-pass test key, so for v3 enter your staging sitekey and lower the score threshold in your staging verifier, or use **Bypass header** instead.
+
+    <Frame>
+      <img src="/images/security/cyber/15-captcha-test-keys.png" alt="CAPTCHA options with Target test keys selected, showing the provider and installed test sitekey fields." />
+    </Frame>
+
+    - **Bypass header**: the form shows **Header name** and **Bypass secret** fields, but saving a header bypass from the form is always refused. Instead, save the test user with **None**, make sure the `CAPTCHA_BYPASS_` credential from [Before you start](#before-you-start) exists, then ask CloudThinker in chat to set it, for example: "Set a header bypass for the qa-member test user on the Shop staging app, header `X-QA-Bypass`, using credential CAPTCHA_BYPASS_STAGING." You must be a workspace Admin. CloudThinker replies with that test user's updated CAPTCHA policy, which shows the bypass type but never the secret. Your target must already accept the header, and the password still has to sign in.
+  </Step>
+  <Step title="Set Automated fallback">
+    Choose **Allow for this identity** or **Disable for this identity** in **Automated fallback**. Default: **Allow for this identity**.
+
+    Allow only takes effect if **CAPTCHA solver enabled** is on for your CloudThinker. It can't turn the solver on. Pick **Disable for this identity** if you don't want this user's challenge images sent to the AI model.
+  </Step>
+  <Step title="Save and run">
+    Click **Save login**. CloudThinker saves a password test user without signing in, so saving doesn't prove the login works.
+
+    There's no login-only test for a password test user. The check happens at the start of a test run: click **Run test** and start a run. The login step has a 60-second deadline by default, so you know within about a minute whether it worked. CloudThinker support, or whoever runs CloudThinker for your company, can change that deadline to anywhere from 20 to 120 seconds.
+
+    **Success state:** the run proves it can load a protected page while signed in, then keeps testing in the run workbench. If the login can't be proven, the run stops early and ends as **Failed**, so a failed login never passes as an anonymous-only test. Only treat protected routes as tested once a run gets past the login.
+  </Step>
+</Steps>
+
+## Provider test keys
+
+reCAPTCHA v2, hCaptcha and Turnstile publish test keys that always pass. Install the sitekey in your login widget and the matching test secret in your server-side verification, then enter the sitekey in **Installed test sitekey**.
+
+| Provider | What to know | Reference |
+| --- | --- | --- |
+| **reCAPTCHA v2** | Google's test key pair skips the challenge and passes verification | [reCAPTCHA FAQ](https://developers.google.com/recaptcha/docs/faq#id-like-to-run-automated-tests-with-recaptcha.-what-should-i-do) |
+| **reCAPTCHA v3** | Google doesn't publish an always-pass test key for v3, only a recommendation to use a separate key for testing. Scores can differ from real traffic, so your server may still reject the login. For v3, prefer a **Bypass header** or a low score threshold in your staging verifier | [reCAPTCHA FAQ](https://developers.google.com/recaptcha/docs/faq) |
+| **hCaptcha** | Test sitekeys only work with the matching test secret | [hCaptcha test keys](https://docs.hcaptcha.com/#integration-testing-test-keys) |
+| **Cloudflare Turnstile** | Dummy sitekeys need matching dummy secrets. Production secrets reject dummy responses | [Turnstile testing](https://developers.cloudflare.com/turnstile/troubleshooting/testing/) |
+
+<Warning>
+  Test keys remove bot protection. Use them only in a test environment, never on production.
+</Warning>
+
+## How a login run handles CAPTCHA
+
+1. The run opens the login page and enters the saved username and password.
+2. If you set a customer bypass, it applies that first.
+3. If a CAPTCHA still appears and fallback is allowed both for your CloudThinker and for that test user, the run tries to solve it in the same browser session.
+4. The run checks that a protected page loads while signed in. If it can't prove that, the run ends as **Failed** instead of testing as an anonymous visitor.
+
+Fallback can fail on image challenges or provider checks, and choosing a provider doesn't guarantee a pass. If your login needs MFA or another step after the password, CAPTCHA options won't help. Use a **Session token** instead.
+
+## Troubleshooting
+
+For every Cyber problem in one place, see [Cyber troubleshooting](/guide/security/cyber-troubleshooting).
+
+Saving a password test user never signs in, so only form problems (a refused header name or header bypass, a Login URL outside the target) show up when you click **Save login**. The CAPTCHA, timeout and MFA messages come from the login step of a test run.
+
+<AccordionGroup>
+  <Accordion title="CAPTCHA blocked this login">
+    The challenge wasn't solved. Check that your test keys or bypass header are installed on the target, or allow automated fallback if the solver is on for your CloudThinker. If none of that works, attach a **Session token**.
+  </Accordion>
+  <Accordion title="CAPTCHA fallback is unavailable">
+    **CAPTCHA solver enabled** is off for your CloudThinker, or it has no AI vision model to call. **Allow for this identity** can't override that. Ask CloudThinker support, or whoever runs CloudThinker for your company, to turn it on, or switch to **Target test keys** or **Bypass header**.
+  </Accordion>
+  <Accordion title="This CAPTCHA flow is not supported">
+    The challenge type is one the run can't handle. Use a target bypass or a **Session token**.
+  </Accordion>
+  <Accordion title="Login could not stay within its safety boundary">
+    The login redirected outside the app's target or scope. Check **Login URL (optional)** and the app's target setup.
+  </Accordion>
+  <Accordion title="The test sitekey does not work">
+    Your widget and server must use matching test keys for the provider you selected. Entering a sitekey in CloudThinker doesn't change your server's verifier, and a test sitekey can't pass production verification.
+  </Accordion>
+  <Accordion title="Use a dedicated CAPTCHA bypass header">
+    The header name is reserved or isn't a valid header name. `Authorization`, `Proxy-Authorization`, `Cookie`, `Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `Upgrade`, `TE`, `Trailer`, `Origin` and `Referer` are refused, in the form and in chat. Pick a name only your bypass uses, such as `X-QA-Bypass`.
+
+    Even with a valid name, the login form refuses a header bypass. Save with **None** and set the header through chat, as in the **Set Customer bypass** step under [Configure the login](#configure-the-login).
+  </Accordion>
+  <Accordion title="Login did not finish in time">
+    The login, including any CAPTCHA attempt, ran past the login deadline. Retry, or ask CloudThinker support, or whoever runs CloudThinker for your company, to raise it. A test key or bypass header avoids the solver time entirely.
+  </Accordion>
+  <Accordion title="This login requires MFA or another authentication step">
+    The password form isn't the last step. Attach a **Session token** copied from a signed-in browser.
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+Once a run proves signed-in access, review what it found behind the login.
+
+<CardGroup cols={2}>
+  <Card title="Run a security test" icon="crosshairs" href="/guide/security/security-testing">
+    Set scope, attach other login methods and pick intensity
+  </Card>
+  <Card title="Triage findings" icon="list-check" href="/guide/security/cyber-findings">
+    Read proof and coverage gaps before prioritizing fixes
+  </Card>
+</CardGroup>

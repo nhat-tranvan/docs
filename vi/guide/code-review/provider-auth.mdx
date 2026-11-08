@@ -1,0 +1,299 @@
+---
+title: Xác thực provider
+description: "Xác thực GitHub, GitLab, Bitbucket, Azure DevOps hoặc AWS CodeCommit cho Review, với chính xác các scope token và webhook mà mỗi provider cần."
+icon: key
+---
+
+Trang này hướng dẫn các bước **Connect** và **Events** của trình hướng dẫn thiết lập Review: mỗi Git provider nhận thông tin xác thực nào, scope tối thiểu, và webhook báo cho CloudThinker biết một pull request (PR) hoặc merge request (MR) đã thay đổi. Bắt đầu trình hướng dẫn từ [Thiết lập Review](/vi/guide/code-review/setup), rồi quay lại đây xem phần dành cho provider của bạn.
+
+## Điều kiện tiên quyết
+
+- Vai trò **Admin** workspace trong CloudThinker, với hộp thoại **Review Setup** đang mở ở bước **Connect**.
+- Ở phía provider, quyền cài đặt app, tạo access token hoặc tạo IAM role cho các repository bạn muốn review.
+- Azure DevOps: quyền tạo service hook trong project (mặc định là Project Administrator).
+
+## Chọn phương thức xác thực
+
+| Provider | Phương thức | Webhook |
+|---|---|---|
+| GitHub | GitHub App | Tự động |
+| GitLab | OAuth, hoặc Project / Group Access Token | Thủ công |
+| Bitbucket Cloud | OAuth, hoặc Workspace / Project / Repository Access Token | Tự động |
+| Azure DevOps | Personal access token (PAT) | Thủ công (service hook) |
+| AWS CodeCommit | IAM role (khuyến nghị) hoặc access key | Script trong AWS CloudShell |
+
+GitLab self-hosted là provider self-hosted duy nhất bạn có thể kết nối trong trình hướng dẫn. GitHub kết nối với github.com và Bitbucket với bitbucket.org, nên GitHub Enterprise Server và Bitbucket Data Center không phải là lựa chọn ở đây.
+
+<Tip>
+  Ưu tiên token cấp project, group, workspace hoặc repository thay vì token cá nhân khi provider hỗ trợ. Khi đó bình luận đến từ một bot user, quyền truy cập được giới hạn trong các repository đó, và bạn có thể thu hồi mà không ảnh hưởng đến tài khoản của ai.
+</Tip>
+
+## GitHub
+
+<Steps>
+  <Step title="Cài đặt GitHub App">
+    Nhấn **Install GitHub App**. GitHub yêu cầu bạn chọn một organization hoặc tài khoản, rồi chọn **All repositories** hoặc **Only select repositories**. Review chỉ có thể liệt kê các repository bạn cấp quyền ở đây. GitHub hiển thị toàn bộ danh sách quyền của app trên màn hình đó trước khi bạn phê duyệt. Danh sách bao gồm **Pull requests: Read and write** để bình luận và **Contents: Read and write**, quyền mà **Apply fix**, autofix và giải quyết xung đột cần để push commit.
+  </Step>
+  <Step title="Quay lại trình hướng dẫn">
+    Sau khi bạn phê duyệt, GitHub chuyển bạn trở lại và trình hướng dẫn tự tiếp tục. Webhook đi kèm với app, nên không có bước **Events**.
+
+    **Trạng thái thành công:** hộp thoại hiển thị **Connected** và chuyển sang **Repositories**.
+  </Step>
+</Steps>
+
+Để cấp quyền cho một repository sau này, mở cài đặt organization hoặc tài khoản trên GitHub, vào **GitHub Apps**, nhấn **Configure** cạnh app CloudThinker, và thêm repository trong **Repository access**. Sau đó thêm repository đó trong Review bằng **Add repository**.
+
+<Note>
+  Chỉ owner của organization mới cài được app trên GitHub organization. Nếu bạn không phải owner, hãy nhờ một owner phê duyệt việc cài đặt.
+</Note>
+
+## GitLab
+
+<Tabs>
+  <Tab title="OAuth">
+    OAuth chỉ kết nối với GitLab.com. Với GitLab self-hosted, hãy dùng access token. Với OAuth, bình luận hiển thị dưới tên người đã kết nối.
+
+    1. Mở tab **OAuth** và nhấn **Connect to GitLab**.
+    2. Phê duyệt quyền truy cập trong GitLab. CloudThinker yêu cầu các scope sau: `api`, `read_api`, `read_repository`, `write_repository`, `openid`, `email` và `profile`.
+    3. Quay lại trình hướng dẫn, [thêm webhook](#cấu-hình-webhook).
+  </Tab>
+  <Tab title="Access token">
+    Dùng cách này cho GitLab self-hosted, hoặc để giới hạn quyền truy cập trong một project hoặc group.
+
+    1. Trong GitLab, mở project hoặc group, vào **Settings → Access Tokens**, và nhấn **Add new token**.
+    2. Đặt role và chọn scope `api`. Dùng **Maintainer** nếu bạn sẽ dùng **Apply fix** hoặc autofix trên nhánh được bảo vệ, nếu không thì dùng **Developer**. Đặt ngày hết hạn. Các scope hẹp hơn như `read_api` hoặc `write_repository` là không đủ: đăng phát hiện dưới dạng bình luận merge request, resolve thread và đọc pipeline đều đi qua GitLab API, vốn cần `api`.
+    3. Sao chép token.
+    4. Trong trình hướng dẫn, mở tab **Access Token** và điền các trường bên dưới.
+    5. Nhấn **Validate Token**, chờ **Token works**, rồi nhấn **Connect**.
+    6. [Thêm webhook](#cấu-hình-webhook).
+
+    | Trường | Giá trị |
+    |---|---|
+    | **GitLab URL** | `https://gitlab.com`, hoặc URL instance của bạn như `https://gitlab.example.com` |
+    | **Token Type** | **Project Access Token** (một project) hoặc **Group Access Token** (mọi project trong group) |
+    | **Access Token** | Token, bắt đầu bằng `glpat-` |
+
+    <Note>
+      Token Guest hoặc Reporter không thể bình luận trên merge request. Token Developer không thể push vào nhánh được bảo vệ, nên **Apply fix** và autofix sẽ thất bại ở đó trừ khi bạn cho phép Developer push vào các nhánh này. Trên GitLab.com, Group Access Token cần GitLab Premium hoặc Ultimate.
+    </Note>
+
+    Với GitLab self-hosted, CloudThinker phải truy cập được **GitLab URL** của bạn qua HTTPS, và instance của bạn phải truy cập được URL webhook từ bước **Events**.
+  </Tab>
+</Tabs>
+
+## Bitbucket
+
+<Tabs>
+  <Tab title="OAuth">
+    1. Mở tab **OAuth** và nhập tên Bitbucket workspace của bạn (phần `<workspace>` trong `bitbucket.org/<workspace>/repo`).
+    2. Nhấn **Connect to Bitbucket** và phê duyệt quyền truy cập.
+
+    Với OAuth, bình luận hiển thị dưới tên người đã kết nối. Webhook được đăng ký tự động.
+  </Tab>
+  <Tab title="Access token">
+    Chọn loại token phù hợp với các repository bạn muốn review:
+
+    | Token Type | Bao phủ | Gói Bitbucket |
+    |---|---|---|
+    | **Workspace Access Token** | Mọi repository trong một workspace | Premium |
+    | **Project Access Token** | Mọi repository trong một project | Premium |
+    | **Repository Access Token** | Một repository | Bất kỳ |
+
+    1. Tạo token trong Bitbucket:
+       - Workspace: **Workspace → Settings → Access tokens → Create workspace access token**
+       - Project: **Project → Project settings → Access tokens → Create project access token**
+       - Repository: **Repository → Repository settings → Access tokens → Create Repository Access Token**
+    2. Cấp các quyền sau và đặt ngày hết hạn:
+
+       | Quyền | Mức truy cập | Cần cho |
+       |---|---|---|
+       | Account | Read | Nhận diện kết nối |
+       | Repositories | Read and write | Clone, và push commit autofix và giải quyết xung đột |
+       | Pull requests | Read and write | Đọc PR và đăng phát hiện |
+       | Webhooks | Read and write | Đăng ký webhook tự động |
+       | Pipelines | Read and write | [Phân tích pipeline](/vi/guide/code-review/pipelines) |
+
+       Trình hướng dẫn yêu cầu Pipelines **Read and write**, nhưng CloudThinker chỉ đọc các lượt chạy, bước và log của pipeline. Nếu chính sách của bạn yêu cầu quyền tối thiểu, **Read** là đủ cho phân tích pipeline.
+
+    3. Trong trình hướng dẫn, mở tab **Access Token** và điền các trường bên dưới.
+    4. Nhấn **Validate Token**, chờ **Token works**, rồi nhấn **Connect**.
+
+    | Trường | Giá trị |
+    |---|---|
+    | **Token Type** | **Workspace Access Token**, **Project Access Token** hoặc **Repository Access Token** |
+    | **Bitbucket Workspace** | Phần `<workspace>` trong `bitbucket.org/<workspace>/repo` |
+    | **Repository slug** | Chỉ với token repository: slug của repository |
+    | **Access Token** | Token bạn đã sao chép |
+
+    Webhook được đăng ký tự động.
+  </Tab>
+</Tabs>
+
+## Azure DevOps
+
+<Steps>
+  <Step title="Tạo personal access token">
+    Trong Azure DevOps, vào **User settings → Personal access tokens** và nhấn **New Token**. Chọn organization, đặt ngày hết hạn và bật các scope sau:
+
+    | Scope | Mức truy cập |
+    |---|---|
+    | Build | Read |
+    | Code | Read & Write |
+    | Pull Request Threads | Read & Write |
+
+    Sao chép token. Azure DevOps đăng bình luận dưới tên người sở hữu PAT, vì vậy hãy tạo token từ một service account riêng. Nhờ vậy review vẫn hoạt động khi có người nghỉ việc. Cấp cho tài khoản đó mức truy cập **Basic** (Stakeholder không dùng được Repos) và **Contributor** trên project, để tài khoản này đọc được code và bình luận trên pull request.
+  </Step>
+  <Step title="Kết nối trong trình hướng dẫn">
+    Điền **Organization URL** (ví dụ `https://dev.azure.com/myorg`), **Project** và **Personal Access Token**. Nhấn **Validate PAT**, chờ **Token works**, rồi nhấn **Connect**.
+
+    Kết nối chỉ bao phủ các repository trong đúng project đó. Để review repository trong project khác, hãy thiết lập Review trong một workspace riêng cho project đó.
+
+    **Trạng thái thành công:** hộp thoại hiển thị **Connected** và chuyển sang **Events**.
+  </Step>
+  <Step title="Thêm service hook">
+    Làm theo [Cấu hình webhook](#cấu-hình-webhook).
+  </Step>
+</Steps>
+
+## AWS CodeCommit
+
+Cả hai phương thức đều dùng một script do trình hướng dẫn tạo cho bạn. Chạy script trong AWS CloudShell, hoặc trong bất kỳ bash shell nào có AWS CLI và thông tin xác thực cho tài khoản (script access key cũng cần `jq`). Một kết nối bao phủ một tài khoản AWS và một region: region bạn chọn trong trình hướng dẫn.
+
+<Tabs>
+  <Tab title="IAM role (khuyến nghị)">
+    1. Chọn **IAM Role (recommended)** và chọn **AWS Region**. Trình hướng dẫn tạo một External ID cho workspace của bạn.
+    2. Sao chép script và chạy trong AWS CloudShell. Script tạo một role tên `CloudThinkerCodeCommitAccessRole` với trust policy giới hạn cho CloudThinker và External ID của bạn. Nếu role đó đã tồn tại, ví dụ từ lần thiết lập trước, script sẽ dùng lại role đó: làm mới trust policy cho External ID mới và in ra ARN hiện có.
+    3. Sao chép role ARN từ đầu ra của script vào **Role ARN**, rồi nhấn **Connect**.
+  </Tab>
+  <Tab title="Access key">
+    1. Chọn **Access Keys** và chọn **AWS Region**.
+    2. Sao chép script và chạy trong AWS CloudShell. Script tạo một IAM user với các quyền CodeCommit mà Review cần và một access key.
+    3. Dán **Access Key ID** và **Secret Access Key** từ đầu ra của script, rồi nhấn **Connect**.
+
+    Access key không tự hết hạn. Hãy xoay vòng key theo lịch thông thường của bạn và dán cặp khóa mới bằng **Update token** trong **Review → Settings → Connection**, hoặc dùng IAM role thay thế.
+  </Tab>
+</Tabs>
+
+<Accordion title="Script tạo ra những gì">
+  Script gắn một inline policy với các action sau:
+
+  | Mục đích | IAM action |
+  |---|---|
+  | Đọc repository và code | `codecommit:ListRepositories`, `GetRepository`, `GetDifferences`, `GetBlob`, `GetFile`, `GetFolder`, `GitPull` |
+  | Đọc pull request | `codecommit:ListPullRequests`, `GetPullRequest`, `GetCommentsForPullRequest`, `GetCommentReactions` |
+  | Đăng phát hiện | `codecommit:PostCommentForPullRequest`, `PostCommentReply`, `UpdateComment` |
+  | Sự kiện webhook | `events:PutRule`, `PutTargets`, `DescribeRule`, `DeleteRule`, `RemoveTargets`, `ListTargetsByRule`, giới hạn trong các rule tên `CloudThinker-CodeCommit-*` |
+
+  Script không cấp `codecommit:GitPush` hoặc `codecommit:CreatePullRequest`. [Tự động giải quyết xung đột](/vi/guide/code-review/conflict-resolution) cần cả hai, vì vậy hãy thêm chúng nếu bạn bật tính năng này:
+
+  1. Trong IAM console, mở **Roles → CloudThinkerCodeCommitAccessRole** (hoặc **Users → CloudThinkerCodeCommitUser** với access key).
+  2. Trên **Permissions**, chỉnh sửa inline policy: `CodeCommitReviewAccess` trên role, `CodeCommitReviewAccessKeyPolicy` trên user.
+  3. Thêm `codecommit:GitPush` và `codecommit:CreatePullRequest` vào statement `CodeCommitReviewActions` và lưu.
+
+  Trust policy của IAM role chỉ cho phép tài khoản AWS của CloudThinker assume role, và chỉ với External ID của workspace bạn. Script bạn sao chép từ trình hướng dẫn chứa toàn bộ trust policy, kèm account ID đó, để team bảo mật của bạn có thể đọc trước khi chạy. Còn phương thức **Access Keys** tạo một IAM user tên `CloudThinkerCodeCommitUser` với cùng policy.
+</Accordion>
+
+Nếu trình hướng dẫn báo **no repositories found yet**, kết nối hoạt động nhưng thông tin xác thực không thấy repository nào. Hãy kiểm tra quyền IAM và region.
+
+## Cấu hình webhook
+
+GitHub và Bitbucket không cần làm gì ở đây. Với ba provider còn lại, bước **Events** hiển thị **URL** webhook và **Secret token** để sao chép.
+
+<Tabs>
+  <Tab title="GitLab">
+    1. Trong GitLab, mở group hoặc project và vào **Settings → Webhooks → Add new webhook**. Webhook cấp group cần GitLab Premium hoặc Ultimate. Ở gói Free, hãy thêm webhook vào từng project.
+    2. Dán **URL** và **Secret token** từ trình hướng dẫn. Giữ **Enable SSL verification** ở trạng thái bật.
+    3. Bật **Merge request events** và **Comments**. Thêm **Pipeline events** nếu bạn dùng [phân tích pipeline](/vi/guide/code-review/pipelines), **Tag push events** nếu bạn dùng [release](/vi/guide/code-review/releases), và **Push events** nếu bạn dùng [tự động giải quyết xung đột](/vi/guide/code-review/conflict-resolution). Nếu không bật Push events, CloudThinker không bao giờ nhận được các lần push vào nhánh đích, nên xung đột do những lần push đó gây ra sẽ không được kiểm tra.
+    4. Lưu webhook, rồi nhấn **Mark as Configured** trong trình hướng dẫn.
+
+    Để kiểm tra webhook đã gửi được chưa, nhấn **Test → Merge request events** cạnh webhook, rồi mở chỉnh sửa webhook và xem trong **Recent events**.
+  </Tab>
+  <Tab title="Azure DevOps">
+    Azure DevOps cần một service hook cho mỗi sự kiện. Lặp lại các bước này cho từng sự kiện bên dưới.
+
+    1. Vào **Project Settings → Service hooks** và nhấn **+ Create subscription**.
+    2. Chọn **Web Hooks** và nhấn **Next**.
+    3. Trong **Trigger**, chọn một sự kiện và nhấn **Next**.
+    4. Giữ bộ lọc repository và nhánh ở **[Any]**. Dán **URL**. Dán **Secret token** vào trường **Basic authentication password** và để trống username. Nhấn **Finish**.
+
+    | Sự kiện | Cần cho |
+    |---|---|
+    | **Pull request created** | Review |
+    | **Pull request updated** | Review |
+    | **Pull request commented on** | Lệnh mention. Đặt **Resource version** là **2.0**: CloudThinker bỏ qua sự kiện bình luận phiên bản 1.0 |
+    | **Build completed** | Phân tích pipeline |
+    | **Code pushed** | Chỉ cho **Analyze new release tags** |
+
+    Sau đó nhấn **Mark as Configured** trong trình hướng dẫn.
+  </Tab>
+  <Tab title="AWS CodeCommit">
+    1. Sao chép script từ bước **Events**. Script đã chứa URL webhook và secret token của bạn.
+    2. Chạy script trong AWS CloudShell, hoặc bất kỳ bash shell nào có AWS CLI, với thông tin xác thực cho tài khoản sở hữu các repository. Script tạo các rule Amazon EventBridge gửi sự kiện đến CloudThinker, một bộ cho mỗi repository CodeCommit đang tồn tại trong region lúc chạy.
+    3. Khi script in ra "Webhook setup complete", nhấn **Mark as Configured**.
+
+    Vì các rule được tạo theo từng repository, repository bạn tạo sau sẽ không có rule nào. Chạy lại script sau khi thêm repository. Chạy lại là an toàn.
+  </Tab>
+</Tabs>
+
+**Trạng thái thành công:** bạn mở một PR hoặc MR thử nghiệm trong một repository đã chọn và một bình luận tiến độ của CloudThinker xuất hiện trên đó.
+
+## Hết hạn token
+
+Access token của GitLab và Bitbucket và PAT của Azure DevOps hết hạn vào ngày bạn đặt. Review dừng lại khi token hết hạn, và trang Review hiển thị **Reconnect your Git provider**. Ghi lại ngày khi tạo token, và thay token trước ngày đó: mở **Review → Settings**, trong mục **Connection** mở menu hành động (⋯) và nhấn **Update token**. Access key CodeCommit không tự hết hạn, nhưng hãy xoay vòng chúng theo cùng cách. Review không cảnh báo trước ngày hết hạn của token, vì vậy hãy đặt lời nhắc trong lịch của riêng bạn.
+
+## Ngắt kết nối provider
+
+<Warning>
+  **Remove setup** xóa mọi MR/PR đã review trên **Review → Reviews** và mọi bản ghi pipeline trong workspace. Thiết lập lại Review không khôi phục chúng.
+</Warning>
+
+<Steps>
+  <Step title="Gỡ thiết lập trong CloudThinker">
+    Mở **Review → Settings**. Trong mục **Connection**, mở menu hành động (⋯) và nhấn **Remove setup**, rồi xác nhận. Review dừng trên mọi repository và kết nối provider bị xóa. Trên GitHub, CloudThinker cũng gỡ cài đặt app của mình, và trên Bitbucket, CloudThinker xóa các webhook đã đăng ký. Bạn có thể thiết lập lại sau.
+  </Step>
+  <Step title="Thu hồi quyền truy cập trên provider">
+    Xác nhận GitHub App đã biến mất khỏi cài đặt **GitHub Apps** của organization, hoặc thu hồi quyền OAuth, xóa access token hoặc PAT, hoặc xóa IAM role hoặc user mà script đã tạo.
+  </Step>
+</Steps>
+
+## Khắc phục sự cố
+
+<AccordionGroup>
+  <Accordion title="Validate Token hoặc Validate PAT thất bại">
+    **Nguyên nhân:** thường là URL hoặc tên sai, hoặc thiếu scope:
+
+    - **GitLab:** URL có đường dẫn ở cuối, hoặc role của token thấp hơn Developer.
+    - **Bitbucket:** tên workspace hoặc slug repository sai, thiếu một quyền, hoặc bạn chọn token workspace hoặc project trên gói không hỗ trợ.
+    - **Azure DevOps:** **Organization URL** không phải `https://dev.azure.com/<org>`, tên **Project** sai, hoặc PAT được tạo cho organization khác.
+
+    **Cách khắc phục:** sửa trường đó, xác nhận các scope trong các bảng ở trên, và tạo token mới nếu cần. Trình hướng dẫn giữ lại những gì bạn đã nhập, nên bạn chỉ cần thay phần bị sai.
+  </Accordion>
+  <Accordion title="Đã kết nối, nhưng không có review trên MR mới (GitLab, Azure DevOps, CodeCommit)">
+    **Nguyên nhân:** webhook bị thiếu, sai secret, hoặc thiếu trigger.
+
+    **Kiểm tra:** mở lịch sử gửi webhook trong provider và tìm các request thất bại.
+
+    **Cách khắc phục:** so sánh URL, secret và trigger với [Cấu hình webhook](#cấu-hình-webhook). Với Azure DevOps, xác nhận mọi service hook đều tồn tại.
+  </Accordion>
+  <Accordion title="Lệnh mention không nhận được phản hồi trên Azure DevOps">
+    **Nguyên nhân:** hook **Pull request commented on** dùng resource version 1.0.
+
+    **Cách khắc phục:** chỉnh sửa service hook đó và đặt **Resource version** là **2.0**.
+  </Accordion>
+  <Accordion title="Bitbucket yêu cầu bạn xác nhận workspace">
+    **Nguyên nhân:** bạn đã kết nối bằng OAuth, và Bitbucket không còn cho phép CloudThinker tự tìm workspace của bạn.
+
+    **Cách khắc phục:** nhấn **Set workspace**, nhập tên workspace vào **Bitbucket workspace**, và nhấn **Save workspace**.
+  </Accordion>
+</AccordionGroup>
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="Hoàn tất thiết lập Review" icon="gear" href="/vi/guide/code-review/setup">
+    Chọn repository, chọn chế độ review và nhận review đầu tiên.
+  </Card>
+  <Card title="Lệnh mention" icon="at" href="/vi/guide/code-review/mention-commands">
+    Trao đổi với reviewer từ bình luận trên PR hoặc MR.
+  </Card>
+</CardGroup>

@@ -1,78 +1,200 @@
 ---
 title: Autonomous Operations
-description: "Understand what CloudThinker agents run without a live prompt and how Manual or Auto bounds that work"
+description: "Set the limits for agent work that runs with no one at the keyboard, and get told when it fails, waits, or changes itself."
 icon: robot
 ---
 
 import AutonomyModes from '/snippets/autonomy-modes.mdx';
 
-CloudThinker agents can work without a live prompt: automations run on triggers, and [Pulse](/guide/pulse/overview) watches your monitoring feeds continuously. The workspace's Manual or Auto mode bounds everything they do, whichever surface started it.
+Autonomous operations are agent runs that start without anyone typing a prompt: automations firing on a trigger, and Pulse sorting your monitoring alerts. Before you rely on them, set the Approval mode for unattended runs, Rules for routine writes, notifications for anything that needs a person, and a credit limit.
 
-## Why autonomous operations
+## What runs without a live prompt
 
-- **Routine work runs itself.** [Automations](/guide/automation/automations) run recurring checks, react to webhook calls and repository events, or run once at a future time — without someone remembering.
-- **Noise becomes signal.** Pulse suppresses duplicate monitoring events and ranks the clusters that remain.
-- **You set the boundary.** The workspace mode and per-tool permissions decide what an agent may do on its own, and the same rules apply to a scheduled run and a live chat alike.
-- **Everything is recorded.** Every autonomous run keeps its conversation, so you can open any run and read exactly what the agent did.
+| Surface | What it does on its own | Configure it in |
+|---------|-------------------------|-----------------|
+| **Automations** | Runs saved instructions on a schedule, a webhook call, a repository event, or a probe script the agent wrote | [Automations](/guide/automation/automations) |
+| **Pulse** | Groups incoming alerts into clusters, drops noise, and hands actionable ones to triage. The investigations it hands off run as [Resolve](/guide/incident/overview) (CloudThinker's incident investigation product), so their writes follow the **Resolve** run type on [Approval mode](/guide/approvals/approval-mode). | [Pulse](/guide/pulse/overview) |
 
-## Manual and Auto
+Every automation run keeps its conversation, so you can open any run and read what the agent checked and did. A chat reply can also end with a proposed automation, but nothing runs until an Admin selects **Enable**.
 
-CloudThinker has two workspace modes:
+## Prerequisites
+
+- A Team plan or above, which automations need. See [Pricing](/guide/billing/pricing).
+- The workspace Admin role. Only admins can change Approval modes, Rules, and automations.
+- An organization Owner or Admin, for the workspace credit limit in step 5.
+
+<Note>
+If the organization moves to a plan without automations, each automation turns off on its next run and sends **Automation turned off**.
+</Note>
+
+Set these limits before your first automation runs unattended, or right after you create it with the [Automation quickstart](/guide/automation/quickstart).
+
+## How a write is decided
+
+Reads always run. Every write goes through [Approvals](/guide/approvals/overview), whichever surface started it:
+
+| The agent wants to | What decides |
+|--------------------|--------------|
+| Read data | Nothing. It runs. |
+| Make a write a Rule covers | The Rule: **Allow** runs it, **Ask first** waits for a person, **Deny** refuses it |
+| Make a write no Rule covers | The run's Approval mode |
+| Make a call that is **Always blocked** | Nothing. It never runs. [Always blocked](/guide/approvals/overview#how-a-write-is-decided) is CloudThinker's built-in list of calls that no Rule or person can allow, such as stopping CloudTrail logging, closing an AWS account, or deleting the `kube-system` namespace. |
+
+When several Rules match one write, **Deny** beats **Ask first**, and **Ask first** beats **Allow**.
+
+There are two modes, **Manual** and **Auto**:
 
 <AutonomyModes />
 
-In a chat, open the approval control beside the model picker in the prompt box. It reads **Manual** or **Auto**. Select the mode you want. The selected mode applies to every conversation in that workspace, including runs that a trigger started.
+Every choice an automation can use (four Auto, plus Manual):
 
-<Tip>
-Start a workspace in Manual. Move it to Auto after you have reviewed the automations and connection tools you expect agents to use.
-</Tip>
+| Choice | A write no Rule covers | Use when |
+|--------|------------------------|----------|
+| **Auto · Rules + AI · Refuse** | AI judgment can allow it; otherwise refused | Unattended runs. The built-in default for automations: no one may be online to answer, so a write AI judgment won't allow is refused instead of left waiting. |
+| **Auto · Rules + AI · Ask me** | AI judgment can allow it; otherwise waits for a person | Someone watches notifications and would rather a write wait than fail |
+| **Auto · Rules · Refuse** | Refused | Unattended runs with a tight, known set of writes covered by Rules |
+| **Auto · Rules · Ask me** | Waits for a person | Only accepted Rules should run writes alone |
+| **Manual** | Waits for a person, as does every write a Rule allows | A person must see every write |
 
-## What runs autonomously
+<Note>
+Rules decide only when Rule enforcement is on for your workspace. It's off by default, and CloudThinker turns it on per workspace. While the **Rules** step on **Approvals** says **In preview**, Rules only record what they would decide, and the choice above alone decides each write — so pick it for the behavior you need today. See [Rules troubleshooting](/guide/approvals/rules#troubleshooting).
+</Note>
 
-Two surfaces run work without a live prompt. Configure each one on its own page.
+## Notifications for unattended runs
 
-| Surface | What it does on its own | Learn more |
-|---------|------------------------|------------|
-| **Automations** | Run stored agent instructions on a schedule, when a webhook call arrives, or when a repository event lands | [Automations](/guide/automation/automations) |
-| **Pulse** | Collects events from sources like CloudTrail, GuardDuty, and Datadog, suppresses noise, and surfaces ranked clusters that can escalate to [incidents](/guide/incident/overview) | [How Pulse Works](/guide/pulse/overview) |
+| Notification | Sent when |
+|--------------|-----------|
+| **Agent approvals** | A write is waiting for a person, and when it's approved or rejected |
+| **Automation run failed** | A run fails for the first time after a success |
+| **Automation turned off** | An automation stops after 10 failed runs in a row, or when it tries to run on a plan that doesn't include automations |
+| **Automation resource missing** | A run can't start because something it needs was deleted |
+| **Watched condition met** | An automation created from an agent's proposal card finishes a run that meets the card's watch condition (the line next to the eye icon). CloudThinker sends it, not the agent. |
+| **Agent reduced its monitoring** | An unattended run paused or removed one of its own triggers, or made a probe check less often |
 
-## How autonomous work is bounded
+**Agent alerts** is a different row: any alert an agent raises, filtered by severity. Use it when your instructions say "raise an alert if…". **Watched condition met** only covers follow-ups an agent proposed.
 
-Whichever surface starts the work, the workspace mode decides what happens before an agent uses a connection tool:
+<Warning>
+**Automation run failed** fires once, on the first failure after a success. Failures two to nine send nothing, until **Automation turned off** at the tenth. To catch them:
 
-| The agent wants to | Manual workspace | Auto workspace |
-|--------------------|------------------|----------------|
-| Read data with a tool set to **Always allow** | Runs | Runs |
-| Read data with a tool set to **Needs approval** | Pauses for a person | Runs — known read-only tools are not held |
-| Change something | Follows that tool's permission | Receives an Auto Mode decision before it runs |
-| Use a tool set to **Never allow** | Unavailable | Receives an Auto Mode decision — per-tool settings are not evaluated in Auto |
+- Check the **Runs** tab daily. Change its status filter from **All statuses** to **Failed**.
+- Add "if you can't finish, raise a high-severity alert saying why" to the instructions. That only helps when the agent gets far enough to raise one.
+</Warning>
 
-In Manual mode, [Tool Permissions](/guide/approval) are the control: each connection tool is **Always allow**, **Needs approval**, or **Never allow**. In Auto mode, Auto Mode checks each write before it runs and can allow it, pause it for your approval, escalate it, or deny it — [Auto Mode](/guide/auto-mode) describes those outcomes.
+## Set the limits
 
-A run that pauses this way shows **Required Approval** in the automation's Runs view until a person decides, so autonomous work never silently waits.
+<Steps>
+  <Step title="Choose the mode for all automations">
+    Open **Approvals** in the sidebar, then the **Approval mode** tab. Under **Run types**, find **Automations**. Keep the built-in default, or select **Override** and pick another mode. Select **Reset** to undo an override.
+
+    Pick **Auto · Rules + AI · Ask me** if someone watches notifications and you'd rather a write wait than fail.
+
+    If you use Pulse, set the **Resolve** row the same way: investigations Pulse hands off follow it.
+
+    **Success state:** the **Automations** row (and **Resolve**, if you changed it) shows the mode you picked.
+  </Step>
+  <Step title="Accept a Rule for each routine write">
+    Accept one **Allow** Rule for every write your automations make each run. Rule enforcement is off by default, and CloudThinker turns it on per workspace. Until then the Rule records the verdict it would give, and the mode from step 1 still decides every write. Accepting the Rules now means the policy is ready the day enforcement reaches you.
+
+    Add a Rule either way:
+
+    - **Accept a suggestion** on the **Rules** tab. Suggestions come from **Find rules** (a check-up chat where CloudThinker reads your connections and approval history, then proposes Rules), or from an agent that proposed one.
+    - **Ask for one** by typing `/create-policy` in a chat and describing the write, for example "Allow posting pull request comments on the github-acme connection from automations". CloudThinker picks the operation name from the connection's catalog.
+
+    | Field | Set it to |
+    |-------|-----------|
+    | **Effect** | **Allow** |
+    | **Operations** | The write the automation makes |
+    | **Connections** | The connection it writes to |
+    | **Runs from** | **Automations** |
+
+    Once enforcement is on, a Rule decides the same way in every Auto choice, so a nightly run no longer depends on AI judgment. See [Rules](/guide/approvals/rules).
+
+    **Success state:** the Rule is on the **Active** tab with **Allow** and **Runs from** set to **Automations**.
+  </Step>
+  <Step title="Set one automation's mode if it needs it">
+    Open the automation and use the **Approval** picker beside the model picker under its instructions. The option marked **Default** follows the **Automations** run type. Pick another to override it for this automation only.
+
+    **Success state:** the picker shows the mode you chose.
+
+    <Warning>
+    The most specific mode wins: this automation's mode, then the **Automations** run type, then the workspace mode. That holds even when the more specific one is looser. Only Admins can change it, and the edit is recorded in [audit logs](/guide/security/audit-logs) as an automation update.
+    </Warning>
+  </Step>
+  <Step title="Route the notifications that need a person">
+    Go to **More → Workspace settings → Notifications**. Under **What to notify me about**, open **Agents & Tasks** and turn on a channel for the events in [Notifications for unattended runs](#notifications-for-unattended-runs) above. Alerts an agent raises are a separate row, **Agent alerts** under **Alerts**. See [Notifications](/guide/notifications).
+
+    **Success state:** each event shows at least one channel turned on.
+  </Step>
+  <Step title="Set a workspace credit limit">
+    There's no per-automation credit cap, so a workspace [credit limit](/guide/billing/credit-limits) is the backstop for a runaway trigger. An organization Owner or Admin sets it in **Admin Settings → Credit Limits**, on Scale or Enterprise. Pick one:
+
+    - **Throttle**: at the limit, the workspace can spend only the free daily credits, which pay for Light chat only. Automation runs use Pro or Ultra, so new runs can't start until the cycle resets or you raise the limit. The limit is checked when a run starts, so a run already going finishes.
+    - **Notify only**: alerts the Owner and keeps going.
+
+    On Team there's no credit limit. Instead, watch [Usage](/guide/billing/usage), keep probe intervals at 15 minutes or more, and filter repository triggers by branch and action.
+
+    **Success state:** the workspace's **Usage / limit** column shows a credit amount, not **Unlimited**.
+  </Step>
+</Steps>
+
+## What an unattended run can change about itself
+
+An agent running an automation can manage that automation's triggers, for example removing a probe once an incident is closed. The limits:
+
+- **Only its own automation.** An unattended run can't edit any other automation.
+- **Loosening is reported.** Turning the automation off, pausing or removing a trigger, or making a probe check less often sends the owner **Automation turned off** or **Agent reduced its monitoring**. A stop shows the reason on the automation, such as "Stopped by the agent: the incident is closed".
+- **Adding is not reported.** The agent can add a probe or repository trigger, or make a probe check more often, without a notification. More triggers can mean more runs and more credits. It can't add a webhook trigger, because the secret has to be shown to a person.
+- **Every change is recorded** in [audit logs](/guide/security/audit-logs) with the agent as the actor. There's no setting to stop an agent adding triggers, so review them weekly: filter **Actor Type** to **Agent** and **Category** to **Task**. Audit logs come with Scale and Enterprise.
+
+There's no per-automation credit cap or daily run cap. The limits are the webhook and probe limits on [Automations](/guide/automation/automations), plus a workspace credit limit (step 5 above), which also caps what triggers an agent added can spend. Watch spend per feature on [Usage](/guide/billing/usage).
+
+## Stop everything at once
+
+There's no switch that pauses every automation. During an incident or a bad deploy:
+
+- Turn off each automation with the switch on its card in **Automations**.
+- To make every write wait for a person while runs keep reading, set the **Automations** run type to **Manual**. An automation with its own **Approval** setting keeps that setting, so check those too.
+- A run already going isn't stopped by the switch, and finishes. A write waiting in **Required Approval** stays there: open the run from **Runs** and select **Decline**.
+
+## Ownership and offboarding
+
+The owner is the person who created the automation. If the owner loses access to the workspace, their automations turn off and show "Its owner no longer has access to this workspace." A workspace admin can then select **Take ownership** in that notice on the automation's page. Ownership can't be moved ahead of time, only after the owner loses access. The automation stays off until someone turns it back on. The Automations page doesn't show who owns each automation, so keep your own list of who created which, and add it to your offboarding checklist. Then someone can take ownership and turn them back on the same day.
 
 ## Examples
 
-- **A Manual workspace with a daily cost report.** An automation runs Alex's cost summary every morning. The run only reads billing data through tools set to **Always allow**, so it finishes without waking anyone; the report waits in the run's conversation and in [notifications](/guide/notifications).
-- **An Auto workspace reacting to a repository event.** A merge request lands and a repository trigger starts a run that needs to comment on the merge request. That write receives an Auto Mode decision first; if the decision pauses it, the run shows **Required Approval** until a person chooses **Proceed** or **Cancel**.
+- **Read-only daily report.** An automation summarizes cost every morning. It only reads, so no approval is involved and nobody is woken. The report waits in the run's conversation.
+- **A comment on every new pull request.** A repository trigger fires on **Opened**, and the run needs to post a comment. Ask for the Allow Rule with `/create-policy` (step 2) and accept it, and with Rule enforcement on, the comment posts every time. Without a Rule it depends on AI judgment, and anything AI judgment doesn't allow is refused, so don't rely on it for a write you want every run.
 
-## Stay informed
+## Troubleshooting
 
-Every autonomous run is logged in the workspace, and each run's conversation holds its full output. Notifications deliver findings, errors, and approval requests to Slack, Teams, or email. Review run history regularly and adjust the workspace mode, Tool Permissions, or the automation's instructions when the work changes.
+<AccordionGroup>
+  <Accordion title="A scheduled run refused a write instead of asking">
+    The default for automations is **Auto · Rules + AI · Refuse**. Accept an **Allow** Rule for that write, or set the automation or the **Automations** run type to an **Ask me** choice.
+  </Accordion>
+  <Accordion title="A run sits on Required Approval">
+    A write is waiting for a person. Open the run's conversation from **Runs** and select **Approve** or **Decline**. Turn on **Agent approvals** so the next one reaches you.
+  </Accordion>
+  <Accordion title="An Allow Rule didn't let the write run">
+    Check Rule enforcement first: while the **Rules** step on **Approvals** says **In preview**, Rules only record what they would decide, so no Allow Rule runs a write yet ([details](/guide/approvals/rules#troubleshooting)). Then check the mode: **Manual** asks before every write, even one an Allow Rule covers. Then check that **Runs from** includes **Automations** and that the Rule names the right connection. Last, look for a **Deny** or **Ask first** Rule that matches the same write: it beats the Allow.
+  </Accordion>
+  <Accordion title="An automation turned itself off">
+    Open it to read the reason. Ten failed runs in a row, an agent stop, or an owner losing access each turn it off. Fix the cause, use **Run now** to confirm, then turn it back on.
+  </Accordion>
+</AccordionGroup>
 
-## Related
+## Next steps
 
 <CardGroup cols={2}>
-  <Card title="Automations" icon="calendar-check" href="/guide/automation/automations">
-    Run agent instructions on schedules, webhooks, and repository events
+  <Card title="Automation quickstart" icon="rocket" href="/guide/automation/quickstart">
+    Build a daily cost anomaly check that alerts Slack
   </Card>
-  <Card title="Approval" icon="shield-check" href="/guide/approval">
-    Configure per-tool permissions for Manual-mode agent actions
+  <Card title="Approval mode" icon="bolt" href="/guide/approvals/approval-mode">
+    See every Auto choice and which mode a run uses
   </Card>
-  <Card title="Auto Mode" icon="bolt" href="/guide/auto-mode">
-    Understand the decision each agent write receives in Auto
+  <Card title="Approval Rules" icon="list-check" href="/guide/approvals/rules">
+    Review and accept the Rules agents propose as they work
   </Card>
   <Card title="Pulse" icon="wave-pulse" href="/guide/pulse/overview">
-    Suppress duplicate events and surface ranked signal clusters
+    Turn alert floods into ranked clusters
   </Card>
 </CardGroup>

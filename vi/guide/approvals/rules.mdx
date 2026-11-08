@@ -1,0 +1,204 @@
+---
+title: Approval Rules
+description: "Tìm, xem xét, chấp nhận và chỉnh sửa các Rule cho phép một thao tác ghi của agent tự chạy, chờ người duyệt, hoặc không bao giờ chạy"
+icon: list-check
+---
+
+Mỗi Rule áp dụng cho một loại thao tác ghi, chẳng hạn `ec2:StopInstances` trên tài khoản AWS staging của bạn, và được xét trước [Approval mode](/vi/guide/approvals/approval-mode), một khi CloudThinker bật Rule enforcement cho workspace của bạn. Tính năng này tắt theo mặc định: khi bước **Rules** hiển thị **In preview**, Rules chỉ ghi lại kết quả lẽ ra sẽ đưa ra, còn quyết định thực tế vẫn do Approval mode, vì vậy hãy chọn **Manual** cho các thao tác ghi bắt buộc phải chờ người duyệt ([chi tiết](#khắc-phục-sự-cố)). Agent đề xuất Rule trong lúc làm việc, nhưng chưa có gì thay đổi cho đến khi Admin workspace chấp nhận.
+
+## Điều kiện tiên quyết
+
+- Vai trò Admin workspace để chấp nhận, chỉnh sửa, vô hiệu hóa hoặc khôi phục một Rule. Developer và Viewer có thể đọc Rule.
+- Ít nhất một [kết nối](/vi/guide/connections/overview) tài khoản cloud hoặc cluster để dùng **Find rules**.
+
+## Rule gồm những gì
+
+| Trường | Ý nghĩa |
+|-------|---------------|
+| **Effect** | **Allow** chạy thao tác ghi. **Ask first** chờ người duyệt. **Deny** từ chối. |
+| **Operations** | Các lệnh gọi mà Rule bao phủ. Dấu `*` khớp với bất kỳ phần nào, ví dụ `ec2:Stop*` hoặc `*:*`. AWS dùng tên action IAM, chẳng hạn `ec2:StopInstances`. Các loại kết nối khác đặt tên thao tác theo cách riêng, vì vậy hãy yêu cầu các Rule đó bằng `/create-policy` và CloudThinker sẽ chọn tên hợp lệ từ danh mục của kết nối. |
+| **Connection type** và **Connections** | Các kết nối mà Rule bao phủ. Để trống **Connections** để bao phủ mọi kết nối thuộc loại đó. |
+| **Runs from** | Các loại run mà Rule bao phủ: **Chat**, **Resolve**, **Optimize**, **Automations**, **Review**. Để trống nghĩa là mọi run. |
+| **Window** | Rule kéo dài bao lâu. Để trống nghĩa là không hết hạn. |
+| **Note** | Lý do Rule tồn tại, dành cho người đọc tiếp theo |
+| **Who approves this?** | Chỉ với **Ask first**: Default approvers hoặc một nhóm người phê duyệt, và có cần **Needs 2 different people** hay không |
+| **Never allow break-glass** | Chỉ với **Deny**: không ai có thể ghi đè, kể cả owner của workspace |
+
+Rule không bao giờ áp dụng cho thao tác đọc, kể cả thao tác đọc nhạy cảm, vì thao tác đọc luôn chạy. Rule **Allow** không bao giờ khớp với lệnh gọi mà CloudThinker không xác định được, chẳng hạn một lệnh tạo đối số lúc chạy, một chương trình CloudThinker không mô hình hóa, hoặc một đường dẫn API nằm ngoài danh mục của kết nối. Rule **Allow** trên mọi thao tác phải nêu tên các kết nối của nó.
+
+Mỗi Rule có huy hiệu quyền truy cập để bạn nhận ra ngay Rule nào rủi ro:
+
+| Huy hiệu | Rule bao phủ |
+|-------|-----------------|
+| **Write** | Các lệnh gọi thay đổi tài nguyên |
+| **Destructive** | Lệnh xóa và các lệnh gọi phá hủy khác, chẳng hạn Git force push |
+| **Session** | Các lệnh gọi mở remote shell, chẳng hạn `ssh` |
+| **Sensitive read** | Thao tác đọc secret, chẳng hạn một tệp thông tin xác thực. Các thao tác này vẫn chạy, nên phần này của Rule không bao giờ khớp. |
+| **Every operation** | `*:*`, mọi lệnh gọi trên các kết nối của Rule |
+
+## Tìm Rule cho workspace của bạn
+
+Check-up là một cuộc chat mà CloudThinker dùng để đọc các kết nối, phát hiện Optimize, sự cố, cảnh báo và lịch sử phê duyệt của bạn, rồi đề xuất Rule để bạn chấp nhận.
+
+<Steps>
+  <Step title="Mở tab Rules">
+    Mở **Approvals** trong sidebar, rồi chọn tab **Rules**.
+
+    <Frame caption="Tab Rules: các Rule đang hoạt động, các Rule đang chờ xem xét, và Add from template hoặc Find rules">
+      <img src="/images/v2/approvals-rules.webp" alt="Tab Rules với các tab Active, Needs review và Dismissed, cùng nút Add from template và Find rules" />
+    </Frame>
+  </Step>
+  <Step title="Chọn nội dung cần tìm">
+    Nhấn **Find rules**. Giữ hoặc bỏ từng trọng tâm:
+
+    | Trọng tâm | Đề xuất gì |
+    |-------|------------------|
+    | **Hand off toil** | Rule Allow cho thao tác ghi trên các kết nối development và staging |
+    | **Guard production** | Rule Ask first cho các lệnh gọi phá hủy và session, cùng Ask first hoặc Deny cho các thao tác ghi production mà mọi người đã từ chối |
+    | **Clean up Rules** | Sửa các Rule không được dùng, quá rộng hoặc thiếu kết nối |
+  </Step>
+  <Step title="Bắt đầu check-up">
+    Nhấn **Start check-up**. Quá trình mất 5–10 phút và tiêu tốn credit. Trong khi chạy, nút hiển thị **Check-up running** và mở cuộc chat đó.
+
+    **Trạng thái thành công:** banner trên tab **Rules** cho biết có bao nhiêu Rule cần bạn xem xét, kèm nút **Review**.
+  </Step>
+</Steps>
+
+Bạn cũng có thể bắt đầu check-up từ bất kỳ cuộc chat nào bằng cách nhập `/find-rules`.
+
+## Yêu cầu một Rule trong chat
+
+Khi bạn đã biết Rule mình muốn, hãy nhập `/create-policy` trong chat. CloudThinker hỏi bạn cần gì, kiểm tra các Rule hiện tại đang làm gì, và đăng một thẻ đề xuất.
+
+```text
+/create-policy Let agents stop and start EC2 instances on aws-staging without asking. Keep everything else on that account as it is.
+/create-policy Always ask the On-call SRE group before any rds:Delete* call on production.
+```
+
+Để biến một lệnh gọi bạn vừa phê duyệt thành Rule, nhấn **Approve and draft rule** trên thẻ phê duyệt của nó. Lệnh gọi chạy ngay, và một cuộc chat bên cạnh soạn Rule.
+
+## Xem xét và chấp nhận Rule
+
+<Steps>
+  <Step title="Mở phần xem xét">
+    Trên tab **Rules**, nhấn **Review** trong banner, hoặc mở tab **Needs review**.
+  </Step>
+  <Step title="Kiểm tra từng Rule">
+    Mở một Rule để đọc. **What would change** phát lại các lệnh gọi trong 7 hoặc 30 ngày qua với Rule đó và cho bạn biết bao nhiêu lệnh sẽ chạy không cần hỏi, hỏi trước, hoặc bị từ chối, kèm các lệnh ví dụ.
+  </Step>
+  <Step title="Chọn và chấp nhận">
+    Ban đầu không có gì được chọn. Chọn tối đa 50 Rule, rồi nhấn **Accept** hoặc **Dismiss**. Với Rule **Allow** trên mọi thao tác, **Allow** cho thao tác phá hủy, hoặc **Allow** bị gắn cờ (nhập từ quyền cũ có bao gồm loại truy cập rủi ro, như lệnh gọi session), bạn sẽ được yêu cầu xác nhận trước.
+
+    **Trạng thái thành công:** một thông báo hiển thị "Accepted N Rules" và đề nghị **Undo**. Rule nào thất bại sẽ ở lại trong danh sách kèm lý do.
+  </Step>
+</Steps>
+
+Các đề xuất tương tự hiển thị dưới dạng thẻ trong cuộc chat đã tạo ra chúng. **Accept** trên thẻ có tác dụng giống **Accept** trên tab **Rules**.
+
+<Note>
+Đề xuất nào trùng với **Always blocked** (danh sách có sẵn gồm các lệnh gọi không bao giờ được chạy) thì không thể chấp nhận. Đề xuất đó sẽ không bao giờ có hiệu lực, nên hãy bỏ qua.
+</Note>
+
+## Chỉnh sửa, vô hiệu hóa hoặc khôi phục Rule
+
+Mở một Rule trên tab **Rules**. Với tư cách admin, bạn thấy biểu mẫu chỉnh sửa ngay.
+
+| Hành động | Kết quả |
+|--------|--------|
+| **Save** trên một Rule đang hoạt động | Thay thế ngay lập tức. Phiên bản cũ được giữ dưới dạng **Replaced** và rời khỏi danh sách. |
+| **Save** trên một đề xuất | Giữ đề xuất trong **Needs review**. Chấp nhận để bật đề xuất. |
+| **Change with AI** | Mở một cuộc chat soạn thay đổi dưới dạng đề xuất mới |
+| **Disable** | Ngăn Rule khớp với bất kỳ lệnh gọi nào và chuyển nó sang **Dismissed** |
+| **Restore** trên một Rule đã bỏ qua | Kích hoạt lại ngay lập tức, không hết hạn |
+
+## Window
+
+Window là Rule ngắn hạn, tạo bằng một cú nhấn vào **Approve for…** trên thẻ phê duyệt. Window chỉ áp dụng cho đúng thao tác và kết nối vừa được duyệt, trong đúng cuộc chat hoặc sự cố đó, và luôn có thời điểm kết thúc: sau **1 giờ**, khi sự cố kết thúc (**This incident**), hoặc sau **30 ngày**. Kể cả Window 30 ngày cũng không áp dụng bên ngoài cuộc chat nơi bạn đã duyệt.
+
+Window hiển thị trên tab **Rules** với nguồn **Window** và thời điểm kết thúc. Bạn không thể chỉnh sửa Window. Để kết thúc sớm, nhấn **Disable** trong menu của dòng.
+
+## Lọc danh sách
+
+Các tab **Active**, **Needs review** và **Dismissed** hiển thị số lượng của chúng. Lọc theo **Source**, **Connector**, **Runs from** hoặc **Approved by**, hoặc tìm theo tên.
+
+| Nguồn | Ai tạo Rule |
+|--------|-------------------|
+| **Person** | Một người trong biểu mẫu Rule |
+| **Agent** | Một đề xuất của agent hoặc một check-up |
+| **Runbook** | Một runbook |
+| **Imported** | Một quyền trust hoặc runbook cũ, hoặc một tệp policy |
+| **Window** | **Approve for…** trên thẻ phê duyệt |
+| **Template** | **Add from template** trên tab **Rules** |
+
+## Xuất và nhập policy
+
+Lưu policy của bạn dưới dạng tệp, ví dụ trong Git, và nạp vào workspace khác. Cả hai hành động nằm trong menu **…** cạnh **Find rules**.
+
+- **Export active Rules** tải xuống `policy-<workspace>-<date>.yaml`. Tệp chứa các Rule đang hoạt động, nhóm người phê duyệt, Approval mode và cài đặt hai người. Tệp không bao giờ chứa Window, đề xuất hoặc secret.
+- **Import policy** đọc một tệp YAML hoặc JSON tối đa 1 MB. Trước khi áp dụng, CloudThinker cho bạn xem những gì sẽ thay đổi và liệt kê từng lỗi theo dòng và trường. Tệp chỉ được áp dụng khi bạn nhấn, và vẫn được giữ lại nếu áp dụng thất bại. Import theo kiểu hợp nhất: các Rule trong tệp được thêm hoặc cập nhật theo `slug`, và các Rule không có trong tệp vẫn giữ nguyên. Nếu muốn bỏ các Rule đó, chọn **Remove Rules that are not in the file**. Các Rule **Ask first** và **Deny** được nhập sẽ bắt đầu ở trạng thái hoạt động. Rule **Allow** được nhập sẽ chờ xem xét trừ khi bạn bật **Activate Allow Rules**.
+
+```yaml
+version: 1
+level: auto_ai_ask
+origin_levels:
+  automation: auto_ai_refuse
+approver_groups:
+  - name: On-call SRE
+    members: [sre-lead@example.com]
+rules:
+  - slug: stop-staging
+    description: Let the agent stop staging instances
+    effect: allow
+    connector: aws
+    aliases: [aws-staging]
+    operations: [ec2:StopInstances]
+  - slug: ask-before-rds-delete
+    effect: require_approval
+    connector: aws
+    operations: [rds:Delete*]
+    approver_group: On-call SRE
+```
+
+| Khóa | Giá trị |
+|-----|--------|
+| `level`, và mỗi giá trị trong `origin_levels` | `manual`, `auto_rules_ask` (Rules · Ask me), `auto_rules_refuse` (Rules · Refuse), `auto_ai_ask` (Rules + AI · Ask me), `auto_ai_refuse` (Rules + AI · Refuse) |
+| Các khóa `origin_levels`, và `applies_to` của Rule (**Runs from**) | `chat`, `resolve`, `keeper` (Optimize), `automation`, `review` |
+| `effect` | `allow`, `require_approval` (Ask first), `deny` |
+| `aliases` | Tên kết nối (**Connections**) |
+| `description` | **Note** của Rule |
+| `expires_at` | Thời điểm kết thúc của Rule (trường **Window**) |
+| `approver_group`, `two_person` | **Who approves this?** và **Needs 2 different people** |
+| `break_glass_blocked` | **Never allow break-glass**, chỉ với Deny |
+| `settings.two_person_mode` | `off`, `destructive`, `all_writes` |
+| `approver_groups[].members` | Địa chỉ email của thành viên |
+
+## Khắc phục sự cố
+
+<AccordionGroup>
+  <Accordion title="Find rules không hiển thị">
+    Công cụ policy của agent chưa được bật cho bản triển khai CloudThinker của bạn, nên check-up, **Change with AI**, và các lệnh `/find-rules` và `/create-policy` bị ẩn. Đây không phải cài đặt trên trang này. Liên hệ bộ phận hỗ trợ CloudThinker, hoặc người vận hành bản triển khai self-hosted của bạn, để yêu cầu bật. Bạn vẫn có thể chỉnh sửa Rule trong biểu mẫu, thêm từ template, hoặc nhập tệp policy.
+  </Accordion>
+  <Accordion title="Find rules yêu cầu bạn kết nối trước">
+    Check-up cần ít nhất một tài khoản cloud hoặc cluster. Thêm một kết nối trong [Connections](/vi/guide/connections/overview), rồi thử lại.
+  </Accordion>
+  <Accordion title="Accept bị tắt">
+    Bạn cần vai trò Admin workspace, hoặc Rule trùng với **Always blocked**. Nếu Rule đã thay đổi sau khi bạn mở, hãy tải lại và xem xét lần nữa.
+  </Accordion>
+  <Accordion title="Tab Rules báo Rules đang ở chế độ preview">
+    Rules chưa quyết định trong workspace này. Mỗi lệnh gọi được kiểm tra với chúng và chỉ kết quả được ghi lại, nên bạn có thể xem xét và chấp nhận đề xuất ngay bây giờ. Cho đến khi tính năng thực thi được bật, chỉ [Approval mode](/vi/guide/approvals/approval-mode) quyết định mỗi thao tác ghi. CloudThinker bật tính năng thực thi cho từng workspace; liên hệ bộ phận hỗ trợ CloudThinker để yêu cầu.
+  </Accordion>
+  <Accordion title="Rule Allow không cho thao tác ghi chạy">
+    Kiểm tra tính năng thực thi trước: nếu tab **Rules** báo Rules đang ở chế độ preview, chưa có Rule nào quyết định gì (xem ở trên). Sau đó kiểm tra chế độ: **Manual** hỏi trước mọi thao tác ghi, kể cả thao tác mà một Rule Allow bao phủ. Sau đó kiểm tra **Runs from** và **Connections**. Rule chỉ áp dụng cho các loại run và kết nối được nêu trong đó.
+  </Accordion>
+</AccordionGroup>
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="Approval mode" icon="bolt" href="/vi/guide/approvals/approval-mode">
+    Quyết định điều gì xảy ra với một thao tác ghi mà không Rule nào bao phủ
+  </Card>
+  <Card title="Người phê duyệt và Activity" icon="users" href="/vi/guide/approvals/approvers">
+    Chọn ai trả lời một Rule Ask first và kiểm tra những gì Rules đã quyết định
+  </Card>
+</CardGroup>

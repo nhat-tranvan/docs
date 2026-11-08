@@ -1,101 +1,203 @@
 ---
 title: CLI
-description: "Install the CloudThinker CLI, log in from your terminal, and run agents from any shell, script, or CI pipeline"
+sidebarTitle: Overview
+description: "Install the CloudThinker CLI, log in, and run CloudThinker from your terminal, shell scripts, and CI pipelines."
 icon: terminal
 ---
 
-<Note>
-**Preview** — The CloudThinker CLI is in early access. Command names, flags, and config formats may change before general availability. [Contact us](https://cloudthinker.io/contact) to join the preview.
-</Note>
+The CloudThinker CLI (`cloudthinker`) brings your CloudThinker workspace into the terminal. Type `cloudthinker`, describe the task in plain language, and the agent works in your current directory; scripts use `cloudthinker chat -p` to get an answer on stdout.
 
-`cloudthinker` puts your workspace in the terminal: it runs the CloudThinker coding agent on your own machine, and sends prompts to Anna from any script. It is one binary with no runtime to install.
+<Note>
+**Beta.** The CLI is in beta. Command names and flags may change before general availability. The CLI calls a [Worker](/guide/workers) an **outpost**, so you'll see `--outpost` in commands. Run `cloudthinker --version` to see yours, and check the [releases page](https://github.com/cloudthinker-ai/cloudthinker-cli/releases) for what changed.
+</Note>
 
 ## What you can do
 
-| Capability | Description |
+| Task | Command |
 | --- | --- |
-| Run the coding agent | `cloudthinker` starts an agent session in the current directory. It edits files and runs commands locally, and reaches your cloud only through the CloudThinker Sandbox with your workspace [connections](/guide/connections/overview) |
-| Send headless prompts | `cloudthinker chat -p "..."` submits one prompt to Anna and prints her answer on stdout, ready to pipe |
-| Follow long runs | Submit without waiting, list recent runs, and collect an answer later from any machine |
-| Check a review | Read the status, verdict, and findings of a [Review](/guide/code-review/overview) on a merge request or pull request |
-| Authenticate scripts | Print a short-lived bearer token for a tool that needs its own credential |
-| Run a Worker (beta) | `cloudthinker worker start` serves one folder on this machine so a chat or Automation runs where your code lives — see [Workers](/guide/workers) |
+| Start an agent session in the current directory | `cloudthinker`, then describe the task |
+| Run a local security test of an app you are building. Test only apps you own or are authorized to test. See [Run a security test](/guide/security/security-testing) | `cloudthinker`, then say "Test http://localhost:3000 for security issues" |
+| Ask one question and pipe the answer | `cloudthinker chat -p "Check production health"` |
+| Review your local Git changes before you push | `cloudthinker review` |
+| Follow a [Review](/guide/code-review/overview) on a merge request or pull request | `cloudthinker review watch <MR_URL>` |
+| Let a CloudThinker conversation work in a folder on this machine | `cloudthinker worker start --outpost <name> --workdir "$PWD"`. See [Workers](/guide/workers) |
 
-## Install
+## What runs where
 
-```bash
-curl -fsSL https://cloudthinker.io/install.sh | sh
-```
+<Frame caption="Local tools run on your machine; what the agent reads goes to the model, and connection credentials stay on the workspace machine.">
+  <img src="/images/cli/diagram-where-work-runs-light.svg" alt="Local tools run as your OS user on your machine and send prompts and what they read to the model gateway and the Agent CLI mirror, while connection credentials stay on the workspace machine" className="block dark:hidden" style={{width: '100%'}} />
+  <img src="/images/cli/diagram-where-work-runs-dark.svg" alt="Local tools run as your OS user on your machine and send prompts and what they read to the model gateway and the Agent CLI mirror, while connection credentials stay on the workspace machine" className="hidden dark:block" style={{width: '100%'}} />
+</Frame>
 
-The installer detects your platform, drops the `cloudthinker` binary in `~/.local/bin`, and adds that directory to your `PATH`. Open a new shell, then check the install:
+<Warning>
+On your machine, the agent reads and edits files and runs shell commands as your OS user, and CloudThinker doesn't ask for approval first. For a repository you don't trust, run the agent in a container or a throwaway checkout.
+</Warning>
 
-```bash
-cloudthinker --version
-```
+| Where | What happens | What crosses the network |
+| --- | --- | --- |
+| Your machine | The agent reads and edits files and runs shell commands as your OS user, with no CloudThinker approval | Tool results, such as file contents the agent reads and command output, go to the model in the cloud |
+| The cloud | The model runs, and your workspace [connections](/guide/connections/overview) (the cloud accounts and tools you linked) are used there | Connection credentials never reach your machine. Cloud writes follow your [Approvals](/guide/approvals/overview) setup |
 
-macOS (Apple Silicon and Intel) and Linux (x86_64 and arm64) are supported. Update in place at any time with `cloudthinker update`.
+Run the agent only in folders whose contents you're fine sending to the model. See [Where work runs](/guide/cli/agent#where-work-runs) for the details.
 
-## First session
+## Prerequisites
+
+- macOS (Apple Silicon or Intel) or Linux (x86_64 or arm64). There is no native Windows build.
+- A CloudThinker account with access to at least one workspace. Headless chat (`cloudthinker chat`) works on every plan, including Free. The interactive agent (`cloudthinker`) needs Team, Scale, or Enterprise; on Free it refuses to start with an upgrade prompt. See [Pricing](/guide/billing/pricing).
+- Outbound HTTPS to `cloudthinker.io` (installer), `github.com` (CLI and agent downloads), and `app.cloudthinker.io` (the API). Behind a proxy, set `HTTPS_PROXY`. If the proxy re-signs HTTPS, set `SSL_CERT_FILE` to your company CA bundle.
+
+## Install and run your first session
 
 <Steps>
-  <Step title="Log in through your browser">
+  <Step title="Install the CLI">
+    ```bash
+    curl -fsSL https://cloudthinker.io/install.sh | sh
+    ```
+
+    The installer puts the `cloudthinker` binary in `~/.local/bin` and adds that folder to your `PATH` in your shell profile. In a terminal, it then starts the login for you unless you are already logged in. It skips the login in CI, or when you set `CLOUDTHINKER_CLI_NO_LOGIN=1`. Open a new shell when it finishes.
+
+    If your machine blocks piping a script into `sh`, or you need a specific version, download the archive and its `.sha256` file for your platform from the [releases page](https://github.com/cloudthinker-ai/cloudthinker-cli/releases) instead:
+
+    ```bash
+    shasum -a 256 -c <archive>.sha256   # prints "<archive>: OK"
+    tar xf <archive>
+    mkdir -p ~/.local/bin && mv <extracted-folder>/cloudthinker ~/.local/bin/
+    ```
+
+    **Success state:** `cloudthinker --version` prints a version number.
+  </Step>
+
+  <Step title="Log in">
+    Skip this step if the installer already printed `Logged in to <workspace>.`
+
     ```bash
     cloudthinker login
     ```
 
-    The CLI prints a consent URL and opens it. Approve the request, pick a workspace if your account has more than one, and the terminal confirms which workspace it stored.
+    The CLI asks **How would you like to log in?** Pick **Log in with browser** on your own machine, or **Log in with a code** over SSH. Approve the request in the browser and choose a workspace if you have more than one.
 
     <Frame>
       <img src="/images/cli/login-consent-url.png" alt="cloudthinker login printing the consent URL" />
     </Frame>
+
+    **Success state:** the terminal prints `Logged in to <workspace>.` See [CLI authentication](/guide/cli/authentication) for remote machines, several workspaces, and CI.
   </Step>
 
-  <Step title="Confirm who you are">
+  <Step title="Check who you are">
     ```bash
     cloudthinker whoami
     ```
 
-    **Success state:** one line with the host, your email, and the active workspace.
+    **Success state:** one line such as `host=https://app.cloudthinker.io email=you@example.com workspace=Production (<workspace-id>)`.
   </Step>
 
-  <Step title="Run the agent, or ask Anna">
+  <Step title="Start the agent, or ask one question">
     ```bash
-    cloudthinker                                   # agent session in this directory
-    cloudthinker chat -p "Check production health" # one headless prompt
+    cloudthinker                                    # interactive agent in this folder
+    cloudthinker chat -p "Check production health"  # one headless prompt, answer on stdout
     ```
 
-    The bare command runs the [Agent CLI](/guide/cli/agent). The first run downloads the agent build that matches your CLI version.
+    The first `cloudthinker` run downloads the agent build that matches your CLI version into `~/.cloudthinker/agent/bin/<version>/` and checks it against the release's SHA-256 checksum. Later runs reuse it.
+
+    **Success state:** the agent header names your workspace, your user, and the workspace Approval mode (`· Auto` or `· Manual`), and the prompt is ready for your request. See [Agent CLI](/guide/cli/agent).
   </Step>
 </Steps>
 
-## Command surface
+## Use a custom domain
 
-| Command | Purpose |
+If your CloudThinker runs on its own domain, such as a self-hosted install, log in to that domain once. Pass the bare origin, with no path:
+
+```bash
+cloudthinker login --url https://cloudthinker.example.com
+```
+
+The CLI remembers the domain, so later commands need no `--url`. Your machine needs outbound HTTPS to that domain instead of `app.cloudthinker.io`.
+
+| To | Run |
 | --- | --- |
-| `cloudthinker` | Run the local coding agent in the current directory |
-| `cloudthinker login` | Log in through the browser, or with a device code |
-| `cloudthinker logout` | Clear stored credentials for a workspace, or for every workspace |
-| `cloudthinker whoami` | Show the live account and workspace behind the stored credential |
-| `cloudthinker auth token` | Print the current access token for a tool that needs a bearer |
-| `cloudthinker chat` | Send a headless prompt, check a run, or list recent runs |
-| `cloudthinker review` | Read a tracked review by its merge-request URL |
-| `cloudthinker agent` | Run the local coding agent, with arguments passed through. See [Agent CLI](/guide/cli/agent) |
-| `cloudthinker update` | Install the latest release |
+| Check which domain the CLI uses | `cloudthinker whoami`, and read `host=` |
+| Use another domain for one command or a CI job | Set `CLOUDTHINKER_URL=https://cloudthinker.example.com` |
+| Go back to CloudThinker cloud | `cloudthinker login --url https://app.cloudthinker.io` |
 
+**Success state:** `cloudthinker whoami` prints `host=https://cloudthinker.example.com`. See the [CLI reference](/guide/cli/reference#environment-variables) for `CLOUDTHINKER_URL`.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `cloudthinker` or `cloudthinker agent` | Start the interactive agent in this folder. See [Agent CLI](/guide/cli/agent) |
+| `cloudthinker chat` | Send a headless prompt, check a run, or list recent runs. See [Headless chat](/guide/cli/headless-chat) |
+| `cloudthinker review` | Review local changes, or read a tracked review by its merge-request URL. See [Review commands](/guide/cli/reference#review) |
+| `cloudthinker incident` | List incidents, or wait for one to be resolved, for on-call scripts and CI. See [Incidents and recommendations](/guide/cli/reference#incidents-and-recommendations) |
+| `cloudthinker recommendations` | List cost and efficiency recommendations with their monthly savings. See [Incidents and recommendations](/guide/cli/reference#incidents-and-recommendations) |
+| `cloudthinker cyber` | List Cyber apps, domains, runs, and findings. See [Cyber commands](/guide/cli/reference#cyber) |
+| `cloudthinker worker` | Run this machine as a Worker and manage your outposts |
+| `cloudthinker remote` | Run the agent on a remote machine over SSH. It keeps running when the connection drops. Both machines need the CLI. See [Remote agent](/guide/cli/reference#remote-agent) |
+| `cloudthinker login` / `logout` / `whoami` | Sign in, sign out, and check the live account and workspace |
+| `cloudthinker auth` | Print an access token, list saved workspace logins, or switch the active one |
+| `cloudthinker update` | Install the latest release |
+| `cloudthinker completion <shell>` | Print a completion script for bash, zsh, or fish |
+
+Every flag, environment variable, and exit code is on the [CLI reference](/guide/cli/reference).
+
+## Keep the CLI up to date
+
+Run `cloudthinker update` at any time. On an interactive terminal, the CLI also offers an update when a newer release exists, checking at most every 20 hours. It asks `Install it now? [y/N] (s skips this version)`:
+
+| Answer | Result |
+| --- | --- |
+| `y` | Installs the new release now |
+| Enter, or anything else | Not now. The CLI offers it again later |
+| `s` | Skips that version. You're offered the next one |
+
+Set `CLOUDTHINKER_NO_UPDATE_CHECK=1` to turn the offer off, for example in CI. To pin a version, install that release's archive by hand, as in step 1.
+
+## Use the CLI from another coding agent
+
+The binary carries an operating guide that teaches an AI coding agent to use the CLI: chat, follow conversations, read code reviews, and run a local Cyber test. Printing it needs no login or network. Save it where your coding agent reads skills, for example:
+
+```bash
+mkdir -p .agents/skills/cloudthinker-cli
+cloudthinker --skill > .agents/skills/cloudthinker-cli/SKILL.md
+```
+
+## Uninstall
+
+```bash
+cloudthinker logout --all
+rm ~/.local/bin/cloudthinker
+rm -rf ~/.cloudthinker   # agent builds, agent settings, session transcripts, Cyber tools
+```
+
+Then delete the `cloudthinker` folder in your config directory (`~/Library/Application Support/cloudthinker` on macOS, `$XDG_CONFIG_HOME/cloudthinker` or `~/.config/cloudthinker` on Linux), and remove the `PATH` line the installer added to your shell profile. See [Files](/guide/cli/reference#files) for every path the CLI writes.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="cloudthinker: command not found">
+    The installer added `~/.local/bin` to your `PATH`, but the current shell started before that. Open a new shell, or run `~/.local/bin/cloudthinker --version` directly.
+  </Accordion>
+  <Accordion title="A command says you are not logged in (exit code 3)">
+    The credential is missing or expired, or the server refused access. Run `cloudthinker login`, then `cloudthinker whoami` to confirm. See [CLI authentication](/guide/cli/authentication).
+  </Accordion>
+  <Accordion title="Ctrl-C stopped a chat before the answer arrived">
+    Only the wait stopped. The run continues on the server, and the CLI prints the command that resumes the wait.
+  </Accordion>
+</AccordionGroup>
 
 ## Next steps
 
 <CardGroup cols={2}>
-  <Card title="Authentication" icon="key" href="/guide/cli/authentication">
-    Browser login, several workspaces, and tokens for CI
+  <Card title="CLI authentication" icon="key" href="/guide/cli/authentication">
+    Log in over SSH, switch workspaces, and authenticate CI jobs
   </Card>
   <Card title="Agent CLI" icon="laptop-code" href="/guide/cli/agent">
     Run an agent session in your own repository
   </Card>
   <Card title="Headless chat" icon="terminal" href="/guide/cli/headless-chat">
-    Pipe Anna's answer into scripts and pipelines
+    Pipe CloudThinker's answer into scripts and pipelines
   </Card>
-  <Card title="Reference" icon="book" href="/guide/cli/reference">
+  <Card title="CLI reference" icon="book" href="/guide/cli/reference">
     Every command, flag, variable, and exit code
   </Card>
 </CardGroup>

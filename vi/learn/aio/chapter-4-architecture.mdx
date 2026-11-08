@@ -1,60 +1,83 @@
 ---
-title: "Chương 4 · Kiến trúc: Hệ thống Đa Agent cho Vận hành"
-description: "Kiến trúc tham chiếu mà các triển khai thực tế đang hội tụ về: một orchestrator, một nhóm chuyên gia, vòng lặp vận hành khép kín, và tầng ngữ cảnh giúp chúng trở nên thông minh."
+title: "Chương 4 · Kiến trúc: Hệ thống đa agent cho vận hành"
+description: "Tìm hiểu kiến trúc tham chiếu đa agent cho vận hành: một orchestrator, các chuyên gia có phạm vi rõ ràng, vòng lặp khép kín và bộ nhớ dùng chung."
 icon: diagram-project
 ---
 
-*Kiến trúc tham chiếu mà các triển khai thực tế đang hội tụ về: một orchestrator, một nhóm chuyên gia, vòng lặp vận hành khép kín, và tầng ngữ cảnh giúp chúng trở nên thông minh.*
+Kiến trúc tham chiếu mà các hệ thống production đang hội tụ về: một orchestrator, một nhóm chuyên gia, một vòng lặp vận hành khép kín và một tầng ngữ cảnh.
 
-## 4.1 Tại sao dùng đa agent thay vì đơn agent
+## 4.1 Vì sao là đa agent, không phải một agent
 
-Một lưu ý về những gì chương này mô tả và những gì không. Kiến trúc dưới đây — một orchestrator duy nhất, các chuyên gia theo từng lĩnh vực, vòng lặp hai tầng cảm nhận-và-xử lý, cùng ranh giới token hóa — là mẫu mà các triển khai thực tế đang hội tụ về, không phải thiết kế riêng của một nhà cung cấp nào. Sự hội tụ này có thể quan sát được trong thực tiễn độc lập: hệ thống nghiên cứu đa agent đã được Anthropic công bố sử dụng đúng hình dạng orchestrator-và-workers này, còn các agent vận hành đã được Microsoft và AWS đưa ra thị trường được xây dựng từ các chuyên gia phối hợp dưới một tầng điều khiển với thông tin xác thực có phạm vi và quyền tối thiểu cho từng agent. Việc một nền tảng cụ thể — CloudThinker, đơn vị phát hành cuốn sách này — triển khai mẫu đó như thế nào là một câu hỏi riêng, được công bố và trình bày trong §10.3; chương này bàn về hình dạng mà lĩnh vực đang định hình, điều đó đúng bất kể bạn chọn nền tảng nào.
+Chương này mô tả mô hình trung lập với nhà cung cấp. Các mục 4.2 đến 4.4 chỉ ra mỗi phần nằm ở đâu trong CloudThinker, và [Chương 10.3](/vi/learn/aio/chapter-10-road-ahead#103-agent-của-hyperscaler-hay-một-nền-tảng-cho-mọi-cloud) so sánh với agent riêng của các hyperscaler.
 
-Lĩnh vực này đã chuyển dứt khoát từ các agent đơn năng sang các nhóm chuyên gia được điều phối. Gartner ghi nhận mức tăng 1.445% trong số lượng yêu cầu tư vấn về hệ thống đa agent giữa Q1 2024 và Q2 2025 — tín hiệu cầu cao nhất trong danh mục này. Lý do mang tính thực tế, không phải thời thượng:
+Hệ thống production dùng những nhóm chuyên gia được điều phối thay vì một agent đa năng. Lý do rất thực tế:
 
-1. **Chiều sâu vượt chiều rộng.** Một chuyên gia Kubernetes với bộ công cụ, prompt và các mẫu đã học dành riêng cho K8s sẽ hoạt động tốt hơn một agent đa năng trên các bài toán K8s — giống như cách các nhóm người làm chuyên môn hóa.
+1. **Chiều sâu thắng chiều rộng.** Một chuyên gia Kubernetes với công cụ, prompt và các mẫu đã học dành riêng cho K8s làm tốt hơn agent đa năng trên các vấn đề K8s, giống như các nhóm kỹ sư chuyên môn hóa.
 
-2. **Giới hạn phạm vi ảnh hưởng.** Mỗi chuyên gia chỉ nắm giữ thông tin xác thực mà lĩnh vực của mình yêu cầu. Một agent cơ sở dữ liệu không thể sửa đổi security groups; một agent chi phí không thể xóa bảng.
+2. **Phạm vi ảnh hưởng có giới hạn.** Mỗi chuyên gia chỉ giữ thông tin xác thực mà miền của nó cần. Agent database không sửa được security group; agent chi phí không drop được bảng.
 
-3. **Tiến hóa độc lập.** Các chuyên gia có thể được nâng cấp, đánh giá và thu hồi một cách độc lập — bài học từ microservices áp dụng cho agent.
+3. **Phát triển độc lập.** Có thể nâng cấp, đánh giá và rollback từng chuyên gia riêng biệt. Đây là bài học microservices áp dụng cho agent.
 
-4. **Bàn giao có thể kiểm toán.** Việc ủy thác giữa các agent tạo ra dấu vết rõ ràng về ai quyết định gì, điều mà lập luận đơn khối che giấu.
+4. **Bàn giao kiểm toán được.** Việc ủy quyền giữa các agent tạo ra dấu vết rõ ràng ai quyết định điều gì, thứ mà lập luận nguyên khối che giấu.
 
-Phân tích ngành liên tục xác định orchestration — tầng điều phối agent, quản lý ngữ cảnh, định tuyến nhiệm vụ và xử lý lỗi — là nơi tạo ra giá trị doanh nghiệp vào năm 2026. Các tổ chức có orchestration vững mạnh kết hợp các mô hình tốt nhất, hoán đổi các thành phần khi bối cảnh thay đổi, và chạy các pipeline phức tạp một cách đáng tin cậy; những tổ chức thiếu nó chỉ ra mắt được các bản demo mỏng manh.
+Hệ quả về thiết kế: tầng điều phối (định tuyến tác vụ, quản lý ngữ cảnh, xử lý lỗi) cần công sức kỹ thuật không kém chính các agent.
 
-Hai bằng chứng từ big-tech làm sắc nét thiết kế — một bằng chứng ủng hộ chuyên môn hóa, một cảnh báo chống lại việc thái quá. Ủng hộ: tài liệu công bố của Anthropic về hệ thống nghiên cứu đa agent sử dụng chính xác mẫu orchestrator-worker mà chương này mô tả, với một agent chính phân rã nhiệm vụ cho các chuyên gia song song, và báo cáo mức cải thiện chất lượng lớn so với baseline đơn agent — với chi phí token cao hơn đáng kể, đó là lý do tại sao kinh tế học hai tầng trong Mục 4.3 quan trọng. Cảnh báo: các kỹ sư của Microsoft xây dựng Azure SRE Agent đã thẳng thắn viết rằng họ bắt đầu với hơn 100 công cụ và hơn 50 agent chuyên biệt hẹp và kết thúc với năm công cụ cốt lõi và các agent tổng quát hơn. Tổng hợp trung thực: chuyên môn hóa theo lĩnh vực vận hành và ranh giới thông tin xác thực như chương này khuyến nghị — nhưng hãy đề kháng việc phân mảnh thành hàng chục micro-agent, vì mỗi agent và công cụ thêm vào đều là ngữ cảnh, chi phí và overhead điều phối.
+Hai bài viết đã công bố đặt ra giới hạn:
+
+- **Ủng hộ chuyên môn hóa.** [Hệ thống nghiên cứu đa agent](https://www.anthropic.com/engineering/multi-agent-research-system) của Anthropic dùng một agent dẫn dắt chia việc cho các worker chạy song song. Bài viết ghi nhận chất lượng tăng mạnh so với một agent đơn lẻ, đổi lại chi phí token cao hơn nhiều. Chi phí đó là lý do thiết kế hai tầng ở [mục 4.3](#43-hai-tầng-cảm-nhận-và-xử-lý) quan trọng.
+- **Phản đối làm quá tay.** Nhóm Azure SRE Agent của Microsoft [viết](https://techcommunity.microsoft.com/blog/appsonazureblog/-/4481200) rằng họ bắt đầu với hơn 100 công cụ và hơn 50 agent chuyên biệt hẹp, và kết thúc với năm công cụ cốt lõi cùng một số ít agent đa năng. Hãy chuyên môn hóa theo miền và ranh giới thông tin xác thực, đừng chia nhỏ thành hàng chục micro-agent. Mỗi agent và công cụ bạn thêm vào đều tốn ngữ cảnh, token và công điều phối.
 
 ## 4.2 Kiến trúc tham chiếu
 
-Một nền tảng vận hành agentic trong môi trường thực tế có năm tầng:
+Một nền tảng vận hành agentic production có năm tầng. Hãy dùng chúng làm danh sách kiểm tra khi đánh giá bất kỳ nền tảng nào hoặc khi tự thiết kế.
 
-1. **Orchestrator (SuperAgent).** Một agent điều phối sở hữu lập luận xuyên suốt: nó nhận mục tiêu và sự cố, phân rã chúng, định tuyến công việc cho các chuyên gia, tích hợp phát hiện của họ, quản lý leo thang lên con người, và sở hữu cuộc hội thoại với nhóm vận hành. Mọi thứ đều chảy qua nó; các chuyên gia mở rộng nó thay vì cạnh tranh với nó.
+| Tầng | Nhiệm vụ | Cần kiểm tra gì khi đánh giá | Trong CloudThinker |
+| :---- | :---- | :---- | :---- |
+| **Orchestrator** | Nhận mục tiêu và sự cố, chia thành tác vụ, định tuyến công việc cho chuyên gia, tổng hợp phát hiện của họ, và escalate lên con người | Có một agent sở hữu cuộc hội thoại và đường escalate không? | Trợ lý tích hợp sẵn [CloudThinker](/vi/guide/agents/overview) |
+| **Agent chuyên gia** | Chuyên gia theo miền (cloud, bảo mật, database, Kubernetes) với công cụ được tuyển chọn và thông tin xác thực có phạm vi giới hạn | Bạn có thêm được chuyên gia của riêng mình và giới hạn kết nối của từng chuyên gia không? | Các subagent tạm thời do CloudThinker tạo ra, cùng các [custom agent](/vi/guide/agents/quickstart) bạn tạo |
+| **Vòng lặp vận hành** | Phát hiện, phân tích, xử lý, xác thực. Giai đoạn xác thực là thứ phân biệt agent với tự động hóa: hệ thống tự kiểm tra công việc của mình. | Nền tảng có xác nhận kết quả sau khi hành động, và rollback khi thất bại không? | [Pulse](/vi/guide/pulse/overview) phát hiện, [Resolve](/vi/guide/incident/overview) điều tra và sửa, [Approvals](/vi/guide/approvals/overview) quyết định thao tác ghi nào được chạy |
+| **Công cụ và tích hợp** | Cloud API, observability, CI/CD, ITSM và chat, với thông tin xác thực quyền tối thiểu cho từng agent | Thông tin xác thực có được giới hạn theo từng hệ thống, và bạn có cắm được công cụ của riêng mình không? | [Kết nối](/vi/guide/connections/overview), kể cả [MCP server](/vi/guide/connections/mcp) của riêng bạn |
+| **Ngữ cảnh và bộ nhớ** | Topology, runbook, sự cố trước đây, quy ước của nhóm, metadata môi trường. Đây là nơi agent tích lũy giá trị. | Hệ thống có ghi nhớ những gì đã học, và bạn có xem và sửa được không? | [Memory](/vi/guide/memory), [Runbook](/vi/guide/incident/runbooks), [Bộ nhớ sự cố](/vi/guide/incident/incident-memory) và [Knowledge](/vi/guide/knowledge) |
 
-2. **Agent chuyên gia.** Các chuyên gia theo lĩnh vực — thường là cloud engineering, bảo mật, cơ sở dữ liệu và Kubernetes — mỗi người với bộ công cụ, kiến thức chuyên môn và thông tin xác thực có phạm vi riêng. Các tổ chức thêm chuyên gia tùy chỉnh cho các bề mặt của họ: tối ưu chi phí, hiệu suất ứng dụng, nền tảng nội bộ.
+## 4.3 Hai tầng: cảm nhận và xử lý
 
-3. **Vòng lặp vận hành.** Một pipeline có kỷ luật mà mọi công việc đều chảy qua: Detect → Analyze → Resolve → Validate (DARV). Phát hiện nhận tín hiệu; phân tích tạo ra giả thuyết nguyên nhân gốc rễ có bằng chứng; giải quyết lên kế hoạch và thực thi bản sửa lỗi theo chính sách; xác thực xác nhận kết quả và cung cấp thông tin học. Giai đoạn xác thực là điều phân biệt vận hành agentic với tự động hóa — hệ thống kiểm tra công việc của chính mình.
+Các thiết kế agent ngây thơ chạy một lệnh gọi model cho mỗi cảnh báo và sụp đổ ở quy mô production. Các nền tảng trưởng thành tách thành hai tầng: tầng cảm nhận rẻ, luôn bật, theo dõi mọi tín hiệu, và tầng suy luận đắt, chỉ chạy một cuộc điều tra nhiều bước đầy đủ khi tầng cảm nhận tìm ra điều gì đáng làm. Đây là điều khiến việc bao phủ 24/7 trở nên vừa túi tiền. Khi đánh giá một nền tảng, hãy hỏi nền tảng quyết định thế nào về những gì được đưa lên tầng đắt, vì quyết định đó chi phối hóa đơn model của bạn.
 
-4. **Tầng công cụ và tích hợp.** Các MCP server và tích hợp gốc exposing các cloud API, nền tảng quan sát, CI/CD, ITSM và các kênh truyền thông (Slack, Teams) với thông tin xác thực quyền tối thiểu cho từng agent.
+Trong CloudThinker, [Pulse](/vi/guide/pulse/overview) là tầng cảm nhận. Pulse loại bỏ bản trùng và nhiễu, nhóm các cảnh báo liên quan thành cluster, và chỉ gửi các cluster có tín hiệu cần hành động sang bước phân loại, nơi CloudThinker mở hoặc ghép vào một sự cố và điều tra. Bạn điều chỉnh những gì được escalate ở ba nơi:
 
-5. **Tầng ngữ cảnh và bộ nhớ.** Đồ thị cấu trúc mạng, thư viện runbook, bộ nhớ sự cố quá khứ, các quy ước tổ chức và siêu dữ liệu môi trường. Đây là nơi các agent tích lũy: mỗi sự cố được giải quyết làm cho sự cố tiếp theo nhanh hơn.
+- **Snooze** trong [giảm nhiễu](/vi/guide/pulse/clusters#lọc-nhiễu) loại bỏ các sự kiện bạn đã biết.
+- Công tắc **On duty** trong **Resolve → Investigation** quyết định CloudThinker tự điều tra hay chờ ai đó nhấn **Investigate**. Xem [Resolve](/vi/guide/incident/overview#chọn-ai-khởi-động-cuộc-điều-tra).
+- Những nguồn bạn kết nối trong [thiết lập Pulse](/vi/guide/pulse/setup) quyết định những gì tới được Pulse.
 
-> *Hình 4 — Kiến trúc tham chiếu: một orchestrator, các agent chuyên gia, vòng lặp Detect→Analyze→Resolve→Validate, công cụ và bộ nhớ.*
+## 4.4 Bảo vệ dữ liệu bên trong pipeline
 
-## 4.3 Mẫu xử lý sâu
+Trong các ngành bị quản lý, telemetry là dữ liệu nhạy cảm: log và truy vấn làm lộ PII của khách hàng, thông tin xác thực và dữ liệu tài khoản. Thực hành tốt đang hình thành là một ranh giới tokenization: một tầng nhận biết PII, thay giá trị nhạy cảm bằng token trước khi dữ liệu tới bất kỳ model nào. Kết hợp với triển khai private, ranh giới này cho phép ngân hàng và các doanh nghiệp bị quản lý khác áp dụng vận hành agentic mà telemetry thô không rời khỏi phạm vi của họ. [Chương 6](/vi/learn/aio/chapter-6-trust-governance#63-lưu-trú-và-kiểm-soát-dữ-liệu) trình bày chi tiết về lưu trú và kiểm soát dữ liệu.
 
-Các thiết kế agent ngây thơ chạy một lần gọi model cho mỗi cảnh báo và sụp đổ ở quy mô thực tế. Các nền tảng trưởng thành tách hai engine: một engine cảm nhận luôn bật, nhẹ nhàng (một "pulse") liên tục theo dõi tín hiệu với chi phí thấp, và một engine xử lý nặng kích hoạt lập luận đa bước đầy đủ chỉ khi pulse phát hiện điều gì đó đáng điều tra. Thiết kế hai tầng này là điều làm cho phạm vi bao phủ agentic 24/7 khả thi về mặt kinh tế — lập luận mô hình frontier được dành cho những khoảnh khắc cần đến nó, trong khi nhận thức rẻ tiền chạy liên tục. Tối ưu hóa chi phí agent đã trở thành mối quan tâm kiến trúc hàng đầu vào năm 2026, giống hệt cách tối ưu hóa chi phí đám mây trở nên thiết yếu trong kỷ nguyên microservices.
+### Trong CloudThinker
 
-## 4.4 Bảo vệ dữ liệu trong pipeline
+- **Che dữ liệu.** [Guardrails](/vi/guide/security/custom-guardrails) thay giá trị nhạy cảm bằng placeholder trước khi agent đọc. Email, số điện thoại, thẻ tín dụng, IBAN, địa chỉ MAC, API key và thông tin xác thực cloud được bật mặc định. Địa chỉ IP, public key và cloud account ID mặc định tắt. Bạn có thể thêm pattern ID của riêng mình trong **Admin Settings → Guardrails**.
+- **Triển khai.** CloudThinker Cloud, Cloud kết hợp [Worker](/vi/guide/workers) trên máy của chính bạn, và các hình thức triển khai dedicated, tự host hoặc air-gapped qua chương trình truy cập sớm. Xem [Lựa chọn triển khai](/vi/guide/deployment/overview).
+- **Lệnh gọi model trên tài khoản của bạn.** [BYOK](/vi/guide/byok) chạy lệnh gọi model trên tài khoản nhà cung cấp model của chính bạn.
 
-Trong các ngành được quản lý, dữ liệu đo từ xa cực kỳ nhạy cảm: log và truy vấn làm lộ PII của khách hàng, thông tin xác thực và dữ liệu tài khoản. Thực hành tốt nhất đang nổi lên là ranh giới token hóa — một tầng nhận biết PII phát hiện và thay thế các giá trị nhạy cảm bằng các token có thể đảo ngược trước khi bất kỳ dữ liệu nào đến mô hình, và giải token hóa chỉ trong ranh giới tin cậy của khách hàng khi một hành động yêu cầu giá trị thực. Kết hợp với triển khai self-hosted hoặc BYOC (bring-your-own-cloud), điều này cho phép các ngân hàng và tổ chức tài chính áp dụng vận hành agentic mà không có dữ liệu đo từ xa nào rời khỏi vành đai của họ. Chương 6 trình bày đầy đủ câu hỏi về lưu trú dữ liệu và kiểm soát — các mô hình triển khai, chủ quyền, và các câu hỏi cần hỏi nhà cung cấp — một cách sâu sắc.
+## Danh sách kiểm tra kiến trúc
 
-<Info>
-**DANH SÁCH KIỂM TRA KIẾN TRÚC**
+Hãy hỏi bất kỳ nhà cung cấp nào, hoặc chính nhóm của bạn:
 
-- ✓ Một orchestrator sở hữu lập luận xuyên suốt và leo thang lên con người
-- ✓ Các chuyên gia với thông tin xác thực quyền tối thiểu theo từng lĩnh vực
-- ✓ Vòng lặp Detect → Analyze → Resolve → Validate rõ ràng với xác thực được tích hợp sẵn
-- ✓ Cảm nhận/xử lý hai tầng để kiểm soát chi phí mô hình
-- ✓ Token hóa PII trước ranh giới mô hình; tùy chọn BYOC/self-host cho các workload được quản lý
-- ✓ Bộ nhớ bền vững để hệ thống tích lũy thay vì bắt đầu từ đầu
-</Info>
+1. Có một orchestrator sở hữu phần lập luận xuyên suốt và việc escalate lên con người không?
+2. Mỗi chuyên gia có chỉ giữ thông tin xác thực mà miền của nó cần không?
+3. Mọi công việc có đi qua phát hiện, phân tích, xử lý, xác thực, với kết quả được kiểm tra sau khi hành động không?
+4. Có một tầng cảm nhận rẻ đặt trước tầng suy luận đắt, và bạn có điều chỉnh được những gì được escalate không?
+5. Định danh cá nhân và thông tin bí mật có được che trước mọi lệnh gọi model không?
+6. Có lựa chọn triển khai private hoặc tự host cho các workload bị quản lý không?
+7. Hệ thống có giữ bộ nhớ giữa các sự cố, để không phải bắt đầu từ con số không mỗi lần không?
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="Chương 5: Nhóm agent" icon="users" href="/vi/learn/aio/chapter-5-agent-team">
+    Xem tầng chuyên gia ánh xạ vào các miền vận hành thực tế thế nào.
+  </Card>
+  <Card title="Chương 6: Tin cậy, guardrail và quản trị" icon="shield-check" href="/vi/learn/aio/chapter-6-trust-governance">
+    Đặt các guardrail, phê duyệt và kiểm soát dữ liệu mà kiến trúc này cần.
+  </Card>
+</CardGroup>

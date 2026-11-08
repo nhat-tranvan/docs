@@ -1,44 +1,246 @@
 ---
-title: MCP Server
-description: "Bring CloudThinker's cloud-ops tools and data into MCP-compatible AI clients like Claude Desktop, Cursor, and Windsurf"
+title: Claude Connector
+description: "Connect CloudThinker to Claude to read incidents, costs, code reviews, and security findings, and to start agent runs from a Claude chat"
 icon: plug
-tag: "Coming soon"
+tag: "New"
 ---
 
+import ApprovalDefault from '/snippets/approval-default.mdx';
+
+Connect CloudThinker to Claude so Claude can read your workspace and start CloudThinker agent runs. The connector is a remote [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server, and only Claude clients can connect today.
+
+## Prerequisites
+
+- A CloudThinker account with access to at least one [workspace](/guide/workspaces)
+- Claude (claude.ai or the desktop app) or Claude Code. The connector isn't tied to a CloudThinker plan, but runs it starts use workspace credits.
+- On a Claude Team or Enterprise plan, a Claude organization owner adds the connector first. Each member then connects on their own.
+
+## Connect Claude
+
+The server URL is the same on every path:
+
+```text
+https://app.cloudthinker.io/api/mcp
+```
+
+<Tabs>
+  <Tab title="Claude (web and desktop)">
+    <Steps>
+      <Step title="Add the connector">
+        In Claude, go to **Customize → Connectors**, click **Add**, then **Add custom connector**. Team and Enterprise owners use **Organization settings → Connectors** instead.
+      </Step>
+      <Step title="Enter the URL">
+        Name it **CloudThinker** and paste the server URL. Leave the OAuth Client ID and Client Secret under **Advanced settings** empty, since CloudThinker identifies Claude on its own. Click **Add**.
+      </Step>
+      <Step title="Connect and approve">
+        Claude sends you to CloudThinker in your browser. Sign in, pick a workspace, and click **Allow**. If Claude does not start sign-in, open the connector in **Customize → Connectors** and choose to connect.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Claude Code">
+    <Steps>
+      <Step title="Add the server">
+        ```bash
+        claude mcp add --transport http cloudthinker https://app.cloudthinker.io/api/mcp
+        ```
+
+        This adds the server for you in the current project only. Add `--scope user` to use it in every project.
+      </Step>
+      <Step title="Sign in">
+        In Claude Code, run `/mcp`, select **cloudthinker**, and follow the browser steps. Sign in, pick a workspace, and click **Allow**.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+**Success state:** Claude shows CloudThinker as connected. Ask Claude "Which CloudThinker workspace are you using?" It should call `whoami` and name the workspace you picked.
+
 <Note>
-**Coming soon** — The CloudThinker MCP server is not available yet. This page describes what it will do. [Contact us](https://cloudthinker.io/contact) to hear when it launches.
+The connector is not in Claude's Connectors Directory yet. Add it as a custom connector with the URL above.
 </Note>
 
-CloudThinker can act as a [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server — MCP is an open standard that lets AI apps use external tools — so an MCP-compatible AI client can call CloudThinker tools and read CloudThinker data using your workspace's authenticated context. This is the inverse of the existing [MCP connection](/guide/connections/mcp), which lets CloudThinker agents call _your_ external MCP servers.
+## What you approve
 
-## What it enables
+The approval page names the app that is connecting and the host Claude returns to. It then shows one workspace and three permissions:
 
-| Capability | Description |
+- Read incidents, costs, code reviews, automations, and security findings in this workspace
+- Start CloudThinker runs that ask you before any change
+  <br />*What this means in practice: these runs follow your workspace's [Approval mode](/guide/approvals/approval-mode). On the default Auto mode, AI judgment can let a safe change run without asking you, and an Allow Rule can too once CloudThinker turns on [Rule enforcement](/guide/approvals/rules#troubleshooting) for your workspace. Manual asks you for every change, and that works today.*
+- Act as you, starting in the workspace you pick here; Claude can switch to other workspaces you belong to
+
+See [Ask CloudThinker to investigate](#ask-cloudthinker-to-investigate) for how runs from Claude handle changes.
+
+Sign-in uses your normal CloudThinker login, so SSO and MFA apply. If you belong to several workspaces, pick the one Claude starts in. You can ask Claude to switch later; see [Switch workspaces](#switch-workspaces).
+
+When Claude Code connects from your own computer, the page adds a warning. Click **Allow** only if you started that connection.
+
+## What Claude can do
+
+Claude gets 23 tools. Most only read data. `ask_cloudthinker` starts a run, and `switch_workspace` changes the workspace Claude works in.
+
+Every read tool except `get_run` works for a workspace Viewer. `ask_cloudthinker` and `get_run` need the Developer or Admin role. Incident, Review, Optimize and Cyber tools also need that module turned on in the workspace.
+
+The **Access** column says whether a tool only reads, or changes something. Claude sees each tool's full input schema, so you never type these names yourself. In the **Inputs** column, a bold name is required; every other input is optional. List tools default to 20 results unless noted.
+
+### Workspace
+
+| Tool | Inputs | Access | What it does |
+| --- | --- | --- | --- |
+| `whoami` | None | Read | Shows who Claude acts as, the workspace it works in now, and the workspaces it can switch to. |
+| `switch_workspace` | **`workspace_id`** (from `whoami`) | Changes the connection | Moves Claude to another workspace you belong to. Nothing in the workspace changes. |
+
+### Incidents
+
+| Tool | Inputs | Access | What it does |
+| --- | --- | --- | --- |
+| `list_incidents` | `status` (list), `severity` (list), `queue` (one investigation queue; use `status` or `queue`, not both), `search` (title text, up to 200 characters), `days` (1 to 90, default 30), `limit` (1 to 50) | Read | Lists incidents and investigations, newest first. |
+| `get_incident` | **`incident_id`** (the full ID or the 8-character short ID) | Read | Reads one incident: status, severity, description, latest root cause analysis, and suggested fixes. |
+
+### Agent runs
+
+| Tool | Inputs | Access | What it does |
+| --- | --- | --- | --- |
+| `ask_cloudthinker` | **`prompt`** (up to 50,000 characters; CloudThinker doesn't see the Claude chat, so the prompt carries every detail) | Starts a run | Starts a CloudThinker agent run and returns a `run_id` and a link at once. |
+| `get_run` | **`run_id`** (from `ask_cloudthinker`) | Read | Reads the status and answer of a run that `ask_cloudthinker` started for you. |
+
+### Automations
+
+| Tool | Inputs | Access | What it does |
+| --- | --- | --- | --- |
+| `list_automations` | `search` (name text), `enabled` (true or false), `limit` (1 to 50) | Read | Lists scheduled and event-triggered automations. |
+| `get_automation` | **`automation_id`** (full or 8-character short ID) | Read | Reads one automation: instructions, triggers, schedule, and recent runs. |
+| `list_automation_runs` | **`automation_id`**, `limit` (1 to 50) | Read | Lists past runs of one automation. |
+
+### Review
+
+| Tool | Inputs | Access | What it does |
+| --- | --- | --- | --- |
+| `list_code_reviews` | `mr_state` (list), `review_status` (list), `repository` (path text such as `group/project`), `author` (username), `limit` (1 to 50) | Read | Lists merge and pull requests that Review checked. |
+| `get_code_review` | **`review_id`** (full or 8-character short ID), `severity` (list), `resolved` (true or false), `limit` (1 to 100, default 30) | Read | Reads one review and its findings, with file, line, and suggested fix. |
+
+### Optimize
+
+| Tool | Inputs | Access | What it does |
+| --- | --- | --- | --- |
+| `list_cost_connections` | None | Read | Lists the cloud billing accounts CloudThinker analyzes. |
+| `get_cost_overview` | **`connection_id`** (from `list_cost_connections`) | Read | Reads spend this month, forecast, top services, and top savings. |
+| `list_cost_findings` | **`connection_id`**, `service`, `search` (title text), `limit` (1 to 50) | Read | Lists open savings findings, highest savings first. |
+| `get_cost_finding` | **`connection_id`**, **`finding_id`** (full or short ID) | Read | Reads one savings finding and its analysis. |
+| `list_cost_anomalies` | **`connection_id`**, `service`, `start_date`, `end_date`, `limit` (1 to 50) | Read | Lists cost spikes, largest first. |
+
+### Cyber
+
+| Tool | Inputs | Access | What it does |
+| --- | --- | --- | --- |
+| `list_security_apps` | `search` (app name or target text), `limit` (1 to 50) | Read | Lists the apps Cyber tests. |
+| `list_security_findings` | `app_id`, `severity`, `status`, `search`, `page` (1 to 100), `take` (1 to 50, default 25) | Read | Lists Cyber findings. |
+| `get_security_app_coverage` | **`app_id`** (full or short ID) | Read | Reads what a Cyber test of one app can cover, and what blocks it. |
+| `get_security_finding` | **`finding_id`** (full ID, short ID, or display ID such as `F-12`), `app_id` (needed when the display ID exists in more than one app) | Read | Reads one Cyber finding. |
+| `list_code_audit_branches` | `page` (1 to 100, 25 per page) | Read | Lists repository branches under Code Audit. |
+| `get_code_audit_branch` | **`branch_id`**, `severity`, `status`, `page` (1 to 100, 25 findings per page) | Read | Reads one branch's latest audit and security findings. |
+| `get_code_audit` | **`audit_id`** (from `get_code_audit_branch` or `list_code_audit_branches`) | Read | Reads one Code Audit run: status, outcome, and failure. |
+
+## Switch workspaces
+
+Ask Claude in plain words, for example "Which CloudThinker workspace are you using?" or "Switch to the Staging workspace". Claude calls `whoami` to list your workspaces, then `switch_workspace`. Every later tool call reads and starts runs in the new workspace.
+
+- **You can switch only to a workspace you belong to.** CloudThinker checks your membership and role on each switch and each call.
+- **The switch applies to the whole connection.** Every Claude chat that uses this connector moves to the new workspace. Ask Claude "Which workspace are you using?" when in doubt.
+- **Records stay in their workspace.** After a switch, Claude cannot read a run or an incident from the old workspace until it switches back.
+
+## Ask CloudThinker to investigate
+
+`ask_cloudthinker` starts a normal CloudThinker agent run. It uses the connections your workspace already has.
+
+- **It returns at once.** Claude gets a run ID and a link. Claude then calls `get_run` to read the answer when the run finishes.
+- **It uses credits.** A run bills your workspace like a chat. See [Usage](/guide/billing/usage).
+- **Changes go through Approvals, as in chat.** A run from Claude follows your workspace's [Approval mode](/guide/approvals/approval-mode). When a change needs your decision (always on Manual, and only for changes no rule or AI judgment allows on Auto), the run waits until you approve it in CloudThinker through the link.
+
+<ApprovalDefault />
+
+## Example prompts
+
+Type these in Claude after you connect.
+
+```text
+What incidents are open in production, and what caused the latest one?
+```
+
+```text
+Which cost savings findings in CloudThinker are worth the most per month? Show the top five with the evidence for each.
+```
+
+```text
+List the code review findings from the last week with high severity, and tell me which ones are still unresolved.
+```
+
+```text
+Switch to my Production workspace and list the open critical incidents.
+```
+
+```text
+Ask CloudThinker to investigate why checkout latency rose after yesterday's deploy, and tell me what it finds.
+```
+
+## How access is checked
+
+Claude acts as you, in the workspace it's using now: the one you picked, or the one you switched to. CloudThinker checks on every call that:
+
+- You are still a member of the workspace.
+- Your role has the permission for that tool.
+- The product module behind the tool is turned on.
+
+Claude never sees more than you can see in CloudThinker. Tool results go into your Claude conversation, so treat that chat like any place you'd paste CloudThinker data. Each run Claude starts is a normal CloudThinker run in your workspace, and Claude gives you its link.
+
+## Limits
+
+| Item | Limit |
 | --- | --- |
-| Cloud operations in your IDE | Query your cloud inventory and costs from Cursor, Claude Desktop, or any MCP-compatible client |
-| Use your connections | Reach the databases, Kubernetes clusters, and observability tools you already connected to CloudThinker |
-| Run skills remotely | Invoke your workspace [skills](/guide/skills/overview) from an MCP-compatible host |
-| Shared context | Read the same recommendations, dashboards, and incident history the web console shows |
+| Clients | Claude only (claude.ai, the desktop app, and Claude Code) |
+| Workspaces per connection | One at a time. Switching moves every chat that uses the connection. |
+| Approval page | Expires 10 minutes after Claude opens it |
+| Access token | Lasts 1 hour. Claude refreshes it for you. |
+| Staying signed in | If the connection goes unused for 30 days, Claude asks you to connect again. |
+| Changes to your systems | Follow your workspace's Approval mode, as in chat |
 
-## Get access
+## Revoke access
 
-The MCP server is not available yet. The tool list, transport options, and authentication setup will be published here at launch. [Contact us](https://cloudthinker.io/contact) to hear when it launches.
+Open **Account settings → Connected apps** in CloudThinker and revoke the Claude connection. Access ends at once. The next call fails, and Claude has to ask you to connect again.
 
-To use external MCP servers as agent tools today, set up an [MCP connection](/guide/connections/mcp) — that direction is generally available.
+Also remove the connector in Claude: in **Customize → Connectors** for Claude, or `claude mcp remove cloudthinker` for Claude Code.
+
+Only you can revoke your connection. A workspace admin who removes you from a workspace ends Claude's access to it on the next call.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Access to this CloudThinker workspace was removed">
+    You are no longer a member of the workspace Claude is using, or the workspace is gone. Ask Claude to switch to another workspace you belong to. If that fails, disconnect and connect again, then pick a workspace you can access.
+  </Accordion>
+  <Accordion title="This CloudThinker role lacks a permission">
+    The message names the missing permission. Ask a workspace admin to grant it, or to change your [role](/guide/workspace-users).
+  </Accordion>
+  <Accordion title="A run is waiting for approval">
+    Claude reported the run as waiting. Open the link Claude gave you, then approve or reject the change in CloudThinker. Ask Claude to check the run again.
+  </Accordion>
+  <Accordion title="A run failed because the workspace is out of credits">
+    Add credits or raise the workspace limit. See [Usage](/guide/billing/usage) and [Credit limits](/guide/billing/credit-limits). Then ask again.
+  </Accordion>
+  <Accordion title="The connection request is invalid or expired">
+    The approval page expires after 10 minutes. Go back to Claude and connect again.
+  </Accordion>
+  <Accordion title="A tool says a module is turned off">
+    Your administrator turned off that product module. Ask them to turn it on.
+  </Accordion>
+</AccordionGroup>
 
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="MCP Connection" icon="link" href="/guide/connections/mcp">
-    Connect external MCP servers as CloudThinker tools
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    How changes from a Claude-started run get approved
   </Card>
-  <Card title="API" icon="code" href="/guide/api/overview">
-    Same operations over a REST surface
-  </Card>
-  <Card title="Skills" icon="wand-magic-sparkles" href="/guide/skills/overview">
-    Package domain knowledge into reusable workflows
-  </Card>
-  <Card title="CLI" icon="terminal" href="/guide/cli/overview">
-    Terminal access to the same capabilities
+  <Card title="Usage" icon="coins" href="/guide/billing/usage">
+    How runs started from Claude use workspace credits
   </Card>
 </CardGroup>

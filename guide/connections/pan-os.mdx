@@ -1,0 +1,166 @@
+---
+title: Palo Alto PAN-OS
+description: "Connect a Palo Alto Networks firewall or Panorama so agents can check health, review security rules, and read logs and live sessions"
+icon: "/images/icons/pan-os.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+
+Connect a Palo Alto Networks firewall or Panorama and CloudThinker agents can check device health, flag risky or unused security rules, and read threat logs and live sessions. The connection is read-only and uses a PAN-OS **API key** that belongs to a dedicated administrator.
+
+<Note>
+Palo Alto PAN-OS is available on [self-hosted deployments](/guide/deployment/overview) of CloudThinker. To use it on CloudThinker Cloud, [contact us](https://cloudthinker.io/contact).
+</Note>
+
+## Prerequisites
+
+- An HTTPS path from CloudThinker to the management interface of the firewall or Panorama. On a [self-hosted deployment](/guide/deployment/overview), allow your CloudThinker deployment. On CloudThinker Cloud, allow CloudThinker's egress IPs: these docs don't publish the list, so ask your CloudThinker contact, or [contact us](https://cloudthinker.io/contact). Palo Alto advises against opening the management interface to the internet, so see [Reaching private services](/guide/connections/overview#reaching-private-services). If the management interface lists **Permitted IP Addresses** (on a firewall, **Device → Setup → Interfaces → Management**), add the address CloudThinker connects from.
+- A firewall or Panorama administrator who can create admin roles and administrator accounts, such as a superuser.
+- The **Admin** role in your CloudThinker workspace, which can add and edit connections. See [Roles](/guide/security/roles).
+
+Connect Panorama to reach every firewall it manages through one connection, or connect each firewall on its own.
+
+## Setup
+
+<Steps>
+  <Step title="Create an admin role">
+    On a firewall, go to **Device → Admin Roles** and click **Add**. Name it `cloudthinker` and set **Role** to **Device**. On Panorama, go to **Panorama → Admin Roles**, click **Add**, and set **Role** to **Panorama**.
+
+    On the **XML API** tab, enable **Operational Requests**, **Log**, and **Configuration**, and disable every other feature. CloudThinker uses only the XML API, so set every feature on the **Web UI** and **REST API** tabs to **Disable**, and **Command Line** to **None**. Click **OK**.
+  </Step>
+  <Step title="Create the administrator">
+    On a firewall, go to **Device → Administrators** and click **Add**. On Panorama, go to **Panorama → Administrators**. Fill in:
+    - **Name**: `cloudthinker`
+    - **Authentication Profile**: leave it unset, then enter and confirm a password
+    - **Administrator Type**: **Role Based** on a firewall, or **Custom Panorama Admin** on Panorama
+    - **Profile**: the `cloudthinker` role
+
+    Click **OK** and **Commit**.
+  </Step>
+  <Step title="Generate the API key">
+    PAN-OS creates API keys through its API, not in the web interface. From a machine that can reach the management interface, run:
+
+    ```bash
+    curl -k -X POST 'https://<management-address>/api/?type=keygen' \
+      --data-urlencode 'user=cloudthinker' \
+      --data-urlencode 'password=<password>'
+    ```
+
+    The key is the value inside `<key>` in the response. Copy only that value. The `-k` flag accepts PAN-OS's default self-signed certificate.
+  </Step>
+  <Step title="Add the connection in CloudThinker">
+    In the sidebar, click **More → Workspace settings → Connections**. On the **Builtin Connections** tab, search for **Palo Alto PAN-OS** and click **Connect**. Fill in the fields from [Connection details](#connection-details) and click **Connect**.
+
+    CloudThinker tests the key by reading the device's system information.
+
+    **Success state:** the connection shows **Connected** with a message such as `PAN-OS <version> firewall <hostname> (<model>) connected (read-only).` or `Panorama <version> connected (read-only).`
+  </Step>
+</Steps>
+
+## Connection details
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| **Management URL** | The firewall or Panorama management address, with `https://` and no path | `https://fw.example.internal` |
+| **API key** | The key from step 3 | `<your-api-key>` |
+| **TLS certificate** | **Skip SSL verification** (the default, for PAN-OS's self-signed certificate) or **Verify SSL certificate** (for a certificate from a publicly trusted certificate authority) | **Skip SSL verification** |
+
+<Warning>
+**Skip SSL verification** encrypts traffic but can't tell your firewall from an impostor. Replace the management certificate with one from a trusted certificate authority, then switch to **Verify SSL certificate**.
+</Warning>
+
+## Required permissions
+
+Each XML API feature on the admin role unlocks part of what agents can read.
+
+| What agents read | XML API feature |
+|------------------|-----------------|
+| Device health, HA, licenses, sessions, rule hit counts, and the connection test | **Operational Requests** |
+| Threat, traffic, and other logs | **Log** |
+| Security rules | **Configuration** |
+
+PAN-OS XML API features are either enabled or disabled, with no read-only setting. **Operational Requests** can run any operational command, and **Configuration** can change the configuration. CloudThinker sends only read requests, but protect the key as one that can do both.
+
+<Tip>
+Leave **Commit**, **Import**, and **Export** disabled. If you don't need rule reviews, disable **Configuration** too: health, logs, and sessions still work.
+</Tip>
+
+## Agent capabilities
+
+| Capability | What agents can do |
+|------------|--------------------|
+| **Device overview** | Report hostname, model, serial number, PAN-OS and content versions, management CPU and memory, session table use, HA state, and expired or expiring licenses |
+| **Security rules** | Count rules and flag any that allow any application and service, allow any source and destination, have no security profile, don't log at session end, are disabled, or were never hit |
+| **Logs** | Search threat, traffic, URL, WildFire, system, config, authentication, and GlobalProtect logs, with an optional PAN-OS filter |
+| **Live sessions** | Show current sessions for a source, destination, application, destination port, rule, or session ID |
+| **Panorama** | List managed firewalls and device groups, read device-group or shared rules, and read one managed firewall's health and sessions through Panorama |
+
+This connection is read-only. Agents can't change rules, objects, or settings. Make changes in the PAN-OS or Panorama web interface.
+
+Log searches cover the last 15 minutes up to the last 30 days and return at most 500 rows. Log times are in the firewall's local time. Agents always filter sessions and never read the whole session table. On a firewall with several virtual systems, rule reviews read `vsys1` unless you name another one. Logs and sessions cover every virtual system. Through Panorama, agents don't read rule hit counts: connect the firewall itself for those.
+
+### Verify the connection
+
+```text
+Summarize my Palo Alto firewall: model, PAN-OS version, HA state, session table use, and any expired or expiring licenses
+```
+
+A working connection returns your device's hostname, model, and PAN-OS version. On Panorama, it also lists the managed firewalls and device groups.
+
+### Example prompts
+
+```text
+Which Palo Alto security rules allow any application, or have never been hit?
+Show high-severity threats the firewall logged in the last 24 hours, grouped by source
+What sessions does 10.1.2.3 have open right now, and which rule allows them?
+```
+
+## Troubleshooting
+
+Except for the last one, the accordion titles below are the exact messages CloudThinker shows when the connection test fails.
+
+<Accordion title="PAN-OS rejected the API key. Generate a new key and reconnect.">
+PAN-OS didn't accept the key. Check that you copied only the value inside `<key>`. PAN-OS also invalidates a key when the administrator's password changes, the administrator is deleted, the **API Key Lifetime** passes, or someone selects **Expire all API Keys**. PAN-OS uses the same error when the role lacks rights, so also check that **Operational Requests** is enabled. Then generate a new key and [replace it](/guide/connections/overview#rotate-a-credential) in the connection.
+</Accordion>
+
+<Accordion title="PAN-OS refused the system info read. Give the admin role XML API Operational Requests rights.">
+The key works, but its admin role can't run operational commands. Enable **Operational Requests** on the role's **XML API** tab, commit, and connect again.
+</Accordion>
+
+<Accordion title="The management certificate is not trusted. Choose Skip SSL verification for a self-signed certificate.">
+**TLS certificate** is set to **Verify SSL certificate**, but the management interface uses a self-signed certificate. Choose **Skip SSL verification**, or replace the certificate with one from a publicly trusted certificate authority.
+</Accordion>
+
+<Accordion title="Could not reach the management address over HTTPS. CloudThinker connects to it directly: check the address, the network path, and that the management interface allows HTTPS.">
+Check the address, the network path in [Prerequisites](#prerequisites), and that the management interface allows HTTPS and lists CloudThinker's address in **Permitted IP Addresses**.
+</Accordion>
+
+<Accordion title="That address answered, but not as the PAN-OS XML API. Use the management address root, with no path.">
+**Management URL** points to something other than the PAN-OS management interface, such as a GlobalProtect portal or a proxy. Enter the management address itself. The same fix applies to `Enter the management URL without a path, for example https://fw.example.internal.` and `The management URL must start with https://.`
+</Accordion>
+
+<Accordion title="PAN-OS answered HTTP <code>. Try again in a minute.">
+A `3xx` code means the address redirected. CloudThinker doesn't follow redirects, so it never sends the key elsewhere. Enter the exact management address. A `429` or `5xx` code means the management server is busy: wait and connect again.
+</Accordion>
+
+<Accordion title='Connected, but rule or log questions fail with "PAN-OS refused the request"'>
+The admin role is missing the XML API feature for that read. Enable **Configuration** for rules or **Log** for logs, then commit.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- **Keep the management interface private.** Palo Alto advises against opening it to the internet. Allow only the address CloudThinker connects from in **Permitted IP Addresses**.
+- **Set an API key lifetime.** By default, PAN-OS keys never expire. On a firewall, set **API Key Lifetime (min)** in **Device → Setup → Management → Authentication Settings**. When the key expires, generate a new one and replace it in the connection.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="FortiGate Connection" icon="/images/icons/fortigate.svg" href="/guide/connections/fortigate">
+    Device health, licenses, and traffic from your FortiGate firewall
+  </Card>
+  <Card title="Connections" icon="plug" href="/guide/connections/overview">
+    Add, test, and rotate connections
+  </Card>
+</CardGroup>

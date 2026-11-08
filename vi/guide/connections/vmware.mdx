@@ -1,0 +1,215 @@
+---
+title: VMware vCenter
+description: "Kết nối vCenter để agent có thể kiểm kê VM, host và datastore, rà soát snapshot và dung lượng, và chạy thay đổi VM thông qua phê duyệt"
+icon: "server"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+import ApprovalDefault from '/snippets/vi/approval-default.mdx';
+
+Kết nối vCenter Server để CloudThinker có thể kiểm kê VM, host, cluster và datastore, tìm VM quá khổ và snapshot cũ, và thực hiện thay đổi VM thông qua [Approvals](/vi/guide/approvals/overview) của bạn. Kết nối đăng nhập bằng **tên người dùng và mật khẩu vCenter**, và vSphere role bạn cấp cho người dùng đó quyết định agent có thể thấy và thay đổi những gì.
+
+## Điều kiện tiên quyết
+
+- Một **vCenter Server** mà CloudThinker truy cập được qua HTTPS bằng hostname hoặc địa chỉ IP. Cổng mặc định là `443`.
+- Một tài khoản vSphere Client thuộc nhóm SSO **Administrators**, chẳng hạn `administrator@vsphere.local`, để tạo người dùng và gán global permission.
+- Một workspace CloudThinker chưa có kết nối VMware vCenter nào.
+
+<Info>
+Mỗi workspace chỉ chứa **một** kết nối VMware vCenter. Kết nối chạy trên cloud của CloudThinker, nên vCenter phải chấp nhận HTTPS trên cổng của nó từ internet. Để vCenter vẫn kín với phần còn lại của internet, chỉ cho phép các egress IP của CloudThinker. Tài liệu này không công bố danh sách egress IP của CloudThinker: hãy hỏi đầu mối liên hệ CloudThinker của bạn, hoặc [liên hệ chúng tôi](https://cloudthinker.io/contact). Xem [Truy cập dịch vụ riêng tư](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ) để biết các lựa chọn khác.
+</Info>
+
+## Thiết lập
+
+<Steps>
+  <Step title="Tạo người dùng vCenter">
+    Trong vSphere Client, mở **Administration → Single Sign On → Users and Groups**. Chọn SSO domain của bạn (`vsphere.local` trên bản cài đặt mặc định), mở tab **Users**, nhấn **Add** và tạo một người dùng như `cloudthinker` với mật khẩu mạnh. Người dùng mới bắt đầu không có quyền nào.
+
+    <Warning>
+    Mật khẩu SSO cục bộ hết hạn sau 90 ngày theo policy mặc định của vCenter, và kết nối sẽ hỏng khi mật khẩu này hết hạn. Thay đổi policy trong **Administration → Single Sign On → Configuration**, hoặc lên kế hoạch xoay vòng và cập nhật mật khẩu trong CloudThinker qua [Xoay vòng mật khẩu](#xoay-vòng-mật-khẩu).
+    </Warning>
+  </Step>
+  <Step title="Cấp role Read-only cho người dùng">
+    Mở **Administration → Access Control → Global Permissions** và nhấn **Add**. Chọn domain, tìm người dùng, chọn role **Read-only** và đánh dấu **Propagate to children**. Nhấn **OK**.
+
+    <Warning>
+    Nếu không có **Propagate to children**, người dùng chỉ thấy đối tượng gốc và agent báo cáo inventory trống.
+    </Warning>
+
+    Để chia sẻ ít hơn, bỏ qua global permission và gán role theo từng đối tượng: chọn một datacenter, cluster hoặc folder, mở tab **Permissions**, nhấn **Add**, chọn người dùng và role **Read-only**, rồi đánh dấu **Propagate to children**.
+
+    **Trạng thái thành công:** người dùng xuất hiện trong danh sách global permission (hoặc tab **Permissions** của đối tượng) với role **Read-only**.
+  </Step>
+  <Step title="Thêm kết nối trong CloudThinker">
+    Trên thanh bên, nhấn **More → Workspace settings → Connections** và chọn **VMware vCenter**. Điền các trường trong [Chi tiết kết nối](#chi-tiết-kết-nối): host, `cloudthinker@<sso-domain>` làm tên người dùng (ví dụ `cloudthinker@vsphere.local`), mật khẩu và cổng.
+
+    Trước khi nhấn **Connect**, mở `https://<vcenter-host>` trong trình duyệt. Nếu trình duyệt tin cậy chứng chỉ, giữ **Verify SSL certificate**. Nếu có cảnh báo, hãy cài trên vCenter một chứng chỉ do CA tin cậy cấp, hoặc, chỉ trên hệ thống thử nghiệm, chọn **Skip SSL verification**. Nếu không, bước kiểm tra sẽ thất bại. Nhấn **Connect**.
+
+    **Trạng thái thành công:** kết nối hiển thị **Connecting** và **Verifying**, rồi trạng thái **Connected**. CloudThinker đăng nhập vCenter và đọc phiên bản của nó để chứng minh thông tin xác thực hoạt động.
+  </Step>
+</Steps>
+
+## Chi tiết kết nối
+
+Form hiển thị tên trường đúng như ở đây. Cả năm trường đều bắt buộc. Port và SSL được điền sẵn.
+
+| Trường | Bắt buộc | Mô tả | Ví dụ |
+|-------|----------|-------------|---------|
+| **VMWARE_HOST** | Có | Hostname vCenter, địa chỉ IPv4, hoặc địa chỉ IPv6 trong ngoặc vuông. Không có `https://` và không có đường dẫn | `vcenter.example.com` |
+| **VMWARE_USERNAME** | Có | Tên người dùng vCenter, dạng `user@<sso-domain>` | `cloudthinker@vsphere.local` |
+| **VMWARE_PASSWORD** | Có | Mật khẩu của người dùng đó | `********` |
+| **VMWARE_PORT** | Có, điền sẵn | Cổng vCenter lắng nghe. Mặc định là `443` | `443` |
+| **VMWARE_VERIFY_SSL** | Có, điền sẵn | **Verify SSL certificate** (mặc định) hoặc **Skip SSL verification** | **Verify SSL certificate** |
+
+Không có trường nào cho certificate authority tùy chỉnh. Nếu vCenter dùng chứng chỉ tự ký (phổ biến trên bản cài đặt mặc định và môi trường thử nghiệm), **Skip SSL verification** là cách duy nhất để kết nối. Tùy chọn này cũng loại bỏ khả năng bảo vệ trước một server mạo danh vCenter của bạn, nên hãy dùng cho hệ thống thử nghiệm và cấp cho vCenter production một chứng chỉ do CA tin cậy cấp.
+
+## Quyền yêu cầu
+
+Bắt đầu với role có sẵn **Read-only**. vSphere cho phép người dùng có role này xem trạng thái và chi tiết của một đối tượng, và chặn mọi hành động trong menu và thanh công cụ. Role này bao phủ mọi khả năng đọc bên dưới.
+
+<Tip>
+Giữ người dùng CloudThinker ở **Read-only** cho đến khi bạn muốn agent thực hiện thay đổi. Nếu một câu hỏi thất bại với lỗi quyền, chỉ thêm đúng privilege mà vCenter nêu tên, trên càng ít đối tượng càng tốt.
+</Tip>
+
+## Quyền ghi
+
+Để cho phép agent bật/tắt nguồn, cấu hình lại, di chuyển, tạo snapshot hoặc xóa VM, hãy tạo một role tùy chỉnh trong **Administration → Access Control → Roles** (nhấn **New**), chỉ thêm các privilege bên dưới cho những thay đổi bạn muốn, rồi gán role:
+
+1. Chọn datacenter, cluster, folder hoặc VM trong phạm vi và mở tab **Permissions**.
+2. Nhấn **Add**, chọn người dùng CloudThinker và role tùy chỉnh, rồi đánh dấu **Propagate to children**. Nhấn **OK**.
+
+Permission đặt trực tiếp trên một đối tượng sẽ ghi đè role **Read-only** được kế thừa tại đó. Mọi role tùy chỉnh đều bao gồm quyền đọc, nên agent vẫn thấy các đối tượng đó.
+
+| Thay đổi | vSphere privilege | Vị trí trong cây privilege của role |
+|--------|--------------------|--------------------------------------------|
+| Bật, tắt hoặc reset nguồn | `VirtualMachine.Interact.PowerOn`, `VirtualMachine.Interact.PowerOff`, `VirtualMachine.Interact.Reset` | **Virtual machine → Interaction** |
+| Thay đổi CPU hoặc bộ nhớ | `VirtualMachine.Config.CPUCount`, `VirtualMachine.Config.Memory` | **Virtual machine → Change Configuration** |
+| Tạo hoặc xóa snapshot | `VirtualMachine.State.CreateSnapshot`, `VirtualMachine.State.RemoveSnapshot` | **Virtual machine → Snapshot management** |
+| Di chuyển | `Resource.HotMigrate`, `Resource.ColdMigrate`, `Resource.AssignVMToPool`, cộng với `Datastore.AllocateSpace` khi di chuyển storage | **Resource** và **Datastore** |
+| Xóa | `VirtualMachine.Inventory.Delete` | **Virtual machine → Edit Inventory** |
+
+Khi di chuyển, hãy gán thêm role trên host hoặc cluster, resource pool và datastore đích.
+
+Để thay đổi CPU hoặc bộ nhớ trên VM đang chạy, VM cần bật CPU hoặc memory hot-add trong vSphere. Nếu không, VM phải được tắt trước, nghĩa là có downtime.
+
+Nếu một thay đổi thất bại với lỗi quyền, vCenter nêu tên privilege còn thiếu. Chỉ thêm privilege đó và không gì rộng hơn.
+
+**Allow writes** trên bảng chi tiết của kết nối là lớp kiểm soát thứ hai. Công tắc này bật theo mặc định, nhưng role **Read-only** không thể thay đổi gì, nên vCenter từ chối mọi thay đổi cho đến khi bạn cấp một role tùy chỉnh.
+
+| vSphere role trên người dùng CloudThinker | Allow writes | Kết quả |
+|---|---|---|
+| Chỉ **Read-only** | Bật hoặc tắt | Chỉ đọc. vCenter từ chối mọi thay đổi. |
+| Role tùy chỉnh có privilege ghi | Tắt | Chỉ đọc. CloudThinker từ chối mọi thay đổi trước khi chúng đến vCenter. |
+| Role tùy chỉnh có privilege ghi | Bật | Agent có thể đề xuất thay đổi. [Rule và Approval mode](/vi/guide/approvals/overview) của bạn quyết định từng thay đổi. |
+
+Để khóa thao tác ghi cả trong CloudThinker, mở **VMware vCenter** trong **More → Workspace settings → Connections** và tắt công tắc **Allow writes** trên bảng chi tiết.
+
+<ApprovalDefault />
+
+Trên vCenter production, chọn **Manual** để một người phê duyệt mọi thay đổi; hiện đây là lớp kiểm soát có hiệu lực. Khi CloudThinker bật [Rule enforcement](/vi/guide/approvals/rules#khắc-phục-sự-cố) cho workspace của bạn, một [Rule](/vi/guide/approvals/rules) **Ask first** có thể thu hẹp việc chờ duyệt xuống chỉ còn tắt nguồn và xóa. Xem [Approvals](/vi/guide/approvals/overview) để biết ai phê duyệt.
+
+## Khả năng của agent
+
+| Khả năng | Agent làm gì |
+|------------|----------------|
+| **Kiểm kê** | Liệt kê datacenter, cluster, host, VM, datastore và network, và xem chi tiết một đối tượng |
+| **Tag** | Đọc tag category và các đối tượng được gắn tag đó |
+| **Điều chỉnh kích thước** | Đánh dấu các VM đang chạy có từ 8 vCPU trở lên với mức sử dụng CPU trung bình dưới 15%, dựa trên mẫu 5 phút của vCenter |
+| **Snapshot** | Liệt kê snapshot theo VM và đánh dấu các snapshot cũ hơn 7 ngày |
+| **Dung lượng datastore** | Hiển thị dung lượng đã dùng và còn trống, và đánh dấu datastore đầy hơn 85% |
+| **Sai lệch cấu hình** | So sánh cài đặt host (NTP, syslog, dịch vụ SSH, lockdown mode) và đánh dấu các tùy chọn bảo mật port group rủi ro như promiscuous mode |
+| **Thay đổi** | Bật/tắt nguồn, thay đổi CPU hoặc bộ nhớ, di chuyển, tạo snapshot hoặc xóa VM. Mỗi thay đổi đi qua [Approvals](#quyền-ghi), nên ở chế độ **Manual**, một người phải phê duyệt từng thay đổi |
+
+Các ngưỡng 15% CPU, 8 vCPU, 7 ngày và 85% là mặc định. Nêu một con số khác trong câu hỏi, chẳng hạn `snapshots older than 30 days`. Câu trả lời chỉ bao gồm những gì role của người dùng thấy được.
+
+### Có dữ liệu điều chỉnh kích thước tốt hơn
+
+Agent yêu cầu tối đa 14 ngày mẫu 5 phút, nhưng vCenter mặc định chỉ giữ chúng trong 1 ngày (tối đa 5 ngày). Agent không dùng khoảng 30 phút dài hơn. Để giữ 5 ngày:
+
+1. Trong vSphere Client, chọn vCenter Server.
+2. Mở **Configure → Settings → General** và nhấn **Edit**.
+3. Mở **Statistics** và đặt khoảng 5 phút giữ mẫu trong 5 ngày. Lưu.
+
+Khi đó mức trung bình để điều chỉnh kích thước bao phủ tối đa 5 ngày gần nhất.
+
+### Xác minh kết nối
+
+```text
+Summarize my vCenter inventory: datacenters, clusters, hosts, VMs, and datastores
+```
+
+Bạn nhận được số lượng theo từng loại đối tượng và danh sách ngắn các cluster và host. Inventory trống trong khi trạng thái là **Connected** cho thấy thiếu **Propagate to children**.
+
+### Ví dụ prompt
+
+```text
+Which powered-on VMs have used under 15% CPU recently and have 8 or more vCPUs?
+List snapshots older than 7 days, grouped by VM
+Which datastores are above 85% full?
+```
+
+## Xoay vòng mật khẩu
+
+VMware vCenter là dịch vụ chỉ cho một kết nối, nên không có biểu tượng bút chì hay hộp thoại **Edit Instance** khi kết nối còn hoạt động bình thường.
+
+| Khi nào | Cách làm |
+|---|---|
+| Trước khi mật khẩu hết hạn | Đặt mật khẩu mới cho người dùng vCenter, rồi nhấn **Disconnect** trên bảng chi tiết **VMware vCenter** và kết nối lại với giá trị mới. |
+| Sau khi hết hạn (kết nối hiển thị **Error**) | Đặt mật khẩu mới cho người dùng vCenter, rồi nhấn **Replace credentials** trên bảng chi tiết và lưu giá trị mới. |
+
+Đổi mật khẩu trong vCenter trước, rồi cập nhật CloudThinker. Kết nối vẫn đăng nhập bằng mật khẩu đã lưu, nên kết nối bị hỏng trong khoảng giữa hai bước. Hãy xoay vòng sớm, vào thời điểm ít hoạt động, thay vì để mật khẩu hết hạn gây gián đoạn. Kết nối lại sẽ bắt đầu một kết nối mới:
+
+- Agent và các [automation](/vi/guide/automation/automations) theo lịch không dùng được vCenter trong khoảng giữa lúc ngắt và kết nối lại.
+- Discovery chạy lại và tiêu tốn credit.
+- **Allow writes** trở về bật. Tắt lại nếu trước đó bạn đã tắt.
+- Kiểm tra xem các [Rule](/vi/guide/approvals/rules) nêu tên kết nối VMware vCenter có còn liệt kê kết nối này không.
+
+## Khắc phục sự cố
+
+<Accordion title="Failed to connect to VMware vCenter">
+CloudThinker không thể đăng nhập. Kiểm tra tên người dùng có bao gồm SSO domain (chẳng hạn `cloudthinker@vsphere.local`), mật khẩu còn hiệu lực, và host cùng cổng truy cập được từ internet. Chứng chỉ tự ký cũng thất bại ở đây trừ khi chọn **Skip SSL verification**.
+</Accordion>
+
+<Accordion title="VMWARE_HOST must be a DNS hostname, IPv4, or bracketed IPv6">
+Trường host có scheme, đường dẫn hoặc địa chỉ IPv6 không có ngoặc vuông. Chỉ nhập host, chẳng hạn `vcenter.example.com`, `192.0.2.10` hoặc `[2001:db8::10]`.
+</Accordion>
+
+<Accordion title="VMWARE_PORT must be an integer between 1 and 65535">
+Cổng chứa chữ cái hoặc nằm ngoài phạm vi. Nhập một số như `443`.
+</Accordion>
+
+<Accordion title="Invalid VMware connection configuration">
+Trường host đang trống. Nhập hostname hoặc địa chỉ IP của vCenter và kết nối lại.
+</Accordion>
+
+<Accordion title="Connection 'vmware' already exists. Only one instance is allowed.">
+Workspace này đã có một kết nối VMware vCenter. Chỉnh sửa kết nối đó hoặc ngắt kết nối trước.
+</Accordion>
+
+<Accordion title="Failed to connect to VMware vCenter trên một kết nối từng hoạt động">
+Nhiều khả năng mật khẩu SSO của người dùng CloudThinker đã hết hạn (mặc định 90 ngày) hoặc tài khoản bị khóa. Quản trị viên SSO mở **Administration → Single Sign On → Users and Groups**, chọn người dùng ở tab **Users**, rồi mở khóa hoặc đặt mật khẩu mới. Sau đó nhập mật khẩu mới qua [Xoay vòng mật khẩu](#xoay-vòng-mật-khẩu): VMware vCenter không có biểu tượng bút chì, nên bạn nhấn **Replace credentials** trên bảng chi tiết khi kết nối hiển thị **Error**.
+</Accordion>
+
+<Accordion title="Agent không thấy một VM, host hoặc datastore">
+Role của người dùng không bao gồm đối tượng đó. Kiểm tra global permission đã đánh dấu **Propagate to children**, hoặc gán role trên folder hoặc cluster cha của đối tượng.
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Dùng người dùng riêng.** Người dùng vCenter riêng giúp quyền truy cập của CloudThinker hiển thị rõ trong sự kiện vCenter và cho phép bạn thu hồi mà không ảnh hưởng tài khoản của ai.
+- **Giữ kiểm tra chứng chỉ.** Chỉ dùng **Skip SSL verification** cho hệ thống thử nghiệm có chứng chỉ tự ký.
+- **Lên kế hoạch cho việc hết hạn mật khẩu.** Mật khẩu SSO cục bộ hết hạn sau 90 ngày theo mặc định. Thay đổi policy, hoặc cập nhật mật khẩu trước khi hết hạn qua [Xoay vòng mật khẩu](#xoay-vòng-mật-khẩu).
+- **Thu hồi tại nguồn.** Gỡ permission của người dùng trong vCenter, hoặc vô hiệu hóa người dùng trong **Single Sign On → Users and Groups**.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Kiểm soát thay đổi VM nào agent có thể chạy và ai phê duyệt
+  </Card>
+  <Card title="Tổng quan kết nối" icon="plug" href="/vi/guide/connections/overview">
+    Cách trạng thái kết nối, kiểm tra và discovery hoạt động
+  </Card>
+</CardGroup>

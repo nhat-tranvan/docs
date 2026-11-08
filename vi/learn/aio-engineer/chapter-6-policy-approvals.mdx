@@ -1,0 +1,176 @@
+---
+title: Chương 6 · Chính sách, phê duyệt và an toàn thực thi dưới dạng mã
+description: "Phân loại hành động của agent theo rủi ro, giữ chính sách dưới dạng mã được review, thiết kế phê duyệt mà người duyệt thực sự đọc và ghi lại mọi thay đổi để ai cũng có thể dựng lại."
+icon: clipboard-check
+---
+
+*Trao cho agent nhiều quyền tự chủ hơn là một lời hứa với tổ chức của bạn. Policy as code là cách giữ lời hứa đó khi không ai theo dõi.*
+
+Chương này đưa ra bốn thứ bạn cần tự xây dựng hoặc yêu cầu từ nhà cung cấp: cách phân loại rủi ro cho hành động của agent, phê duyệt chống được sự mệt mỏi, cơ chế bảo vệ khi thực thi và bản ghi audit mà ai cũng có thể dựng lại.
+
+## 6.1 Phân loại hành động theo hai trục
+
+Mọi cơ chế kiểm soát ở phần sau của chương đều phụ thuộc vào việc phân loại hành động tốt. Chỉ cần hai câu hỏi:
+
+- **Khả năng đảo ngược.** Thay đổi có thể hoàn tác sạch sẽ không, và nhanh đến đâu?
+- **Phạm vi ảnh hưởng.** Thay đổi có thể chạm tới bao nhiêu phần hạ tầng của bạn, và ở những tầng nào?
+
+Phân loại theo **lớp hành động**, không phải từng lệnh đơn lẻ. "Restart một pod stateless" là một lớp có các thuộc tính đã biết, và chính sách tham chiếu tới lớp đó. Khi có thể, hãy để máy suy ra lớp: một skill hoặc công cụ khai báo loại truy cập, khả năng đảo ngược và phạm vi (xem [Chương 3](/vi/learn/aio-engineer/chapter-3-tools-skills-protocol)) tự phân loại chính nó, nên không ai phải nhớ rằng một script là nguy hiểm.
+
+|  | Đảo ngược được | Khó hoặc chậm đảo ngược |
+|---|---|---|
+| **Phạm vi ảnh hưởng hẹp** | Tự động hóa trước. Restart, xóa cache, scale replica, xoay vòng chứng chỉ. | Hỏi một người, kể cả khi nhỏ. Xóa dữ liệu, thu hồi thông tin xác thực. |
+| **Phạm vi ảnh hưởng rộng** | Hỏi một người, rồi triển khai theo giai đoạn. Chuyển hướng traffic, triển khai cấu hình có kiểm tra giữa các giai đoạn. | Con người chịu trách nhiệm, cần phê duyệt cấp cao. Migration schema, failover, thay đổi security group trên hệ thống quan trọng. |
+
+Dùng ma trận này làm chính sách khởi đầu: điền lớp hành động của riêng bạn vào từng ô trước khi kết nối agent với production.
+
+### Viết chính sách dưới dạng mã
+
+Chính sách gắn ma trận với hạ tầng thực tế của bạn. Với mỗi lớp hành động, chính sách trả lời: agent nào, trong môi trường nào, trong khung thời gian thay đổi nào, với điều kiện tiên quyết nào và do ai phê duyệt.
+
+Giữ chính sách đó dưới dạng cấu hình có phiên bản, thay đổi qua pull request với người sở hữu được nêu tên. Diff chính sách là một quyết định về quyền tự chủ, nên hãy review nó như một thay đổi production. Dưới đây là bản phác thảo chung (không phải định dạng tệp của CloudThinker) cho một lớp hành động:
+
+```yaml
+# Generic policy sketch, not a product format
+action_class: rollback_recent_deploy
+preconditions: [deploy_age < 60m, slo_breach_active, rollback_plan_attached]
+environments:
+  staging:    { decision: allow, notify: "#ops-incidents" }
+  production: { decision: ask_first, approvers: [sre-senior] }
+limits: { max_per_hour: 2, halt_on: repeated_failure }
+```
+
+Đọc từ trên xuống: agent chỉ được rollback một bản deploy chưa quá một giờ, trong lúc đang vi phạm SLO, và có kèm kế hoạch rollback. Staging chạy không cần hỏi. Production chờ một SRE cấp cao. Tối đa hai lần rollback mỗi giờ, và một lỗi lặp lại sẽ dừng lớp hành động này.
+
+## 6.2 Thiết kế phê duyệt mà người duyệt thực sự đọc
+
+Phê duyệt là một hệ thống yếu tố con người, và hệ thống này hỏng theo một hướng đã biết: mệt mỏi, rồi duyệt cho qua. Khi điều đó xảy ra, cổng phê duyệt chỉ còn là hình thức, và audit trail ghi nhận sự đồng ý chưa bao giờ thực sự diễn ra.
+
+Một quy tắc kinh nghiệm hữu ích: khi mọi người chấp nhận nguyên vẹn hơn khoảng 95% một lớp, hãy cho lớp đó chạy không cần hỏi. Khi tỷ lệ chấp nhận dưới khoảng 70%, hãy sửa agent hoặc chính sách trước khi mở rộng bất cứ thứ gì. Chờ ít nhất 30 quyết định trên một lớp trước khi tin vào một trong hai con số, vì ba lần duyệt trên ba không chứng minh được gì.
+
+Tỷ lệ chấp nhận cao chỉ có nghĩa là "sẵn sàng" khi mọi người thực sự đọc yêu cầu. Tỷ lệ chấp nhận cao với thời gian review gần bằng không là mệt mỏi, không phải sẵn sàng ([Chương 11, failure mode 7](/vi/learn/aio-engineer/chapter-11-failure-catalog)). Bốn thực hành giúp quy tắc kinh nghiệm này dùng được:
+
+| Thực hành | Ý nghĩa trong thực tế |
+|---|---|
+| **Một màn hình, đủ ngữ cảnh** | Yêu cầu hiển thị phát hiện, bằng chứng, kế hoạch chính xác (một diff hoặc đầu ra plan, không phải văn xuôi), phạm vi ảnh hưởng, cách rollback và bước kiểm tra sẽ diễn ra sau đó. Nếu người duyệt phải đi tìm thông tin, thiết kế đã thất bại. |
+| **Làm cho việc từ chối có thông tin** | Ghi lại lý do một yêu cầu bị từ chối: chẩn đoán sai, chẩn đoán đúng nhưng cách sửa sai, thời điểm không phù hợp, hoặc một ngoại lệ chính sách. Lý do đó dùng để tinh chỉnh chính sách và đánh giá ([Chương 7](/vi/learn/aio-engineer/chapter-7-evaluating-agents)). Hỏi ngay lúc từ chối, nếu không sẽ mất. |
+| **Danh tính và quorum là chính sách** | Các lớp rủi ro có thể yêu cầu một nhóm được nêu tên hoặc người thứ hai. Phê duyệt xác thực theo người, không theo kênh chat, và được ghi vào audit trail dưới dạng sự kiện. |
+| **Đo lường cổng phê duyệt** | Theo dõi độ trễ phê duyệt, tỷ lệ chấp nhận và tần suất mọi người sửa kế hoạch, theo từng lớp. Các con số đó là bằng chứng để nới lỏng một lớp, và chúng cho thấy sự mệt mỏi trước khi nó biến thành duyệt cho qua. |
+
+<Tip>
+Review số liệu phê duyệt theo từng lớp hành động vài tuần một lần. Lớp có tỷ lệ chấp nhận cao và độ trễ phê duyệt dài là ứng viên rõ ràng nhất để tự động hóa: mọi người đồng ý với lớp đó, và chờ họ chỉ làm bạn mất thời gian.
+</Tip>
+
+## 6.3 An toàn thực thi giữa "đã duyệt" và "đã xong"
+
+Đặt tiêu chuẩn cho thay đổi của agent cao hơn thay đổi trung bình của con người. Năm cơ chế giúp bạn đạt được điều đó:
+
+1. **Kiểm tra trước khi chạy.** Kiểm tra lại điều kiện tiên quyết khi hành động chạy, không phải khi lên kế hoạch, vì mọi thứ thay đổi trong khoảng thời gian đó. Các khẳng định phạm vi như "ảnh hưởng tối đa 5 tài nguyên, không cái nào gắn tag critical" sẽ chặn lại khi không thỏa mãn (fail closed).
+2. **Triển khai theo giai đoạn có kiểm tra giữa các giai đoạn.** Thay đổi rộng được triển khai theo từng phần, với vòng lặp xác minh từ [Chương 1](/vi/learn/aio-engineer/chapter-1-agent-anatomy) giữa các phần. Chuẩn bị sẵn rollback trước phần đầu tiên.
+3. **Circuit breaker và giới hạn tốc độ.** Agent lặp lại hành động đang lỗi, hoặc cả nhóm agent vượt trần tốc độ thay đổi, sẽ dừng lại và chuyển cấp. Retry có backoff dành cho lời gọi mạng, không dành cho thay đổi production.
+4. **Rollback là một phần bàn giao.** Mọi hành động quan trọng đều kèm rollback có thể thực thi, gắn vào ngay lúc lên kế hoạch và được kiểm thử khi có thể. "Chắc là đảo ngược được" không phải kế hoạch rollback.
+5. **Kill switch.** Một hành động dừng mọi thực thi tự động trong khi điều tra vẫn tiếp tục. Giao cho kill switch một người sở hữu, lịch diễn tập và một sự kiện audit. Thiết kế cơ chế này trước ngày bạn cần đến.
+
+## 6.4 Bản ghi audit mà ai cũng có thể dựng lại
+
+Thiết kế bản ghi audit để ba kiểu người đọc có thể dựng lại bất kỳ hành động nào: kỹ sư vào sáng hôm sau, kiểm toán viên vào cuối quý và cơ quan quản lý vào tuần tồi tệ nhất của bạn. Với mỗi hành động quan trọng, ghi lại:
+
+| Trường | Trả lời câu hỏi |
+|---|---|
+| Trigger và nguồn của nó | Điều gì khởi động việc này? |
+| Tham chiếu ảnh chụp ngữ cảnh | Agent biết những gì? |
+| Tóm tắt lập luận kèm con trỏ tới bằng chứng | Vì sao agent chọn cách này? |
+| Đánh giá chính sách | Quy tắc nào khớp, và chúng quyết định gì? |
+| Sự kiện phê duyệt | Ai phê duyệt, khi nào, và họ đã thấy gì? |
+| Log thực thi | Lời gọi công cụ nào đã chạy, với tham số nào (secret được che) và kết quả gì? |
+| Kết quả xác minh và rollback nếu có | Có hiệu quả không, và có bị hoàn tác không? |
+
+Làm cho bản ghi bất biến và có thể xuất, và lưu giữ trong thời gian chính sách lưu trữ của bạn yêu cầu. Nếu làm tốt, vận hành bằng agent tạo ra bằng chứng thay đổi tốt hơn hầu hết quy trình của con người, như một sản phẩm phụ của chính công việc.
+
+## 6.5 Ánh xạ sang CloudThinker
+
+Trong CloudThinker, [Approvals](/vi/guide/approvals/overview) quyết định mọi thao tác ghi mà agent thực hiện qua một kết nối. Thao tác đọc luôn chạy. Mỗi thao tác ghi đi qua bốn bước kiểm tra theo thứ tự, và bước đầu tiên có câu trả lời sẽ quyết định, với một ngoại lệ: ở chế độ **Manual**, Rule **Allow** không quyết định, và thao tác ghi vẫn được chuyển cho một người. CloudThinker bật [Rule enforcement](/vi/guide/approvals/rules#khắc-phục-sự-cố) cho từng workspace một, và cho đến khi đó chỉ riêng Approval mode quyết định.
+
+1. **Luôn bị chặn.** Một danh sách có sẵn các lời gọi không bao giờ chạy, chẳng hạn dừng ghi log CloudTrail, đóng tài khoản AWS hoặc xóa namespace `kube-system`. Không Rule, không người nào và không break-glass nào ghi đè được. Bạn không thể thêm vào danh sách này; để chặn thêm, hãy chấp nhận một Rule **Deny** với **Never allow break-glass** được bật, Rule này có hiệu lực khi enforcement đến workspace của bạn.
+2. **[Rules](/vi/guide/approvals/rules).** Mỗi Rule nêu một loại thao tác ghi, chẳng hạn `ec2:StopInstances` trên một tài khoản staging, và chỉ định **Allow**, **Ask first** hoặc **Deny**. Agent đề xuất Rule trong khi làm việc, và Rule được đề xuất không có tác dụng cho đến khi workspace admin chấp nhận. Khi bước **Rules** hiển thị **In preview**, ngay cả Rule đã chấp nhận cũng chỉ ghi lại quyết định lẽ ra Rule sẽ đưa ra, trong khi enforcement vẫn tắt.
+3. **[Approval mode](/vi/guide/approvals/approval-mode).** Quyết định mọi thao tác ghi mà không Rule nào quyết định. **Manual** hỏi một người trước mọi thao tác ghi mà không Rule **Deny** hoặc **Ask first** nào quyết định, kể cả thao tác được một Rule **Allow** bao phủ. **Auto** có bốn lựa chọn, đặt tên theo các bước của chúng (xem bảng dưới). Workspace mới bắt đầu với **Auto · Rules + AI · Ask me**. Automation mặc định là **Auto · Rules + AI · Refuse**, vì có thể không có ai ở đó để trả lời.
+4. **[Approvers](/vi/guide/approvals/approvers).** Người phê duyệt mặc định hoặc một nhóm được nêu tên, quy tắc hai người tùy chọn, và break-glass, vốn tắt cho đến khi admin bật và cần lý do bằng văn bản mỗi lần dùng.
+
+| Lựa chọn Auto | AI judgment | Thao tác ghi vẫn chưa được cho phép |
+|---|---|---|
+| **Auto · Rules · Ask me** | Tắt | Chờ một người |
+| **Auto · Rules · Refuse** | Tắt | Bị từ chối |
+| **Auto · Rules + AI · Ask me** | Bật | Chờ một người |
+| **Auto · Rules + AI · Refuse** | Bật | Bị từ chối |
+
+AI judgment cho phép một thao tác ghi khớp với yêu cầu của bạn và không vượt ra ngoài phạm vi đó. Thao tác ghi mang tính phá hủy, hoặc có tác động không rõ ràng, sẽ đi tới cột cuối. Để xem AI judgment đã quyết định gì, mở **Approvals → Activity**: dòng **No Rule matched** đếm các thao tác ghi do Approval mode quyết định, bao gồm AI judgment.
+
+Mỗi ý tưởng trong chương này có một vị trí cụ thể:
+
+| Ý tưởng trong chương | Vị trí trong CloudThinker |
+|---|---|
+| Lớp hành động và ma trận hai trục | Rules, mỗi Rule cho một loại thao tác ghi, giới hạn theo một kết nối |
+| Chính sách dưới dạng mã được review | **Export active Rules** (trong menu **More Rule actions** ở tab **Rules**) tải về Rules, nhóm người phê duyệt và Approval mode dưới dạng YAML. **Import policy** trong cùng menu áp dụng lại một tệp đã review. |
+| Review diff chính sách trước khi triển khai | Khi bạn review một Rule được đề xuất hoặc sửa một Rule, bản xem trước phát lại các lời gọi trong 7 hoặc 30 ngày gần nhất và cho thấy lời gọi nào lẽ ra đã chạy, hỏi trước hoặc bị từ chối |
+| Quorum và danh tính | Nhóm người phê duyệt và quy tắc hai người trên tab **Approvers** |
+| Đo lường cổng phê duyệt | Tab **Activity** cho thấy mỗi Rule đã quyết định gì trong một khoảng thời gian, có xuất CSV |
+| Quy trình đã review cho các cách sửa đã biết | [Runbook](/vi/guide/incident/runbooks) của Resolve. Lệnh trong runbook mà thay đổi hệ thống vẫn là thao tác ghi, nên Rules và Approval mode của bạn quyết định lệnh đó. |
+| Kiểm tra trước khi chạy (6.3) | Không phải cài đặt của Rule. Rule giới hạn một loại thao tác ghi theo một kết nối, qua đó giới hạn những gì có thể chạy. Hành động của Optimize mở một cuộc hội thoại kiểm tra trước rằng phát hiện vẫn còn hợp lệ. Đặt các bước kiểm tra trước khác vào runbook. |
+| Triển khai theo giai đoạn (6.3) | Không có sẵn. Triển khai thay đổi rộng trong pipeline của riêng bạn. Khi enforcement bật, đặt Rule **Ask first** cho thao tác ghi khởi động mỗi giai đoạn; cho đến khi đó, giữ loại run đó ở **Manual**. |
+| Circuit breaker và giới hạn tốc độ (6.3) | Không có sẵn: Rule không có giới hạn theo giờ. Dùng **Ask first** cho mọi lớp mà việc lặp lại có thể gây hại. |
+| Rollback là một phần bàn giao (6.3) | Sản phẩm không bắt buộc. Yêu cầu rollback trong runbook hoặc trong yêu cầu, và từ chối các phê duyệt thiếu rollback. |
+| Kill switch (6.3) | Không có công tắc dừng tất cả duy nhất. Cơ chế hoạt động hiện nay là **Allow writes**: tắt tùy chọn này trên một kết nối và mọi thay đổi trên kết nối đó bị từ chối. Đặt mỗi loại run về **Manual** sẽ chuyển thao tác ghi của loại đó cho một người, nhưng riêng điều đó không phải là dừng, vì một chat có thể tự chọn chế độ trong ô soạn thảo. Tắt **On duty** trong Resolve để dừng điều tra tự động, và tắt trigger của automation để dừng các lượt chạy của nó. Khi CloudThinker bật [Rule enforcement](/vi/guide/approvals/rules#khắc-phục-sự-cố) cho workspace của bạn, Rules bổ sung một cách dừng rộng hơn. [Rule](/vi/guide/approvals/rules) **Deny** áp cho mọi thao tác, trên mọi kết nối, với **Never allow break-glass** bật, sẽ từ chối mọi thao tác ghi của agent ở mọi chế độ trong khi thao tác đọc vẫn chạy. |
+| Bản ghi audit có thể dựng lại | [Audit Logs](/vi/guide/security/audit-logs), trên các gói Scale, Scale Plus và Enterprise, dành cho Owner và Admin của tổ chức. Không ai có thể sửa hoặc xóa sự kiện từ ứng dụng. Sự kiện được lưu 90 ngày, nên hãy xuất CSV nếu cần lâu hơn. Với các gói khác, dùng **Approvals → Activity** và chức năng xuất CSV, cho thấy mỗi Rule đã quyết định gì và ai phê duyệt. |
+
+### Áp dụng trong workspace của bạn
+
+Bất kỳ ai trong workspace đều xem được Approvals. Để chấp nhận Rule hoặc thay đổi chế độ và người phê duyệt, bạn cần vai trò workspace Admin (Owner và Admin của tổ chức có vai trò này trong mọi workspace).
+
+<Steps>
+  <Step title="Mở Approvals">
+    Mở **Approvals** trên thanh bên. Nếu không thấy, nhấn **More** và chọn **Approvals**. Trang mở ở tab **Overview**.
+
+    **Trạng thái thành công:** bạn thấy những gì cần bạn xử lý và số lời gọi đã chạy, đã hỏi một người hoặc bị từ chối trong 7 ngày gần nhất.
+  </Step>
+  <Step title="Điền ma trận bằng Rules">
+    Trên tab **Rules**, review các Rule mà agent đề xuất. Chưa có đề xuất? Nhấn **Find rules**. Quá trình kiểm tra mất 5 đến 10 phút, dùng credit và đề xuất Rule từ kết nối, phát hiện, sự cố, cảnh báo và lịch sử phê duyệt của bạn. Chấp nhận những Rule khớp với ma trận ở 6.1. Nếu không có đề xuất nào bạn muốn, nhấn **Add from template** hoặc viết Rule trong biểu mẫu ([Rules](/vi/guide/approvals/rules)).
+
+    **Trạng thái thành công:** mỗi Rule đã chấp nhận hiển thị **Allow**, **Ask first** hoặc **Deny**, và không có gì thay đổi trước khi bạn chấp nhận.
+  </Step>
+  <Step title="Chọn Approval mode">
+    Trên tab **Approval mode**, đặt **Workspace mode**. **Auto · Rules + AI · Ask me** phù hợp với hầu hết các nhóm. Với workspace production mà chỉ Rule đã chấp nhận mới được tự chạy thao tác ghi, chọn **Auto · Rules · Ask me** hoặc **Manual**. Trong **Run types**, nhấn **Override** để đặt chế độ riêng cho một loại run, chẳng hạn **Automations**.
+
+    **Trạng thái thành công:** bộ chọn hiển thị lựa chọn của bạn, và mỗi dòng loại run hiển thị **Same as workspace** hoặc chế độ ghi đè.
+  </Step>
+  <Step title="Đặt người phê duyệt">
+    Trên tab **Approvers**, nhấn **Edit** ở **Default approvers** và thêm những người sẽ trả lời phần lớn yêu cầu. Nhấn **New group** cho nhóm sở hữu một hệ thống, và nêu tên nhóm đó trong mỗi Rule **Ask first** cho hệ thống của họ; các Rule đó định tuyến yêu cầu khi enforcement bật. Bật quy tắc hai người cho production, để không ai tự duyệt thao tác ghi trong lượt chạy của chính mình. Để break-glass tắt cho đến khi bạn có quy trình khẩn cấp cho break-glass.
+
+    **Trạng thái thành công:** thẻ **Who approves** trên **Overview** cho biết bạn có bao nhiêu người phê duyệt mặc định và quy tắc hai người có bật không.
+  </Step>
+  <Step title="Đưa chính sách vào quy trình review">
+    Trên tab **Rules**, mở menu **More Rule actions**, nhấn **Export active Rules** và commit tệp YAML vào một repository có người sở hữu được nêu tên. Sau khi pull request được merge, mở cùng menu, nhấn **Import policy** và tải tệp đã merge. Import cho thấy những gì sẽ thay đổi trước khi áp dụng. Mặc định import theo kiểu gộp: Rule trong tệp được thêm hoặc cập nhật, và Rule không có trong tệp vẫn giữ nguyên trừ khi bạn chọn **Remove Rules that are not in the file**. Rule **Allow** được nhập sẽ chờ review trừ khi bạn bật **Activate Allow Rules**. Rule đã chấp nhận chỉ quyết định thao tác ghi khi CloudThinker bật [Rule enforcement](/vi/guide/approvals/rules#khắc-phục-sự-cố) cho workspace của bạn; cho đến khi đó, đặt chế độ **Manual** cho các thao tác ghi phải chờ một người.
+
+    **Trạng thái thành công:** workspace khớp với tệp đã review trong Git.
+  </Step>
+</Steps>
+
+<Note>
+Git không khóa workspace. Admin vẫn có thể chấp nhận hoặc sửa Rule trong ứng dụng, và thay đổi đó bỏ qua pull request của bạn. Chỉ giao vai trò workspace Admin cho số ít người sở hữu chính sách, và xuất lại sau mọi thay đổi trong ứng dụng để Git luôn cập nhật.
+</Note>
+
+<Tip>
+**ĐIỀU CẦN NHỚ**
+
+Quyền tự chủ có thể quản trị khi được viết ra và được thực thi. Phân loại hành động theo khả năng đảo ngược và phạm vi ảnh hưởng, giữ chính sách dưới dạng mã được review, thiết kế phê duyệt chống mệt mỏi và đo lường chúng, bao bọc việc thực thi bằng kiểm tra trước khi chạy, triển khai theo giai đoạn, circuit breaker và rollback sẵn sàng, và ghi lại mọi hành động để ai cũng có thể dựng lại.
+</Tip>
+
+## Bước tiếp theo
+
+<CardGroup cols={2}>
+  <Card title="Chương 7 · Đánh giá agent như hệ thống production" icon="flask" href="/vi/learn/aio-engineer/chapter-7-evaluating-agents">
+    Xây dựng bộ kiểm thử từ chính sự cố của bạn và kiểm soát mọi thay đổi agent bằng bộ đó.
+  </Card>
+  <Card title="Thiết lập Approvals" icon="shield-check" href="/vi/guide/approvals/overview">
+    Review các Rule được đề xuất, chọn Approval mode và chọn người phê duyệt.
+  </Card>
+</CardGroup>

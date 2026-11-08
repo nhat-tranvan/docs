@@ -1,113 +1,257 @@
 ---
 title: Databricks
-description: "Connect Databricks to CloudThinker to review clusters, jobs, runs, notebooks, and catalog assets, and diagnose failed work"
+description: "Connect Databricks so CloudThinker can explain failed job runs, spot idle clusters, and explore notebooks and Unity Catalog"
 icon: layer-group
 ---
 
+import ApprovalDefault from '/snippets/approval-default.mdx';
 import ConnectionSecurity from '/snippets/connection-security.mdx';
 
-Connect your Databricks workspace to let CloudThinker agents review clusters, jobs, runs, notebooks, files, and catalog assets, run focused data queries, and diagnose failed work before anyone touches production.
+Connect Databricks to let CloudThinker agents explain why a job run failed, flag idle or unhealthy clusters, read notebooks and workspace files, and explore Unity Catalog, plus run read-only SQL when you add a SQL warehouse. The connection uses a Databricks **personal access token** (PAT), so agents see exactly what the token's user can see.
 
-Databricks authenticates with a **personal access token** for your workspace. Operational changes stay deliberate, approval-based decisions.
+<Warning>
+Changes run whenever the token's user has change grants, and under the default Approval mode AI can approve them, including a cluster terminate or a job delete. Choose **Manual**, or keep the token's grants read-only, before you connect a production workspace. An [Ask first Rule](#write-access) adds to that once CloudThinker turns on [Rule enforcement](/guide/approvals/rules#troubleshooting) for your workspace.
+</Warning>
+
+---
 
 ## Prerequisites
 
-- A **Databricks workspace** and a user allowed to create personal access tokens in it.
-- Optionally, a **SQL warehouse** if you want agents to run SQL queries.
+- A Databricks workspace with personal access tokens turned on. A workspace admin turns them on under **Settings → Advanced → Personal Access Tokens**, and grants **Can Use** on token permissions to the user or service principal the connection acts as.
+- Optional: a SQL warehouse, if you want agents to run SQL queries. A query on a stopped warehouse starts it, and Databricks bills for the time it runs. Use the 2X-Small size with auto stop set to 5 to 10 minutes.
+- The workspace Admin role in CloudThinker to add the connection. See [How access works](/guide/connections/overview#how-access-works).
+
+<Note>
+The connection takes a token only. OAuth machine-to-machine sign-in (a client ID and secret) isn't supported.
+</Note>
+
+---
 
 ## Setup
 
 <Steps>
   <Step title="Create a personal access token">
-    In your Databricks workspace, click your username in the top bar and select **Settings → Developer**. Next to **Access tokens**, click **Manage**, then **Generate new token**. Set a lifetime and copy the token.
+    The token carries every permission of its identity, so use a dedicated, non-admin one.
+    <Tabs>
+      <Tab title="Service principal (recommended)">
+        A service principal's token isn't tied to a person, but it can't be created from the Settings page. A workspace admin does this:
+        1. Go to **Settings → Advanced → Personal Access Tokens**, click **Permission Settings**, and give the service principal **Can Use**.
+        2. Sign the Databricks CLI in as a workspace admin with `databricks auth login --host <workspace-url>`.
+        3. Create the token:
+        ```bash
+        # 7776000 seconds = 90 days
+        databricks token-management create-obo-token <service-principal-application-id> \
+          --lifetime-seconds 7776000 --comment cloudthinker
+        ```
+        Copy `token_value` from the output. Also save `token_info.token_id`: you need it to revoke the token later. On Azure Databricks, the application ID is the service principal's Microsoft Entra application (client) ID.
+      </Tab>
+      <Tab title="User token">
+        Sign in as the user the connection should act as. Click your username in the top bar, then go to **Settings → Developer**. Next to **Access tokens**, click **Manage**, then **Generate new token**.
+        - **Comment**: `cloudthinker`
+        - **Lifetime**: 90 days is a sensible default. Your workspace admin may enforce a shorter maximum
+
+        Copy the token now. Databricks shows it only once.
+      </Tab>
+    </Tabs>
+    Put the expiry on your calendar so you can [rotate the token](#rotate-the-token) in time.
   </Step>
-  <Step title="Find your workspace URL and warehouse ID">
-    The workspace URL is your Databricks address, such as `https://dbc-a1b2345c-d6e7.cloud.databricks.com`. For SQL queries, copy the warehouse's ID from **SQL Warehouses → your warehouse → Connection details** — it is the last segment of the **HTTP path**.
+  <Step title="Copy your workspace URL">
+    Copy the address from your browser's address bar up to the domain, for example `https://dbc-a1b2345c-d6e7.cloud.databricks.com`. Keep the `https://` and drop any path after the domain.
+  </Step>
+  <Step title="Copy the SQL warehouse ID (optional)">
+    Skip this step if you don't want agents running SQL. Otherwise, go to **SQL Warehouses**, open the warehouse, and select **Connection details**. The warehouse ID is the last segment of the **HTTP path**: in `/sql/1.0/warehouses/1a2b3c4d5e6f7g8h`, it's `1a2b3c4d5e6f7g8h`.
+  </Step>
+  <Step title="Open network access">
+    Skip this step if your workspace has no IP access list. Otherwise, have a workspace admin add CloudThinker's egress IP addresses to the workspace's IP access list. These docs don't publish CloudThinker's egress IP list: ask your CloudThinker contact, or [contact us](https://cloudthinker.io/contact).
   </Step>
   <Step title="Add the connection in CloudThinker">
-    Navigate to **Connections → Databricks** and enter:
-    - **DATABRICKS_HOST**: your workspace URL
-    - **DATABRICKS_TOKEN**: the personal access token
-    - **DATABRICKS_WAREHOUSE_ID**: optional — only needed for SQL queries
+    Go to **More → Workspace settings → Connections**, select **Databricks**, fill in the fields from [Connection details](#connection-details), and click **Connect**.
 
-    Click **Connect**. CloudThinker verifies the credentials and shows a **Connected** status.
+    Databricks shows a **Connected** status. That means CloudThinker started the Databricks tools. It doesn't prove the token, the warehouse ID, or the grants, so finish with the next step.
+  </Step>
+  <Step title="Run the verify prompt">
+    Run the [verify prompt](#verify-the-connection).
+
+    **Success state:** the connection shows **Connected** and the verify prompt lists your clusters, jobs, and catalogs.
+
+    A wrong token shows up here as `401`, a missing grant as `403`, and a wrong host as an unreachable workspace. A bad warehouse ID shows up only on the first SQL query.
   </Step>
 </Steps>
 
 <Warning>
-Databricks automatically revokes personal access tokens that have not been used for 90 days, and a token expires at the lifetime you set. Recreate the token and update the connection when either happens.
+Databricks revokes a personal access token after 90 days without use, and every token expires at the lifetime you set. When either happens, agent calls fail with 401. Generate a new token and [rotate it](#rotate-the-token) into the connection.
 </Warning>
+
+---
 
 ## Connection details
 
-| Field | Description | Example |
-|-------|-------------|---------|
-| **DATABRICKS_HOST** | Databricks workspace URL | `https://dbc-a1b2345c-d6e7.cloud.databricks.com` |
-| **DATABRICKS_TOKEN** | Personal access token for a workspace user | — |
-| **DATABRICKS_WAREHOUSE_ID** | Optional SQL warehouse ID; required only for SQL queries | — |
+The connect form labels each field with its variable name, as below.
+
+| Field | Required | Description | Example |
+|-------|----------|-------------|---------|
+| **DATABRICKS_HOST** | Yes | Workspace URL, including `https://`. Azure looks like `https://adb-1234567890123456.7.azuredatabricks.net`, Google Cloud like `https://1234567890123456.7.gcp.databricks.com` | `https://dbc-a1b2345c-d6e7.cloud.databricks.com` |
+| **DATABRICKS_TOKEN** | Yes | Personal access token for the connection's user | Secret, not shown |
+| **DATABRICKS_WAREHOUSE_ID** | No | SQL warehouse ID. Needed only for SQL queries. Leave empty to turn SQL off. | `1a2b3c4d5e6f7g8h` |
+
+You can add more than one Databricks connection, for example one per workspace. Name the workspace in your prompt so CloudThinker picks the right one.
+
+---
 
 ## Required permissions
 
-The connection acts as the user who created the token, so scope that user deliberately.
+The token carries every permission of its identity (a user or a service principal, see Setup step 1). Grant only what agents need.
+
+| Agents can | Grant the token's user |
+|------------|------------------------|
+| Review clusters and their state | **Can Attach To** on the clusters |
+| Review jobs and run history, diagnose failed runs | **Can View** on the jobs |
+| Read notebooks and workspace files | **Can Read** on the folders or notebooks |
+| Explore catalogs and table metadata | `USE CATALOG`, `USE SCHEMA`, and `BROWSE` in Unity Catalog |
+| Run SQL queries | **Can Use** on the warehouse, plus `SELECT` on the tables |
+| Start, restart, or terminate a cluster | **Can Restart** on the cluster |
+| Resize a cluster, create or delete a job | **Can Manage** on the cluster or job |
+| Run or cancel a job | **Can Manage Run** on the job |
+| Import notebooks, write or delete files | **Can Edit** on the folder or notebook |
 
 <Tip>
-Create the token as a user with read access to the clusters, jobs, and catalog assets agents should investigate — not a workspace admin. Leave **DATABRICKS_WAREHOUSE_ID** empty if you do not want agents running SQL.
+Don't create the token as a workspace admin. Start with the view-level grants above, leave **DATABRICKS_WAREHOUSE_ID** empty until you need SQL, and add change grants only for the objects you want agents to change.
 </Tip>
+
+---
 
 ## Agent capabilities
 
-Once connected, agents can:
-
 | Capability | Description |
 |------------|-------------|
-| **Cluster and job review** | Review clusters, jobs, and run history |
-| **Failure diagnosis** | Investigate failed runs and explain what went wrong |
-| **Notebook and file review** | Read notebooks and workspace files for context |
-| **Catalog exploration** | Explore catalog assets and their metadata |
-| **Focused SQL queries** | Run bounded data queries through the configured SQL warehouse |
+| **Workspace discovery** | List clusters, jobs, recent job runs, and Unity Catalog catalogs in one pass |
+| **Failed run triage** | Break down run results by state and explain the failures, scoped to one job when you name it |
+| **Cluster health** | Summarize cluster states and flag running clusters that look idle and are costing money |
+| **Notebooks and files** | Read notebooks, workspace files, and DBFS paths for context |
+| **Catalog and lineage** | Explore catalogs, schemas, tables, and table lineage |
+| **SQL queries** | Run queries (`SELECT`, `SHOW`, `DESCRIBE`) through the configured warehouse |
+| **Changes** | Start, resize, or terminate a cluster, run or cancel a job, create or delete a job, import notebooks, write or delete files. Each one goes through approvals. |
+
+CloudThinker doesn't filter SQL statements. Agents keep to `SELECT`, `SHOW`, and `DESCRIBE` unless you ask for a write, and every SQL statement, reads included, goes through approvals. On **Manual**, that means every `SELECT` waits for a person. If the token's user holds `MODIFY` on a table, an approved `INSERT` runs. The table grants are the real boundary.
 
 ### Verify the connection
 
 ```text
-List my Databricks clusters and jobs and summarize their current state
+Check my Databricks connection: list my clusters, jobs, and catalogs with their current state
 ```
+
+**Success state:** CloudThinker lists your clusters, jobs, and catalogs with their current state.
 
 ### Example prompts
 
 ```text
-The root cause of the last failed run of the nightly-etl job on Databricks
-Which of my Databricks clusters look idle or oversized
-Row counts by day for the sales catalog table over the last week
+Why did the last run of the nightly-etl job fail? Show the error and a likely fix
+Which Databricks clusters are running but look idle right now?
+Show daily row counts for main.sales.orders over the last 7 days
 ```
+
+The third prompt needs **DATABRICKS_WAREHOUSE_ID**. Without it, CloudThinker can describe the table but can't query it.
+
+---
+
+## Write access
+
+There's no **Allow writes** switch on Databricks. The token's user grants are the real boundary: with only the view-level grants from [Required permissions](#required-permissions), Databricks refuses every change.
+
+Writes are possible from day one whenever the token's user holds change grants.
+
+<ApprovalDefault />
+
+CloudThinker doesn't undo a change for you, so a terminated cluster, a deleted job, or a deleted file stays that way.
+
+**Manual** also covers SQL, so every `SELECT` waits for someone to approve it. That suits a change-controlled production workspace. For read-heavy analysis on a workspace where the grants already block changes, the wait on every query may cost more than it protects.
+
+- **Approve every change today**: choose **Manual**. A person approves every call, SQL included, and it holds whether or not Rule enforcement is on.
+- **Approve every change with a Rule**: add an **Ask first** Rule on the Databricks connection. This is the right choice for most production workspaces once enforcement is on.
+- **Read-only workspace, approve each SQL query**: keep the token's user on view-level grants and add an **Ask first** Rule. The grants make Databricks refuse every change, and the Rule makes you approve each SQL query.
+- **Block everything, SQL included**: add a **Deny** Rule that covers every operation. Every SQL statement counts as a change, so a Deny Rule stops `SELECT` queries too. Discovery, triage, and notebook reads keep working.
+
+The three Rule options depend on Rule enforcement, which CloudThinker turns on per workspace ([details](/guide/approvals/rules#troubleshooting)). Until it's on, **Manual** is the control that holds every write today, and the token's grants are the other boundary that always applies.
+
+To build the Rule:
+
+<Steps>
+  <Step title="Ask for the Rule">
+    In a chat, type `/create-policy Ask first for every write on the Databricks connection`. For a block instead, ask for a **Deny** Rule.
+  </Step>
+  <Step title="Check the proposal">
+    Open **Approvals** in the sidebar, then **Rules → Needs review**, and open the Rule. Check that **Effect** is **Ask first** (or **Deny**), the Rule carries the **Every operation** badge, and **Connections** names your Databricks connection.
+  </Step>
+  <Step title="Accept it">
+    Select the Rule and click **Accept**.
+
+    **Success state:** a toast confirms the accepted Rule, and it moves to the **Active** tab.
+  </Step>
+</Steps>
+
+---
+
+## Rotate the token
+
+<Steps>
+  <Step title="Create the new token">
+    Repeat Setup step 1. Keep the old token until the swap is done.
+  </Step>
+  <Step title="Replace it in CloudThinker">
+    Open **More → Workspace settings → Connections**, select **Databricks**, click the pencil icon on the workspace's row, and in **Edit Instance** click **Replace…**. Paste the new token into **DATABRICKS_TOKEN**, leave the other fields blank to keep their saved values, and click **Save and test**.
+
+    **Success state:** the connection stays **Connected**. If the test fails, CloudThinker keeps the previous token.
+  </Step>
+  <Step title="Revoke the old token">
+    In Databricks, revoke the old token under **Settings → Developer → Access tokens**. For a service principal token, a workspace admin deletes it with `databricks token-management delete <token-id>`, using the `token_info.token_id` you saved in Setup step 1.
+  </Step>
+</Steps>
+
+---
 
 ## Troubleshooting
 
-<Accordion title="401 or 403 Unauthorized">
-The token is wrong, expired, or was revoked — Databricks revokes tokens unused for 90 days. Generate a new token and update the connection.
+<Accordion title="401 Unauthorized">
+The token is wrong, expired, or revoked. Databricks revokes tokens unused for 90 days. Generate a new token and update **DATABRICKS_TOKEN**.
 </Accordion>
 
-<Accordion title="Connection cannot reach the workspace">
-**DATABRICKS_HOST** is wrong or unreachable. Use the full workspace URL, including `https://`, exactly as it appears in your browser.
+<Accordion title="403 Forbidden on a cluster, job, or table">
+The token's user lacks permission on that object. Grant the matching permission from [Required permissions](#required-permissions), then ask again.
+</Accordion>
+
+<Accordion title="The connection can't reach the workspace">
+**DATABRICKS_HOST** is wrong. Use the workspace URL with `https://` and no path after the domain.
+</Accordion>
+
+<Accordion title="No job runs come back, but jobs exist">
+Check that the token's user has **Can View** on the jobs. Then ask about one job by name, for example "show recent runs of the nightly-etl job". An empty cluster or job list on a new workspace is normal.
 </Accordion>
 
 <Accordion title="SQL queries fail while everything else works">
-**DATABRICKS_WAREHOUSE_ID** is missing or wrong, or the warehouse is stopped. Copy the ID from the warehouse's **Connection details** and confirm the warehouse can start.
+**DATABRICKS_WAREHOUSE_ID** is empty or wrong, the warehouse is stopped and can't start, or the user lacks **Can Use** on it. Copy the ID from the warehouse's **Connection details** again and check the warehouse permissions.
 </Accordion>
+
+---
 
 ## Security
 
 <ConnectionSecurity />
 
-- **Token identity** — the connection can do whatever the token's user can do, so create it from a deliberately scoped user.
-- **Opt in to SQL** — leaving the warehouse ID empty keeps the connection to cluster, job, and catalog review.
+- **Token identity**: the connection can do anything the token's user can do in Databricks, so the user's grants are your real permission boundary.
+- **SQL is opt-in**: with no warehouse ID, agents can't query tables. They can still read any notebooks, workspace files, and DBFS paths the token's user can read, and those can hold data.
+
+---
 
 ## Related
 
 <CardGroup cols={2}>
   <Card title="Snowflake Connection" icon="/images/icons/snowflake.svg" href="/guide/connections/snowflake">
-    Warehouse cost and query analysis
+    Query and cost analysis for Snowflake warehouses
   </Card>
-  <Card title="Tony Agent" icon="database" href="/guide/agents/tony">
-    Database analysis and optimization
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Decide which changes run on their own and which wait for you
+  </Card>
+  <Card title="Connections overview" icon="plug" href="/guide/connections/overview">
+    How credentials and write controls work across connections
   </Card>
 </CardGroup>
