@@ -112,3 +112,7 @@ Import syntax: `import Snippet from '/snippets/name.mdx';` then `<Snippet />`. R
 - ≤2 sentences before first `##`; sentence-case headings; prompt blocks ` ```text ` and within caps.
 - Every retained `/images/` path resolves, and no retained screenshot contradicts the current UI or canonical product names.
 - `mintlify broken-links` passes.
+
+## Execution naming
+
+Use **Environments** for the feature and **environment** for a named execution destination. Use **machine** for a connected host and **worker** for its background process. Keep **Run in**, **CloudThinker Cloud**, and existing CLI syntax and URLs. **Allow self-hosted environments** controls customer-hosted execution; it does not disable CloudThinker Cloud.

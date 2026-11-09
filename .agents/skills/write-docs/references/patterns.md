@@ -21,7 +21,7 @@ Per-type structure rules and the companion-file conventions. Read the section fo
 ## Connection docs
 
 - Usual sections: overview or value, prerequisites, setup, permissions, capabilities, troubleshooting, security, related links. Reuse an existing connection page for the order.
-- The page teaches credential acquisition, not deployment. When the service is self-hosted, state only what the reader must know to reach it and authenticate, then link the vendor for install and hosting.
+- The page teaches credential acquisition, not deployment. When the service is self-hosted, state only what the reader must know to reach it and authenticate, then link the vendor for install and hosting. For network reach, TLS, and connections offered only on self-hosted deployments of CloudThinker, follow [self-host.md](self-host.md).
 - Favor read-only or least-privilege credential examples.
 - Ground the connection's real behavior in the product source: the builtin connection entry for the fields and auth type, the connection test for what Connect does and every message it can return, and the agent skill for capabilities and limits. The product source is authoritative about CloudThinker only. Every claim it makes about the vendor still needs the vendor check.
 - Write each troubleshooting entry from a message the product can actually return, not from a guess about what might go wrong.
