@@ -1,0 +1,170 @@
+---
+title: F5 BIG-IP
+description: "Connect an F5 BIG-IP so agents can review applications, firewall policies, DNS, and device state, and change configuration with approval"
+icon: "/images/icons/f5.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+import ApprovalDefault from '/snippets/approval-default.mdx';
+
+Connect an F5 BIG-IP and CloudThinker agents can review virtual servers and pools, Advanced Firewall Manager (AFM) policies, DNS, and device state, and change configuration through your approvals. The connection signs in to the iControl REST API with the username and password of a dedicated BIG-IP user.
+
+<Note>
+F5 BIG-IP isn't turned on for every workspace yet. To use it, [contact us](https://cloudthinker.io/contact).
+</Note>
+
+## Prerequisites
+
+- A BIG-IP whose HTTPS management interface CloudThinker can reach. This connection runs from CloudThinker Cloud, so allow CloudThinker's egress IPs on the management interface. These docs don't publish the list: ask your CloudThinker contact, or [contact us](https://cloudthinker.io/contact). F5 advises against opening the management interface to the internet, so see [Reaching private services](/guide/connections/overview#reaching-private-services).
+- A BIG-IP account with the **Administrator** or **User Manager** role, which can create user accounts.
+- The **Admin** role in your CloudThinker workspace, which can add and edit connections. See [Roles](/guide/security/roles).
+
+The connection covers one BIG-IP TMOS device. BIG-IQ, F5 Distributed Cloud, NGINX, and F5OS use separate endpoints and credentials, and this connection can't reach them.
+
+## Setup
+
+<Steps>
+  <Step title="Create a dedicated user">
+    In the BIG-IP Configuration utility, go to **System → Users → User List** and click **Create**. Fill in:
+    - **User Name**: `cloudthinker`
+    - **Password**: enter and confirm a strong password
+    - **Partition Access**: the partitions agents should see, or **All**
+    - **Role**: **Auditor** for read-only access, or a role that can change the modules you want agents to manage. See [Required permissions](#required-permissions).
+    - **Terminal Access**: **Disabled**
+
+    Click **Finished**.
+  </Step>
+  <Step title="Add the connection in CloudThinker">
+    In the sidebar, click **More → Workspace settings → Connections**. On the **Builtin Connections** tab, search for **F5 BIG-IP** and click **Connect**. Fill in the fields from [Connection details](#connection-details) and click **Connect**.
+
+    CloudThinker signs in with a temporary token, reads the BIG-IP version and module provisioning, then removes the token.
+
+    **Success state:** the connection shows **Connected** with a message such as `BIG-IP 17.1.1 connected; system inventory is readable. Provisioned modules: afm, ltm.`
+  </Step>
+</Steps>
+
+<Warning>
+Repeated wrong passwords can lock the BIG-IP account. If the test reports a rejected password, check it before you try again.
+</Warning>
+
+## Connection details
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| **Management URL** | The BIG-IP management address, with `https://` and no path | `https://bigip.example.internal` |
+| **Username** | The dedicated BIG-IP user | `cloudthinker` |
+| **Password** | That user's password | `<your-password>` |
+| **Verify TLS certificate** | **No** (the default, for BIG-IP's self-signed management certificate) or **Yes** (for a certificate from a trusted certificate authority) | **No** |
+
+There's no partition field. Agents see every partition the user can access, and they name each object by its full path, such as `/Common/app-pool`.
+
+<Warning>
+With **Verify TLS certificate** set to **No**, traffic is encrypted, but CloudThinker can't tell your BIG-IP from an impostor. Install a certificate from a trusted certificate authority on the management interface, then switch to **Yes**.
+</Warning>
+
+## Required permissions
+
+The BIG-IP user's role and partition access set what agents can read and change.
+
+| Goal | BIG-IP role |
+|------|-------------|
+| Read applications, firewall policies, DNS, network, and system state | **Auditor** |
+| Change pools, virtual servers, and other application objects | **Manager** on the partitions agents manage |
+| Change AFM address lists, port lists, rule lists, and policies | **Firewall Manager**, with the `Common` partition to change global and management-port rules |
+
+<Tip>
+Start with **Auditor**. Grant a role that can make changes only when a workflow needs it, and limit **Partition Access** to the partitions that workflow touches.
+</Tip>
+
+## Agent capabilities
+
+| Capability | What agents can do |
+|------------|--------------------|
+| **Device overview** | Report the BIG-IP version, failover state, provisioned modules, and which API areas the user can read |
+| **Application delivery** | Review virtual servers and pools, and read one pool's members and traffic statistics |
+| **Firewall review** | Flag risky or disabled rules in an AFM policy, read address, port, and rule lists, and read global and management-port enforcement |
+| **DNS** | Review BIG-IP DNS wide IPs and pools by record type |
+| **System and network** | Review module provisioning, HA, VLANs, self IPs, and routes |
+| **Other modules** | Read APM, Advanced WAF, and other objects the user can see |
+| **Configuration changes** | Create, update, or delete one named object per request, such as a pool member or an AFM rule |
+
+Reads run without asking. Every configuration change is a write: the agent reads the object first, states its current value, the change, and the traffic impact, and each change goes through your Approvals on its own. After the change, the agent reads the object again to confirm it.
+
+Agents can't run commands on the device, export credentials or private keys, or change users and access. Reboot, failover, configuration restore, module provisioning, and upgrades are out of scope.
+
+Writes also need **Allow writes** on, which starts on. To lock writes in CloudThinker, open **F5 BIG-IP** in **More → Workspace settings → Connections** and turn off the **Allow writes** switch on its detail panel.
+
+<ApprovalDefault />
+
+For a production BIG-IP, choose **Manual** so every change reaches a person.
+
+<Warning>
+A pool, virtual server, DNS, or firewall change affects live traffic at once. Changes apply to the running configuration only: CloudThinker doesn't save the configuration or sync it to an HA peer. Save and sync on the BIG-IP once you've checked a change.
+</Warning>
+
+### Verify the connection
+
+```text
+Summarize my BIG-IP: version, failover state, provisioned modules, and the virtual servers with their pools
+```
+
+A working connection returns your BIG-IP version and modules, and lists virtual servers by full path, such as `/Common/app-vs`.
+
+### Example prompts
+
+```text
+Review the AFM policy /Common/edge-policy and flag rules that allow any source or are disabled
+Which members of /Common/app-pool are down, and how much traffic does each one carry?
+Disable pool member 10.0.1.12:443 in /Common/app-pool
+```
+
+## Troubleshooting
+
+The accordion titles below are the messages CloudThinker shows when the connection test fails.
+
+<Accordion title="BIG-IP rejected the username or password. Repeated failures lock the account.">
+Check the username and password in the BIG-IP Configuration utility before you try again. If the account is locked, an administrator can unlock it in **System → Users → User List**.
+</Accordion>
+
+<Accordion title="BIG-IP rejected token sign-in or system access. Check the user role and its authentication provider.">
+The user signed in but can't get a token or read system information. Check that the user has a role, such as **Auditor**, and that a remote authentication provider, if you use one, allows token sign-in.
+</Accordion>
+
+<Accordion title="The user cannot read module provisioning. Give it read access to the BIG-IP system inventory.">
+The role can't read **System → Resource Provisioning**. Give the user a role with read access to system settings, such as **Auditor**.
+</Accordion>
+
+<Accordion title="The management certificate is not trusted. Set Verify TLS certificate to No for a self-signed certificate.">
+The BIG-IP still uses its self-signed management certificate. Set **Verify TLS certificate** to **No**, or install a certificate from a trusted certificate authority.
+</Accordion>
+
+<Accordion title="Could not reach the management address over HTTPS.">
+CloudThinker couldn't reach the BIG-IP. Check the **Management URL**, the network path, and that the management interface accepts HTTPS from CloudThinker's egress IPs.
+</Accordion>
+
+<Accordion title="That address answered, but not as the BIG-IP iControl REST API. Use the management address root, with no path.">
+The **Management URL** points to something other than the BIG-IP management interface, or includes a path. Enter only `https://` and the management address.
+</Accordion>
+
+<Accordion title="BIG-IP answered with a redirect. Use the exact management https address.">
+Enter the exact `https://` management address, not an `http://` address or a load-balanced name that redirects.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- **Use a dedicated user.** Give CloudThinker its own BIG-IP user with no terminal access, so you can audit and revoke it on its own.
+- **Short-lived tokens.** CloudThinker exchanges the password for a temporary iControl REST token for each task and removes the token afterwards.
+- **Verify the certificate.** Treat **Verify TLS certificate: No** as a setting for BIG-IP's default certificate. Switch to **Yes** once the management interface has a trusted certificate.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Decide which changes run, wait for a person, or are refused
+  </Card>
+  <Card title="FortiGate Connection" icon="/images/icons/fortigate.svg" href="/guide/connections/fortigate">
+    Device health, traffic, and configuration on a FortiGate firewall
+  </Card>
+</CardGroup>
