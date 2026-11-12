@@ -1,0 +1,149 @@
+---
+title: Sonatype Nexus Repository
+description: "Connect Nexus Repository with a read-only account to inspect repositories, storage, tasks, and component versions."
+icon: "/images/icons/nexus.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+
+Connect Sonatype Nexus Repository so [CloudThinker](/guide/agents/overview) can check repository health, storage usage, task results, and component versions. The connection uses a **username and password**, or a **Nexus user token**, and only reads data.
+
+## Prerequisites
+
+- An existing self-hosted Nexus Repository 3 installation. This guide was verified with Community 3.96.5-05; Nexus Repository Cloud compatibility is unverified. For installation, follow [Sonatype's guide](https://help.sonatype.com/en/install-nexus-repository.html).
+- An HTTPS path from CloudThinker to Nexus. For CloudThinker Cloud, follow [Reaching private services](/guide/connections/overview#reaching-private-services). On a [self-hosted deployment of CloudThinker](/guide/deployment/overview), allow access from your CloudThinker deployment.
+- A Nexus administrator who can create a dedicated user and assign roles.
+- The **Admin** role in your CloudThinker workspace. See [Roles](/guide/security/roles).
+
+## Setup
+
+<Steps>
+  <Step title="Create a role for CloudThinker">
+    Ask your Nexus administrator to open **Settings → Security → Roles → Create Role** and select **Nexus role**. Enter a **Role ID** and **Role Name**, such as `cloudthinker-reader`.
+
+    Under **Privileges**, choose **Edit Privileges**, select the privileges in [Required permissions](#required-permissions), and click **Confirm**, then **Save**. Leave **Contained Roles** empty. See [Sonatype's role instructions](https://help.sonatype.com/en/roles.html).
+  </Step>
+  <Step title="Create a dedicated local user">
+    In Nexus, open **Settings → Security → Users**, select the **Local** source, and click **Create user**. Enter an **ID**, password, first and last name, and email. Set **Status** to **Active** and assign only the role you created.
+
+    Save the user and keep its ID and password securely. The ID is the username you enter in CloudThinker. See [Sonatype's user instructions](https://help.sonatype.com/en/users.html).
+  </Step>
+  <Step title="Add the connection in CloudThinker">
+    Open **More → Workspace settings → Connections**, stay on **Builtin Connections**, and select **Sonatype Nexus Repository**. Click **Connect** and fill in the four fields below, then click **Connect** in the dialog.
+
+    **Success state:** the connection shows a **Connected** status and reports how many repositories the user sees. This test checks repository access; run the verify prompt below to check storage, tasks, and system checks too.
+  </Step>
+</Steps>
+
+If Nexus is missing from **Builtin Connections**, [contact CloudThinker](https://cloudthinker.io/contact) to confirm availability.
+
+## Connection details
+
+| Field | Description | Example |
+|---|---|---|
+| **Nexus URL** | HTTPS address where Nexus answers directly, including any context path. Exclude credentials, query strings, fragments, and `/service/rest` | `https://repository.example.com/nexus` |
+| **Username or user token name** | The dedicated user's ID, or the name code from its user token | Your Nexus user ID |
+| **Password or user token passcode** | That user's password, or the matching token passcode | Your saved password |
+| **TLS certificate** | Keep **Verify (recommended)**, the default | **Verify (recommended)** |
+
+Use your repository address, not the `my.sonatype.com` portal. CloudThinker refuses redirects, so include `/nexus` only if your installation uses that path.
+
+For a self-signed certificate, **Skip SSL verification (self-signed)** keeps traffic encrypted but cannot verify the server's identity. Prefer a trusted certificate and verification; a publicly trusted HTTPS address needs no skip option. For a private certificate authority, contact CloudThinker.
+
+[User tokens](https://help.sonatype.com/en/user-tokens.html) require a licensed Nexus entitlement. If your administrator already supplies a Nexus user token, enter its separate name code and passcode in the matching fields. Otherwise, use the local-user credentials above.
+
+## Required permissions
+
+Assign these [Nexus privileges](https://help.sonatype.com/en/privileges.html) for the checks you need:
+
+| Privilege | Used for |
+|---|---|
+| `nx-repository-view-*-*-browse` | Repository inventory and component visibility |
+| `nx-repository-admin-*-*-read` | Reading repository settings |
+| `nx-search-read` | Component search |
+| `nx-blobstores-read` | Blob store usage and quotas |
+| `nx-tasks-read` | Task status and last results |
+| `nx-metrics-all` | System health checks; Sonatype defines this as all Metrics permissions |
+
+Replace repository wildcards with the formats and repositories CloudThinker should assess. On Nexus 3.57–3.75, search additionally requires repository-view **read**, which also allows downloads. From 3.76, browse plus search permission is sufficient; do not add download access by default.
+
+<Tip>
+Use a dedicated account, not an administrator. Privileges add together across roles: a narrow role cannot remove access granted by another role.
+</Tip>
+
+## Agent capabilities
+
+| Capability | What agents can read |
+|---|---|
+| **Health** | Whether Nexus accepts writes, failing system checks, offline repositories, and failed task results |
+| **Storage** | Blob store usage and quotas, when Nexus reports them |
+| **Repositories** | Format, hosted/proxy/group type, and settings such as storage, cleanup policies, proxy addresses, and group members |
+| **Components** | Names, versions, sizes, and last-modified or last-download times, when reported |
+
+Repository and component results follow the user's access. Lists are bounded; an incomplete search is not a full inventory. Missing size or download time means Nexus did not report it.
+
+Agents cannot change repositories, blob stores, cleanup policies, or tasks, run tasks, or delete components. Make those changes in Nexus. This connection does not provide vulnerability intelligence or upgrade recommendations; [Sonatype Guide](https://help.sonatype.com/en/automate-with-sonatype-guide.html) is a separate service.
+
+### Verify the connection
+
+```text
+Check Nexus Repository health, storage usage, repositories, and task results. Identify any failed checks or missing permissions.
+```
+
+Expect real repository and blob store names, with task results and health checks. A failed section is unavailable data, not an empty list.
+
+### Example prompts
+
+```text
+Which Nexus repositories are offline, and what storage do they use?
+Show the proxy address and cleanup policies for my Nexus Maven repository
+Find component versions in my Nexus repository and show their last download times when available
+```
+
+## Troubleshooting
+
+<Accordion title="Nexus rejected the username and password, or the user token.">
+Recheck both credential fields. For a token, use its name code and matching passcode, rather than your username or the combined base64 value.
+</Accordion>
+
+<Accordion title="The user signed in, but it cannot browse repositories. Give it nx-repository-view-*-*-browse.">
+Ask your Nexus administrator to grant browse access to the intended repositories. Keep the repository scope narrow, then connect again.
+</Accordion>
+
+<Accordion title="Nexus answered with a redirect. Use the exact address, including any /nexus path.">
+Enter the final HTTPS address Nexus serves directly. Preserve its context path, and leave off the REST API suffix.
+</Accordion>
+
+<Accordion title="That address has no Nexus REST API. Check the URL and any context path such as /nexus.">
+Confirm the address belongs to your Nexus Repository installation. Check the context path with its administrator. The Sonatype account portal is not a repository address.
+</Accordion>
+
+<Accordion title="The Nexus certificate is not trusted. Set TLS certificate to Skip SSL verification for a self-signed certificate.">
+Prefer a trusted certificate with **Verify (recommended)**. Use the skip option only after accepting the identity-verification trade-off explained above.
+</Accordion>
+
+<Accordion title="HTTP 403 during an investigation">
+Check which section failed and grant its permission from the table above. **Connected** confirms repository access, not every investigation permission. Retry the investigation after the role changes.
+</Accordion>
+
+<Accordion title="The Nexus URL must start with https://.">
+Enter the installation's HTTPS address. For connection timeouts, confirm CloudThinker can reach that address through your firewall; browser access from your laptop alone is insufficient.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- Keep the Nexus account limited to the repositories and checks you need, even though this connection exposes no changes.
+- Keep certificate verification on and restrict network access to the sources that need Nexus.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Connections overview" icon="plug" href="/guide/connections/overview">
+    Understand connection status, access, and credential rotation.
+  </Card>
+  <Card title="Jenkins" icon="/images/icons/jenkins.svg" href="/guide/connections/jenkins">
+    Investigate the builds that publish your components.
+  </Card>
+</CardGroup>
