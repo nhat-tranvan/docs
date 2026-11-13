@@ -1,0 +1,202 @@
+---
+title: dbt
+description: "dbt Cloud または dbt Core プロジェクトを接続して、エージェントが失敗したランの説明、リネージの追跡、モデルのプレビューを行えるようにします"
+icon: "/images/icons/dbt.svg"
+---
+
+import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+
+**dbt** を接続すると、CloudThinker のエージェントが何も実行することなく、失敗したジョブランの説明、モデルのリネージの追跡、モデルの健全性の確認、コンパイル済み SQL の読み取りを行えるようになります。**Cloud** タブではアクセストークンで dbt Cloud アカウントを接続し、**Self-host** タブでは Git リポジトリと読み取り専用のウェアハウスユーザーで dbt Core プロジェクトを接続します。
+
+<Note>
+dbt はまだ一般提供されていません。利用するには [CloudThinker にお問い合わせ](https://cloudthinker.io/contact)ください。**Self-host** は dbt Core を指し、CloudThinker のセルフホストデプロイメントではありません。
+</Note>
+
+## 前提条件
+
+- **Cloud**：Starter、Enterprise、または Enterprise+ プランの dbt アカウントと、本番環境。メトリクスに関する質問には、[dbt Semantic Layer](https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl) のセットアップも必要です。
+- **Self-host**：GitLab または GitHub のリポジトリにあり、HTTPS で提供され、**PostgreSQL** にビルドする dbt Core プロジェクト。Self-host タブが対応するウェアハウスは PostgreSQL のみです。
+- **Self-host のネットワークアクセス**：CloudThinker がインターネット経由で Git ホストと PostgreSQL のポートに到達できる必要があります。[プライベートなサービスに到達する](/ja/guide/connections/overview#プライベートなサービスに到達する)を参照してください。
+
+## セットアップ
+
+<Tabs>
+  <Tab title="Cloud">
+    <Steps>
+      <Step title="Access URL をコピーする">
+        dbt で **Account settings** を開き、**Access URLs** を探します。アカウントの URL のホスト部分（`cloud.getdbt.com` や `ab123.us1.dbt.com` など）を、`https://` を付けずにコピーします。
+
+        CloudThinker はトークンを `getdbt.com` と `dbt.com` のホストにのみ送信します。アカウントが別のドメインを使用している場合は、[CloudThinker にお問い合わせ](https://cloudthinker.io/contact)ください。
+      </Step>
+      <Step title="アクセストークンを作成する">
+        作成できるトークンは dbt のプランによって異なります：
+
+        - **Enterprise または Enterprise+**：**Account settings → Service Tokens** を開き、**+ Create service token** をクリックします。**Job Viewer** と **Metadata Only** の権限セットを追加し、エージェントにメトリクスの質問に回答させる場合は **Semantic Layer Only** も追加します。**Save** をクリックしてトークンをコピーします。dbt がトークンを表示するのは一度だけです。
+        - **Starter**：**Account settings → API tokens → Personal tokens** を開き、**Create personal access token** をクリックします。パーソナルトークンは作成したユーザーの権限を持つため、可能であれば読み取り専用アクセスのユーザーで作成してください。
+
+        dbt の [サービストークン](https://docs.getdbt.com/docs/dbt-cloud-apis/service-tokens) と [パーソナルアクセストークン](https://docs.getdbt.com/docs/dbt-cloud-apis/user-tokens) のガイドを参照してください。
+      </Step>
+      <Step title="本番環境の ID をコピーする">
+        **Orchestration → Environments** に移動し、本番環境をクリックします。ページ URL の `/environments/` の後ろにある数値だけをコピーします。
+      </Step>
+      <Step title="CloudThinker で接続を追加する">
+        **More → Workspace settings → Connections** を開き、**dbt** を選択して **Connect** をクリックします。**Cloud** を選び、[接続の詳細](#接続の詳細)のフィールドを入力して **Connect** をクリックします。
+
+        **成功状態:** 接続が **Connected** ステータスで表示されます。
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Self-host">
+    <Steps>
+      <Step title="リポジトリの読み取りトークンを作成する">
+        <Tabs>
+          <Tab title="GitLab">
+            プロジェクトで **Settings → Repository** を開き、**Deploy tokens** を展開して **Add token** をクリックします。`read_repository` スコープだけを選択し、**Create deploy token** をクリックします。生成されたユーザー名（`gitlab+deploy-token-1` など）とトークンをコピーします。[GitLab のデプロイトークン](https://docs.gitlab.com/user/project/deploy_tokens/)を参照してください。
+          </Tab>
+          <Tab title="GitHub">
+            **Settings → Developer settings → Personal access tokens → Fine-grained tokens** を開き、**Generate new token** をクリックします。**Repository access** で **Only select repositories** を選んで dbt リポジトリを指定し、そのリポジトリへの読み取り専用アクセスをトークンに付与します。このトークンには自分の GitHub ユーザー名を使用します。[GitHub の Fine-grained トークン](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)を参照してください。
+          </Tab>
+        </Tabs>
+      </Step>
+      <Step title="読み取り専用の PostgreSQL ユーザーを作成する">
+        管理者として接続し、モデルとソースが存在するスキーマへの読み取りアクセスをユーザーに付与します。この例では `analytics` を使用します：
+
+        ```sql
+        CREATE ROLE cloudthinker_dbt WITH LOGIN PASSWORD '<secure-password>';
+        GRANT CONNECT ON DATABASE your_database TO cloudthinker_dbt;
+        GRANT USAGE ON SCHEMA analytics TO cloudthinker_dbt;
+        GRANT SELECT ON ALL TABLES IN SCHEMA analytics TO cloudthinker_dbt;
+        ```
+
+        これ以外は付与しないでください。dbt はコンパイル時にプロジェクトのフックを実行するため、読み取り専用ユーザーにしておけばフックによるデータ変更を防げます。
+      </Step>
+      <Step title="ネットワークアクセスを開放する">
+        CloudThinker が HTTPS で Git ホストに、また PostgreSQL のポート（デフォルト `5432`）に到達できるよう許可します。このドキュメントでは CloudThinker の egress IP の一覧を公開していません。CloudThinker の担当者に尋ねるか、[お問い合わせ](https://cloudthinker.io/contact)ください。
+      </Step>
+      <Step title="CloudThinker で接続を追加する">
+        **More → Workspace settings → Connections** を開き、**dbt** を選択して **Connect** をクリックします。**Self-host** を選び、[接続の詳細](#接続の詳細)のフィールドを入力して **Connect** をクリックします。
+
+        **成功状態:** 接続が **Connected** ステータスで表示されます。初回の接続では、CloudThinker がリポジトリをクローンしてプロジェクトのパッケージをインストールするため、2 分ほどかかることがあります。
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+保存済みの接続を編集しても、元のタイプは変わりません。もう一方のタブを使うには、2 つ目の接続を追加してください。
+
+## 接続の詳細
+
+| Cloud のフィールド | 必須 | 入力内容 |
+|---|---|---|
+| **Access URL** | はい | **Account settings → Access URLs** にあるホスト（`cloud.getdbt.com` など） |
+| **Access token** | はい | 作成したサービストークンまたはパーソナルアクセストークン |
+| **Production environment ID** | はい | 本番環境の URL で `/environments/` の後ろにある数値。モデル、ソース、リネージ、メトリクスの読み取りに使用されます |
+
+| Self-host のフィールド | 必須 | 入力内容 |
+|---|---|---|
+| **Git repository URL** | はい | HTTPS のクローン URL（`https://gitlab.com/acme/analytics.git` など）。ユーザー名やトークンは含めません |
+| **Repository username** | はい | GitLab のデプロイトークンのユーザー名、または自分の GitHub ユーザー名。デフォルトは `oauth2` |
+| **Repository read token** | はい | デプロイトークンまたは Fine-grained トークン |
+| **Branch or tag** | いいえ | 空欄にするとデフォルトブランチを読み取ります |
+| **Project folder** | いいえ | `dbt_project.yml` を含むフォルダ（リポジトリのルートからの相対パス）。ルートにある場合は空欄にします |
+| **Warehouse** | はい | **PostgreSQL** |
+| **Warehouse host** | はい | ホスト名または IP アドレス。ポートは含めません |
+| **Warehouse port** | はい | デフォルトは `5432` |
+| **Database** | はい | プロジェクトのビルド先データベース |
+| **Schema** | はい | 本番モデルのビルド先スキーマ。コンパイル済み SQL とプレビューは、このスキーマに対して `ref()` を解決します |
+| **Warehouse user** | はい | 読み取り専用ユーザー |
+| **Warehouse password** | はい | そのユーザーのパスワード |
+
+## 必要な権限
+
+| タブ | エージェントにさせたいこと | アクセス |
+|---|---|---|
+| **Cloud** | ジョブ、ラン、ログ、ランのアーティファクトの読み取り | サービストークンの **Job Viewer** |
+| **Cloud** | モデル、ソース、エクスポージャー、リネージの読み取り | サービストークンの **Metadata Only** |
+| **Cloud** | メトリクスの質問への回答 | サービストークンの **Semantic Layer Only** |
+| **Self-host** | プロジェクトの読み取り | GitLab デプロイトークンの `read_repository`、または GitHub Fine-grained トークンでの 1 リポジトリへの読み取りアクセス |
+| **Self-host** | モデルのコンパイルと行のプレビュー | スキーマへの `USAGE` とテーブルへの `SELECT` |
+
+パーソナルアクセストークンは、これらの権限セットではなく、そのユーザーの権限を持ちます。
+
+<Tip>
+サービストークンには上記の権限セットだけを、ウェアハウスユーザーには `USAGE` と `SELECT` だけを付与してください。どちらにも書き込みや管理者のアクセスは必要ありません。
+</Tip>
+
+## エージェントの機能
+
+| タブ | エージェントができること | 範囲 |
+|---|---|---|
+| **Cloud** | プロジェクト、ジョブ、ランの一覧表示と、ランのステータス、エラー、ログ、アーティファクトの読み取り | 読み取り専用 |
+| **Cloud** | モデル、ソース、エクスポージャー、マクロの読み取り、リネージの追跡、モデルの健全性と実行時間の確認 | 本番環境を使用 |
+| **Cloud** | メトリクス、ディメンション、保存済みクエリの一覧表示、メトリクスの SQL の表示、メトリクスのクエリ | Semantic Layer が必要。メトリクスのクエリはウェアハウスで実行され、ウェアハウス側で課金されます |
+| **Self-host** | プロジェクトのパースと一覧表示、リネージの追跡、ノード詳細の読み取り | 設定したブランチを読み取ります。ラン履歴はありません |
+| **Self-host** | モデルの SQL へのコンパイルと行のプレビュー | 1 回のプレビューにつき最大 100 行 |
+
+### 接続を確認する
+
+```text
+orders モデルの上流と下流のリネージを見せて
+```
+
+`orders` に入力しているモデルとソース、および `orders` からビルドされるモデルが返ることを確認します。不明なモデルのエラーが返る場合は、名前が間違っているか、モデルが本番環境または設定したブランチに存在しません。
+
+### プロンプト例
+
+```text
+nightly ジョブの直近のランが失敗したのはなぜ
+customers モデルは健全か、またそのランにはどれくらい時間がかかっているか
+orders モデルのコンパイル済み SQL を表示して、5 行プレビューして
+```
+
+## 書き込みアクセス
+
+dbt 接続は読み取り専用です。エージェントは dbt Cloud のジョブを実行、再試行、キャンセルできず、dbt Core プロジェクトに対して run、build、test、seed、snapshot も実行できません。CloudThinker がリポジトリにプッシュすることはありません。
+
+## トラブルシューティング
+
+<Accordion title="The provider rejected these credentials">
+dbt がトークンを拒否しました。**Access URL** がアカウントのホストであること、トークンが期限切れや取り消しになっていないこと、サービストークンが **Job Viewer** と **Metadata Only** を持っていることを確認してください。新しいトークンを作成して接続し直してください。
+</Accordion>
+
+<Accordion title="モデル、リネージ、メトリクスの質問が失敗する">
+**Production environment ID** が間違っているか、数値ではありません。本番環境の URL から `/environments/` の後ろにある数値だけをコピーしてください。
+</Accordion>
+
+<Accordion title="メトリクスの質問で有用な結果が返らない">
+アカウントで Semantic Layer がセットアップされていないか、トークンに **Semantic Layer Only** がありません。ジョブ、モデル、リネージの質問はこれがなくても動作します。
+</Accordion>
+
+<Accordion title="could not clone the repository; check the URL, branch, username, and token">
+CloudThinker がリポジトリを読み取れませんでした。URL が `https://` で始まっていること、ブランチまたはタグが存在すること、ユーザー名がトークンと一致していること（GitLab デプロイトークン自体のユーザー名、または自分の GitHub ユーザー名）、トークンがそのリポジトリを読み取れることを確認してください。URL にユーザー名やトークンが含まれている場合は削除し、**Repository username** と **Repository read token** のフィールドを使用してください。
+</Accordion>
+
+<Accordion title="dbt_project.yml not found in the project folder">
+**Project folder** に、`dbt_project.yml` を含むフォルダをリポジトリのルートからの相対パス（`analytics` など）で設定してください。ファイルがルートにある場合は空欄にします。
+</Accordion>
+
+<Accordion title="The tools for this connection took too long to start">
+Self-host の初回接続ではリポジトリのクローンとパッケージのインストールを行うため、数分かかることがあります。1 分ほど待ってから接続し直してください。
+</Accordion>
+
+<Accordion title="コンパイルまたはプレビューがデータベースエラーで失敗する">
+CloudThinker が PostgreSQL に到達できないか、ユーザーにアクセス権がありません。ホスト、ポート、データベース、パスワード、ファイアウォールが CloudThinker を許可していること、そしてモデルが読み取るスキーマに対してユーザーが `USAGE` と `SELECT` を持っていることを確認してください。
+</Accordion>
+
+## セキュリティ
+
+<ConnectionSecurity />
+
+- **読み取り専用のウェアハウスユーザーを使う** — プレビューはこのユーザーとして `SELECT` クエリを実行し、dbt はコンパイル時にプロジェクトのフックを実行します。`USAGE` と `SELECT` だけを付与してください。
+- **リポジトリトークンの範囲を絞る** — 1 つの dbt リポジトリだけを読み取れる GitLab デプロイトークンまたは GitHub Fine-grained トークンを使用してください。
+
+## 関連
+
+<CardGroup cols={2}>
+  <Card title="PostgreSQL" icon="/images/icons/postgresql.svg" href="/ja/guide/connections/postgresql">
+    読み取り専用ユーザーでウェアハウスに直接接続します。
+  </Card>
+  <Card title="接続の概要" icon="plug" href="/ja/guide/connections/overview">
+    すべての接続と、CloudThinker がプライベートなサービスに到達する方法を確認します。
+  </Card>
+</CardGroup>
