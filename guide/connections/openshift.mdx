@@ -1,0 +1,221 @@
+---
+title: Red Hat OpenShift
+description: "Connect Red Hat OpenShift with a read-only service account so agents can check cluster version, operators, nodes, failing pods, and routes"
+icon: "/images/icons/openshift.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+
+Connect a Red Hat OpenShift cluster so CloudThinker agents can report its version and available updates, find degraded cluster operators, check node readiness, catch crash-looping and failing pods, and review how routes are exposed. The connection uses a **service account token** bound to OpenShift's `cluster-reader` role, and is **read-only by design**: agents can describe the cluster and cannot change it.
+
+<Note>
+Red Hat OpenShift is available on [self-hosted deployments](/guide/deployment/overview) of CloudThinker. To use it on CloudThinker Cloud, [contact us](https://cloudthinker.io/contact).
+</Note>
+
+## Prerequisites
+
+- An HTTPS path from CloudThinker to the cluster's API server, usually on port `6443`. On a [self-hosted deployment](/guide/deployment/overview), allow your CloudThinker deployment. On CloudThinker Cloud, allow CloudThinker's egress IPs: these docs don't publish the list, so ask your CloudThinker contact, or [contact us](https://cloudthinker.io/contact). See [Reaching private services](/guide/connections/overview#reaching-private-services).
+- The `oc` command-line tool, signed in to the cluster as a user who can create service accounts and bind cluster roles, such as a cluster administrator.
+- The **Admin** role in your CloudThinker workspace, which can add and edit connections. See [Roles](/guide/security/roles).
+
+## Setup
+
+<Steps>
+  <Step title="Create a service account">
+    Create a project for CloudThinker and a service account in it, instead of reusing a person's account:
+
+    ```bash
+    oc create namespace cloudthinker
+    oc create serviceaccount cloudthinker-reader -n cloudthinker
+    ```
+  </Step>
+  <Step title="Grant read access">
+    Bind the service account to the `cluster-reader` cluster role, which can view most objects in the cluster but can't modify them:
+
+    ```bash
+    oc adm policy add-cluster-role-to-user cluster-reader system:serviceaccount:cloudthinker:cloudthinker-reader
+    ```
+
+    To limit agents to a few projects instead, see [Required permissions](#required-permissions).
+  </Step>
+  <Step title="Create a token">
+    <Tabs>
+      <Tab title="Token with an expiry">
+        ```bash
+        oc create token cloudthinker-reader -n cloudthinker --duration=2160h
+        ```
+
+        The command prints the token. `2160h` asks for 90 days, but the cluster can return a token with a shorter or longer lifetime. When the token expires, the connection stops working: create a new one and enter it in the connection.
+      </Tab>
+      <Tab title="Long-lived token">
+        Since OpenShift 4.16, a service account no longer gets a token secret automatically. To create one that doesn't expire, save this as `cloudthinker-reader-token.yaml`:
+
+        ```yaml
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: cloudthinker-reader-token
+          namespace: cloudthinker
+          annotations:
+            kubernetes.io/service-account.name: cloudthinker-reader
+        type: kubernetes.io/service-account-token
+        ```
+
+        Apply it and read the token:
+
+        ```bash
+        oc apply -f cloudthinker-reader-token.yaml
+        oc get secret cloudthinker-reader-token -n cloudthinker -o jsonpath='{.data.token}' | base64 --decode
+        ```
+
+        Red Hat advises this only when a non-expiring token stored in a readable object is acceptable to you. Delete the secret to revoke the token.
+      </Tab>
+    </Tabs>
+  </Step>
+  <Step title="Get the API server address and CA certificate">
+    Print the API server address of the cluster `oc` is signed in to:
+
+    ```bash
+    oc config view --minify -o jsonpath='{.clusters[0].cluster.server}'
+    ```
+
+    By default, an internal OpenShift CA issues the API server's certificate, so CloudThinker can't verify it without that CA. Print the CA certificate from your `oc` configuration:
+
+    ```bash
+    oc config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}' | base64 --decode
+    ```
+
+    If the command prints nothing, ask your cluster administrator for the certificate of the CA that issued the API server's certificate. If the API server uses a certificate from a publicly trusted CA, you can skip this.
+  </Step>
+  <Step title="Add the connection in CloudThinker">
+    In the sidebar, click **More → Workspace settings → Connections**. On the **Builtin Connections** tab, search for **Red Hat OpenShift** and click **Connect**. Fill in the fields from [Connection details](#connection-details) and click **Connect**.
+
+    CloudThinker tests the token by reading the cluster version.
+
+    **Success state:** the message reads `Red Hat OpenShift connected; the cluster runs <version>.` and the connection shows **Connected**.
+  </Step>
+</Steps>
+
+## Connection details
+
+| Field | Required | Description | Example |
+|-------|----------|-------------|---------|
+| **API server URL** | Yes | The cluster API address, `https://` with the port and no path | `https://api.prod.example.com:6443` |
+| **Service account token** | Yes | The token from the token step, with no quotes or line breaks | `<your-token>` |
+| **Cluster CA certificate** | No | The PEM certificate of the CA that issued the API server's certificate, including the `BEGIN` and `END` lines | `-----BEGIN CERTIFICATE-----...` |
+
+TLS verification always stays on, because the token travels with every request. Leave **Cluster CA certificate** empty only when the API server's certificate comes from a publicly trusted CA. CloudThinker doesn't follow redirects, so enter the address the API server answers on directly.
+
+## Required permissions
+
+The token sees exactly what its service account can read. Pick one:
+
+| Access | Grant | What agents can read |
+|--------|-------|----------------------|
+| **Whole cluster** (recommended) | `cluster-reader` cluster role | Everything in [Agent capabilities](#agent-capabilities) |
+| **Some projects** | `view` role in each project, plus read access to the cluster version | Most objects in those projects, such as pods and routes, and the cluster version. Not cluster operators or nodes |
+
+For project access, run this once per project, replacing `<project>`:
+
+```bash
+oc policy add-role-to-user view system:serviceaccount:cloudthinker:cloudthinker-reader -n <project>
+```
+
+The connection test reads the cluster version, which belongs to the cluster rather than to a project. If **Connect** shows `The service account cannot read the cluster version.`, grant that one read:
+
+```bash
+oc create clusterrole cloudthinker-cluster-version --verb=get --resource=clusterversions.config.openshift.io
+oc adm policy add-cluster-role-to-user cloudthinker-cluster-version system:serviceaccount:cloudthinker:cloudthinker-reader
+```
+
+With project access, agents name every part of the cluster they couldn't read, such as nodes and cluster operators, instead of reporting it as empty.
+
+<Tip>
+Never bind the service account to an edit or admin role. The connection has no way to send a change, so write access only adds risk if the token leaks.
+</Tip>
+
+## Agent capabilities
+
+| Capability | What agents do |
+|------------|----------------|
+| **Cluster overview** | Report the cluster version, update channel, available updates, and whether an update is running or failing |
+| **Cluster operators** | List degraded, unavailable, or progressing operators, or show one operator's conditions and related objects |
+| **Nodes** | List nodes with readiness and cordon state, and name the nodes that aren't ready (up to 300) |
+| **Failing pods** | Find pods in CrashLoopBackOff, not ready, restarted in the last hour, Pending, or Failed (up to 500) |
+| **Routes** | List routes with their host, service, TLS termination, plain HTTP policy, and admission (up to 500), by project or host |
+
+When a token can't list pods across the cluster, agents scan up to 10 of the projects it can see, and you can ask about one project by name. A count ending in **+** means more exist than the agent read. Agents read the cluster live for every answer and don't store its state.
+
+Agents can't upgrade the cluster, cordon nodes, scale or restart workloads, or edit routes. Ask for a change and the agent tells you to make it with `oc` or the OpenShift web console.
+
+### Verify the connection
+
+```text
+Summarize my OpenShift cluster: version, available updates, unhealthy operators, nodes that aren't ready, and failing pods
+```
+
+**Expected result:** the full cluster version, any available updates, and the operators, nodes, and pods that need attention, each by name.
+
+### Example prompts
+
+```text
+Which pods in the payments project are crash-looping on OpenShift?
+Why is the authentication cluster operator degraded?
+List OpenShift routes that allow plain HTTP
+```
+
+Replace `payments` with one of your projects.
+
+## Troubleshooting
+
+Except for the last one, the accordion titles below are the exact messages CloudThinker shows when the connection test fails.
+
+<Accordion title="The API server's certificate is not trusted. Add the cluster CA certificate to the connection.">
+The API server uses a certificate from a CA that CloudThinker doesn't trust, which is the default on OpenShift. Paste the CA certificate from [Get the API server address and CA certificate](#setup) into **Cluster CA certificate**, then connect again.
+</Accordion>
+
+<Accordion title="The cluster CA certificate is not a valid PEM certificate.">
+Paste the certificate as PEM text, including the `-----BEGIN CERTIFICATE-----` and `-----END CERTIFICATE-----` lines. If you copied `certificate-authority-data`, decode it with `base64 --decode` first.
+</Accordion>
+
+<Accordion title="OpenShift rejected the token. Create a new service account token.">
+The token expired, was revoked, or was copied incompletely. Create a new token as in the token step, and paste it as one line into **Service account token**.
+</Accordion>
+
+<Accordion title="The service account cannot read the cluster version. Bind it to the cluster-reader cluster role.">
+The token works, but its service account can't read the cluster version. Bind `cluster-reader`, or for project access grant the cluster version read in [Required permissions](#required-permissions), then connect again.
+</Accordion>
+
+<Accordion title="Could not reach the API server. Check the URL and port.">
+Check the **API server URL**, including the port (usually `6443`), and that the network path in [Prerequisites](#prerequisites) is open.
+</Accordion>
+
+<Accordion title="Enter the API server URL, for example https://api.prod.example.com:6443.">
+Enter only the `https://` address and port, with no path. The web console address is not the API server: print the right one with the `oc config view` command in [Setup](#setup).
+</Accordion>
+
+<Accordion title="That address answered, but not as an OpenShift API server.">
+The address reached something other than the OpenShift API, such as the web console or a load balancer page. The same fix applies to `That API server has no OpenShift cluster version. Is it OpenShift?`, which also appears for a plain Kubernetes cluster: use the [Kubernetes connection](/guide/connections/kubernetes) for those. If the message starts `OpenShift answered` and mentions a redirect code, enter the address the API server answers on directly.
+</Accordion>
+
+<Accordion title="An agent says it can't read nodes or cluster operators">
+The service account has project access only. Bind `cluster-reader` to read nodes and cluster operators, or ask about a project the service account can read.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- **Use a dedicated read-only service account with an expiring token.** You can revoke it without affecting other tools, and a leaked token stops working on its own.
+- **Token stays on your API server.** CloudThinker sends the token only to the **API server URL** you enter, always verifies the server's certificate, and never follows a redirect.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Kubernetes" icon="/images/icons/kubernetes.svg" href="/guide/connections/kubernetes">
+    Inspect workloads, rollouts, logs, and node pressure in other clusters
+  </Card>
+  <Card title="Rancher" icon="/images/icons/rancher.svg" href="/guide/connections/rancher">
+    List managed clusters, projects, and nodes, and review who has access
+  </Card>
+</CardGroup>
