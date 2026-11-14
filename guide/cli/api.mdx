@@ -1,0 +1,73 @@
+---
+title: CLI for the Public API
+description: "Use cloudthinker api to call any Public API operation from a terminal or script, with paging, writes and JSON output."
+icon: brackets-curly
+---
+
+`cloudthinker api` calls any [Public API](/guide/api/overview) operation and prints the JSON response. It uses your CLI login, or the token in `CLOUDTHINKER_TOKEN`, so scripts need no `curl` headers.
+
+## Prerequisites
+
+- The [CloudThinker CLI](/guide/cli/overview) installed, and either logged in or with `CLOUDTHINKER_TOKEN` set to an [API token](/guide/api/tokens).
+- [jq](https://jqlang.org) for the scripted examples.
+
+## Read data
+
+Name the operation as `<module>.<resource>.<verb>`. Query parameters become flags:
+
+```bash
+cloudthinker api review.reviews.list --limit 5
+cloudthinker api resolve.incidents.get <incident-id>
+```
+
+`--all` follows every page and prints all items, up to 10,000. Use it only when you need everything; each page counts against your [rate limit](/guide/api/errors#rate-limits). The CLI doesn't retry a `429`: wait for the `Retry-After` time, then run the command again.
+
+```bash
+cloudthinker api resolve.incidents.list --all | jq -r '.items[] | "\(.severity) \(.title)"'
+```
+
+The module form `cloudthinker <module> <resource> <verb>` runs the same operation, for example `cloudthinker review reviews list --limit 5`.
+
+To see every operation, run `cloudthinker api --list`. It prints each operation's command, name, method and scope; add `--json` for a JSON table.
+
+You can also name the method and path instead of the operation. The path must match a Public API operation. On this form, pass each query parameter as `--query NAME=VALUE`, repeated as needed:
+
+```bash
+cloudthinker api GET /v1/workspaces/<workspace-id>/resolve/incidents --query status=OPEN
+```
+
+## Write data
+
+| Flag | Use |
+| --- | --- |
+| `--body JSON`, `--body @file.json`, `--body -` | Send the request body inline, from a file or from stdin |
+| `--set KEY=VALUE` | Set one body field without writing JSON |
+| `--key KEY` | The `Idempotency-Key`. Without it, the CLI sends a fresh one. Pass your own so a retried script step doesn't repeat the write. |
+| `--etag ETAG` | The `If-Match` value from your last read, required to update a resource. A read prints it on stderr as `ETag: …`. |
+| `--yes`, `-y` | Skip the `[y/N]` question on an operation that asks first. Without a terminal, the CLI refuses such an operation unless you pass `--yes` (exit code 2). |
+
+```bash
+# Start a chat run
+cloudthinker api chat.runs.create --set prompt="Summarize open high-severity incidents" --key nightly-2026-11-13
+
+# Resolve an incident only if nobody changed it since you read it
+etag=$(cloudthinker api resolve.incidents.get <incident-id> 2>&1 >/dev/null | sed -n 's/^ETag: //p')
+cloudthinker api resolve.incidents.update <incident-id> --set status=RESOLVED --etag "$etag"
+```
+
+## Pick the workspace
+
+A CLI login and an API token each cover one workspace, and `api` calls that workspace. A call to any other workspace returns `404`.
+
+To call another workspace with a login, log in to it once, then pick it with the global `--workspace` before the command: `cloudthinker --workspace Production api review.releases.list`. With `CLOUDTHINKER_TOKEN`, use a token for that workspace instead. Don't set `--workspace` or `CLOUDTHINKER_WORKSPACE` beside the token: the command exits with code 2.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Use CloudThinker in CI/CD" icon="code-branch" href="/guide/api/ci-cd">
+    Run these calls from a pipeline with a service account.
+  </Card>
+  <Card title="CLI Reference" icon="book" href="/guide/cli/reference">
+    Every command, flag and exit code.
+  </Card>
+</CardGroup>

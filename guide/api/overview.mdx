@@ -1,405 +1,52 @@
 ---
-title: Developer Integrations
-description: "Choose how your systems and tools talk to CloudThinker today: A2A, webhooks, the Claude connector, SCIM and the CLI"
+title: Public API
+description: "Read incidents, reviews, costs and findings, and start agent runs, from your own code with an API token."
 icon: code
 ---
 
-CloudThinker has no general REST API for reading resources or recommendations; if you need one, email support@cloudthinker.io with your use case. It does have five supported ways for outside code to reach your workspace, each for a different job, listed below.
+import ApiAreas from '/snippets/api-areas.mdx';
 
-## Pick an integration
+The CloudThinker Public API is a REST API that reads and acts on one workspace with an API token. A token carries the scopes you pick and never does more than your workspace role allows.
 
-| You want to | Use | Who sets it up |
-| --- | --- | --- |
-| Let an outside system (for example ServiceNow) ask a CloudThinker agent a question and read the answer | [A2A API for outside callers](#a2a-api-for-outside-callers) | A workspace **Developer** or **Admin**, on Scale or Enterprise |
-| Have an external system run an Automation, or send an alert to Resolve that can open an incident, with one POST | [Webhooks](/guide/webhooks/overview) | A workspace **Admin** (both kinds) |
-| Read incidents, costs, code reviews and security findings from a Claude chat, and start agent runs there (starting runs needs the Developer or Admin role; see [What Claude can do](/guide/mcp/overview#what-claude-can-do)) | [Claude connector](/guide/mcp/overview) | Each user, after a Claude organization owner adds it on Team or Enterprise |
-| Add, suspend and remove CloudThinker members from Okta or Microsoft Entra ID | [SCIM provisioning](/guide/security/scim) | The organization **Owner**, on Scale or Enterprise |
-| Run CloudThinker from a terminal, a shell script or a CI pipeline | [CLI](/guide/cli/overview) | Any user with a CloudThinker login |
+New here? The [quickstart](/guide/api/quickstart) takes you from a token to your first call in about five minutes.
 
-<Note>
-Webhooks are inbound only. CloudThinker doesn't POST events to your endpoints. To send results outward, use [notifications](/guide/notifications), [Slack](/guide/slack-integration) or [Microsoft Teams](/guide/teams-integration).
-</Note>
+## What you can call
 
-## A2A API for outside callers
+<ApiAreas />
 
-The A2A API lets a system outside CloudThinker ask one agent a question over the [Agent2Agent (A2A) protocol](https://a2a-protocol.org). The caller authenticates with the OAuth 2.0 client credentials grant, so no person has to log in.
+Each call needs one scope, and your workspace role must allow it. Every endpoint page names its scope; [API Tokens](/guide/api/tokens#scopes) explains how scopes work. See [Approvals for API Runs](/guide/api/approvals#start-a-run-and-get-its-answer) to start an agent run and read its answer.
 
-A typical case: your platform team wants ServiceNow to ask CloudThinker about an incident. You register ServiceNow as an outside caller, pick the agent that answers, and ServiceNow sends its questions to the agent URL.
+To call CloudThinker another way, use the [CloudThinker CLI](/guide/cli/api), the [Claude Connector](/guide/mcp/overview), the [A2A API](/guide/api/a2a) for an outside system such as ServiceNow, [Webhooks](/guide/webhooks/overview), or [SCIM provisioning](/guide/security/scim) for Okta and Microsoft Entra ID.
 
-### Before you start
+## How it works
 
-- The organization is on **Scale** or **Enterprise**. See [Pricing](/guide/billing/pricing).
-- You have the **Developer** or **Admin** workspace role, which can edit agents. See [Workspace users](/guide/workspace-users).
-- You know which agent should answer: CloudThinker itself or one of your Custom Agents. Each outside caller is tied to one agent in one workspace.
+- **Base URL:** `https://app.cloudthinker.io/api/public`. Paths look like `/v1/workspaces/<workspace-id>/{module}/{resource}`.
+- **Authentication:** send `Authorization: Bearer <token>` with a personal (`ct_pat_…`), service account (`ct_sat_…`) or OAuth (`ct_oat_…`) token, or a CLI login. Each token works in one workspace; `GET /v1/token` returns its workspace ID, scopes and expiry.
+- **Format:** JSON in and out, UTF-8. A body field the operation doesn't define returns `422`. The OpenAPI 3.1 contract is at `https://app.cloudthinker.io/api/public/v1/openapi.json`, no token needed.
+- **Paging:** list calls take `limit` (1–100, default 20) and `cursor`. A page is `{"items": [...], "next_cursor": "..."}`; pass `next_cursor` back as `cursor` until it is `null`. Keep `limit` and filters the same; a changed query returns `400` `invalid_cursor`.
+- **Writes:** every `POST` needs an `Idempotency-Key` header. See [API Errors](/guide/api/errors#retry-safe-writes).
+- **Versions:** every path starts with the version, `v1`. A breaking change ships as a new version. Within `v1`, new fields and operations can appear, so ignore response fields you don't recognize.
 
-### Register an outside caller
-
-<Steps>
-  <Step title="Open the sharing settings">
-    Go to **Agents → Sharing → Outside callers**.
-  </Step>
-  <Step title="Add the caller">
-    Click **Add an outside caller**. Enter a **Name** your team will recognize (for example "ServiceNow"), pick the **Agent that answers**, and optionally set a **Monthly credit limit**. Leave the limit empty for no limit. Click **Create client**.
-  </Step>
-  <Step title="Copy the credentials">
-    CloudThinker shows four values: **Client ID**, **Client secret**, **Token URL** and **Agent URL**. Copy the secret now. It's shown once, and CloudThinker keeps only a hash of it.
-
-    The two URLs look like this:
-
-    ```text
-    Token URL: https://app.cloudthinker.io/api/a2a/oauth/token
-    Agent URL: https://app.cloudthinker.io/api/a2a
-    ```
-
-    Every caller uses the same agent URL. The token decides which workspace and agent answer.
-  </Step>
-  <Step title="Store them in the calling system">
-    Put the client ID and secret in the outside system's secret store, next to the token URL and agent URL.
-  </Step>
-</Steps>
-
-### Get a token and ask a question
-
-The flow has three calls:
-
-```text
-Caller ── POST /api/a2a/oauth/token (Basic client_id:secret) ──► access token, valid 1 hour
-Caller ── SendMessage (Bearer token) ──► agent URL ──► agent run starts
-Caller ◄── GetTask (Bearer token) ── task state and the answer
-```
-
-<Steps>
-  <Step title="Request a token">
-    POST to the token URL with HTTP Basic auth (client ID as the user, secret as the password) and the `client_credentials` grant.
-
-    ```bash
-    curl -X POST "$TOKEN_URL" \
-      -u "$CLIENT_ID:$CLIENT_SECRET" \
-      -d grant_type=client_credentials
-    ```
-
-    A successful response:
-
-    ```json
-    {"access_token": "eyJ...", "token_type": "Bearer", "expires_in": 3600}
-    ```
-
-    The token is valid for 1 hour. Request a new one when it expires. Errors use the OAuth 2.0 (RFC 6749) format, for example `{"error": "invalid_client", "error_description": "..."}`.
-  </Step>
-  <Step title="Send the question">
-    POST a JSON-RPC 2.0 `SendMessage` request to the agent URL with the token as a Bearer token. Give each question a unique `messageId`. Resending the same `messageId` returns the first task instead of starting a new run, so retries are safe.
-
-    ```bash
-    curl -X POST "$AGENT_URL" \
-      -H "Authorization: Bearer $ACCESS_TOKEN" \
-      -H "Content-Type: application/json" \
-      -d '{
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "SendMessage",
-        "params": {
-          "message": {
-            "messageId": "snow-INC0012345-1",
-            "role": "ROLE_USER",
-            "parts": [{"text": "What caused the checkout-api errors in the last hour?"}]
-          }
-        }
-      }'
-    ```
-
-    CloudThinker answers at once with the task. Keep its `id`:
-
-    ```json
-    {
-      "jsonrpc": "2.0",
-      "id": 1,
-      "result": {
-        "task": {
-          "id": "<task-id>",
-          "contextId": "<context-id>",
-          "status": {"state": "TASK_STATE_SUBMITTED"}
-        }
-      }
-    }
-    ```
-  </Step>
-  <Step title="Poll for the answer">
-    Call `GetTask` with the task ID until the state is final. CloudThinker never pushes results to an outside caller, so polling is the only way to get them. An agent run takes minutes, so poll every 10 to 30 seconds.
-
-    ```bash
-    curl -X POST "$AGENT_URL" \
-      -H "Authorization: Bearer $ACCESS_TOKEN" \
-      -H "Content-Type: application/json" \
-      -d '{"jsonrpc": "2.0", "id": 2, "method": "GetTask", "params": {"id": "<task-id>"}}'
-    ```
-
-    Stop polling when `status.state` is `TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, `TASK_STATE_REJECTED` or `TASK_STATE_CANCELED`. On `TASK_STATE_COMPLETED`, the answer is the `text` in `result.artifacts[].parts[]`. See [Task fields](#task-fields) for every state.
-  </Step>
-</Steps>
-
-### What to expect
-
-| Behavior | Detail |
-| --- | --- |
-| Access | Read-only. The agent answers questions but doesn't make changes for an outside caller. |
-| Identity | The run uses the workspace System user. The conversation shows "Asked by: &lt;client name&gt;" and marks it as an outside caller. |
-| Billing | Credits are charged to the workspace that owns the caller. |
-| Limits | Each caller runs at most 3 questions at once. The **Monthly credit limit** is set when you add the caller, and is empty (no limit) by default. See [A2A errors](#a2a-errors) for what a refused ask returns. |
-| Discovery | The agent's Agent Card lists the `workspaceClient` OAuth scheme, so A2A clients can find the auth method. |
-
-### Rotate, pause or revoke
-
-In **Agents → Sharing → Outside callers**, each caller's row has these controls:
-
-| Control | What happens |
-| --- | --- |
-| **New secret** | The old secret stops working at once. Tokens already issued keep working until they expire, up to 1 hour. Update the secret in the calling system right away. |
-| The **Let &lt;name&gt; ask** switch, turned off | Pauses the caller. New questions are refused with `client_inactive`. Turn it back on to resume. |
-| **Revoke** | The secret, every token and any running questions stop. This can't be undone. |
-
-<Warning>
-Revoking a caller is permanent. To stop traffic without losing the caller, pause it instead.
-</Warning>
-
-## A2A reference
-
-Everything an outside caller can send and get back. All calls go to `https://app.cloudthinker.io`.
-
-### Endpoints
-
-| Method and path | Auth | What it does |
-| --- | --- | --- |
-| `POST /api/a2a/oauth/token` | Client ID and secret | Issues an access token |
-| `POST /api/a2a` | `Authorization: Bearer <access token>` | JSON-RPC 2.0 endpoint for `SendMessage`, `GetTask` and `CancelTask` |
-| `GET /api/a2a/card` | None | The public Agent Card: the agent URL, the token URL and the supported auth schemes |
-| `GET /api/a2a/.well-known/agent-card.json` | `Authorization: Bearer <access token>` | The extended Agent Card for your caller: the answering agent's name, its workspace, and one `ask` skill that lists the workspace's connection kinds |
-
-You can send an optional `A2A-Version` header on calls to `/api/a2a`. CloudThinker speaks A2A `1.0` and also accepts `1` and `1.0.0`. Any other value fails with JSON-RPC error `-32009`.
-
-### Token request
-
-`POST /api/a2a/oauth/token` with `Content-Type: application/x-www-form-urlencoded`.
-
-| Field | Required | Value |
-| --- | --- | --- |
-| `grant_type` | Yes | `client_credentials` |
-| Client ID and secret | Yes | HTTP Basic auth (client ID as the user, secret as the password), or the form fields `client_id` and `client_secret`. Basic auth wins when both are sent. |
-
-Client IDs start with `cta_`. A success returns `200` with `Cache-Control: no-store`:
-
-```json
-{"access_token": "eyJ...", "token_type": "Bearer", "expires_in": 3600}
-```
-
-Errors return an OAuth 2.0 body, `{"error": "...", "error_description": "..."}`:
-
-| HTTP | `error` | Cause |
-| --- | --- | --- |
-| 400 | `invalid_request` | The body isn't `application/x-www-form-urlencoded` |
-| 400 | `unsupported_grant_type` | `grant_type` isn't `client_credentials` |
-| 401 | `invalid_client` | The ID or secret is missing or wrong, or the caller was revoked. When you used Basic auth, the response carries `WWW-Authenticate: Basic realm="a2a"`. |
-
-A paused caller can still get a token. Its `SendMessage` calls fail with `client_inactive` until you turn it back on.
-
-### JSON-RPC envelope
-
-Every call to `POST /api/a2a` is a JSON-RPC 2.0 request:
-
-```json
-{"jsonrpc": "2.0", "id": 1, "method": "SendMessage", "params": {}}
-```
-
-`id` can be a string, a number or `null`, and comes back unchanged. A success has a `result`; a failure has an `error` (see [A2A errors](#a2a-errors)).
-
-### SendMessage
-
-Starts one agent run, or returns the existing task when the `messageId` was sent before.
-
-| Field in `params` | Required | Notes |
-| --- | --- | --- |
-| `message.messageId` | Yes | 1 to 128 characters. Unique per question. Resending the same ID returns the first task and starts no new run. |
-| `message.parts` | Yes | A list of parts. CloudThinker joins the `text` of every part into the question. Other part fields are ignored. |
-| `message.role` | No | Defaults to `ROLE_USER` |
-| `message.contextId` | No | The `contextId` of an earlier task from this caller. The question continues that conversation. An unknown or someone else's `contextId` fails with `task_not_found`. |
-| `message.metadata`, `metadata` | No | Accepted and ignored for outside callers |
-| `configuration` | No | Accepted. Push notification settings are ignored for outside callers, so poll `GetTask`. |
-
-The question is capped at 8,000 characters; longer text is cut. A question with no text, or one that contains a secret such as an access key, is refused with `blocked_by_guardrail`.
-
-The `result` wraps the task in a `task` field:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": {
-    "task": {
-      "id": "<task-id>",
-      "contextId": "<context-id>",
-      "status": {"state": "TASK_STATE_SUBMITTED", "timestamp": "2026-10-25T09:00:00Z"},
-      "artifacts": [],
-      "metadata": {"workspaceId": "<workspace-id>", "failureKind": ""}
-    }
-  }
-}
-```
-
-### GetTask
-
-| Field in `params` | Required | Notes |
-| --- | --- | --- |
-| `id` | Yes | The task `id` from `SendMessage`. 1 to 128 characters. |
-
-The `result` is the task itself, with no `task` wrapper. Once the state is `TASK_STATE_COMPLETED`, the answer is in one artifact:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 2,
-  "result": {
-    "id": "<task-id>",
-    "contextId": "<context-id>",
-    "status": {"state": "TASK_STATE_COMPLETED", "timestamp": "2026-10-25T09:03:12Z"},
-    "artifacts": [
-      {
-        "artifactId": "<task-id>:answer",
-        "name": "answer",
-        "parts": [{"text": "The checkout-api errors started after ..."}]
-      }
-    ],
-    "metadata": {"workspaceId": "<workspace-id>", "failureKind": ""}
-  }
-}
-```
-
-CloudThinker redacts secrets from the answer text before it returns it. When a run fails, is rejected or is canceled, `status.message.parts[].text` says why, and `metadata.failureKind` holds a short code.
-
-### CancelTask
-
-Stops a task that hasn't finished. It takes the same `params` as `GetTask` and returns the task in the same shape. Canceling a task that already reached a final state fails with `task_not_cancelable`.
-
-### Task fields
-
-| Field | Meaning |
-| --- | --- |
-| `id` | The task ID. Use it with `GetTask` and `CancelTask`. |
-| `contextId` | The conversation the task belongs to. Send it as `message.contextId` to ask a follow-up. |
-| `status.state` | One of the states below |
-| `status.timestamp` | When the state last changed |
-| `status.message` | Present when the run failed, was rejected or was canceled. Its `text` part explains why. |
-| `artifacts` | Empty until the state is `TASK_STATE_COMPLETED`, then one artifact named `answer` |
-| `metadata.workspaceId` | The workspace that answered |
-| `metadata.failureKind` | Empty on success. A short code when the run didn't finish. |
-
-| `status.state` | Final | Meaning |
-| --- | --- | --- |
-| `TASK_STATE_SUBMITTED` | No | Queued. Poll again. |
-| `TASK_STATE_WORKING` | No | The agent is working. Poll again. |
-| `TASK_STATE_INPUT_REQUIRED` | No | Not returned to outside callers. Their runs never wait on a person: a step that would need approval is declined, and the agent answers without it. |
-| `TASK_STATE_COMPLETED` | Yes | Done. Read the `answer` artifact. |
-| `TASK_STATE_FAILED` | Yes | The run failed. Ask again or check the conversation in CloudThinker. |
-| `TASK_STATE_REJECTED` | Yes | CloudThinker refused the run, for example because the workspace hit its credit limit. |
-| `TASK_STATE_CANCELED` | Yes | The run was stopped by `CancelTask`, or because the caller was revoked. |
-
-### A2A errors
-
-A failed JSON-RPC call returns an `error` object. The reason is in `error.data.reason`:
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "error": {
-    "code": -32600,
-    "message": "...",
-    "data": {"reason": "busy", "retry_after": 30}
-  }
-}
-```
-
-| Method | HTTP | `error.code` | `error.data.reason` | Meaning |
-| --- | --- | --- | --- | --- |
-| Any | 401 | `-32600` | `invalid_token` | The token is missing, expired or revoked. The response carries `WWW-Authenticate: Bearer realm="a2a"`. |
-| `SendMessage` | 403 | `-32600` | `client_inactive` | The caller is paused |
-| `SendMessage` | 403 | `-32600` | `client_budget_reached` | The caller hit its monthly credit limit |
-| `SendMessage` | 403 | `-32600` | `plan_required` | The organization isn't on Scale or Enterprise |
-| `SendMessage` | 400 | `-32600` | `blocked_by_guardrail` | The question has no text, or contains a secret |
-| `SendMessage` | 429 | `-32600` | `busy` | 3 questions are already running. Retry after the `Retry-After` header (30 seconds), also in `error.data.retry_after`. |
-| `SendMessage`, `GetTask`, `CancelTask` | 404 | `-32001` | `task_not_found` | No task or context with this ID for this caller |
-| `CancelTask` | 409 | `-32002` | `task_not_cancelable` | The task already reached a final state |
-
-The envelope itself can fail before CloudThinker reads the method:
-
-| HTTP | `error.code` | Cause |
-| --- | --- | --- |
-| 400 | `-32700` | The body isn't valid JSON |
-| 400 | `-32600` | The body isn't a JSON-RPC 2.0 request |
-| 400 | `-32602` | `params` don't match the method, for example a missing `messageId` |
-| 400 | `-32009` | Unsupported `A2A-Version` header |
-| 404 | `-32601` | Unknown method |
-| 500 | `-32603` | Internal error. Retry with the same `messageId`. |
-
-### Limits
-
-| Item | Limit |
-| --- | --- |
-| Access token | 1 hour |
-| Questions running at once, per caller | 3 |
-| Monthly credit limit | Set per caller, none by default |
-| Question length | 8,000 characters, longer text is cut |
-| `messageId`, `contextId`, task `id` | 128 characters |
-| Streaming and push notifications | Not available to outside callers. Poll `GetTask`. |
-| Access | Read-only answers |
-
-## Webhooks
-
-A JSON POST to a webhook URL either runs an [Automation](/guide/automation/automations), or sends an alert to [Resolve](/guide/incident/overview), which can open an incident and start a root cause analysis. Creating either kind needs the **Admin** workspace role. Use a webhook to fire work and move on; use the A2A API when the caller needs an answer back. See [Webhooks](/guide/webhooks/overview).
-
-## Claude connector
-
-The Claude connector is a remote [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server at:
-
-```text
-https://app.cloudthinker.io/api/mcp
-```
-
-Add it in claude.ai, the Claude desktop app or Claude Code. Only Claude clients can connect today. On a Claude Team or Enterprise plan, a Claude organization owner adds the connector first, then each member connects. See [Claude connector](/guide/mcp/overview).
-
-## SCIM provisioning
-
-SCIM 2.0 lets Okta or Microsoft Entra ID add, suspend and remove CloudThinker members. You need **Scale** or **Enterprise**, an active [SSO connection](/guide/security/sso) with a verified domain, and the organization **Owner** role. While SCIM is on, member invitations from CloudThinker are turned off. See [SCIM provisioning](/guide/security/scim).
-
-## CLI
-
-The `cloudthinker` CLI runs on macOS and Linux. There is no native Windows build. Install it and log in:
+List incidents in your workspace, with `WORKSPACE_ID` set from `GET /v1/token`:
 
 ```bash
-curl -fsSL https://cloudthinker.io/install.sh | sh
-cloudthinker login
+curl -sS "https://app.cloudthinker.io/api/public/v1/workspaces/$WORKSPACE_ID/resolve/incidents?limit=20" \
+  -H "Authorization: Bearer $CLOUDTHINKER_TOKEN"
 ```
 
-If you'd rather not pipe a script into `sh`, download the archive from the [releases page](https://github.com/cloudthinker-ai/cloudthinker-cli/releases). Each archive has a SHA-256 checksum next to it.
-
-For scripts and CI, `cloudthinker chat -p "Check production health"` prints one answer to stdout, and works on every plan, including Free. The interactive agent (`cloudthinker`) needs Team, Scale, or Enterprise. The CLI is in preview, so command names and flags may change. See [CLI](/guide/cli/overview).
-
-## Troubleshooting
-
-| Symptom | Likely cause | What to do |
-| --- | --- | --- |
-| **Add an outside caller** is missing or greyed out | The organization isn't on Scale or above, or you're a Viewer | Check the plan in [Pricing](/guide/billing/pricing), or ask a workspace Admin for the Developer role |
-| The token request returns `invalid_client` | Wrong client ID or secret, or the secret was replaced with **New secret** | Use the current secret. If it's lost, click **New secret** and update the calling system. |
-| Calls fail with `invalid_token` after working for an hour | The token expired | Request a new token with the client credentials grant |
-| `SendMessage` returns `client_inactive` | The caller is paused | Turn its switch back on in **Agents → Sharing → Outside callers** |
-| `SendMessage` returns `busy` or `client_budget_reached` | 3 questions are running, or the monthly credit limit is used up | For `busy`, retry after `Retry-After`. For the credit limit, wait for the next month, or add a caller with a higher limit. |
-| You're waiting for CloudThinker to call you back | Outside callers never get a push | Poll `GetTask` for the result |
-
-## Related
+## Next steps
 
 <CardGroup cols={2}>
-  <Card title="Webhooks" icon="webhook" href="/guide/webhooks/overview">
-    Run an Automation or send an alert to Resolve with one POST
+  <Card title="API Quickstart" icon="rocket" href="/guide/api/quickstart">
+    Create a token and make your first call.
   </Card>
-  <Card title="Claude Connector" icon="plug" href="/guide/mcp/overview">
-    Use CloudThinker from Claude over remote MCP
+  <Card title="API Tokens" icon="key" href="/guide/api/tokens">
+    Choose scopes, set an expiry and revoke tokens.
+  </Card>
+  <Card title="API Errors" icon="triangle-exclamation" href="/guide/api/errors">
+    Read the error shape, retry safely and stay under the rate limit.
+  </Card>
+  <Card title="API reference" icon="book" href="/api-reference/token/get">
+    See every operation, field and scope.
   </Card>
 </CardGroup>

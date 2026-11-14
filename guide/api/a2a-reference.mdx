@@ -1,0 +1,186 @@
+---
+title: A2A API Reference
+description: "Look up every A2A endpoint, method, field, task state, error code and limit an outside caller can use."
+icon: book
+---
+
+Every A2A call an outside caller can send to `https://app.cloudthinker.io`. To add a caller, see [A2A API](/guide/api/a2a).
+
+## Endpoints
+
+| Method and path | Auth | What it does |
+| --- | --- | --- |
+| `POST /api/a2a/oauth/token` | Client ID and secret | Issues an access token |
+| `POST /api/a2a` | Bearer token, or `X-API-Key: <client ID>.<client secret>` | JSON-RPC 2.0 endpoint for the [methods](#methods) |
+| `GET /api/a2a/card` | None | Public Agent Card: agent URL, token URL and auth schemes |
+| `GET /api/a2a/.well-known/agent-card.json` | Bearer token or `X-API-Key` | Extended Agent Card: the answering agent, its workspace, and an `ask` skill listing its connection kinds |
+
+`X-API-Key` skips the token request and gets every scope the caller has. Repeated wrong keys from one IP address are rate limited like token requests.
+
+Send `A2A-Version: 1.0` on every call to `/api/a2a`. `1` and `1.0.0` also mean A2A 1.0; `0.3`, or no header, gets A2A 0.3 fields, which differ from this page. Any other value fails with `-32009`.
+
+## Get a token
+
+`POST /api/a2a/oauth/token` with `Content-Type: application/x-www-form-urlencoded` and `grant_type=client_credentials`. Send the client ID and secret with HTTP Basic auth, or as the form fields `client_id` and `client_secret`; Basic auth wins when both are sent. Client IDs start with `cta_`. Leave out `scope` (space-separated) for every scope the caller has.
+
+```bash
+curl -X POST https://app.cloudthinker.io/api/a2a/oauth/token \
+  -u "$CLIENT_ID:$CLIENT_SECRET" \
+  -d grant_type=client_credentials
+```
+
+A success returns `200` with `Cache-Control: no-store`; `scope` lists the token's scopes:
+
+```json
+{"access_token": "eyJ...", "token_type": "Bearer", "expires_in": 3600, "scope": "a2a:ask a2a:push a2a:tasks.read"}
+```
+
+A paused caller still gets a token, but its `SendMessage` calls fail with `client_inactive`.
+
+A caller registered with a public key can send a `private_key_jwt` assertion, and no secret: `client_assertion_type=urn:ietf:params:oauth:client-assertion-type:jwt-bearer` and `client_assertion=<JWT>`. The JWT needs `iss` and `sub` set to the client ID, `aud` set to the token URL, a single-use `jti`, and `exp` at most 5 minutes ahead.
+
+Token errors return OAuth 2.0 `error` and `error_description`. `400 invalid_request` means a wrong body type or assertion type, or both a secret and an assertion; `400 unsupported_grant_type`, that `grant_type` isn't `client_credentials`; `400 invalid_scope`, a scope the caller doesn't have. `401 invalid_client` means a missing or wrong ID, secret or assertion, a reused assertion, or a revoked caller; with Basic auth it carries `WWW-Authenticate: Basic realm="a2a"`. `429 slow_down` means too many token requests ([Limits](#limits)); wait for `Retry-After`.
+
+## Methods
+
+Every call to `/api/a2a` is a JSON-RPC 2.0 request; its `id` (string, number or `null`) comes back unchanged with a `result` or an [error](#errors). Each method needs a scope; a new caller has all three, and a token without the scope fails with `insufficient_scope`.
+
+- `a2a:ask`: `SendMessage` asks and waits up to 110 seconds for the answer; `SendStreamingMessage` asks and streams task updates as server-sent events; `CancelTask` stops a task that hasn't finished.
+- `a2a:tasks.read`: `GetTask` reads one of your tasks; `ListTasks` lists them, filtered by `contextId` or `status`, up to 100 per page; `SubscribeToTask` streams updates for a task that hasn't finished; `GetExtendedAgentCard` returns your caller's extended Agent Card.
+- `a2a:push`: `CreateTaskPushNotificationConfig`, `GetTaskPushNotificationConfig`, `ListTaskPushNotificationConfigs` and `DeleteTaskPushNotificationConfig` add, read, list and remove a task's push URLs.
+
+## SendMessage
+
+| Field in `params` | Required | Notes |
+| --- | --- | --- |
+| `message.messageId` | Yes | 1 to 128 characters, unique per question. Resending it returns the first task and starts no run. |
+| `message.parts` | Yes | The `text` of every part is joined into the question. Other part fields are ignored. Text past 8,000 characters is cut. |
+| `message.role` | No | Defaults to `ROLE_USER` |
+| `message.contextId` | No | An earlier task's `contextId`, to continue that conversation. An unknown one fails with `task_not_found`. |
+| `message.taskId` | No | Adds the message to a task that waits for input. Outside callers' tasks never wait, so a finished or running task fails with `unsupported_operation`; send follow-ups with `contextId` alone. |
+| `configuration.returnImmediately` | No | `true` returns the task at once. Otherwise CloudThinker waits up to 110 seconds. |
+| `configuration.taskPushNotificationConfig` | No | A [push URL](#push-notifications) for this task |
+
+`message.metadata` and `metadata` are accepted and ignored for outside callers; `configuration.historyLength` sets how many messages of history to include. A question with no text, or with a secret such as an access key, fails with `blocked_by_guardrail`.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "SendMessage",
+  "params": {
+    "message": {
+      "messageId": "snow-INC0012345-1",
+      "parts": [{"text": "What caused the checkout-api errors in the last hour?"}]
+    }
+  }
+}
+```
+
+The `result` wraps the task in `task`:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "task": {
+      "id": "<task-id>",
+      "contextId": "<context-id>",
+      "status": {"state": "TASK_STATE_SUBMITTED", "timestamp": "2026-10-25T09:00:00Z"}
+    }
+  }
+}
+```
+
+## GetTask and other methods
+
+`GetTask` takes `id`, the task `id` (1 to 128 characters), and an optional `historyLength`. Its `result` is the task itself, with no `task` wrapper. `CancelTask` takes the same `params` and returns the task; a task in a final state fails with `task_not_cancelable`.
+
+Once the state is `TASK_STATE_COMPLETED`, the answer is in one `answer` artifact, with secrets redacted.
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "result": {
+    "id": "<task-id>",
+    "contextId": "<context-id>",
+    "status": {"state": "TASK_STATE_COMPLETED", "timestamp": "2026-10-25T09:03:12Z"},
+    "artifacts": [
+      {"artifactId": "<task-id>:answer", "name": "answer", "parts": [{"text": "The checkout-api errors started after ..."}]}
+    ],
+    "metadata": {"workspaceId": "<workspace-id>", "failureKind": ""}
+  }
+}
+```
+
+### Task fields
+
+`contextId` is the conversation, for `message.contextId` on a follow-up. `status.timestamp` is when the state last changed, and `status.message` says why the run failed, was rejected or was canceled, as a `text` part. `metadata.workspaceId` is the workspace that answered; `metadata.failureKind` is a short code when the run didn't finish, else empty.
+
+`TASK_STATE_SUBMITTED` (queued) and `TASK_STATE_WORKING` (the agent is working) aren't final. The final states are `TASK_STATE_COMPLETED` (read the `answer` artifact), `TASK_STATE_FAILED` (the run failed; ask again or check the conversation), `TASK_STATE_REJECTED` (refused, for example at the workspace credit limit) and `TASK_STATE_CANCELED` (stopped by `CancelTask` or by revoking the caller). `TASK_STATE_INPUT_REQUIRED` is never returned to outside callers: a step that needs approval is declined, and the agent answers without it.
+
+### Push notifications
+
+When a task reaches a final state, CloudThinker POSTs `{"task": <task>}` to each of its push URLs, set on `SendMessage` or with `CreateTaskPushNotificationConfig`. The required `url` must be a public `https` address with no user name or password, else `invalid_params`. The optional `token` is sent back in `X-A2A-Notification-Token`, to prove the call is from CloudThinker. The optional `authentication.scheme` and `authentication.credentials` are sent as `Authorization: <scheme> <credentials>`. A task holds at most 5 push configs.
+
+## Errors
+
+The HTTP status is `200`, except `401` for `invalid_token` (with `WWW-Authenticate: Bearer realm="a2a"`) and `429` with `Retry-After` for `busy` and `rate_limited`. `error.data` is a list holding one `ErrorInfo`; `metadata.reason` is the reason and `metadata.retryAfter` the seconds to wait, as a string:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32093,
+    "message": "...",
+    "data": [
+      {
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        "reason": "BUSY",
+        "domain": "cloudthinker.io",
+        "metadata": {"reason": "busy", "retryAfter": "30"}
+      }
+    ]
+  }
+}
+```
+
+| `error.code` | `metadata.reason` | Meaning | What to do |
+| --- | --- | --- | --- |
+| `-32091` | `invalid_token` | Token missing, expired or revoked | Get a new token |
+| `-32092` | `insufficient_scope` | Token lacks the method's [scope](#methods) | Request that scope |
+| `-32090` | `client_inactive` | Caller is paused | Turn it back on |
+| `-32090` | `client_budget_reached` | Monthly credit limit reached | Wait for next month, or add a caller with a higher limit |
+| `-32090` | `plan_required` | Organization isn't on Scale or Enterprise | Upgrade the plan |
+| `-32093` | `busy` | The caller has its limit of questions running | Retry after 30 seconds |
+| `-32093` | `rate_limited` | Over 120 calls in a minute | Wait for `Retry-After` |
+| `-32602` | `blocked_by_guardrail` | No text, or contains a secret | Fix the question |
+| `-32602` | `invalid_params` | A parameter isn't valid | Fix the parameter |
+| `-32602` | `push_config_limit` | Task already has 5 push configs | Delete one |
+| `-32602` | `context_mismatch` | `message.contextId` doesn't match the task named in `message.taskId` | Send `contextId` alone |
+| `-32001` | `task_not_found` | No such task or context for this caller | Check the ID |
+| `-32002` | `task_not_cancelable` | Task already final | Read it with `GetTask` |
+| `-32004` | `unsupported_operation` | The call doesn't apply, such as `SubscribeToTask` on a finished task | Use `GetTask` |
+| `-32005` | `content_type_not_supported` | Request isn't `application/json` or `application/a2a+json` | Fix `Content-Type` |
+| `-32007` | `extended_card_not_configured` | No extended Agent Card for this caller | Use the public Agent Card |
+| `-32009` | `version_not_supported` | Unsupported `A2A-Version` header | Send `A2A-Version: 1.0` |
+
+Envelope errors have no `metadata.reason`: `-32700` (the body isn't valid JSON), `-32600` (not a JSON-RPC 2.0 request), `-32601` (unknown method), `-32602` (`params` don't match the method; `error.data` holds a `BadRequest` naming the field) and `-32603` (internal error; retry with the same `messageId`).
+
+## Limits
+
+An access token lasts 1 hour. Each caller runs at most 3 questions at once and makes at most 120 calls a minute to `/api/a2a`. Token requests are limited to 20 a minute, per IP address and per caller. A caller's monthly credit limit is none by default.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="A2A API" icon="arrow-right-arrow-left" href="/guide/api/a2a">
+    Add an outside caller and send your first message.
+  </Card>
+  <Card title="Public API" icon="code" href="/guide/api/overview">
+    Read and act on workspace data with a scoped token.
+  </Card>
+</CardGroup>

@@ -1,0 +1,136 @@
+---
+title: API Tokens
+description: "Create personal API tokens and service account credentials with scopes, an expiry and one workspace."
+icon: key
+---
+
+Every Public API call carries a token. Pick a personal token for your own scripts, or a service account credential for automation that must outlive any one person.
+
+## Pick a token type
+
+| | Personal API token | Service account credential |
+| --- | --- | --- |
+| Starts with | `ct_pat_` | `ct_sat_` |
+| Acts as | You, limited to the scopes you pick | The service account, limited to the scopes an Admin picks |
+| Who creates it | You, with the **Developer** or **Admin** role | A workspace **Admin** |
+| Works in | One workspace you pick | The service account's workspace |
+| Stops working when | It expires, you revoke it, you leave the workspace, or your role drops below what a call needs | It expires, it is revoked, or the service account is disabled or deleted |
+| Use it for | Local scripts, notebooks, the CLI and MCP clients | CI/CD pipelines, scheduled jobs and shared integrations |
+
+<Tip>
+For CI/CD, prefer a service account. A pipeline that runs on a personal token breaks the day that person changes role or leaves.
+</Tip>
+
+## Create a personal token
+
+<Steps>
+  <Step title="Open API tokens">
+    Open **Account Settings → Security → API tokens** and click **Create token**.
+  </Step>
+  <Step title="Name the token and pick a workspace">
+    Enter a **Token name** that says where it runs, such as `laptop-review-script`. Pick one **Workspace**. To reach a second workspace, create a second token.
+  </Step>
+  <Step title="Choose permissions">
+    Under **Choose permissions**, click **Use template** on **Read CloudThinker**, **Read reviews** or **Run reviews**, or expand a service and tick **Read** or **Write** for each resource. Pick only the scopes the script needs. See [Scopes](#scopes).
+  </Step>
+  <Step title="Set the expiration">
+    Choose 7 days, 30 days (the default), 90 days, 1 year, or a custom date. A token can't live longer than one year, and every token expires.
+  </Step>
+  <Step title="Review and create">
+    Click **Review token**, check the permissions and the workspace, then click **Create token**. Copy the token now. CloudThinker stores only a hash and the last four characters, and can't show it again.
+  </Step>
+</Steps>
+
+The page then shows ready-to-paste snippets that set `CLOUDTHINKER_TOKEN`, `CLOUDTHINKER_URL` and `CLOUDTHINKER_WORKSPACE`. Replace `<your-token>` with the token. `CLOUDTHINKER_URL` is the app's origin, `https://app.cloudthinker.io`, which the CLI uses as its host; `curl` calls add `/api/public` to it.
+
+In your own scripts, keep the workspace ID in a plain shell variable and pass it to the CLI with `-w` after the operation name:
+
+```bash
+export CLOUDTHINKER_TOKEN="<your-token>"
+WORKSPACE_ID="<workspace-id>"
+curl -sS "https://app.cloudthinker.io/api/public/v1/workspaces/$WORKSPACE_ID/review/reviews" \
+  -H "Authorization: Bearer $CLOUDTHINKER_TOKEN"
+cloudthinker api review.reviews.list -w "$WORKSPACE_ID"
+```
+
+<Note>
+The CLI refuses `CLOUDTHINKER_WORKSPACE` and the global `--workspace` flag when `CLOUDTHINKER_TOKEN` is set, and exits with code 2. The page's CLI snippet unsets it with `env -u CLOUDTHINKER_WORKSPACE`.
+</Note>
+
+## Service accounts
+
+A service account is a workspace member that belongs to no person. Its credentials keep working when people change role or leave.
+
+<Steps>
+  <Step title="Add the service account">
+    As a workspace Admin, open **Workspace settings → Service accounts**. Enter an **Account name**, such as `release automation`, pick its **Workspace role** (Viewer, Developer or Admin), and click **Create account**.
+  </Step>
+  <Step title="Create a credential">
+    Click **Manage** on the account, then **Create credential** under **API credentials**. Choose its permissions and an expiration, the same way as for a personal token. You can only pick scopes the account's **Workspace role** allows.
+  </Step>
+  <Step title="Store the credential">
+    Copy the `ct_sat_` value into your CI secret store. CloudThinker shows it once.
+  </Step>
+</Steps>
+
+## What a token can do
+
+A call succeeds only when the token has the call's scope and its owner, a person or a service account, still has that scope's permission in their current workspace role. So a token never does more than the member behind it.
+
+### Scopes
+
+A scope is `<area>:<resource>:read` or `<area>:<resource>:write`, for example `resolve:incidents:write`. A write scope includes the matching read scope. Each endpoint page in the [API Reference](/api-reference/token/get) names the scope it needs. Each scope checks the same permission as the matching button in the app, so the API never refuses what the app lets you do, and never allows what it refuses.
+
+The lowest workspace role that has a scope's permission (a higher role has it too):
+
+- **Viewer:** every read scope except Chat.
+- **Developer:** Chat scopes (`chat:...`) and `review:reviews:write`.
+- **Admin:** `resolve:incidents:write` and `workspace:connections:write`.
+
+No token can answer approval requests; answer them in the app.
+
+You can only give a token scopes your own role allows; the rest are disabled when you create it. Admins, and organization Owners and Admins, can give any scope. Developers can give every scope except `resolve:incidents:write` and `workspace:connections:write`. Viewers can't create tokens, and see "Viewers cannot create API tokens. Ask a workspace admin for the Developer role." on the token page.
+
+When a call still accepts an older scope, the response carries `Deprecation: true` and `X-CloudThinker-Required-Scope` with the scope to use instead. Add that scope to a new token before the old one stops working.
+
+### How a call is checked
+
+CloudThinker checks every call in this order and stops at the first failure:
+
+| Check | Fails with |
+| --- | --- |
+| The token is valid and not expired or revoked | `401` `token_invalid` |
+| The workspace in the path is one the token covers, and the owner is still a member of it | `404` `workspace_not_found` |
+| The token has the call's scope. You can't add scopes to a token; create a new one. | `403` `scope_missing` |
+| The owner's current role has the scope's permission. Ask a workspace Admin for a role that has it; see [Workspace Members](/guide/workspace-users). | `403` `permission_missing` |
+| The hourly [rate limit](/guide/api/errors#rate-limits) has room | `429` `public_rate_limited` |
+
+Role and membership are checked on every call, so a change takes effect on the owner's next request: a removed member's token gets `404` `workspace_not_found`, and a token with `review:reviews:write` whose owner becomes a Viewer can only read reviews. `GET /v1/token` ([Read the calling token](/api-reference/token/get)) lists the scopes a token was given; your current role still applies on each call.
+
+## Rotate and revoke
+
+Rotate a token before it expires: create the new token, update the secret where it's used, confirm a call succeeds, then revoke the old one.
+
+| To | Do this |
+| --- | --- |
+| Revoke a personal token | **Account Settings → Security → API tokens**, then **Revoke** on the token. Calls with it fail from the next request. |
+| Revoke a service account credential | **Workspace settings → Service accounts → Manage**, then **Revoke** on the credential. Scripts using it lose access immediately. |
+| Stop a service account entirely | **Disable** it, which revokes all its credentials, or **Delete** it |
+
+## Keep tokens safe
+
+- Call the API from a server, a script or a pipeline, never from browser or mobile app code, where anyone can read the token.
+- Keep tokens in a secret manager or CI secret, never in source code, tickets, chat or logs. The CLI never logs it.
+- Give each environment and pipeline its own token with only the scopes it needs and the shortest expiry that fits, so revoking one breaks one thing.
+- If a token leaks, revoke it at once, then create a new one, update the secret where it's used, and work out where the old one was used.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="API Errors" icon="triangle-exclamation" href="/guide/api/errors">
+    Read the error shape and fix a 403 or a 429.
+  </Card>
+  <Card title="Use CloudThinker in CI/CD" icon="code-branch" href="/guide/api/ci-cd">
+    Use a service account credential in a pipeline.
+  </Card>
+</CardGroup>

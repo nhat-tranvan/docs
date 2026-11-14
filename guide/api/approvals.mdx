@@ -1,0 +1,107 @@
+---
+title: Approvals for API Runs
+description: "See how Approval mode, Rules and the token's scopes decide what an agent run started from the API or the CLI can change."
+icon: shield-check
+---
+
+An agent run started from the API, the CLI or the [Claude Connector](/guide/mcp/overview) follows the same [Approval mode](/guide/approvals/approval-mode) as a chat in the app. Three things limit it: the token's scopes, the owner's workspace role, and the approval mode that applies to the run.
+
+## Start a run and get its answer
+
+A chat run asks CloudThinker a question with the token owner's rights and spends credits. The token needs `chat:runs:write`. The `POST` returns `201` at once, usually with `status: pending`; poll the run until it reaches a final status.
+
+```bash
+API="https://app.cloudthinker.io/api/public/v1/workspaces/$WORKSPACE_ID"
+created=$(curl -sS --fail-with-body -X POST "$API/chat/runs" \
+  -H "Authorization: Bearer $CLOUDTHINKER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{"prompt": "Summarize the open critical incidents"}') || { echo "$created" >&2; exit 1; }
+run_id=$(jq -er '.id' <<<"$created") || exit 1
+
+asked=""
+deadline=$((SECONDS + 1800))   # give up after 30 minutes
+while :; do
+  run=$(curl -sS --fail-with-body "$API/chat/runs/$run_id" \
+    -H "Authorization: Bearer $CLOUDTHINKER_TOKEN") || { echo "$run" >&2; exit 1; }
+  status=$(jq -r '.status' <<<"$run")
+  case "$status" in
+    succeeded|failed|cancelled) break ;;
+    required_approval) [ -n "$asked" ] || echo "Approve in the app: $(jq -r '.url // "see Approvals"' <<<"$run")"; asked=1 ;;
+  esac
+  [ "$SECONDS" -lt "$deadline" ] || { echo "Still $status after 30 minutes" >&2; exit 1; }
+  sleep 5
+done
+echo "$run"
+[ "$status" = succeeded ]
+```
+
+```json
+{
+  "id": "8c41…",
+  "conversation_id": "e27a…",
+  "status": "succeeded",
+  "answer": "Two critical incidents are open: …",
+  "message": null,
+  "failure_kind": null,
+  "url": "https://app.cloudthinker.io/…",
+  "created_at": "2026-11-14T03:12:08Z",
+  "started_at": "2026-11-14T03:12:09Z",
+  "ended_at": "2026-11-14T03:13:41Z"
+}
+```
+
+| Status | Final | What it means |
+| --- | --- | --- |
+| `pending`, `running` | No | The run is queued or working |
+| `required_approval` | No | A write waits for a person. Once they decide in the app, the run continues. See [When a run pauses](#when-a-run-pauses). |
+| `succeeded` | Yes | `answer` holds the final answer |
+| `failed` | Yes | `message` and `failure_kind` say why |
+| `cancelled` | Yes | The run was stopped before it finished. The Public API has no cancel call. |
+
+This script stops on the first HTTP error. In production, wrap each call in the [retry loop](/guide/api/errors#retry-a-failed-call). A workspace runs at most 20 agent runs at once, pending or running; the next `POST` gets `429` `rate_limited`. A prompt that contains credentials is refused with `422`.
+
+To continue the conversation, send its `conversation_id` in the next `POST`. See [Ask CloudThinker](/api-reference/chat/runs-create) for every field.
+
+## What limits an API run
+
+| Limit | Effect |
+| --- | --- |
+| The token's scopes | The agent can only use CloudThinker actions the token's scopes allow. If it tries one they don't allow, it says "The API token for this run does not allow …; it needs one of these scopes: …" and carries on without it. |
+| The owner's workspace role | The run never does more than the token's owner could do in the app |
+| Approval mode and Rules | Decide whether each write runs at once, waits for a person, or is refused |
+
+## Which approval mode applies
+
+These runs are chat runs, so they use the **Chat** run type. The mode comes from the first of these that is set:
+
+1. The mode picked for that conversation
+2. The **Chat** run type override, under **Approvals → Approval mode → Run types**
+3. The workspace mode
+
+New workspaces start on **Auto · Rules + AI · Ask me**. Under Auto, each write goes through your Rules, then AI judgment, and if neither allows it, it waits for a person (**Ask me**) or is refused (**Refuse**). See [Approval mode](/guide/approvals/approval-mode#the-two-modes) for every choice.
+
+Rules decide only when Rule enforcement is on for your workspace. It's off by default: while the **Rules** step on **Approvals** says **In preview**, Rules only record what they would decide, and the Approval mode alone decides each write. See [Rules troubleshooting](/guide/approvals/rules#troubleshooting).
+
+<Warning>
+Under Auto, a write that a Rule or AI judgment allows runs with no person in the loop, recorded as the token's owner. Once Rule enforcement is on for your workspace, pick **Auto · Rules · Refuse** for unattended pipelines, on the conversation or the Chat run type, and accept **Allow** Rules only for the writes the job needs. While Rules are in preview, no Rule allows anything, so every write under that setting is refused.
+</Warning>
+
+## When a run pauses
+
+A run waiting for a person has status `required_approval`. Its `url` opens the conversation in the browser, where an [approver](/guide/approvals/approvers) decides. `cloudthinker chat` exits with code 5.
+
+A token with `approvals:requests:read` can list pending requests from the API, but no token can answer them: approving or rejecting always happens in the app, by a person. This keeps a leaked token from approving its own writes.
+
+The polling example above keeps waiting through a pause and prints the approval link once. A script that can't wait, such as a CI job, can stop at `required_approval` and report the `url` instead; the run still continues after a person decides.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Approval mode" icon="sliders" href="/guide/approvals/approval-mode">
+    Set the mode for the workspace, a run type or one chat.
+  </Card>
+  <Card title="Rules" icon="list-check" href="/guide/approvals/rules">
+    Allow, ask first or deny an exact write.
+  </Card>
+</CardGroup>
