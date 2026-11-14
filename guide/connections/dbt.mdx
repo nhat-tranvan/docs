@@ -1,0 +1,202 @@
+---
+title: dbt
+description: "Connect dbt Cloud or a dbt Core project so agents can explain failed runs, trace lineage, and preview models"
+icon: "/images/icons/dbt.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+
+Connect **dbt** so CloudThinker agents can explain failed job runs, trace model lineage, check model health, and read compiled SQL, without running anything. The **Cloud** tab connects a dbt Cloud account with an access token, and the **Self-host** tab connects a dbt Core project from its Git repository and a read-only warehouse user.
+
+<Note>
+dbt isn't generally available yet. To use it, [contact CloudThinker](https://cloudthinker.io/contact). **Self-host** means dbt Core, not a self-hosted deployment of CloudThinker.
+</Note>
+
+## Prerequisites
+
+- **Cloud**: a dbt account on a Starter, Enterprise, or Enterprise+ plan, and a production environment. Metric questions also need the [dbt Semantic Layer](https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl) set up.
+- **Self-host**: a dbt Core project in a GitLab or GitHub repository, served over HTTPS, that builds into **PostgreSQL**. PostgreSQL is the only warehouse the Self-host tab supports.
+- **Self-host network access**: CloudThinker must reach your Git host and your PostgreSQL port from the internet. See [Reaching private services](/guide/connections/overview#reaching-private-services).
+
+## Setup
+
+<Tabs>
+  <Tab title="Cloud">
+    <Steps>
+      <Step title="Copy your Access URL">
+        In dbt, open **Account settings** and find **Access URLs**. Copy the host of your account's URL, such as `cloud.getdbt.com` or `ab123.us1.dbt.com`, without `https://`.
+
+        CloudThinker sends the token only to `getdbt.com` and `dbt.com` hosts. If your account uses a different domain, [contact CloudThinker](https://cloudthinker.io/contact).
+      </Step>
+      <Step title="Create an access token">
+        Which token you can create depends on your dbt plan:
+
+        - **Enterprise or Enterprise+**: open **Account settings → Service Tokens** and click **+ Create service token**. Add the **Job Viewer** and **Metadata Only** permission sets, plus **Semantic Layer Only** if agents should answer metric questions. Click **Save** and copy the token, which dbt shows only once.
+        - **Starter**: open **Account settings → API tokens → Personal tokens** and click **Create personal access token**. A personal token carries the permissions of the user who creates it, so create it as a user with read-only access where you can.
+
+        See dbt's guides to [service tokens](https://docs.getdbt.com/docs/dbt-cloud-apis/service-tokens) and [personal access tokens](https://docs.getdbt.com/docs/dbt-cloud-apis/user-tokens).
+      </Step>
+      <Step title="Copy the production environment ID">
+        Go to **Orchestration → Environments** and click your production environment. Copy only the number after `/environments/` in the page URL.
+      </Step>
+      <Step title="Add the connection in CloudThinker">
+        Open **More → Workspace settings → Connections**, select **dbt**, and click **Connect**. Choose **Cloud**, fill in the fields in [Connection details](#connection-details), and click **Connect**.
+
+        **Success state:** the connection shows a **Connected** status.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Self-host">
+    <Steps>
+      <Step title="Create a repository read token">
+        <Tabs>
+          <Tab title="GitLab">
+            In the project, open **Settings → Repository**, expand **Deploy tokens**, and click **Add token**. Select only the `read_repository` scope, then click **Create deploy token**. Copy the generated username, such as `gitlab+deploy-token-1`, and the token. See [GitLab deploy tokens](https://docs.gitlab.com/user/project/deploy_tokens/).
+          </Tab>
+          <Tab title="GitHub">
+            Open **Settings → Developer settings → Personal access tokens → Fine-grained tokens** and click **Generate new token**. Under **Repository access**, choose **Only select repositories** and pick the dbt repository, and give the token read-only access to it. Use your GitHub username with this token. See [GitHub fine-grained tokens](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
+          </Tab>
+        </Tabs>
+      </Step>
+      <Step title="Create a read-only PostgreSQL user">
+        Connect as an admin and grant the user read access to the schemas your models and sources live in. This example uses `analytics`:
+
+        ```sql
+        CREATE ROLE cloudthinker_dbt WITH LOGIN PASSWORD '<secure-password>';
+        GRANT CONNECT ON DATABASE your_database TO cloudthinker_dbt;
+        GRANT USAGE ON SCHEMA analytics TO cloudthinker_dbt;
+        GRANT SELECT ON ALL TABLES IN SCHEMA analytics TO cloudthinker_dbt;
+        ```
+
+        Grant nothing else. dbt runs your project's hooks when it compiles, so a read-only user keeps a hook from changing data.
+      </Step>
+      <Step title="Open network access">
+        Allow CloudThinker to reach your Git host over HTTPS and your PostgreSQL port (default `5432`). These docs don't publish CloudThinker's egress IP list: ask your CloudThinker contact, or [contact us](https://cloudthinker.io/contact).
+      </Step>
+      <Step title="Add the connection in CloudThinker">
+        Open **More → Workspace settings → Connections**, select **dbt**, and click **Connect**. Choose **Self-host**, fill in the fields in [Connection details](#connection-details), and click **Connect**.
+
+        **Success state:** the connection shows a **Connected** status. The first connection can take about two minutes while CloudThinker clones the repository and installs the project's packages.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+Editing a saved connection keeps its original type. To use the other tab, add a second connection.
+
+## Connection details
+
+| Cloud field | Required | What to enter |
+|---|---|---|
+| **Access URL** | Yes | The host from **Account settings → Access URLs**, such as `cloud.getdbt.com` |
+| **Access token** | Yes | The service token or personal access token you created |
+| **Production environment ID** | Yes | The number after `/environments/` in your production environment's URL. Model, source, lineage, and metric reads use it |
+
+| Self-host field | Required | What to enter |
+|---|---|---|
+| **Git repository URL** | Yes | The HTTPS clone URL, such as `https://gitlab.com/acme/analytics.git`, with no username or token in it |
+| **Repository username** | Yes | The GitLab deploy token's username, or your GitHub username. Defaults to `oauth2` |
+| **Repository read token** | Yes | The deploy token or fine-grained token |
+| **Branch or tag** | No | Leave empty to read the default branch |
+| **Project folder** | No | The folder that holds `dbt_project.yml`, relative to the repository root. Leave empty when it's at the root |
+| **Warehouse** | Yes | **PostgreSQL** |
+| **Warehouse host** | Yes | Hostname or IP address, without a port |
+| **Warehouse port** | Yes | Defaults to `5432` |
+| **Database** | Yes | The database your project builds into |
+| **Schema** | Yes | The schema your production models build into. Compiled SQL and previews resolve `ref()` against it |
+| **Warehouse user** | Yes | The read-only user |
+| **Warehouse password** | Yes | That user's password |
+
+## Required permissions
+
+| Tab | You want agents to | Access |
+|---|---|---|
+| **Cloud** | Read jobs, runs, logs, and run artifacts | **Job Viewer** on a service token |
+| **Cloud** | Read models, sources, exposures, and lineage | **Metadata Only** on a service token |
+| **Cloud** | Answer metric questions | **Semantic Layer Only** on a service token |
+| **Self-host** | Read the project | `read_repository` on a GitLab deploy token, or read access to one repository on a GitHub fine-grained token |
+| **Self-host** | Compile models and preview rows | `USAGE` on the schemas and `SELECT` on the tables |
+
+A personal access token carries its user's permissions instead of these sets.
+
+<Tip>
+Give the service token only the permission sets above, and give the warehouse user only `USAGE` and `SELECT`. Neither needs write or admin access.
+</Tip>
+
+## Agent capabilities
+
+| Tab | What agents can do | Bounds |
+|---|---|---|
+| **Cloud** | List projects, jobs, and runs, and read a run's status, error, logs, and artifacts | Read-only |
+| **Cloud** | Read models, sources, exposures, and macros, trace lineage, and check model health and run times | Uses the production environment |
+| **Cloud** | List metrics, dimensions, and saved queries, show a metric's SQL, and query metrics | Needs the Semantic Layer. A metric query runs in your warehouse and is billed there |
+| **Self-host** | Parse and list the project, trace lineage, and read node details | Reads the branch you set; no run history |
+| **Self-host** | Compile a model to SQL and preview its rows | At most 100 rows per preview |
+
+### Verify the connection
+
+```text
+Show the upstream and downstream lineage of the orders model
+```
+
+Expect the models and sources that feed `orders` and the models built from it. An unknown-model error means the name is wrong or the model isn't in the production environment or the branch you set.
+
+### Example prompts
+
+```text
+Why did the last run of the nightly job fail?
+Is the customers model healthy, and how long do its runs take?
+Show the compiled SQL for the orders model and preview 5 rows
+```
+
+## Write access
+
+The dbt connection is read-only. Agents can't run, retry, or cancel dbt Cloud jobs, and they can't run, build, test, seed, or snapshot a dbt Core project. CloudThinker never pushes to your repository.
+
+## Troubleshooting
+
+<Accordion title="The provider rejected these credentials">
+dbt refused the token. Check that the **Access URL** is your account's host, that the token hasn't expired or been revoked, and that a service token holds **Job Viewer** and **Metadata Only**. Create a new token and connect again.
+</Accordion>
+
+<Accordion title="Model, lineage, or metric questions fail">
+The **Production environment ID** is wrong or isn't a number. Copy only the number after `/environments/` from your production environment's URL.
+</Accordion>
+
+<Accordion title="Metric questions return nothing useful">
+The account has no Semantic Layer set up, or the token lacks **Semantic Layer Only**. Job, model, and lineage questions still work without it.
+</Accordion>
+
+<Accordion title="could not clone the repository; check the URL, branch, username, and token">
+CloudThinker couldn't read the repository. Check that the URL starts with `https://`, the branch or tag exists, the username matches the token (a GitLab deploy token's own username, or your GitHub username), and the token can read that repository. If the URL contains a username or token, remove it and use the **Repository username** and **Repository read token** fields.
+</Accordion>
+
+<Accordion title="dbt_project.yml not found in the project folder">
+Set **Project folder** to the folder that holds `dbt_project.yml`, relative to the repository root, such as `analytics`. Leave it empty when the file is at the root.
+</Accordion>
+
+<Accordion title="The tools for this connection took too long to start">
+The first Self-host connection clones the repository and installs packages, which can take a few minutes. Wait a minute, then connect again.
+</Accordion>
+
+<Accordion title="Compiling or previewing fails with a database error">
+CloudThinker can't reach PostgreSQL, or the user lacks access. Check the host, port, database, and password, that your firewall allows CloudThinker, and that the user has `USAGE` and `SELECT` on the schemas your models read.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- **Use a read-only warehouse user**: previews run `SELECT` queries as this user, and dbt runs project hooks when it compiles. Grant only `USAGE` and `SELECT`.
+- **Scope the repository token**: use a GitLab deploy token or a GitHub fine-grained token that can only read the one dbt repository.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="PostgreSQL" icon="/images/icons/postgresql.svg" href="/guide/connections/postgresql">
+    Connect the warehouse directly with a read-only user.
+  </Card>
+  <Card title="Connections overview" icon="plug" href="/guide/connections/overview">
+    See every connection and how CloudThinker reaches private services.
+  </Card>
+</CardGroup>

@@ -1,0 +1,202 @@
+---
+title: dbt
+description: "Kết nối dbt Cloud hoặc một project dbt Core để agent giải thích các lần chạy thất bại, truy vết lineage và xem trước model"
+icon: "/images/icons/dbt.svg"
+---
+
+import ConnectionSecurity from '/snippets/vi/connection-security.mdx';
+
+Kết nối **dbt** để các agent CloudThinker giải thích job run thất bại, truy vết lineage của model, kiểm tra sức khỏe model và đọc SQL đã compile, mà không chạy bất cứ thứ gì. Tab **Cloud** kết nối một tài khoản dbt Cloud bằng access token, còn tab **Self-host** kết nối một project dbt Core từ Git repository của project cùng một user warehouse chỉ đọc.
+
+<Note>
+dbt chưa được phát hành rộng rãi. Để sử dụng, hãy [liên hệ CloudThinker](https://cloudthinker.io/contact). **Self-host** ở đây là dbt Core, không phải bản triển khai tự host của CloudThinker.
+</Note>
+
+## Điều kiện tiên quyết
+
+- **Cloud**: tài khoản dbt dùng gói Starter, Enterprise hoặc Enterprise+, và một production environment. Câu hỏi về metric còn cần thiết lập [dbt Semantic Layer](https://docs.getdbt.com/docs/use-dbt-semantic-layer/dbt-sl).
+- **Self-host**: một project dbt Core trong repository GitLab hoặc GitHub, truy cập qua HTTPS, build vào **PostgreSQL**. PostgreSQL là warehouse duy nhất mà tab Self-host hỗ trợ.
+- **Truy cập mạng cho Self-host**: CloudThinker phải truy cập được Git host và cổng PostgreSQL của bạn từ internet. Xem [Truy cập dịch vụ nội bộ](/vi/guide/connections/overview#truy-cập-dịch-vụ-nội-bộ).
+
+## Thiết lập
+
+<Tabs>
+  <Tab title="Cloud">
+    <Steps>
+      <Step title="Sao chép Access URL">
+        Trong dbt, mở **Account settings** và tìm **Access URLs**. Sao chép host trong URL của tài khoản, ví dụ `cloud.getdbt.com` hoặc `ab123.us1.dbt.com`, không kèm `https://`.
+
+        CloudThinker chỉ gửi token đến các host `getdbt.com` và `dbt.com`. Nếu tài khoản của bạn dùng tên miền khác, hãy [liên hệ CloudThinker](https://cloudthinker.io/contact).
+      </Step>
+      <Step title="Tạo access token">
+        Loại token bạn tạo được tùy thuộc vào gói dbt:
+
+        - **Enterprise hoặc Enterprise+**: mở **Account settings → Service Tokens** và nhấn **+ Create service token**. Thêm các permission set **Job Viewer** và **Metadata Only**, cùng **Semantic Layer Only** nếu agent cần trả lời câu hỏi về metric. Nhấn **Save** và sao chép token, vì dbt chỉ hiển thị token một lần.
+        - **Starter**: mở **Account settings → API tokens → Personal tokens** và nhấn **Create personal access token**. Personal token mang quyền của người dùng tạo ra nó, nên nếu có thể, hãy tạo token bằng một người dùng chỉ có quyền đọc.
+
+        Xem hướng dẫn của dbt về [service token](https://docs.getdbt.com/docs/dbt-cloud-apis/service-tokens) và [personal access token](https://docs.getdbt.com/docs/dbt-cloud-apis/user-tokens).
+      </Step>
+      <Step title="Sao chép production environment ID">
+        Vào **Orchestration → Environments** và nhấn vào production environment của bạn. Chỉ sao chép con số sau `/environments/` trong URL của trang.
+      </Step>
+      <Step title="Thêm kết nối trong CloudThinker">
+        Mở **More → Workspace settings → Connections**, chọn **dbt** và nhấn **Connect**. Chọn **Cloud**, điền các trường trong [Chi tiết kết nối](#chi-tiết-kết-nối), rồi nhấn **Connect**.
+
+        **Trạng thái thành công:** kết nối hiển thị trạng thái **Connected**.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="Self-host">
+    <Steps>
+      <Step title="Tạo token đọc repository">
+        <Tabs>
+          <Tab title="GitLab">
+            Trong project, mở **Settings → Repository**, mở rộng **Deploy tokens** và nhấn **Add token**. Chỉ chọn scope `read_repository`, rồi nhấn **Create deploy token**. Sao chép username được tạo, ví dụ `gitlab+deploy-token-1`, và token. Xem [GitLab deploy tokens](https://docs.gitlab.com/user/project/deploy_tokens/).
+          </Tab>
+          <Tab title="GitHub">
+            Mở **Settings → Developer settings → Personal access tokens → Fine-grained tokens** và nhấn **Generate new token**. Trong **Repository access**, chọn **Only select repositories**, chọn repository dbt, và chỉ cấp cho token quyền đọc trên repository đó. Dùng GitHub username của bạn với token này. Xem [GitHub fine-grained tokens](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens).
+          </Tab>
+        </Tabs>
+      </Step>
+      <Step title="Tạo user PostgreSQL chỉ đọc">
+        Kết nối bằng tài khoản admin và cấp cho user quyền đọc trên các schema chứa model và source của bạn. Ví dụ này dùng `analytics`:
+
+        ```sql
+        CREATE ROLE cloudthinker_dbt WITH LOGIN PASSWORD '<secure-password>';
+        GRANT CONNECT ON DATABASE your_database TO cloudthinker_dbt;
+        GRANT USAGE ON SCHEMA analytics TO cloudthinker_dbt;
+        GRANT SELECT ON ALL TABLES IN SCHEMA analytics TO cloudthinker_dbt;
+        ```
+
+        Không cấp thêm quyền nào khác. dbt chạy các hook của project khi compile, nên user chỉ đọc ngăn hook thay đổi dữ liệu.
+      </Step>
+      <Step title="Mở truy cập mạng">
+        Cho phép CloudThinker truy cập Git host của bạn qua HTTPS và cổng PostgreSQL (mặc định `5432`). Tài liệu này không công bố danh sách egress IP của CloudThinker: hãy hỏi đầu mối liên hệ CloudThinker của bạn, hoặc [liên hệ chúng tôi](https://cloudthinker.io/contact).
+      </Step>
+      <Step title="Thêm kết nối trong CloudThinker">
+        Mở **More → Workspace settings → Connections**, chọn **dbt** và nhấn **Connect**. Chọn **Self-host**, điền các trường trong [Chi tiết kết nối](#chi-tiết-kết-nối), rồi nhấn **Connect**.
+
+        **Trạng thái thành công:** kết nối hiển thị trạng thái **Connected**. Lần kết nối đầu tiên có thể mất khoảng hai phút trong lúc CloudThinker clone repository và cài đặt các package của project.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+Khi chỉnh sửa một kết nối đã lưu, loại kết nối ban đầu được giữ nguyên. Để dùng tab còn lại, hãy thêm một kết nối thứ hai.
+
+## Chi tiết kết nối
+
+| Trường Cloud | Bắt buộc | Nội dung cần nhập |
+|---|---|---|
+| **Access URL** | Có | Host lấy từ **Account settings → Access URLs**, ví dụ `cloud.getdbt.com` |
+| **Access token** | Có | Service token hoặc personal access token bạn đã tạo |
+| **Production environment ID** | Có | Con số sau `/environments/` trong URL của production environment. Các thao tác đọc model, source, lineage và metric dùng giá trị này |
+
+| Trường Self-host | Bắt buộc | Nội dung cần nhập |
+|---|---|---|
+| **Git repository URL** | Có | URL clone HTTPS, ví dụ `https://gitlab.com/acme/analytics.git`, không chứa username hay token |
+| **Repository username** | Có | Username của GitLab deploy token, hoặc GitHub username của bạn. Mặc định là `oauth2` |
+| **Repository read token** | Có | Deploy token hoặc fine-grained token |
+| **Branch or tag** | Không | Để trống để đọc branch mặc định |
+| **Project folder** | Không | Thư mục chứa `dbt_project.yml`, tính từ thư mục gốc của repository. Để trống khi tệp nằm ở thư mục gốc |
+| **Warehouse** | Có | **PostgreSQL** |
+| **Warehouse host** | Có | Hostname hoặc địa chỉ IP, không kèm port |
+| **Warehouse port** | Có | Mặc định là `5432` |
+| **Database** | Có | Database mà project của bạn build vào |
+| **Schema** | Có | Schema mà các model production build vào. SQL đã compile và bản xem trước phân giải `ref()` theo schema này |
+| **Warehouse user** | Có | User chỉ đọc |
+| **Warehouse password** | Có | Mật khẩu của user đó |
+
+## Quyền yêu cầu
+
+| Tab | Bạn muốn agent | Quyền truy cập |
+|---|---|---|
+| **Cloud** | Đọc job, run, log và run artifact | **Job Viewer** trên service token |
+| **Cloud** | Đọc model, source, exposure và lineage | **Metadata Only** trên service token |
+| **Cloud** | Trả lời câu hỏi về metric | **Semantic Layer Only** trên service token |
+| **Self-host** | Đọc project | `read_repository` trên GitLab deploy token, hoặc quyền đọc một repository trên GitHub fine-grained token |
+| **Self-host** | Compile model và xem trước row | `USAGE` trên các schema và `SELECT` trên các bảng |
+
+Personal access token mang quyền của người dùng tạo ra nó thay cho các permission set này.
+
+<Tip>
+Chỉ cấp cho service token các permission set ở trên, và chỉ cấp cho user warehouse `USAGE` và `SELECT`. Không bên nào cần quyền ghi hay quyền admin.
+</Tip>
+
+## Khả năng của agent
+
+| Tab | Agent có thể làm gì | Giới hạn |
+|---|---|---|
+| **Cloud** | Liệt kê project, job và run, và đọc trạng thái, lỗi, log và artifact của một run | Chỉ đọc |
+| **Cloud** | Đọc model, source, exposure và macro, truy vết lineage, và kiểm tra sức khỏe cùng thời gian chạy của model | Dùng production environment |
+| **Cloud** | Liệt kê metric, dimension và saved query, hiển thị SQL của một metric, và truy vấn metric | Cần Semantic Layer. Truy vấn metric chạy trong warehouse của bạn và được tính phí ở đó |
+| **Self-host** | Parse và liệt kê project, truy vết lineage, và đọc chi tiết node | Đọc branch bạn đã đặt; không có lịch sử chạy |
+| **Self-host** | Compile một model thành SQL và xem trước row của model | Tối đa 100 row mỗi lần xem trước |
+
+### Xác minh kết nối
+
+```text
+Show the upstream and downstream lineage of the orders model
+```
+
+Kết quả mong đợi là các model và source cấp dữ liệu cho `orders`, cùng các model được build từ nó. Lỗi model không xác định nghĩa là tên sai, hoặc model không nằm trong production environment hay branch bạn đã đặt.
+
+### Ví dụ prompt
+
+```text
+Why did the last run of the nightly job fail?
+Is the customers model healthy, and how long do its runs take?
+Show the compiled SQL for the orders model and preview 5 rows
+```
+
+## Quyền ghi
+
+Kết nối dbt chỉ đọc. Agent không thể chạy, chạy lại hoặc hủy job dbt Cloud, và không thể run, build, test, seed hay snapshot một project dbt Core. CloudThinker không bao giờ push vào repository của bạn.
+
+## Khắc phục sự cố
+
+<Accordion title="The provider rejected these credentials">
+dbt từ chối token. Kiểm tra **Access URL** là host của tài khoản bạn, token chưa hết hạn hoặc bị thu hồi, và service token có **Job Viewer** và **Metadata Only**. Tạo token mới và kết nối lại.
+</Accordion>
+
+<Accordion title="Câu hỏi về model, lineage hoặc metric thất bại">
+**Production environment ID** sai hoặc không phải là số. Chỉ sao chép con số sau `/environments/` trong URL của production environment.
+</Accordion>
+
+<Accordion title="Câu hỏi về metric không trả về kết quả hữu ích">
+Tài khoản chưa thiết lập Semantic Layer, hoặc token thiếu **Semantic Layer Only**. Câu hỏi về job, model và lineage vẫn hoạt động khi không có nó.
+</Accordion>
+
+<Accordion title="could not clone the repository; check the URL, branch, username, and token">
+CloudThinker không đọc được repository. Kiểm tra URL bắt đầu bằng `https://`, branch hoặc tag tồn tại, username khớp với token (username riêng của GitLab deploy token, hoặc GitHub username của bạn), và token đọc được repository đó. Nếu URL chứa username hoặc token, hãy xóa chúng và dùng các trường **Repository username** và **Repository read token**.
+</Accordion>
+
+<Accordion title="dbt_project.yml not found in the project folder">
+Đặt **Project folder** thành thư mục chứa `dbt_project.yml`, tính từ thư mục gốc của repository, ví dụ `analytics`. Để trống khi tệp nằm ở thư mục gốc.
+</Accordion>
+
+<Accordion title="The tools for this connection took too long to start">
+Lần kết nối Self-host đầu tiên clone repository và cài đặt package, việc này có thể mất vài phút. Đợi một phút, rồi kết nối lại.
+</Accordion>
+
+<Accordion title="Compile hoặc xem trước thất bại với lỗi database">
+CloudThinker không truy cập được PostgreSQL, hoặc user thiếu quyền. Kiểm tra host, port, database và mật khẩu, firewall của bạn cho phép CloudThinker, và user có `USAGE` và `SELECT` trên các schema mà model của bạn đọc.
+</Accordion>
+
+## Bảo mật
+
+<ConnectionSecurity />
+
+- **Dùng user warehouse chỉ đọc**: bản xem trước chạy truy vấn `SELECT` bằng user này, và dbt chạy hook của project khi compile. Chỉ cấp `USAGE` và `SELECT`.
+- **Giới hạn phạm vi token repository**: dùng GitLab deploy token hoặc GitHub fine-grained token chỉ đọc được đúng một repository dbt.
+
+## Liên quan
+
+<CardGroup cols={2}>
+  <Card title="PostgreSQL" icon="/images/icons/postgresql.svg" href="/vi/guide/connections/postgresql">
+    Kết nối trực tiếp warehouse bằng user chỉ đọc.
+  </Card>
+  <Card title="Tổng quan kết nối" icon="plug" href="/vi/guide/connections/overview">
+    Xem mọi kết nối và cách CloudThinker truy cập dịch vụ nội bộ.
+  </Card>
+</CardGroup>
