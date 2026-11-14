@@ -1,0 +1,169 @@
+---
+title: API Errors
+description: "Read the Public API error shape, decide when to retry, and fix the most common error codes."
+icon: triangle-exclamation
+---
+
+Every Public API error has the same JSON shape, so one handler covers every call. Use `category` to decide what to do, and `code` for the exact cause.
+
+## Error shape
+
+```json
+{
+  "error": {
+    "code": "permission_missing",
+    "category": "forbidden",
+    "message": "Your workspace role lacks the permission this operation needs.",
+    "action": "contact_admin",
+    "action_target": null,
+    "retryable": false,
+    "field_errors": null,
+    "context": null
+  },
+  "request_id": "9f3c2a71b0d4",
+  "detail": "Your workspace role lacks the permission this operation needs."
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `code` | The exact cause. Stable: safe to branch on. |
+| `category` | The kind of failure. Branch on this first. |
+| `message` | A sentence for people. It may change; don't parse it. |
+| `action` | What fixes it, such as `retry`, `fix_input`, `sign_in` or `contact_admin`. Can be `null`. |
+| `action_target` | Where to apply the fix, when there is one. Usually `null`. |
+| `retryable` | `true` when the same request can succeed later |
+| `field_errors` | For request validation errors, each field's `path`, `code` and `message`. Otherwise `null`. |
+| `context` | Extra facts for some codes. Otherwise `null`. |
+| `request_id` | Quote it when you contact support |
+| `detail` | Deprecated copy of `message`. Don't use it. |
+
+Every response carries the same ID in an `X-Request-ID` header. To tag a call with your own ID, send `X-Request-ID`: a letter or digit, then up to 127 letters, digits, `.`, `_`, `:` or `-`. Any other value is replaced with a new ID, not refused.
+
+## Categories
+
+| Category | Status | Retry? | What to do |
+| --- | --- | --- | --- |
+| `invalid_input` | 400, 422, 428 | No | Fix the request. `field_errors` names each bad field. |
+| `unauthenticated` | 401 | No | Use a valid, unexpired token |
+| `forbidden` | 403 | No | Use a token with the scope the call needs, or ask for a higher workspace role. See [How a call is checked](/guide/api/tokens#how-a-call-is-checked). |
+| `policy_blocked` | 403 | No | A workspace policy refuses the action |
+| `not_found` | 404 | No | Check the ID and the workspace |
+| `conflict` | 409, 412 | When `retryable` is `true` | Read `code`; see the table below |
+| `reconnect_required` | 409 | No | Reconnect the connection in the app |
+| `rate_limited` | 429 | Yes | Wait `Retry-After` when sent. See [Rate limits](#rate-limits). |
+| `dependency_unavailable` | 502, 503 | Yes | Retry with backoff |
+| `dependency_timeout` | 504 | Yes | Retry with backoff |
+| `internal` | 500 | No | Contact support with the `request_id` |
+
+## Common codes
+
+| Status | Code | Fix |
+| --- | --- | --- |
+| 400 | `invalid_cursor` | Start the listing again without `cursor` |
+| 400 | `hop_invalid` | Don't send the `X-CloudThinker-Execute-Id` or `X-CloudThinker-Call-Index` headers. CloudThinker reserves them. |
+| 401 | `token_invalid` | The token is missing, unknown, expired or revoked. Create a new one. |
+| 403 | `scope_missing` | The token doesn't have the scope the call needs. Create a token with that scope. |
+| 403 | `permission_missing` | Your current workspace role doesn't have the permission behind the scope. Ask a workspace Admin for a higher role. |
+| 404 | `workspace_not_found` | The token doesn't cover this workspace, or its owner is no longer a member. Use the workspace ID from `GET /v1/token`. |
+| 409 | `idempotency_running` | A request with this `Idempotency-Key` is still running. Retry after it ends. |
+| 412 | `precondition_failed` | The incident changed since you read it. Get it again and retry with the new `ETag` header. |
+| 422 | `validation_error` | A field, query parameter or header is invalid. `field_errors` gives its `path` and `code`. |
+| 422 | `idempotency_key_missing` | Send an `Idempotency-Key` header with the `POST` |
+| 422 | `idempotency_reused` | The key was used with a different body. Send a new key. |
+| 422 | `validation_error` (no `field_errors`) | On `POST /chat/runs`: the prompt contains credentials. Remove them and send again. |
+| 428 | `precondition_required` | Send `If-Match` with the `ETag` header from the last read |
+| 429 | `public_rate_limited` | The token's hourly quota is full. Wait the seconds in `Retry-After`. |
+| 429 | `rate_limited` | The workspace already has 20 agent runs pending or running. Wait for one to end; this response has no `Retry-After`. |
+
+Getting or updating an incident returns an `ETag` header, and a `PATCH` sends that value in `If-Match`, so two scripts can't overwrite each other.
+
+## Rate limits
+
+Each token has an hourly request quota. The window opens with the token's first counted call and resets one hour later.
+
+| Plan | Requests per hour, per token | Can be raised |
+| --- | --- | --- |
+| Free | 1,000 | Upgrade to a paid plan |
+| Any paid plan | 5,000 | Enterprise: [contact us](mailto:support@cloudthinker.io) |
+
+If a payment is overdue, the Free quota applies until billing is current.
+
+A call counts once its token, workspace, scope and role checks pass, even if it then fails. A `429` counts too; retrying before `Retry-After` only gets another `429`. A call refused with `401`, `404` `workspace_not_found`, `403` `scope_missing` or `403` `permission_missing` doesn't count, and neither does `GET /v1/token`.
+
+| Caller | Quotas each call counts against |
+| --- | --- |
+| Personal API token | That token |
+| OAuth token, MCP client or CLI login | That token, client or login |
+| Service account credential | That credential, the service account, and one quota shared by every service account in the workspace |
+
+A service account call is refused once any of its quotas is full, so adding credentials or service accounts doesn't add capacity. Spread their load over time instead.
+
+Agent runs also spend [credits](/guide/billing/credit-limits), and a workspace can have 20 pending or running at once.
+
+Successful counted responses and `429` responses carry these headers. An error returned while handling a counted call, such as `404`, `412` or `422`, doesn't:
+
+| Header | Meaning |
+| --- | --- |
+| `RateLimit-Limit` | Requests allowed per hour |
+| `RateLimit-Remaining` | Requests left in the current window |
+| `RateLimit-Reset` | Seconds until the window resets |
+| `Retry-After` | Only on `429`: seconds to wait before retrying |
+
+To stay under the quota, use `limit=100` on list calls and slow down before `RateLimit-Remaining` reaches zero. To ask for more, email support with your organization, the token or service account name (never the token), and your peak requests per hour.
+
+## Retry-safe writes
+
+Every `POST` needs an `Idempotency-Key` header, and an incident `PATCH` accepts one: 1–255 letters, digits, `-` or `_`. Any other value returns `422` `validation_error`, with `["header", "Idempotency-Key"]` as the field path and `string_pattern_mismatch` as its code. Generate a new key, such as a UUID, for each new action, and reuse it only when you retry that same action.
+
+A key belongs to its caller, workspace and operation, and CloudThinker keeps it for 24 hours. After that, the same key starts a new write. The body is compared byte for byte, so send the exact same bytes when you retry.
+
+| You send | You get |
+| --- | --- |
+| A new key | The write runs |
+| The same key and body, after the first call succeeded | The first result again, with `Idempotency-Replayed: true`. Nothing runs twice. |
+| The same key, after the first call returned an error | The write runs again. Only a `2xx` result keeps the key. |
+| The same key while the first call is still running | `409` `idempotency_running` |
+| The same key with a different body, while the first call runs or after it succeeded | `422` `idempotency_reused` |
+
+The CLI sends a fresh key on every write unless you pass your own with `--key`. Pass the same `--key` when you retry a write.
+
+## Retry a failed call
+
+Retry when the error's `retryable` is `true`, on a `502`, `503` or `504` even without a JSON body, and on a network failure, where `curl` reports status `000`. Wait the seconds in `Retry-After` when the response has it, and double the wait otherwise. Add a little random jitter, and give up after a few tries. Keep the same `Idempotency-Key` on every try so a write runs at most once:
+
+```bash
+key=$(uuidgen)
+for attempt in 1 2 3 4 5; do
+  rm -f body.json headers.txt
+  status=$(curl -sS -o body.json -D headers.txt -w '%{http_code}' -X POST \
+    "https://app.cloudthinker.io/api/public/v1/workspaces/$WORKSPACE_ID/chat/runs" \
+    -H "Authorization: Bearer $CLOUDTHINKER_TOKEN" \
+    -H "Content-Type: application/json" \
+    -H "Idempotency-Key: $key" \
+    -d '{"prompt": "Summarize the open critical incidents"}') || status=000
+  case "$status" in
+    2??) break ;;
+    000|502|503|504) ;;
+    *) [ "$(jq -r '.error.retryable' body.json 2>/dev/null)" = true ] || break ;;
+  esac
+  [ "$attempt" -lt 5 ] || break
+  delay=$(grep -i '^retry-after:' headers.txt 2>/dev/null | tail -n 1 | tr -dc '0-9')
+  sleep $(( ${delay:-$((2 ** attempt))} + RANDOM % 3 ))
+done
+echo "HTTP $status"
+[ -f body.json ] && cat body.json
+```
+
+The CLI doesn't retry a `429` for you; it exits with code 1. A script that calls it should wait and retry the same way.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="API Tokens" icon="key" href="/guide/api/tokens#how-a-call-is-checked">
+    See which scope each call needs and fix a 403.
+  </Card>
+  <Card title="Pricing" icon="credit-card" href="/guide/billing/pricing">
+    Compare plans.
+  </Card>
+</CardGroup>

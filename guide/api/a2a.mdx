@@ -1,0 +1,120 @@
+---
+title: A2A API
+description: "Let an outside system such as ServiceNow ask a CloudThinker agent a question over the Agent2Agent protocol."
+icon: arrow-right-arrow-left
+---
+
+The A2A API lets a system outside CloudThinker ask one agent a question over the [Agent2Agent (A2A) protocol](https://a2a-protocol.org). The caller authenticates with the OAuth 2.0 client credentials grant, so no person has to log in. For every field, method and error code, see the [A2A API Reference](/guide/api/a2a-reference).
+
+## Prerequisites
+
+- The organization is on **Scale** or **Enterprise**. See [Pricing](/guide/billing/pricing).
+- You have the **Developer** or **Admin** workspace role. See [Workspace users](/guide/workspace-users). If **Add an outside caller** is missing or greyed out, one of these two is the reason.
+- You know which agent should answer: CloudThinker itself or one of your custom agents. Each outside caller is tied to one agent in one workspace.
+
+## Add an outside caller
+
+<Steps>
+  <Step title="Open the sharing settings">
+    Go to **Agents settings**, open the **Sharing** tab, and find **Agents we share**.
+  </Step>
+  <Step title="Add the caller">
+    Click **Add an outside caller**. Enter a **Name** your team will recognize (for example "ServiceNow"), pick the **Agent that answers**, and optionally set a **Monthly credit limit**. Leave the limit empty for no limit.
+
+    Under **What it may do**, keep or clear the three permissions. All are on by default. **Ask** lets the caller ask the agent and cancel its own tasks. **Read tasks** lets it read, list and follow its own tasks. **Webhooks** lets it set push URLs that receive its task updates.
+
+    To let the caller sign in with `private_key_jwt` instead of the secret, paste an RS256 or ES256 public key in **Public key (JWK, optional)**. Add it now: the caller's row has no control to add or change the key later. Click **Create client**.
+  </Step>
+  <Step title="Copy the credentials">
+    CloudThinker shows four values: **Client ID**, **Client secret**, **Token URL** and **Agent URL**. Copy the secret now. It's shown once, and CloudThinker keeps only a hash of it. Store all four in the outside system's secret store.
+
+    ```text
+    Token URL: https://app.cloudthinker.io/api/a2a/oauth/token
+    Agent URL: https://app.cloudthinker.io/api/a2a
+    ```
+
+    Every caller uses the same agent URL. The token decides which workspace and agent answer.
+  </Step>
+</Steps>
+
+## Get a token
+
+POST to the token URL with HTTP Basic auth (client ID as the user, secret as the password) and the `client_credentials` grant:
+
+```bash
+curl -X POST "$TOKEN_URL" \
+  -u "$CLIENT_ID:$CLIENT_SECRET" \
+  -d grant_type=client_credentials
+```
+
+```json
+{"access_token": "eyJ...", "token_type": "Bearer", "expires_in": 3600, "scope": "a2a:ask a2a:push a2a:tasks.read"}
+```
+
+The token is valid for 1 hour. Request a new one when it expires. To skip this step, send `X-API-Key: <client ID>.<client secret>` on each call instead; see [Endpoints](/guide/api/a2a-reference#endpoints). For the token request options and errors, see [Get a token](/guide/api/a2a-reference#get-a-token).
+
+## Send a first message
+
+POST a JSON-RPC 2.0 `SendMessage` request to the agent URL with the token as a Bearer token. Give each question a unique `messageId`. Resending the same `messageId` returns the first task instead of starting a new run, so retries are safe.
+
+```bash
+curl -X POST "$AGENT_URL" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "A2A-Version: 1.0" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "SendMessage",
+    "params": {
+      "message": {
+        "messageId": "snow-INC0012345-1",
+        "role": "ROLE_USER",
+        "parts": [{"text": "What caused the checkout-api errors in the last hour?"}]
+      }
+    }
+  }'
+```
+
+CloudThinker waits up to 110 seconds for the run to finish, then returns the task. To get it back at once, set `"configuration": {"returnImmediately": true}` in `params`. Keep the task's `id`.
+
+If the task isn't final yet, call `GetTask` with that `id`. An agent run can take minutes, so poll every 10 to 30 seconds:
+
+```bash
+curl -X POST "$AGENT_URL" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "A2A-Version: 1.0" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "id": 2, "method": "GetTask", "params": {"id": "<task-id>"}}'
+```
+
+Stop when `status.state` is `TASK_STATE_COMPLETED`, `TASK_STATE_FAILED`, `TASK_STATE_REJECTED` or `TASK_STATE_CANCELED`. On `TASK_STATE_COMPLETED`, the answer is the `text` in `result.artifacts[].parts[]`. To avoid polling, use `SendStreamingMessage` or `SubscribeToTask`, or set a [push notification](/guide/api/a2a-reference#push-notifications) URL. See [Task fields](/guide/api/a2a-reference#task-fields) for every state.
+
+To ask a follow-up in the same conversation, send the task's `contextId` as `message.contextId`.
+
+## What to expect
+
+The agent answers questions but doesn't make changes for an outside caller. The run uses the workspace System user, and the conversation shows "Asked by: &lt;client name&gt;" and marks it as an outside caller. Credits are charged to the workspace that owns the caller. By default, each caller runs at most 3 questions at once. See [Errors](/guide/api/a2a-reference#errors) for what a refused call returns, and what to do.
+
+## Rotate, pause or revoke
+
+In **Agents settings → Sharing → Agents we share**, each caller's row has three controls:
+
+- **New secret**: the old secret stops working at once. Tokens already issued keep working until they expire, up to 1 hour. Update the secret in the calling system right away.
+- The **Let &lt;name&gt; ask** switch: turned off, it pauses the caller, and new questions are refused with `client_inactive`. Turn it back on to resume.
+- **Revoke**: the secret, every token and any running questions stop. This can't be undone.
+
+<Warning>
+Revoking a caller is permanent. To stop traffic without losing the caller, pause it instead.
+</Warning>
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="A2A API Reference" icon="book" href="/guide/api/a2a-reference">
+    Every endpoint, method, field, task state, error code and limit.
+  </Card>
+  <Card title="Public API" icon="code" href="/guide/api/overview">
+    Read and act on workspace data with a scoped token.
+  </Card>
+</CardGroup>

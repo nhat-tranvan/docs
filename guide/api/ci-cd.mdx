@@ -1,0 +1,115 @@
+---
+title: Use CloudThinker in CI/CD
+description: "Call CloudThinker from GitHub Actions or GitLab CI with a service account token, the CLI or plain HTTP."
+icon: code-branch
+---
+
+A pipeline calls CloudThinker with a service account credential stored as a CI secret. The job needs no browser login and keeps working when people change role or leave.
+
+## Prerequisites
+
+- A workspace **Admin**, to create the service account.
+- A CI system that stores secrets, such as GitHub Actions or GitLab CI.
+
+## Set up the token
+
+<Steps>
+  <Step title="Create a service account">
+    Open **Workspace settings → Service accounts**, add an account such as `ci-release-gate`, and give it the lowest role the job needs: **Developer** for a job that asks CloudThinker a question, **Viewer** for a release gate that only reads release risk. See [Service accounts](/guide/api/tokens#service-accounts).
+  </Step>
+  <Step title="Create a credential">
+    Click **Manage → Create credential**. Pick only the scopes the job calls: `chat:runs:write` to ask a question, `review:releases:read` for the release gate. Set an expiry and copy the `ct_sat_` value.
+  </Step>
+  <Step title="Store it as a CI secret">
+    Save it as a masked secret named `CLOUDTHINKER_TOKEN`. In GitHub, use **Settings → Secrets and variables → Actions**. In GitLab, use **Settings → CI/CD → Variables → Add variable**, set **Visibility** to **Masked**, and select **Protect variable** so only protected branches and tags get it.
+  </Step>
+</Steps>
+
+## Run it in the pipeline
+
+The examples ask CloudThinker for a release risk summary and fail the job unless the run succeeds within 15 minutes. A successful run means CloudThinker answered, not that the release is safe; to gate on release risk, see [Call the API directly](#call-the-api-directly). Exit code 4 means the wait ran out and the run continues; exit code 5 means it paused for an approval. See [Approvals for API runs](/guide/api/approvals).
+
+<Tabs>
+  <Tab title="GitHub Actions">
+    ```yaml .github/workflows/cloudthinker.yml
+    name: CloudThinker release summary
+    on: [workflow_dispatch]
+    permissions:
+      contents: read
+
+    jobs:
+      check:
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+          - name: Install the CLI
+            run: |
+              curl -fsSL https://cloudthinker.io/install.sh | sh
+              echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          - name: Ask CloudThinker
+            env:
+              CLOUDTHINKER_TOKEN: ${{ secrets.CLOUDTHINKER_TOKEN }}
+            run: |
+              set -o pipefail
+              cloudthinker chat -p "Summarize the production risk of releasing $GITHUB_SHA" \
+                --timeout 900 --json < /dev/null | jq -r .answer
+    ```
+  </Tab>
+  <Tab title="GitLab CI">
+    ```yaml .gitlab-ci.yml
+    cloudthinker-check:
+      stage: test
+      image: ubuntu:24.04
+      timeout: 20m
+      before_script:
+        - apt-get update && apt-get install -y curl jq
+        - curl -fsSL https://cloudthinker.io/install.sh | sh
+        - export PATH="$HOME/.local/bin:$PATH"
+      script:
+        - set -o pipefail
+        - cloudthinker chat -p "Summarize the production risk of releasing $CI_COMMIT_SHA" --timeout 900 --json < /dev/null | jq -r .answer
+    ```
+  </Tab>
+</Tabs>
+
+The installer puts the CLI in `~/.local/bin` and adds it to `PATH` only in your shell profile, which a CI step doesn't read. The extra line puts it on `PATH` for the steps that follow. To pin a CLI version instead of taking the latest, see [Use it in CI](/guide/cli/headless-chat#use-it-in-ci).
+
+`set -o pipefail` keeps the CLI's exit code when its output goes through `jq`. Without it, the step takes `jq`'s exit code and passes even when the run failed or paused.
+
+A service account credential covers its own workspace, so the job needs no workspace setting. Don't set `--workspace` or `CLOUDTHINKER_WORKSPACE` beside `CLOUDTHINKER_TOKEN`: the command exits with code 2. An API token is meant for `cloudthinker chat` and `cloudthinker api`; most other CLI commands need a [CLI login](/guide/cli/authentication#authenticate-a-script-or-ci-job).
+
+## Call the API directly
+
+For a read that needs no agent, skip the prompt and call the API. This step passes when the repository's newest release is clear to ship, was shipped anyway by a person, or doesn't exist yet. It fails while the release is being analyzed, is blocked, or its analysis failed. Set `--project` to the repository path, such as `$GITHUB_REPOSITORY` or `$CI_PROJECT_PATH`:
+
+```bash
+set -o pipefail
+cloudthinker api review.releases.list --project "$GITHUB_REPOSITORY" --limit 1 \
+  | jq -e '.items[0] | . == null or .status == "clear" or .status == "shipped_anyway"'
+```
+
+Any HTTP client works too. Send the token as a bearer and put the workspace ID, from `workspace_ids` in `GET /v1/token`, in the path:
+
+```bash
+curl -fsS -H "Authorization: Bearer $CLOUDTHINKER_TOKEN" \
+  "https://app.cloudthinker.io/api/public/v1/workspaces/<workspace-id>/review/releases?limit=1"
+```
+
+## Keep pipelines safe
+
+- One service account per pipeline, with the lowest role that pipeline needs.
+- Expose the secret only to protected branches and trusted workflows, never to jobs that run code from forks.
+- A re-run `cloudthinker chat` step starts a second run. To make a re-run safe, start the run with `cloudthinker api chat.runs.create --set prompt="…" --key <key>` and a key built from the pipeline ID, then wait with `cloudthinker chat status <run-id> --wait`. See [Write data](/guide/cli/api#write-data).
+- Rotate the credential before it expires. See [Rotate and revoke](/guide/api/tokens#rotate-and-revoke).
+- Every credential of a service account, and every service account in the workspace, draws on shared hourly [quotas](/guide/api/errors#rate-limits), so a second credential adds no capacity. `cloudthinker api` doesn't retry a `429`; wait for `Retry-After` before you run the step again.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Approvals for API Runs" icon="shield-check" href="/guide/api/approvals">
+    Decide what a pipeline run may change without a person.
+  </Card>
+  <Card title="Headless Chat" icon="terminal" href="/guide/cli/headless-chat">
+    Exit codes and JSON output for chat runs.
+  </Card>
+</CardGroup>

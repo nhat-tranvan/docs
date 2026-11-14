@@ -48,6 +48,8 @@ for tab in en["tabs"]:
     sections = [(a["anchor"], a["groups"]) for a in tab["anchors"]] if "anchors" in tab else [(None, tab["groups"])]
     for anchor, groups in sections:
         for g in groups:
+            if not list(pages(g)):  # an openapi group has no .mdx pages
+                continue
             title = " / ".join(x for x in (tab["tab"], anchor, g["group"]) if x)
             out += [f"## {title}", ""]
             for p in pages(g):
