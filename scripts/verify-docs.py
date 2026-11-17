@@ -120,6 +120,17 @@ for p in PAGES:
 
 # ------------------------------------------------------------- frontmatter
 FM = re.compile(r"\A---\n(.*?)\n---", re.S)
+
+
+def frontmatter_flag(p, key):
+    """True when the page's frontmatter sets `key: true`."""
+    m = FM.search(read(p))
+    return bool(m and re.search(rf"^{key}:\s*true\s*$", m.group(1), re.M))
+
+
+def is_hidden(p):
+    return frontmatter_flag(p, "hidden")
+
 titles = {}
 for p in PAGES:
     if p.startswith("snippets/"):
@@ -244,12 +255,22 @@ for slug in sorted(linked):
     if not os.path.exists(slug + ".mdx") or slug.startswith(LANGS):
         continue
     if slug not in all_nav:
-        # A page that sets `hidden: true` stays out of the nav on purpose (for example the
-        # AWS Marketplace pages, linked only from the listing), so links to it are fine.
-        if "hidden: true" in read(slug + ".mdx")[:400]:
+        # A page whose frontmatter sets `hidden: true` stays out of the nav on purpose (for
+        # example the AWS Marketplace pages, linked only from the listing).
+        if is_hidden(slug + ".mdx"):
             continue
         fail("nav-missing", f"{slug} is linked from other pages but is in no language's nav "
                             f"(a generator script may have dropped it)")
+
+# A public page that links to a hidden page makes the hidden page discoverable.
+for p in PAGES:
+    if p.startswith(LANGS) or p.startswith("snippets/") or is_hidden(p):
+        continue
+    body = read(p)
+    for m in list(LINK.finditer(body)) + list(HREF.finditer(body)):
+        slug = m.group(1).rstrip("/")
+        if os.path.exists(slug + ".mdx") and is_hidden(slug + ".mdx"):
+            notes.append(f"hidden-link: {p} links to hidden page {slug}")
 
 # ----------------------------------------------------------------- Beta
 # One label word. Cyber is the only product the app badges pre-GA
