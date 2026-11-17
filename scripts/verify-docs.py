@@ -244,6 +244,10 @@ for slug in sorted(linked):
     if not os.path.exists(slug + ".mdx") or slug.startswith(LANGS):
         continue
     if slug not in all_nav:
+        # A page that sets `hidden: true` stays out of the nav on purpose (for example the
+        # AWS Marketplace pages, linked only from the listing), so links to it are fine.
+        if "hidden: true" in read(slug + ".mdx")[:400]:
+            continue
         fail("nav-missing", f"{slug} is linked from other pages but is in no language's nav "
                             f"(a generator script may have dropped it)")
 
