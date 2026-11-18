@@ -1,0 +1,145 @@
+---
+title: MuleSoft Anypoint Platform
+description: "Connect MuleSoft Anypoint so agents can inspect Mule apps, deployments, logs, and API policies, and run approved restarts and scaling"
+icon: "/images/icons/mulesoft.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+import ApprovalDefault from '/snippets/approval-default.mdx';
+
+Connect MuleSoft Anypoint Platform so CloudThinker agents can find failed Mule apps, check recent deployments, read CloudHub logs, and review API Manager policies, then start, stop, restart, roll back, or scale an app through your Approvals. The connection signs in with the **client ID** and **client secret** of an Anypoint **Connected App** that acts on its own behalf.
+
+## Prerequisites
+
+- An Anypoint Platform organization on the US, EU, or Government Cloud control plane. Organizations on another MuleSoft cloud, on MuleSoft Government Cloud Plus, or on Private Cloud Edition can't connect yet: [contact us](https://cloudthinker.io/contact).
+- The **Organization Administrator** permission in the business group where you create the Connected App. See MuleSoft's [Creating Connected Apps](https://docs.mulesoft.com/access-management/creating-connected-apps-dev).
+- The **Admin** role in your CloudThinker workspace, which can add and edit connections. See [Roles](/guide/security/roles).
+
+Apps on CloudHub 2.0, CloudHub 1.0, and your own Mule servers (hybrid) all work through Anypoint's control plane. Nothing is installed on your servers.
+
+## Setup
+
+<Steps>
+  <Step title="Create a Connected App">
+    Sign in to Anypoint Platform and open **Access Management**. In the navigation menu, click **Connected Apps**, and optionally select the business group to create the app in. Click **Create App**, enter a name such as `cloudthinker`, and select **App acts on its own behalf (client credentials)**.
+  </Step>
+  <Step title="Add scopes">
+    Click **Add Scopes** and select the scopes from [Required permissions](#required-permissions). Click **Next**, select the business groups the app can reach, and click **Next**. Select every environment agents should see, such as **Sandbox** and **Production**, and click **Next**. Review the list, click **Add Scopes**, then click **Save**.
+
+    Runtime Manager and API Manager scopes apply per environment. If you don't select an environment, Anypoint saves those scopes unticked, and agents see no apps.
+  </Step>
+  <Step title="Copy the client ID and secret">
+    In **Connected Apps → Owned Apps**, click **Copy Id** for the app, then copy its client secret the same way.
+  </Step>
+  <Step title="Add the connection in CloudThinker">
+    In the sidebar, click **More → Workspace settings → Connections**. On the **Builtin Connections** tab, search for **MuleSoft Anypoint Platform** and click **Connect**. Fill in the fields from [Connection details](#connection-details) and click **Connect**.
+
+    **Success state:** the connection shows **Connected**. CloudThinker has checked that the Connected App can read its own organization. What agents can see in Runtime Manager and API Manager depends on the scopes from step 2.
+  </Step>
+</Steps>
+
+## Connection details
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| **Region** | The MuleSoft cloud your organization is on: **US**, **EU**, or **Government Cloud**. Defaults to **US** | **EU** |
+| **Connected App client ID** | The client ID from step 3 | `<your-client-id>` |
+| **Connected App client secret** | The client secret of the same Connected App | `<your-client-secret>` |
+
+Pick the region you sign in to: `anypoint.mulesoft.com` is **US**, and `eu1.anypoint.mulesoft.com` is **EU**. CloudThinker always verifies Anypoint's certificate and doesn't follow redirects, so the secret is never sent anywhere else.
+
+## Required permissions
+
+Agents can do only what the Connected App's scopes allow, in the business groups and environments you selected.
+
+| Goal | Scopes to add |
+|------|---------------|
+| Connect, and list business groups and environments | **View Organization** and **View Environment** |
+| Read apps, deployments, and CloudHub logs | Runtime Manager **Read Applications** |
+| See hybrid servers and the apps on them | Runtime Manager **Read Servers** |
+| Read API instances and applied policies | API Manager **View APIs Configuration** and **View Policies** |
+| Start, stop, restart, roll back, or scale apps | Runtime Manager **Create Applications**, **Delete Applications**, and **Download Applications** |
+
+<Tip>
+Start with the read scopes in the environments you want investigated. Add the Runtime Manager action scopes only in environments where agents should be able to restart or scale apps. CloudThinker doesn't need Exchange scopes.
+</Tip>
+
+## Agent capabilities
+
+| Capability | What agents can do | Approval |
+|------------|--------------------|----------|
+| **Discovery** | Map business groups, environments, hybrid servers, and apps on each runtime, with their status. A first pass samples up to three business groups and two environments in each; name an environment to look further | No |
+| **App details** | Read an app's status, capacity, version, and last deployment | No |
+| **Logs** | Read up to 100 recent log lines from a CloudHub 2.0 or CloudHub 1.0 app, from the last 24 hours, with an optional text filter | No |
+| **API Manager** | List API instances and the policies applied to each. Policy settings and credentials are left out | No |
+| **Start, stop, restart** | Change the run state of an app on any runtime | Yes |
+| **Roll back** | Return a CloudHub 2.0 app to its previous deployment | Yes |
+| **Scale** | Set CloudHub 1.0 workers or CloudHub 2.0 replicas, from 1 to 16 | Yes |
+
+<ApprovalDefault />
+
+Hybrid apps have no central log store in Anypoint. For those, agents say so and point you to the log system your servers send to.
+
+### Verify the connection
+
+```text
+List my MuleSoft business groups and environments, and the apps in each with their runtime and status
+```
+
+A working connection returns your business groups and environments, then the apps you scoped, grouped by runtime.
+
+### Example prompts
+
+```text
+Which Mule apps in Production failed or were redeployed in the last day? Show recent errors from their logs
+List the API Manager instances in Production and the policies applied to each
+Restart the orders-api app in Sandbox and tell me when it's running again
+```
+
+## Write access
+
+Before any action, CloudThinker reads the app and shows its environment, version, status, and the downtime or capacity change in the [approval](/guide/approvals/overview) request. If the app changes between that read and the action, the action is refused and needs a fresh read and approval.
+
+An accepted request isn't a finished one. CloudThinker reads the app again until the deployment settles. A failed or timed-out action is never retried on its own. A restart stops the app and then starts it; if it's interrupted, the app can stay stopped until you approve a start.
+
+Agents can't deploy new apps, change app properties, or edit API policies. Rollback works only on CloudHub 2.0: use your release pipeline for CloudHub 1.0 and hybrid apps. Scale hybrid apps on your own servers.
+
+## Troubleshooting
+
+<Accordion title="Anypoint rejected the Connected App credentials. Check the client ID and secret.">
+The client ID or secret is wrong, or the secret was changed. Copy both again from **Connected Apps → Owned Apps**. Check that **Region** matches the cloud your organization is on: an EU app can't sign in to the US region.
+</Accordion>
+
+<Accordion title="Anypoint rejected the token request. Use a Connected App that acts on its own behalf with the client credentials grant.">
+The app was created as **App acts on behalf of a user**. Create a new Connected App with **App acts on its own behalf (client credentials)** and use its client ID and secret.
+</Accordion>
+
+<Accordion title="The Connected App lacks access. Grant reads for its Connected App record and organization, then the required Runtime Manager and API Manager scopes.">
+The app signed in but can't read its own organization. Add **View Organization** and **View Environment** to the app for that business group, save it, and connect again.
+</Accordion>
+
+<Accordion title="Connected, but agents see no apps or environments">
+The Runtime Manager and API Manager scopes weren't saved for any environment. Open the app in **Connected Apps**, click **Add Scopes**, and select the business group and each environment again. Check that the scopes now show as ticked.
+</Accordion>
+
+<Accordion title="An action is refused after you approved it">
+The app changed after CloudThinker read it, or the Connected App lacks the Runtime Manager action scopes in that environment. Ask the agent to read the app again, then approve the new request. If it's refused again, add the action scopes from [Required permissions](#required-permissions).
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- **Set a secret expiry.** A Connected App secret doesn't expire by default. Set an expiration date, or rotate it on your normal schedule.
+- **Rotate after an ownership transfer.** When the app's creator leaves or loses admin rights, MuleSoft moves the app to the root organization owner. Rotate its secret, then update the connection.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Decide which changes run, wait for a person, or are refused
+  </Card>
+  <Card title="Connections" icon="plug" href="/guide/connections/overview">
+    Every service CloudThinker can connect to
+  </Card>
+</CardGroup>
