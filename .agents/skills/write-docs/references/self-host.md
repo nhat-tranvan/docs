@@ -17,6 +17,8 @@ Public docs are read by CloudThinker Cloud (SaaS) customers first. Never tell th
 
 When a feature is gated, say **in beta**, or **contact CloudThinker**. Nothing more.
 
+Exception: Enterprise deployment pages under `guide/deployment/` (such as the AWS Marketplace pages) may describe the customer-facing stack, the AWS resources and permissions it needs, and its network access, still without internal names, hosts, IDs, images, or settings.
+
 ## Two meanings of "self-hosted"
 
 Keep them apart. One term per concept.
