@@ -1,0 +1,126 @@
+---
+title: CloudThinker Enterprise Data Handling
+sidebarTitle: Data handling
+description: "Review what stays in your AWS account, the exact messages an Enterprise install sends CloudThinker, and how retention and deletion work."
+icon: shield-halved
+hidden: true
+noindex: true
+---
+
+CloudThinker Enterprise stores and processes your data in your own AWS account. This page lists what stays there, exactly what the install sends to CloudThinker, and how retention, deletion, incident reporting, and audit logs work.
+
+## What stays in your account
+
+The app collects the same kinds of data as the hosted service: accounts, workspaces, connection credentials, chats, files, agent results, audit records, and usage. All of it stays in your AWS account, in the Region you launch in.
+
+| Resource in your account | What it holds |
+|---|---|
+| Amazon Aurora PostgreSQL | All app data, including the audit trail |
+| Amazon S3 bucket | Files, attachments, and images |
+| Amazon ElastiCache for Valkey | Short-lived cache data |
+| AWS Secrets Manager | App keys and database passwords |
+| Amazon EKS | The app, the upgrader, and agent sandboxes |
+| Amazon CloudWatch Logs | Logs of the launch check and installer functions |
+
+AI models run on Amazon Bedrock in your account, called by the app's own IAM role. Bedrock global inference profiles can serve a request from another AWS Region. Email goes through Amazon SES in your account, your own SMTP server, or is turned off.
+
+Product analytics, session recording, marketing tools, run tracing, web search, and the knowledge base are off on Enterprise. CloudThinker staff cannot connect into your network, your cluster, or your AWS account. The stack gives CloudThinker no IAM user, access key, or role it can assume.
+
+## What leaves your account
+
+The app and the upgrader talk to one CloudThinker service, the CloudThinker billing service, over HTTPS. Every request is signed with the install's own key. [Network access](/guide/deployment/aws-marketplace/network-access) explains how to get the address to allow. No chats, prompts, files, credentials, or data from your connected systems are sent.
+
+| Message | When | What it contains |
+|---|---|---|
+| Registration | Once, at first start | Install token, the install's public key, a signed AWS identity proof that shows your AWS account ID, cluster ID, chart and Kubernetes versions |
+| License check | Every minute | Install ID. The reply is the signed license. |
+| Usage | Every minute, only when there is new usage | Per run: event ID, time, product module, workspace ID, credits used |
+| Heartbeat | Every 5 minutes | App, chart, upgrader, and stack versions; upgrade state and a short failure reason; install address and load balancer host names; certificate expiry date; state of support operations you approved |
+| Updates | When the upgrader checks for releases, or an admin changes update settings | Update mode, channel, window, and approved version |
+| Launch, name, and delete | At stack create, update, and delete | Install token check; claim of the managed install name with the certificate's DNS validation records; removal of the install and its name on delete |
+
+CloudThinker reports your usage to AWS Marketplace every hour for billing. Container images, charts, and releases come from the CloudThinker container registry in AWS Marketplace, pulled with your nodes' and upgrader's own IAM roles.
+
+Data also leaves your account when you choose: connections you add (for example Slack, GitHub, or another AWS account), sandbox internet access, and the optional public webhook address. All outbound traffic leaves through one NAT gateway address. See [Network access](/guide/deployment/aws-marketplace/network-access).
+
+## How data is protected
+
+| Area | What the stack does |
+|---|---|
+| Encryption at rest | One customer managed AWS KMS key in your account, rotation on, encrypts the database, cache, S3 bucket, secrets, installer logs, and, when the stack builds the cluster, Kubernetes secrets. You own the key policy. |
+| Encryption in transit | The database accepts only TLS, the cache requires TLS, the bucket refuses non-TLS requests, and users reach the app over HTTPS. |
+| Credentials | Connection credentials and sign-in secrets are encrypted again inside the database. |
+| Isolation | Single-tenant: one account, one cluster, one database, used only by you. |
+| Sandboxes | Agent code runs in Kata Containers VMs on their own nodes. Sandboxes cannot reach the database, cache, or instance metadata. They reach the cluster API and your private ranges only if you turn that on. |
+
+For every AWS resource, role, and permission, see [AWS services and IAM](/guide/deployment/aws-marketplace/aws-services-and-iam).
+
+## Compliance
+
+CloudThinker has SOC 2 Type 1 and SOC 2 Type 2 reports. Request them, and see our other security documents, in the [CloudThinker Trust Center](https://trust.cloudthinker.io/).
+
+## Retention
+
+Data in your account:
+
+| Data | Kept for |
+|---|---|
+| Aurora automated backups, with point-in-time restore | 7 days |
+| Aurora snapshots taken before each upgrade | The 3 most recent |
+| Old S3 object versions | 30 days |
+| App audit trail | 365 days by default; an administrator can change it |
+| Launch check and installer logs in CloudWatch | 90 days |
+
+Everything else stays until you delete it. You can keep backups longer with your own AWS Backup plan. See [Backup and restore](/guide/deployment/aws-marketplace/backup-and-restore).
+
+Data CloudThinker holds about your install:
+
+| Data | Kept for |
+|---|---|
+| Registration, license, and usage records | 7 years, for tax and AWS Marketplace payout audits |
+| Heartbeat details: versions, load balancer names, certificate expiry | 90 days |
+| Managed install address | Removed when the subscription ends, after the grace period, and never reused |
+
+## Deletion
+
+You delete your data directly in your AWS account. Deleting the stack keeps the database, bucket, KMS key, and data secrets on purpose, so a mistaken delete never loses data. Remove them when you are sure. See [Uninstall](/guide/deployment/aws-marketplace/uninstall).
+
+When the subscription ends, the install keeps running for a 30-day grace period, then stops starting runs. Your data stays in your account until you delete it. See [Contract and billing](/guide/deployment/aws-marketplace/contract-and-billing).
+
+Deleting the stack also removes the install and its managed address from CloudThinker. Billing and usage records stay for the retention above.
+
+## Security incidents
+
+Report a suspected incident or vulnerability to [security@cloudthinker.io](mailto:security@cloudthinker.io). The steps, what to include, and how CloudThinker responds are in [Report a security incident](/guide/security/report-a-security-incident).
+
+CloudThinker acknowledges a report within one business day. When we confirm an incident that affects your install, we notify your administrators within 72 hours. A release that fixes a security issue shows **Security release** on the license page; install it promptly. See [Upgrades](/guide/deployment/aws-marketplace/upgrades).
+
+Your own AWS account is yours to monitor. Keep AWS CloudTrail on, and send its logs where your security team reviews them.
+
+## Audit logs
+
+Two sources record what happens in an install, both in your account:
+
+| Source | What it records | Where |
+|---|---|---|
+| App audit trail | Sign-ins, permission changes, connection changes, agent actions, and other app events | The Aurora database; view and export it in the app. See [Audit logs](/guide/security/audit-logs). |
+| AWS CloudTrail | Every AWS API call by the stack's roles and by your administrators | Your CloudTrail trail |
+
+To keep a tamper-resistant copy, export the app audit trail and send CloudTrail to an S3 bucket with S3 Object Lock.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="AWS services and IAM" icon="key" href="/guide/deployment/aws-marketplace/aws-services-and-iam">
+    Every resource, role, and permission the stack creates.
+  </Card>
+  <Card title="Network access" icon="network-wired" href="/guide/deployment/aws-marketplace/network-access">
+    Choose who reaches the app and what it reaches out to.
+  </Card>
+  <Card title="Report a security incident" icon="triangle-exclamation" href="/guide/security/report-a-security-incident">
+    How to report and how CloudThinker responds.
+  </Card>
+  <Card title="Uninstall" icon="trash" href="/guide/deployment/aws-marketplace/uninstall">
+    Delete the stack and the kept resources.
+  </Card>
+</CardGroup>
