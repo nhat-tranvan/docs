@@ -1,0 +1,158 @@
+---
+title: CloudThinker Enterprise AWS Services and IAM
+sidebarTitle: AWS services and IAM
+description: "Review every AWS service, IAM role, and permission the CloudThinker Enterprise stack creates in your account, in plain words."
+icon: key
+hidden: true
+noindex: true
+---
+
+This page lists every AWS resource the CloudThinker Enterprise CloudFormation stack creates, every IAM role, and what each role may do. Everything is in your account and Region; CloudThinker gets no IAM user, no access key, and no role it can assume.
+
+## Cluster modes
+
+The `ClusterMode` parameter decides how much the stack builds.
+
+| Mode | What the stack builds |
+|---|---|
+| `new` | The network, the EKS cluster, and everything below |
+| `existing` | You bring a VPC, subnets, and an EKS cluster. The stack skips the rows marked **new only**. |
+
+## AWS services
+
+| Service | What the stack creates | Mode |
+|---|---|---|
+| Amazon VPC | One VPC across two Availability Zones with public, private, data, and sandbox subnets; an internet gateway; one NAT gateway with an Elastic IP; route tables | new only |
+| Amazon EC2 | Security groups for the sandbox nodes, Aurora, ElastiCache, and the installer function, and their rules; two launch templates that require IMDSv2 and encrypted 100 GB gp3 disks | both |
+| Amazon EKS | One cluster with a private API endpoint, the `vpc-cni`, `kube-proxy`, `coredns`, and `aws-ebs-csi-driver` add-ons, an IAM OIDC provider, and the `general` app node group | new only |
+| Amazon EKS | The `opensandbox-kata` sandbox node group (nested virtualization on, each sandbox in its own Kata Containers VM), and an access entry for the installer role | both |
+| Amazon Aurora PostgreSQL | One Serverless v2 cluster with one writer, encrypted, TLS required, deletion protection on, 7-day backups, RDS Data API on | both |
+| Amazon ElastiCache | One Valkey node, encrypted in transit and at rest, with an AUTH password | both |
+| Amazon S3 | One private, versioned bucket for files, attachments, and images; KMS-encrypted; public access blocked; TLS-only bucket policy | both |
+| AWS KMS | One customer managed key, rotation on, with an alias | both |
+| AWS Secrets Manager | Five secrets: Aurora master password, app database password, cache password, app keys, and the first administrator's one-time setup link | both |
+| AWS Lambda | Two functions, the launch check and the installer, with a code signing config that accepts only code CloudThinker signed | both |
+| Amazon CloudWatch Logs | One log group per function, kept 90 days | both |
+| AWS Certificate Manager | One public certificate for the managed install address | managed address only |
+| AWS IAM | The nine roles below | both |
+| Elastic Load Balancing | Network Load Balancers, created at runtime by the AWS Load Balancer Controller, not by the template | both |
+
+When you delete the stack, it keeps the KMS key, Aurora, the S3 bucket, and the database and app-key secrets, so your data stays readable.
+
+## How roles are used
+
+| Role | Used by | Trusts |
+|---|---|---|
+| Cluster role (new only) | The EKS control plane | `eks.amazonaws.com` |
+| Node role | App nodes | `ec2.amazonaws.com` |
+| Sandbox node role | Sandbox nodes | `ec2.amazonaws.com` |
+| App role | The CloudThinker app and its hook jobs | One named Kubernetes service account, through the cluster's OIDC provider |
+| Upgrader role | The CloudThinker upgrader | One named service account |
+| Load balancer controller role | The AWS Load Balancer Controller | One named service account |
+| EBS CSI driver role (new only) | The EBS CSI driver | One named service account |
+| Launch check role | The launch check function | `lambda.amazonaws.com` |
+| Installer role | The installer function | `lambda.amazonaws.com` |
+
+Wildcards (`*`) appear only where an AWS action does not support resource-level permissions, as noted below.
+
+## Node roles
+
+| Role | Permissions |
+|---|---|
+| Cluster role | AWS managed `AmazonEKSClusterPolicy`. |
+| Node role | AWS managed `AmazonEKSWorkerNodePolicy` (join the cluster), `AmazonEKS_CNI_Policy` (pod networking), `AmazonEC2ContainerRegistryReadOnly` (pull images), and `AmazonSSMManagedInstanceCore`, so your administrators can open a Session Manager shell on an app node. |
+| Sandbox node role | The same as the node role without Session Manager. |
+| EBS CSI driver role | AWS managed `AmazonEBSCSIDriverPolicy`, to create and attach the app's disks. |
+
+## App role
+
+| # | What it allows |
+|---|---|
+| 1 | Read, write, and delete objects in the stack's bucket only. |
+| 2 | List that bucket and read its Region. |
+| 3 | Use the stack's KMS key, only through Amazon S3. |
+| 4 | Invoke Amazon Bedrock foundation models and inference profiles, including cross-Region and global profiles, and read inference profiles. Limited to foundation-model ARNs and inference profiles in your account. |
+| 5 | List Bedrock foundation models and inference profiles (`*`, list calls only). |
+| 6 | Bring your own Bedrock key in IAM role mode: assume a role you tagged `cloudthinker-byok` = `true`, only with an External ID that starts with `ct-`. |
+| 7 | AWS connections in IAM role mode: assume a role you tagged `cloudthinker-connection` = `true`, in this account or another one. That role's trust policy must name this role. Untagged roles are never assumable. |
+| 8 | With email through SES, or email off: send email through SES from identities in this account and Region. With SES outside Quick Launch, only from the stack's sender address. |
+| 9 | With email through SES, or email off: read and create SES email identities and read the SES account status in this Region, so an admin can set up the sender later. |
+
+## Upgrader role
+
+| # | What it allows |
+|---|---|
+| 1 | Get an Amazon ECR sign-in token (`*`, the call has no resource). |
+| 2 | Pull images and charts only from CloudThinker's AWS Marketplace repositories. |
+| 3 | Describe this install's Aurora cluster and the upgrader's own snapshots. |
+| 4 | Snapshot this install's Aurora cluster before an upgrade, and tag the snapshot (names start with `ct-upgrader-`). |
+| 5 | Delete only its own `ct-upgrader-` snapshots. |
+| 6 | Describe the stack's KMS key, and grant its use only to AWS services, for encrypted snapshots. |
+
+## Load balancer controller role
+
+The controller's published policy, cut down to Network Load Balancers.
+
+| # | What it allows |
+|---|---|
+| 1 | Create the Elastic Load Balancing service-linked role, and no other. |
+| 2 | Read-only discovery of the network, load balancers, and certificates (`*`, describe and list calls only). |
+| 3 | Add and remove ingress rules on the cluster's node security group. |
+| 4 | Create security groups, and tag, change, or delete only the ones it tagged with `elbv2.k8s.aws/cluster`. |
+| 5 | Create load balancers, target groups, and listeners with that tag, and change, register targets on, or delete only resources that carry it. |
+
+No WAF, Shield, Cognito, or listener-rule permissions.
+
+## Launch check role
+
+The launch check runs at stack create, update, and delete, outside your VPC. It validates the install token and inputs before the stack builds anything kept or costly, and requests the managed certificate.
+
+| # | What it allows |
+|---|---|
+| 1 | Write its own log group only. |
+| 2 | Read the install token secret and, if you set one, your SMTP password secret, only to check it is readable. |
+| 3 | Describe this stack and its resources. |
+| 4 | Describe Availability Zones, subnets, security groups, and VPCs (`*`, describe calls only). |
+| 5 | Existing mode: describe your cluster, its node groups, and its `vpc-cni` add-on (that cluster only), and read IAM OIDC providers. |
+| 6 | Custom address: describe the certificate you named. |
+| 7 | Request and tag an ACM certificate, only with the `cloudthinker:install` tag (`*`, a new certificate has no ARN yet). |
+| 8 | Describe and delete only certificates in this account and Region that carry that tag. |
+| 9 | Quick Launch email setup with SES: read the SES account status, and read and create SES email identities to start sender verification. |
+| 10 | Invoke its own function only, to keep waiting for certificate validation. |
+
+## Installer role
+
+The installer runs inside your VPC on stack create, update, and delete. It prepares the database and installs the upgrader and its settings into the cluster.
+
+| # | What it allows |
+|---|---|
+| 1 | Write its own log group, and manage the network interfaces a function in a VPC needs (`*`). |
+| 2 | Read the install token, the stack's five secrets, and, if you set one, your SMTP password secret. |
+| 3 | Write the app keys, app database password, and one-time setup link secrets. |
+| 4 | Run SQL through the RDS Data API on this install's Aurora cluster only, to create the app's database user. It has no network path to the database. |
+| 5 | Decrypt and generate data keys with the stack's KMS key only. |
+| 6 | Describe this install's EKS cluster only. |
+| 7 | Describe subnets and VPCs (`*`, describe calls only). |
+| 8 | Describe this stack, to check every event against the stack's status. |
+| 9 | With email through SES: read and create SES email identities, to verify the sender and admin addresses. |
+| 10 | Invoke its own function only, so a long step continues while CloudFormation waits. |
+
+The installer also has an EKS access entry with `AmazonEKSClusterAdminPolicy`, kept for the life of the stack, because updates and deletes reapply and remove CloudThinker's Kubernetes objects. It accepts events only from its own stack.
+
+## KMS key policy
+
+| Who | What |
+|---|---|
+| Your account root | Full control of the key, through your own IAM policies |
+| CloudWatch Logs in this Region | Encrypt and decrypt only for the installer's log group |
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Data handling" icon="shield-halved" href="/guide/deployment/aws-marketplace/data-handling">
+    What stays in your account and what leaves it.
+  </Card>
+  <Card title="Before you start" icon="list-check" href="/guide/deployment/aws-marketplace/before-you-start">
+    The permissions the person who launches the stack needs.
+  </Card>
+</CardGroup>
