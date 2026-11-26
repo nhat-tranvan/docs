@@ -1,202 +1,169 @@
 ---
 title: MongoDB
-description: "MongoDB 데이터베이스를 CloudThinker에 연결하여 문서 쿼리 분석, 성능 튜닝, 운영 인사이트를 제공합니다"
+description: "MongoDB 또는 Atlas를 연결하면 에이전트가 읽기 전용 모드로 데이터베이스, 컬렉션, 인덱스, 쿼리 계획을 검사할 수 있습니다"
 icon: "/images/icons/mongodb.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ko/connection-security.mdx';
 
-MongoDB 데이터베이스를 연결하면 [CloudThinker](/ko/guide/agents/overview)가 쿼리를 분석하고, 성능을 최적화하며, 데이터베이스 상태를 모니터링할 수 있습니다.
+MongoDB 배포나 MongoDB Atlas 클러스터를 연결하면 CloudThinker 에이전트가 데이터베이스, 컬렉션, 인덱스, 쿼리 계획을 검사할 수 있습니다. 전용 데이터베이스 사용자의 연결 문자열 하나를 CloudThinker에 제공하며, 연결은 항상 읽기 전용 모드로 실행됩니다. 에이전트는 쿼리하고 explain할 수 있지만, 삽입, 업데이트, 삭제(drop), 인덱스 생성은 할 수 없습니다.
 
-## 지원 플랫폼
+## 사전 요구 사항
 
-| 플랫폼 | 지원 |
-|----------|---------|
-| **자체 호스팅 MongoDB** | 4.x, 5.x, 6.x, 7.x |
-| **MongoDB Atlas** | 전체 버전 |
-
-## 사전 요구사항
-
-- 네트워크를 통해 CloudThinker에서 접근 가능한 MongoDB 인스턴스 또는 Atlas 클러스터.
-- 전용 데이터베이스 사용자를 생성하고 역할을 할당할 관리자 접근.
-- 자격증명이 포함된 MongoDB 연결 문자열.
+- CloudThinker가 인터넷에서 접근할 수 있는 MongoDB 배포 또는 Atlas 클러스터. 에이전트는 CloudThinker Cloud에서 연결하므로, `localhost`와 사설 주소는 사용자의 네트워크가 아니라 CloudThinker Cloud 쪽에서 확인됩니다. Atlas private endpoint와 VPC peering은 지원되지 않습니다. [비공개 서비스 접근](/ko/guide/connections/overview#비공개-서비스-접근)을 참조하세요.
+- 데이터베이스 사용자를 만들 수 있는 권한: 셀프 호스팅 MongoDB에서는 `admin`에 대한 `userAdmin`, Atlas에서는 **Project Database Access Admin**(또는 그 이상).
 
 ## 설정
 
-MongoDB 플랫폼을 선택하여 구체적인 연결 방법을 확인하세요.
+<Steps>
+  <Step title="읽기 전용 사용자 만들기">
+    <Tabs>
+      <Tab title="셀프 호스팅 MongoDB">
+        관리자로 `mongosh`에 접속한 다음 `admin` 데이터베이스에 사용자를 만듭니다.
 
-<Tabs>
-  <Tab title="자체 호스팅 MongoDB">
-    <Steps>
-      <Step title="관리자로 연결">
-        관리자 권한으로 Mongo 셸(`mongosh`)을 사용하여 MongoDB 인스턴스에 연결하세요.
-
-        *`<admin-user>`, `<admin-password>`, `<your-host>`를 실제 자격증명으로 교체하세요. `/admin` 데이터베이스가 필요합니다.*
-
-        ```bash
-        mongosh "mongodb://<admin-user>:<admin-password>@<your-host>:27017/admin"
-        ```
-      </Step>
-      <Step title="admin 데이터베이스로 전환">
-        사용자가 생성되는 `admin` 데이터베이스에 있는지 확인하세요:
         ```javascript
         use admin
-        ```
-      </Step>
-      <Step title="읽기 전용 사용자 생성">
-        표준 MongoDB 내장 역할을 사용하여 CloudThinker 전용 사용자를 생성하세요:
-        ```javascript
         db.createUser({
-          user: "<cloudthinker_user>",
+          user: "cloudthinker_readonly",
           pwd: "<secure-password>",
           roles: [
-            { role: "readAnyDatabase", db: "admin" },
+            { role: "readAnyDatabase", db: "admin" },  // or { role: "read", db: "shop" } for one database
             { role: "clusterMonitor", db: "admin" }
           ]
         })
         ```
-        성능 메트릭 분석을 위해 `clusterMonitor` 역할이 권장됩니다.
-      </Step>
-      <Step title="네트워크 접근 설정">
-        CloudThinker가 데이터베이스에 접근할 수 있는지 확인하세요:
-        - CloudThinker IP를 방화벽 또는 보안 그룹에 추가
-        - `mongod.conf`에서 MongoDB가 접근 가능한 IP 주소에 바인딩되어 있는지 확인
-      </Step>
-      <Step title="CloudThinker에 연결 추가">
-        **Connections → MongoDB**로 이동하여 연결 문자열을 붙여넣으세요:
+      </Tab>
+      <Tab title="MongoDB Atlas">
+        Atlas에서 **Security → Database Access**를 열고 **Add New Database User**를 클릭합니다. **Password** 인증을 선택하고 `cloudthinker_readonly`와 강력한 비밀번호를 입력한 다음, **Database User Privileges**에서 기본 제공 역할 **Only read any database**를 선택합니다. 에이전트를 데이터베이스 하나로 제한하려면 대신 **Specific Privileges**에 `read@shop`을 추가하세요. **Add User**를 클릭합니다.
 
-        ```
-        mongodb://<cloudthinker_user>:<secure-password>@<your-host>:27017/admin?tls=true&appName=CloudThinker
-        ```
+        서버 상태, 로그, 복제 지연을 보려면 **Specific Privileges**에 **clusterMonitor** 역할도 추가하세요.
+      </Tab>
+    </Tabs>
+  </Step>
+  <Step title="네트워크 접근 열기">
+    CloudThinker의 egress IP가 배포에 접근할 수 있도록 허용합니다. 이 문서는 CloudThinker의 egress IP 목록을 공개하지 않습니다. CloudThinker 담당자에게 문의하거나 [문의하기](https://cloudthinker.io/contact)를 이용하세요. 셀프 호스팅 MongoDB에서는 방화벽이나 보안 그룹에서 포트 `27017`의 인바운드 연결을 허용하고, `mongod.conf`의 `bindIp`가 `127.0.0.1`만이 아닌지 확인하세요. Atlas에서는 **Security → Network Access → IP Access List**에 IP마다 항목을 하나씩 추가하세요.
+  </Step>
+  <Step title="연결 문자열 만들기">
+    <Tabs>
+      <Tab title="셀프 호스팅 MongoDB">
+        레플리카 세트의 경우 모든 멤버를 나열하고 세트 이름을 지정합니다.
 
-        배포 환경에서 TLS 암호화를 강제하는 경우 `tls=true`를 포함하세요. **Connect**를 클릭하세요. 성공하면 CloudThinker가 **Connected** 상태를 표시합니다.
-      </Step>
-    </Steps>
-  </Tab>
-  <Tab title="MongoDB Atlas">
-    <Steps>
-      <Step title="Database Access로 이동">
-        [cloud.mongodb.com/v2](https://cloud.mongodb.com/v2)에서 MongoDB Atlas 대시보드에 로그인하세요.
-
-        왼쪽 사이드바에서 **Security** 섹션으로 스크롤하여 **Database Access**를 선택하세요.
-      </Step>
-      <Step title="새 데이터베이스 사용자 추가">
-        **Add New Database User**를 클릭하고 다음을 설정하세요:
-        - **Authentication Method**: Password
-        - **Username**: `<cloudthinker_user>`
-        - **Password**: 안전한 비밀번호 생성
-        - **Database User Privileges**: **Built-in Role** → **Read Any Database** 선택
-
-        **Add User**를 클릭하세요.
-      </Step>
-      <Step title="네트워크 접근 설정">
-        **Security** 섹션의 **Network Access**로 이동하세요:
-        - **IP Access List** → **+ Add IP Address** 클릭
-        - CloudThinker 연결 설정 화면에 표시된 CloudThinker 고정 IP 주소 입력
-        - 향후 감사를 위해 `CloudThinker Agent Access`와 같은 설명 추가
-        - **Confirm** 클릭
-      </Step>
-      <Step title="연결 문자열 가져오기">
-        **Deployment** 아래의 **Databases** 탭으로 이동하여 클러스터에서 **Connect**를 클릭하고 **Drivers**를 선택하세요.
-
-        Atlas가 다음 형식의 문자열을 제공합니다:
-        ```
-        mongodb+srv://<username>:<password>@<cluster-name>.<cluster-hash>.mongodb.net/?appName=<ClusterName>
+        ```text
+        mongodb://cloudthinker_readonly:<secure-password>@h1.example.com:27017,h2.example.com:27017,h3.example.com:27017/?replicaSet=rs0&authSource=admin&tls=true&readPreference=secondaryPreferred&appName=CloudThinker
         ```
 
-        CloudThinker에 맞게 수정하세요:
-        ```
-        mongodb+srv://<cloudthinker_user>:<secure-password>@<cluster-name>.<cluster-hash>.mongodb.net/admin?appName=CloudThinker&tls=true&retryWrites=false
+        단일 서버의 경우 호스트 하나를 사용하고 `replicaSet`을 뺍니다. 서버가 TLS를 지원하지 않는 경우에만 `tls=true`를 빼세요.
+      </Tab>
+      <Tab title="MongoDB Atlas">
+        클러스터에서 **Connect**를 클릭하고 **Drivers**를 선택한 다음 `mongodb+srv://` 문자열을 복사합니다. 1단계의 사용자와 비밀번호를 넣습니다.
+
+        ```text
+        mongodb+srv://cloudthinker_readonly:<secure-password>@cluster0.abcde.mongodb.net/?readPreference=secondaryPreferred&appName=CloudThinker
         ```
 
-        - `/admin`은 인증 데이터베이스를 명시적으로 지정
-        - `appName=CloudThinker`는 데이터베이스 로그에서 식별을 쉽게 함
-        - `tls=true`는 전송 중 암호화를 강제
-        - `retryWrites=false`는 이 읽기 전용 사용자에 적합
-      </Step>
-      <Step title="CloudThinker에 연결 추가">
-        **Connections → MongoDB**로 이동하여 수정된 연결 문자열을 붙여넣으세요. **Connect**를 클릭하세요. 성공하면 CloudThinker가 **Connected** 상태를 표시합니다.
-      </Step>
-    </Steps>
-  </Tab>
-</Tabs>
+        Atlas는 `mongodb+srv://` 문자열에 TLS를 자동으로 켭니다.
+      </Tab>
+    </Tabs>
+
+    `readPreference=secondaryPreferred`는 에이전트의 읽기를 세컨더리로 보내므로, 프로덕션 프라이머리에 부담을 주지 않습니다. 사용할 수 있는 세컨더리가 없으면 프라이머리로 대체합니다. `appName=CloudThinker`는 MongoDB 로그에서 연결에 레이블을 붙입니다. 비밀번호의 특수 문자는 URL 인코딩하세요(`@`는 `%40`이 됩니다).
+  </Step>
+  <Step title="CloudThinker에 연결 추가">
+    **Settings → Workspace → Connections**를 열고 **MongoDB**를 선택한 다음, 상세 패널에서 **Connect**를 클릭합니다. 대화상자에서 필요하면 **Alias**와 **Description**을 변경합니다. **MDB_MCP_CONNECTION_STRING** 레이블이 붙은 연결 문자열 필드에 문자열을 붙여 넣고 **Connect**를 클릭합니다.
+
+    **성공 상태:** 연결에 **Connecting**과 **Verifying**이 표시된 다음 **Connected**가 표시됩니다. 그러면 CloudThinker가 연결을 읽기 전용으로 깊이 살펴보는 채팅을 엽니다("Often takes about 15 min. You can leave the chat."). 나중에 다시 실행하려면 카드의 **More** 메뉴를 열고 **Try in chat**을 선택하세요.
+  </Step>
+</Steps>
 
 ## 연결 세부 정보
 
-| 필드 | 설명 | 예시 |
-|-------|-------------|---------|
-| **Connection string** | 자격증명을 포함한 전체 MongoDB URI | `mongodb+srv://user:pass@host/admin?tls=true` |
-| **TLS/SSL** | 연결에 TLS 강제 — URI에서 `tls=true` 사용 | `true` |
-| **Read preference** | 읽기 작업을 라우팅할 노드 | `primary` |
-| **Connection timeout** | 연결 대기 시간 (초) | `10` |
+| 필드 | 필수 | 설명 | 예시 |
+|-------|----------|-------------|---------|
+| **Alias** | 아니요 | 이 배포의 짧은 이름. `mongodb-1`처럼 다음으로 사용 가능한 별칭이 미리 채워집니다 | `prod-atlas` |
+| **Description** | 아니요 | 이 배포가 무엇인지. 에이전트가 인스턴스를 고를 때 읽습니다 | `Production Atlas cluster` |
+| **MDB_MCP_CONNECTION_STRING** | 예 | 사용자, 비밀번호, 호스트, 옵션을 포함한 전체 MongoDB URI | `mongodb+srv://cloudthinker_readonly:<password>@cluster0.abcde.mongodb.net/` |
 
-## 필요 권한
+문자열에서 유용한 옵션:
 
-| 역할 | 용도 |
-|------|---------|
-| `readAnyDatabase` | 모든 컬렉션의 쿼리 및 인덱스 사용량 분석 |
-| `clusterMonitor` | 성능 메트릭을 위한 `serverStatus`, `replSetGetStatus` 및 기타 진단 명령 접근 |
+| 옵션 | 사용 시점 |
+|--------|-------------|
+| `authSource=admin` | 사용자가 `admin` 데이터베이스에 있고 문자열이 다른 데이터베이스를 지정하는 경우 |
+| `tls=true` | 서버가 TLS를 지원하고 스킴이 `mongodb://`인 경우 |
+| `readPreference=secondaryPreferred` | 프로덕션에 권장: 에이전트의 읽기가 세컨더리로 가고 프라이머리를 피합니다 |
+| `appName=CloudThinker` | 로그와 `currentOp`에서 CloudThinker 세션을 찾고 싶은 경우 |
+
+## 필수 권한
+
+| 역할 | 허용되는 것 |
+|------|-----------------|
+| `readAnyDatabase` | 데이터베이스와 컬렉션 나열, 문서 샘플링, `find`, `aggregate`, `count` 실행, 인덱스와 쿼리 계획 읽기 |
+| `clusterMonitor` | 서버 상태, 레플리카 세트 상태와 지연, 최근 서버 로그 |
 
 <Tip>
-전체 쿼리 분석 및 클러스터 상태 모니터링을 활성화하려면 두 역할을 모두 할당하세요. CloudThinker 사용자에게 절대 쓰기 또는 관리자 역할을 부여하지 마세요.
+에이전트를 데이터베이스 하나로 제한하려면 1단계처럼 `readAnyDatabase` 대신 해당 데이터베이스에 `read`를 부여하세요. `readWrite`, `dbAdmin`, `root`는 절대 부여하지 마세요. 연결은 어차피 읽기 전용이므로, 추가 역할은 기능은 늘리지 않고 위험만 늘립니다.
 </Tip>
 
 ## 에이전트 기능
 
-연결이 완료되면 CloudThinker가 할 수 있는 작업:
+| 기능 | 에이전트가 할 수 있는 작업 |
+|------------|--------------------|
+| **인벤토리** | 문서 수와 스토리지 크기와 함께 데이터베이스와 컬렉션 나열 |
+| **스키마** | 샘플링한 문서에서 필드 이름과 유형 추론 |
+| **쿼리** | 데이터에 관한 질문에 답하기 위해 `find`, `aggregate`, `count` 쿼리 실행 |
+| **인덱스 검토** | 컬렉션별 인덱스를 나열하고 `explain`으로 쿼리가 인덱스를 사용하는지 확인 |
+| **서버 상태** | 서버 로그, 연결, 레플리카 상태 읽기(`clusterMonitor` 필요) |
 
-| 기능 | 설명 |
-|------------|-------------|
-| **쿼리 분석** | 느린 쿼리 식별, `explain()`으로 실행 계획 분석 |
-| **인덱스 권고** | 누락된 인덱스 찾기, 미사용 인덱스 식별 |
-| **성능 메트릭** | 연결, 메모리 사용량, 복제 지연 모니터링 |
+에이전트는 쓸 수 없습니다. 이 연결에서는 삽입, 업데이트, 삭제, drop, 인덱스 생성 도구가 꺼져 있으므로 "drop the sessions collection" 같은 요청은 실행될 수 없습니다. 에이전트는 사용자가 만들 인덱스를 추천할 수는 있습니다.
+
+스키마 추론과 쿼리는 실제 문서를 반환하며, 여기에는 개인 데이터가 포함될 수 있습니다. 에이전트가 어떤 식별자를 자리 표시자로만 보게 할지는 [Guardrails](/guide/security/custom-guardrails)가 결정합니다. 이메일과 전화번호는 기본적으로 켜져 있습니다.
 
 ### 연결 확인
 
 ```text
-List all MongoDB databases and summarize their collection counts
+List the MongoDB databases with their collection counts and storage size
 ```
+
+각 데이터베이스 이름이 컬렉션과 크기와 함께 표시되어야 합니다. Atlas에서는 Atlas가 접근을 차단하므로 `local`과 `config` 시스템 데이터베이스를 건너뜁니다.
 
 ### 예시 프롬프트
 
 ```text
-Analyze slow queries on the production MongoDB instance
-Find missing indexes on the users collection
-Check replication lag on the secondary nodes
+Which queries on the orders collection scan the whole collection, and what index would fix them?
+Show the indexes on every collection in the shop database and flag ones that look redundant
+What does a typical document in users look like? List its fields and types
 ```
 
 ## 문제 해결
 
-<Accordion title="인증 실패">
-- 사용자 이름과 비밀번호가 올바른지 확인하세요
-- 사용자가 `admin` 데이터베이스에 생성되어 있는지 확인하거나 연결 문자열에 `?authSource=admin`을 추가하세요
-- Atlas의 경우: Database Access에서 올바른 권한으로 사용자가 생성되었는지 확인하세요
+<Accordion title="Authentication failed">
+사용자, 비밀번호 또는 인증 데이터베이스가 잘못되었습니다. 사용자를 `admin`에 만들었고 문자열이 다른 데이터베이스를 지정한다면 `authSource=admin`을 추가하세요. Atlas에서는 **Database Access**에 사용자가 있는지, 비밀번호의 특수 문자가 URL 인코딩되었는지 확인하세요.
 </Accordion>
 
-<Accordion title="연결 거부됨 또는 타임아웃">
-- CloudThinker IP가 Atlas 네트워크 접근 목록 또는 방화벽에 추가되어 있는지 확인하세요
-- 로컬 MongoDB의 경우: `mongod.conf`의 `bindIp`가 `127.0.0.1`만으로 설정되어 있지 않은지 확인하세요
+<Accordion title="Server selection timed out 또는 connection refused">
+CloudThinker가 배포에 접근할 수 없습니다. Atlas에서는 **IP Access List**를 확인하세요. 셀프 호스팅 MongoDB에서는 방화벽과 `bindIp`가 `127.0.0.1`만이 아닌지 확인하세요. 사설 네트워크에 있는 배포는 먼저 접근 가능한 엔드포인트가 필요합니다.
 </Accordion>
 
-<Accordion title="성능 메트릭 사용 불가">
-- CloudThinker가 `serverStatus` 및 `replSetGetStatus`를 실행하려면 `clusterMonitor` 역할이 필요합니다
-- `admin` 데이터베이스의 CloudThinker 사용자에게 `clusterMonitor` 역할을 추가하고 재연결하세요
+<Accordion title="not authorized on admin to execute command (serverStatus, replSetGetStatus, getLog)">
+사용자에게 `clusterMonitor`가 없습니다. `admin` 데이터베이스에 추가한 다음 에이전트에게 다시 요청하세요. 데이터에 대한 쿼리는 이것 없이도 계속 작동합니다.
+</Accordion>
+
+<Accordion title="에이전트가 쓰기가 읽기 전용 모드로 차단되었다고 함">
+예상된 동작입니다. MongoDB 연결은 읽기 전용입니다. 변경은 직접 하거나, 에이전트에게 실행할 정확한 명령을 요청하세요.
 </Accordion>
 
 ## 보안
 
 <ConnectionSecurity />
 
-- **TLS 필수** — 전송 중 데이터를 암호화하려면 항상 연결 문자열에 `tls=true`를 사용하세요.
-- **최소 역할** — `readAnyDatabase`와 `clusterMonitor`만 부여하고 쓰기 또는 관리자 역할은 절대 부여하지 마세요.
+- **두 단계의 읽기 전용**: 연결 자체가 쓸 수 없으며, `read`나 `readAnyDatabase`만 가진 사용자도 문자열이 유출되더라도 쓸 수 없습니다.
+- **TLS 사용**: Atlas에서는 `mongodb+srv://`를, 셀프 호스팅 MongoDB에서는 `tls=true`를 사용하여 자격 증명과 쿼리 결과가 전송 중에 암호화되게 하세요.
 
 ## 관련 항목
 
 <CardGroup cols={2}>
-  <Card title="에이전트" icon="database" href="/ko/guide/agents/overview">
-    데이터베이스 중심 최적화 에이전트
+  <Card title="Redis" icon="/images/icons/redis.svg" href="/ko/guide/connections/redis">
+    읽기 전용 ACL 사용자로 Redis 캐시를 연결합니다.
   </Card>
-  <Card title="PostgreSQL 연결" icon="/images/icons/postgresql.svg" href="/ko/guide/connections/postgresql">
-    PostgreSQL 데이터베이스 설정 방법
+  <Card title="Connections" icon="plug" href="/ko/guide/connections/overview">
+    연결할 수 있는 모든 서비스와 연결 상태가 작동하는 방식을 확인하세요.
   </Card>
 </CardGroup>

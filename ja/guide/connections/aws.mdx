@@ -1,286 +1,360 @@
 ---
-title: AWS
-description: "IAMロールまたはアクセスキーによるコスト分析、セキュリティ監査、インフラ管理のためにAWSをCloudThinkerに接続します"
+title: Amazon Web Services
+description: "読み取り専用の IAM ロールで AWS アカウントを接続し、エージェントがコンピューティング、ストレージ、ID、コスト、モニタリングを調査できるようにします。"
 icon: "/images/icons/aws.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
-AWSアカウントを接続して、CloudThinkerエージェントがコスト分析、セキュリティ監査、リソース最適化、大規模なインフラ管理を実行できるようにします。
-
-AWSの認証は**IAMロール（AssumeRole）**または**IAMユーザーアクセスキー**で行います。ロールベースの認証は、AWS STSを通じた短期認証情報を使用し、長期シークレットの保存を避けられるため、強く推奨されています。
-
----
+CloudThinker は、アカウントに対して AWS CLI を実行し、コンピューティング、ストレージ、ID、コスト、モニタリングに関する質問に答えます。接続には、CloudThinker が短期の認証情報を得るために引き受ける IAM ロール（推奨）、または IAM ユーザーのアクセスキーを使います。
 
 ## 前提条件
 
-- IAM管理者アクセス権を持つAWSアカウント。
-- ターゲットアカウントでIAMロールまたはIAMユーザーを作成する権限。
-- セットアップ用の[AWS CloudShell](https://console.aws.amazon.com/)または[IAMコンソール](https://console.aws.amazon.com/iam/)へのアクセス。
-
-<Info>
-ロールベースの認証（AssumeRole）を強く推奨します。環境でAssumeRoleが使用できない場合にのみアクセスキーを使用してください。
-</Info>
-
----
+- IAM ロール（アクセスキー方式の場合は IAM ユーザー）を作成できる AWS アカウント。
+- そのアカウントでの [AWS CloudShell](https://console.aws.amazon.com/cloudshell/home) へのアクセス。セットアップスクリプトはそこで実行されるため、何もインストールする必要はありません。
+- コストに関する質問と [Optimize](/ja/guide/cost-optimization/overview) の場合: アカウントで Cost Explorer がオンになっていること（**Billing and Cost Management → Cost Explorer → Launch Cost Explorer**。組織の場合は管理アカウントで）。新しいアカウントでは、AWS が有効化するまで最大 24 時間かかることがあります。
+- AWS Organization では、サービスコントロールポリシー（SCP）を確認してください。外部のプリンシパルからの `sts:AssumeRole` を拒否する SCP はロールをブロックし、リージョンを拒否する SCP はそれらのリージョンをエージェントから見えなくします。管理アカウントから、**AWS Organizations → AWS accounts → your account → Policies** でアカウントの SCP を一覧表示するか、`aws organizations list-policies-for-target --target-id <account-id> --filter SERVICE_CONTROL_POLICY` を実行します。
+- `ap-east-1` や `me-south-1` などのオプトインリージョンは、AWS コンソールの **Account → AWS Regions** で有効にするまでエージェントからは見えません。
 
 ## セットアップ
 
+まず接続ダイアログを開きます。**Settings → Workspace → Connections** に移動し、**Amazon Web Services** を選んで **Connect** をクリックします。その後、ダイアログ上部で選んだ方法のタブに従います。
+
 <Tabs>
-  <Tab title="ロールベース（推奨）">
-    ### AssumeRoleを使用したIAMロール
+  <Tab title="Role-Based (recommended)">
+    ダイアログは **External ID**（ロールをこの CloudThinker ワークスペースに結び付け、confused deputy 問題を防ぐ一意の識別子。AWS はこれをシークレットとして扱いません）を生成し、それを組み込んだセットアップスクリプトを作成します。
 
-    この方法は、CloudThinkerがリソースにアクセスするためのIAMロールを作成します。メリット：
-    - 長期認証情報の共有や保存が不要
-    - 自動ローテーションされる一時的な認証情報にAWS STSを使用
-    - External IDがconfused deputy攻撃を防御
-    - アクセスの監査と失効が容易
-
-    #### CloudShellによるクイックセットアップ
+    <Warning>
+    **Connect** をクリックするまでダイアログを開いたままにしてください。閉じると External ID は破棄され、新しいダイアログでは別の ID が生成されるため、古い ID で作成したロールは一致しなくなります。
+    </Warning>
 
     <Steps>
-      <Step title="AWS CloudShellを開く">
-        [AWSコンソール](https://console.aws.amazon.com/)にログインし、上部ナビから**CloudShell**を開きます。
+      <Step title="アカウントに名前を付ける">
+        **Alias**（例: `production`）と **Description**（例: `Production AWS account, main workloads`）を入力します。エージェントは説明を読んで適切なアカウントを選びます。**Default AWS region** は任意で、出発点にすぎません。エージェントはロールが到達できる任意のリージョンを使えます。
       </Step>
-      <Step title="セットアップスクリプトを実行">
-        CloudThinkerの接続ダイアログで**Copy Script**をクリックし、CloudShellに貼り付けます。スクリプトは以下を実行します：
-        - `CloudThinkerAccessRole` が存在しないことを確認
-        - 読み取り専用権限でIAMロールを作成
-        - External IDを含むトラストポリシーを添付
+      <Step title="CloudShell を開く">
+        **Open CloudShell** をクリックし、接続したい AWS アカウントにサインインします。
       </Step>
-      <Step title="ロールARNをコピー">
-        出力からロールARNをコピーします：
+      <Step title="セットアップスクリプトを実行する">
+        先にスクリプトを読むには、ダイアログで **View script** をクリックします。その後 **Copy Script to Clipboard** をクリックし、CloudShell に貼り付けて Enter キーを押します。スクリプトは次の処理を行います。
+
+        1. `CloudThinkerAccessRole` という名前のロールがすでに存在する場合は停止します。
+        2. CloudThinker だけが、あなたの External ID を使う場合に限り引き受けられる信頼ポリシーを持つ `CloudThinkerAccessRole` を作成します。
+        3. AWS 管理の `ReadOnlyAccess` ポリシーをアタッチします。
+        4. ロールの ARN を出力します。
+
+        <Accordion title="実行前に確認するためのスクリプト全文">
+        ダイアログが External ID と CloudThinker のプリンシパルを埋め込みます。進捗メッセージも出力されますが、ここでは省略しています。
+
+        ```bash
+        #!/bin/bash
+        set -e
+        ROLE_NAME="CloudThinkerAccessRole"
+
+        # Stop if the role already exists
+        if aws iam get-role --role-name "$ROLE_NAME" >/dev/null 2>&1; then
+          echo "ERROR: Role '$ROLE_NAME' already exists!"
+          exit 1
+        fi
+
+        # Trust policy: only the CloudThinker principal, only with your External ID
+        cat > trust-policy.json <<'EOF'
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": { "AWS": "<CloudThinker principal shown in the dialog>" },
+              "Action": "sts:AssumeRole",
+              "Condition": { "StringEquals": { "sts:ExternalId": "<your External ID>" } }
+            }
+          ]
+        }
+        EOF
+
+        aws iam create-role --role-name "$ROLE_NAME" \
+          --assume-role-policy-document file://trust-policy.json \
+          --description "Role for CloudThinker to access AWS resources"
+
+        aws iam attach-role-policy --role-name "$ROLE_NAME" \
+          --policy-arn arn:aws:iam::aws:policy/ReadOnlyAccess
+
+        rm -f trust-policy.json
+        aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text
         ```
+        </Accordion>
+
+        出力の最後は次のようになります。
+
+        ```text
+        ==========================================
+          ✅ Setup Complete!
+        ==========================================
+
+        Copy this Role ARN and paste it in the connection form:
+
         arn:aws:iam::123456789012:role/CloudThinkerAccessRole
         ```
       </Step>
-      <Step title="接続を完了">
-        ロールARNをCloudThinkerに貼り付け、必要に応じてデフォルトリージョンを選択し、**Connect**をクリックします。CloudThinkerがロールを確認し、**Connected**ステータスに変わります。
+      <Step title="Role ARN を貼り付けて接続する">
+        ARN を **AWS Role ARN** に貼り付けます。**AWS External ID (Auto-generated)** はそのままにしてください。自動で入力されており、スクリプトと一致している必要があります。**Connect** をクリックします。
+
+        **成功時の状態:** ステータスが **Connecting**、**Verifying** と進み、アカウントに **Connected** のステータスが表示されます。このアカウントで Optimize がまだオンになっていない場合、CloudThinker は詳細調査を開始する代わりに **Turn on Optimize?** と尋ねます。**Turn on Optimize** をクリックして最初のコストスキャンを開始するか、**Not now** をクリックしてください。エージェントにアカウントを探索させるには、カードの **More** メニューを開き、**Try in chat** を選択します。[What happens after you connect](/ja/guide/connections/overview#接続した後に起こること) を参照してください。
+      </Step>
+      <Step title="環境を設定する">
+        **Settings → Workspace → Connections** で **Amazon Web Services** を開き、アカウントの行の鉛筆アイコンをクリックして、**Edit Instance** で **Environment** を設定します。これは人とエージェントに向けてアカウントにラベルを付けるものです。[Set the environment](/ja/guide/connections/overview#環境を設定する) を参照してください。
+      </Step>
+      <Step title="確認用の質問をする">
+        チャットを開き、[確認用の質問](#接続を確認する)をします。回答には、実際の 12 桁のアカウント ID が含まれるはずです。
       </Step>
     </Steps>
 
-    #### 期待される出力
+    Terraform や CloudFormation などで自分でロールを作成したい場合は、ダイアログの **Manual steps** を展開します。External ID と CloudThinker のプリンシパルが入力された信頼ポリシーが表示されます。プリンシパルはすべてのワークスペースで同じです。ダイアログごとに変わるのは External ID だけです。CloudThinker は貼り付けた ARN を使うため、手動の手順では任意のロール名を使えます。形式は次のとおりです。
 
-    ```
-    Starting CloudThinker IAM Role setup...
-    ✅ Role does not exist, proceeding...
-    ✅ Role created successfully
-    ✅ Policy attached successfully
-    ==========================================
-    ✅ Setup Complete!
-    ==========================================
-    Copy this Role ARN:
-    arn:aws:iam::123456789012:role/CloudThinkerAccessRole
-    ```
-
-    #### 手動ロール作成
-
-    手動でセットアップする場合：
-
-    **トラストポリシー：**
     ```json
     {
       "Version": "2012-10-17",
       "Statement": [
         {
           "Effect": "Allow",
-          "Principal": {
-            "AWS": "arn:aws:iam::CLOUDTHINKER_ACCOUNT_ID:root"
-          },
+          "Principal": { "AWS": "<CloudThinker principal shown in the dialog>" },
           "Action": "sts:AssumeRole",
           "Condition": {
-            "StringEquals": {
-              "sts:ExternalId": "YOUR_EXTERNAL_ID"
-            }
+            "StringEquals": { "sts:ExternalId": "<your External ID>" }
           }
         }
       ]
     }
     ```
 
-    **権限ポリシー：**
-    ```json
-    {
-      "Version": "2012-10-17",
-      "Statement": [
-        {
-          "Effect": "Allow",
-          "Action": [
-            "ec2:Describe*",
-            "rds:Describe*",
-            "s3:GetBucket*",
-            "s3:List*",
-            "cloudwatch:GetMetric*",
-            "cloudwatch:List*",
-            "ce:GetCost*",
-            "ce:GetReservation*",
-            "iam:GetRole",
-            "iam:ListRoles"
-          ],
-          "Resource": "*"
-        }
-      ]
+    同じロールを Terraform で、両方の値を変数として渡す場合:
+
+    ```hcl
+    variable "cloudthinker_principal" {}
+    variable "cloudthinker_external_id" {}
+
+    resource "aws_iam_role" "cloudthinker" {
+      name = "CloudThinkerAccessRole"
+      assume_role_policy = jsonencode({
+        Version = "2012-10-17"
+        Statement = [{
+          Effect    = "Allow"
+          Principal = { AWS = var.cloudthinker_principal }
+          Action    = "sts:AssumeRole"
+          Condition = { StringEquals = { "sts:ExternalId" = var.cloudthinker_external_id } }
+        }]
+      })
+    }
+
+    resource "aws_iam_role_policy_attachment" "read_only" {
+      role       = aws_iam_role.cloudthinker.name
+      policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+    }
+
+    output "role_arn" {
+      value = aws_iam_role.cloudthinker.arn
     }
     ```
 
+    開いているダイアログから両方の値をコピーし、`terraform apply` が完了して `role_arn` の出力を **AWS Role ARN** に貼り付けるまで、そのダイアログを開いたままにしてください。
+
+    ダイアログにタイマーはありませんが、External ID はその開いているブラウザタブの中にしか存在しません。ダイアログを閉じたりページを再読み込みしたりすると失われ、External ID を新しいダイアログに戻す方法はありません。これは、`apply` が数時間後に CI で実行されることがある、プルリクエストでレビューする Terraform にとっての制約です。パイプラインが完了するまでダイアログを開いたままにするか、新しいダイアログを開始し、**Connect** をクリックする前に信頼ポリシーの External ID を更新してください。
   </Tab>
-
-  <Tab title="アクセスキー（代替）">
-    ### アクセスキーを使用したIAMユーザー
-
-    AssumeRoleが環境で使用できない場合にのみこの方法を使用してください。
-
-    <Warning>
-    AWSは長期アクセスキーよりIAMロールを推奨しています。この方法を使用する場合は定期的にキーをローテーションしてください。
-    </Warning>
+  <Tab title="Access Keys">
+    この方法は、組織がクロスアカウントロールを許可していない場合にのみ使ってください。アクセスキーは長期間有効なため、90 日ごとなど、自分でローテーションする必要があります。[Rotate a credential](/ja/guide/connections/overview#認証情報をローテーションする) を参照してください。
 
     <Steps>
-      <Step title="IAMユーザーを作成">
-        [IAMコンソール](https://console.aws.amazon.com/iam/) → **Users → Create user** に移動し、名前を `cloudthinker-readonly` に設定します。
+      <Step title="アカウントに名前を付ける">
+        ダイアログ上部で **Access Keys** を選びます。**Alias**、**Description**、必要に応じて **Default AWS region** を入力します。
       </Step>
-      <Step title="ポリシーをアタッチ">
-        **Attach policies directly** を選択して追加します：
-        - `ReadOnlyAccess`（包括的）、または
-        - `AmazonEC2ReadOnlyAccess`、`AmazonS3ReadOnlyAccess` などの特定ポリシー
+      <Step title="CloudShell でセットアップスクリプトを実行する">
+        **Open CloudShell** をクリックし、**Copy Script to Clipboard** をクリックして、CloudShell で実行します。スクリプトは `CloudThinkerUser` という名前の IAM ユーザーを作成し、`ReadOnlyAccess` をアタッチし、アクセスキーを作成して、`AWS_ACCESS_KEY_ID` と `AWS_SECRET_ACCESS_KEY` を出力します。
+
+        AWS はシークレットを一度しか表示しないため、両方の値をダイアログに入力するまで CloudShell を開いたままにしてください。シークレットはターミナルの出力に残るため、接続が完了したら `clear` を実行して CloudShell のセッションを閉じてください。
       </Step>
-      <Step title="アクセスキーを作成">
-        ユーザーを選択 → **Security credentials → Create access key**。ユースケースとして**Third-party service**を選択します。
+      <Step title="キーを入力して接続する">
+        `AWS_ACCESS_KEY_ID` を **Access key ID** に、`AWS_SECRET_ACCESS_KEY` を **Secret access key** に貼り付け、**Connect** をクリックします。
+
+        **成功時の状態:** アカウントに **Connected** のステータスが表示されます。このアカウントで Optimize がまだオンになっていない場合、CloudThinker は詳細調査を開始する代わりに **Turn on Optimize?** と尋ねます。**Turn on Optimize** をクリックして最初のコストスキャンを開始するか、**Not now** をクリックしてください。エージェントにアカウントを探索させるには、カードの **More** メニューを開き、**Try in chat** を選択します。[What happens after you connect](/ja/guide/connections/overview#接続した後に起こること) を参照してください。
       </Step>
-      <Step title="認証情報を保存">
-        Access Key IDとSecret Access Keyをコピーして安全に保管します。**Connections → AWS** に入力し、**Connect**をクリックします。CloudThinkerは**Connected**ステータスに変わります。
+      <Step title="環境を設定する">
+        **Settings → Workspace → Connections** で **Amazon Web Services** を開き、アカウントの行の鉛筆アイコンをクリックして、**Edit Instance** で **Environment** を設定します。これは人とエージェントに向けてアカウントにラベルを付けるものです。[Set the environment](/ja/guide/connections/overview#環境を設定する) を参照してください。
       </Step>
     </Steps>
 
+    ユーザーには `ReadOnlyAccess` が付与されるため、S3 オブジェクトも読み取れます。[Required permissions](#必要な権限) のより狭い権限セットに切り替えるには、CloudShell で次を実行します。
+
+    ```bash
+    USER=CloudThinkerUser
+    aws iam attach-user-policy --user-name $USER --policy-arn arn:aws:iam::aws:policy/job-function/ViewOnlyAccess
+    aws iam attach-user-policy --user-name $USER --policy-arn arn:aws:iam::aws:policy/SecurityAudit
+    aws iam put-user-policy --user-name $USER --policy-name CloudThinkerCostRead \
+      --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ce:Get*","Resource":"*"}]}'
+    aws iam detach-user-policy --user-name $USER --policy-arn arn:aws:iam::aws:policy/ReadOnlyAccess
+    ```
   </Tab>
 </Tabs>
 
-### マルチアカウントのセットアップ
+### さらにアカウントを接続する
 
-複数のAWSアカウントを持つ組織向け：
+各 AWS アカウントはそれぞれ独立した接続です。**Amazon Web Services** でもう一度 **Connect** をクリックし、アカウントに独自のエイリアスを付け、そのダイアログのスクリプトを新しいアカウントの CloudShell で実行します。信頼ポリシーにそのダイアログが示す External ID が含まれるよう、スクリプトは必ず完了しようとしているダイアログからコピーしてください。
 
-<Steps>
-  <Step title="各アカウントにロールを作成">
-    CloudFormation StackSetsを使用して、すべてのターゲットアカウントにIAMロールをデプロイします。
-  </Step>
-  <Step title="AWS Organizationsを使用">
-    組織全体の可視性のため管理アカウントを接続します。
-  </Step>
-  <Step title="各アカウントを追加">
-    CloudThinkerで各アカウントの接続を個別に追加します。
-  </Step>
-</Steps>
+一括オンボーディングにはまだ対応していません。各ダイアログが独自の External ID を生成するため、StackSet や 1 回の Terraform apply で複数の接続のロールを一度に作成することはできません。各アカウントに専用のダイアログと専用のロールが必要です。多数のアカウントの場合、最も速い方法は上記の Terraform モジュールを、アカウントごとにそのアカウントの開いているダイアログの値で 1 回ずつ適用することです。
 
----
+AWS Organization 全体のコストを見るには、管理アカウントを接続します。これで Optimize は組織全体のコストだけを取得できます。メンバーアカウントのリソースは、そのアカウント自身の接続を通じてのみエージェントから見えます。
 
-## 接続詳細
+## 接続の詳細
 
-| フィールド | 説明 | 例 |
-|-------|-------------|---------|
-| **ロールARN** | CloudThinkerが引き受けるIAMロールのARN（ロールベースの方法） | `arn:aws:iam::123456789012:role/CloudThinkerAccessRole` |
-| **External ID** | トラストポリシー内のシークレットID（CloudThinkerから提供） | — |
-| **デフォルトAWSリージョン（任意）** | 接続の開始リージョンです。エージェントはアクセス権限とユーザー指定の範囲内で他のリージョンも使用できます。 | `us-east-1` |
-| **アクセスキーID** | IAMユーザーキーID（アクセスキー方法のみ） | — |
-| **シークレットアクセスキー** | IAMユーザーシークレットキー（アクセスキー方法のみ） | — |
+| フィールド | 方式 | 説明 | 例 |
+|---|---|---|---|
+| **Alias** | 両方 | このアカウントの短い名前。空欄の場合は自動で付けられます。 | `production` |
+| **Description** | 両方 | アカウントの内容。エージェントはこれを使ってアカウントを選びます。 | `Production AWS account` |
+| **Default AWS region** | 両方 | 任意の開始リージョン。エージェントは認証情報が許可する他のリージョンも使えます。 | `us-east-1` |
+| **AWS Role ARN** | Role-Based | セットアップスクリプトが出力した ARN | `arn:aws:iam::123456789012:role/CloudThinkerAccessRole` |
+| **AWS External ID (Auto-generated)** | Role-Based | CloudThinker が生成します。読み取り専用で、信頼ポリシーと一致している必要があります。 | 自動で入力されます |
+| **Access key ID** | Access Keys | IAM ユーザーのアクセスキー ID | `AKIA...` |
+| **Secret access key** | Access Keys | IAM ユーザーのシークレットキー | AWS が一度だけ表示します |
 
----
+**Environment**（**Production**、**Staging**、**Development**、**Not set**）は接続ダイアログにはありません。セットアップの最後のステップのとおり、接続後に設定してください。これは人とエージェントに向けてアカウントにラベルを付けるものです。[Approval rules](/guide/approvals/rules) はこれを読まないため、1 つのアカウントを対象にすべき Rule では、その接続を指定します。
 
 ## 必要な権限
 
-### 最小（読み取り専用分析）
+セットアップスクリプトは AWS 管理の `ReadOnlyAccess` ポリシーをアタッチします。これにより、エージェントはサービス全体でリソースを describe・一覧表示し、CloudWatch のメトリクスと Cost Explorer を読み取れます。作成、変更、削除は一切できません。
 
-```
-ec2:Describe*
-rds:Describe*
-s3:GetBucket*, s3:List*
-cloudwatch:GetMetric*, cloudwatch:List*
-ce:GetCost*, ce:GetReservation*
-iam:GetRole, iam:ListRoles
-```
-
-### 推奨（完全分析）
-
-```
-# All minimum permissions, plus:
-elasticloadbalancing:Describe*
-autoscaling:Describe*
-lambda:List*, lambda:GetFunction*
-ecs:Describe*, ecs:List*
-eks:Describe*, eks:List*
-securityhub:Get*, securityhub:List*
-guardduty:Get*, guardduty:List*
-config:Describe*, config:Get*
-cloudtrail:Describe*, cloudtrail:Get*
-```
+| やりたいこと | 付与するもの |
+|---|---|
+| インベントリ、ヘルス、セキュリティに関する質問 | `ReadOnlyAccess`（スクリプトがアタッチするもの） |
+| Optimize のコストデータ | `ReadOnlyAccess` に含まれます。カスタムポリシーの場合は `ce:Get*` を追加します。 |
+| エージェントに特定の変更をさせる | それらのアクションだけをロールに追加し、[書き込みアクセス](#書き込みアクセス)を参照します |
 
 <Tip>
-最小権限から始め、必要に応じて拡張します。接続前にAWSコンソールでCost Explorerを有効にしてください。新しいアカウントでは有効化に最大24時間かかる場合があります。
+`ReadOnlyAccess` は、設定だけでなく S3 オブジェクトなどのデータも読み取れます。より狭い選択肢は、AWS 管理の `ViewOnlyAccess` と `SecurityAudit` に、Optimize 用の `ce:Get*` の読み取りを追加したものです。リソースの一覧表示と describe はカバーしますが、S3 オブジェクトの内容やログイベントなどのデータの読み取りはカバーしません。権限が不足していてもアカウントが切断されることはありません。それを必要とした回答が、欠けているアクションを示す `AccessDenied` で失敗するため、そのアクションだけをインラインポリシーに追加できます。
 </Tip>
 
----
+既存のロールをより狭いセットに切り替えるには、CloudShell で次を実行します。
+
+```bash
+ROLE=CloudThinkerAccessRole
+aws iam attach-role-policy --role-name $ROLE --policy-arn arn:aws:iam::aws:policy/job-function/ViewOnlyAccess
+aws iam attach-role-policy --role-name $ROLE --policy-arn arn:aws:iam::aws:policy/SecurityAudit
+aws iam put-role-policy --role-name $ROLE --policy-name CloudThinkerCostRead \
+  --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":"ce:Get*","Resource":"*"}]}'
+aws iam detach-role-policy --role-name $ROLE --policy-arn arn:aws:iam::aws:policy/ReadOnlyAccess
+```
+
+Terraform では、`read_only` のアタッチメントを、その 2 つのポリシー ARN のアタッチメントと、`ce:Get*` のステートメントを持つ `aws_iam_role_policy` に置き換えます。
 
 ## エージェントの機能
 
-接続後、エージェントはAWSリソースの分析と最適化を実行できます。
-
-| 分野 | CloudThinker ができること（AWS） |
-|-------|------------------------------------------------------------------------------------------|
-| コスト | コスト分析、EC2の適正サイズ調整、リザーブドインスタンスの推奨、リソース最適化 |
-| セキュリティ | Security Hubのファインディング、IAM監査、コンプライアンスチェック、脆弱性評価 |
-| データベース | RDSパフォーマンス分析、Aurora最適化、DynamoDBチューニング |
-| コンテナ | EKSクラスター管理、Fargate最適化、コンテナ分析 |
+| 領域 | CloudThinker が行うこと |
+|---|---|
+| **Inventory** | リージョンをまたいで、コンピューティング、ストレージ、ネットワーク、マネージドサービスを一覧表示・describe します |
+| **Identity** | IAM のロール、ユーザー、ポリシーを確認し、危険なアクセスや未使用のアクセスを見つけます |
+| **Cost** | サービス、アカウント、タグ別に支出を分解し、リザーブドインスタンスと Savings Plans のカバー率を確認します。[Optimize](/ja/guide/cost-optimization/overview) にデータを提供します。 |
+| **Monitoring** | CloudWatch のメトリクスとアラームを読み、急増や障害を説明します |
+| **Changes** | **Allow writes** がオンで、ロールが許可し、承認設定が許可する場合にのみ、AWS CLI の書き込みを実行します |
 
 ### 接続を確認する
 
 ```text
-Run an AWS account check and list the connected account ID and active regions
+Which AWS account ID and regions can you reach through my AWS connection?
 ```
 
-### プロンプト例
+回答には、実際の 12 桁のアカウント ID が含まれます。
+
+### プロンプトの例
 
 ```text
-Analyze EC2 costs over the last 30 days and recommend right-sizing opportunities
-Audit IAM roles and flag any with excessive permissions or missing MFA requirements
-Check EKS cluster health across all connected regions and report any failing pods
+Break down last month's AWS spend by service and flag anything that grew more than 20% from the month before
+List IAM users and roles that haven't been used in 90 days
+Find EC2 instances in us-east-1 with average CPU under 10% over the last two weeks
 ```
 
----
+## 書き込みアクセス
+
+接続の詳細パネルにある **Allow writes** は、エージェントが AWS で何かを変更してよいかを制御します。AWS ではデフォルトでオンですが、スクリプトが作成するロールは読み取り専用のため、権限を追加するまで AWS 自体がすべての書き込みを拒否します。
+
+| IAM の権限 | Allow writes | 結果 |
+|---|---|---|
+| `ReadOnlyAccess` のみ | オンまたはオフ | 読み取り専用。AWS がすべての変更を拒否します。 |
+| 追加の書き込みアクションを付与 | オフ | 読み取り専用。CloudThinker が AWS に届く前にすべての変更を拒否します。 |
+| 追加の書き込みアクションを付与 | オン | エージェントが変更を提案できます。各変更は [Rules と Approval mode](/guide/approvals/overview) が判断します。 |
+
+CloudThinker 側でも書き込みをロックするには、**Settings → Workspace → Connections** で **Amazon Web Services** を開き、詳細パネルの **Allow writes** スイッチをオフにします。
 
 ## トラブルシューティング
 
-<Accordion title="アクセス拒否エラー">
-IAMロールに必要な権限があることを確認します。トラストポリシーにCloudThinkerのアカウントIDが含まれていること、External IDが完全に一致していること、ロールARNが正しいことを確認してください。
+<Accordion title="スクリプトが CloudThinkerAccessRole はすでに存在すると表示する">
+**原因:** このアカウントでの以前のセットアップがロールを作成しています。おそらく別の External ID を使っています。
+
+**対処:** そのロールを使っている他の CloudThinker 接続がなければ、ポリシーを削除してロールを削除し、新しいスクリプトを実行します。`delete-role` は、アタッチされたポリシーとインラインポリシーがすべてなくなるまで失敗するため、先に一覧表示します。
+
+```bash
+ROLE=CloudThinkerAccessRole
+aws iam list-attached-role-policies --role-name $ROLE
+aws iam list-role-policies --role-name $ROLE
+# For each attached policy ARN:
+aws iam detach-role-policy --role-name $ROLE --policy-arn <policy-arn>
+# For each inline policy name:
+aws iam delete-role-policy --role-name $ROLE --policy-name <policy-name>
+aws iam delete-role --role-name $ROLE
+```
+
+CloudThinker の接続がまだそのロールを使っているかを確認するには、CloudTrail の **Event history** を開き、**Event name** = `AssumeRole` で絞り込み、セッション名が `cloudthinker-` で始まる `CloudThinkerAccessRole` の最近のイベントを探します。ある場合は、その External ID を置き換えないでください。代わりに **Manual steps** を使い、このワークスペース用に別の名前で 2 つ目のロールを作成します。
 </Accordion>
 
-<Accordion title="コストデータがない">
-AWSコンソールでCost Explorerを有効にします（有効化に最大24時間かかります）。`ce:GetCost*`権限が付与されていることと、請求設定でプログラムによるアクセスが許可されていることを確認してください。
+<Accordion title="テストが sts:AssumeRole の AccessDenied で失敗する">
+**原因:** 信頼ポリシーが、CloudThinker が提示するものと一致していません。
+
+**確認:** 貼り付けた ARN がスクリプトの出力したものであること、信頼ポリシーの `sts:ExternalId` がダイアログの **AWS External ID (Auto-generated)** と完全に一致していること。
+
+**対処:** テストが失敗した場合、接続は保存されません。信頼ポリシーを修正してから、External ID が変わらないよう同じダイアログで再度 **Connect** をクリックします。ダイアログを閉じた場合は、新しいダイアログからセットアップをやり直します。**Retry** は、保存された接続が後で **Error** になった場合にのみ表示されます。
 </Accordion>
 
-<Accordion title="メトリクスがない">
-CloudWatchメトリクスが収集されていることを確認します。リージョン選択にすべての関連リージョンが含まれていること、サービスが実行中でデータを生成していることを確認してください。
+<Accordion title="接続が Error になり、スケジュールされた作業が止まった">
+**原因:** バックグラウンドでの認証情報の失敗が 3 回続くと（ロールの削除、信頼ポリシーの破損、キーの取り消しなど）、接続が **Error** に切り替わります。Optimize のコスト更新、スケジュールされたオートメーション、**Resolve → Signals** のアラートポーリングがそのために一時停止し、ワークスペース管理者に通知が 1 回届きます。
+
+**対処:** AWS でロールまたはキーを修復してから、接続の **Retry** をクリックするか、**Replace credentials** で新しいキーを入力します。ステータスが **Connected** になると、スケジュールされた作業は次のサイクルで再開します。
 </Accordion>
 
-<Accordion title="接続タイムアウト">
-AWS APIへのネットワーク接続を確認します。VPCエンドポイントがアクセスをブロックしていないことを確認し、別のリージョンから接続を試みてください。
+<Accordion title="コストに関する質問でデータが返らない">
+**確認:** AWS Billing コンソールで Cost Explorer がオンになっていて、オンにしてから少なくとも 24 時間が経過していること。AWS Organizations のメンバーアカウントでは、管理アカウントがメンバーの Cost Explorer へのアクセスをブロックしている場合があります。
+
+**対処:** Cost Explorer をオンにするか、管理アカウントを接続して組織全体のコストを確認します。
 </Accordion>
 
----
+<Accordion title="テストに Timed out と表示される">
+**原因:** テストが時間内に完了しませんでした。AWS のエンドポイントは公開されているため、ネットワークが原因であることはまれです。
+
+**対処:** もう一度接続します。タイムアウトが続く場合は、[お問い合わせ](https://cloudthinker.io/contact)ください。
+</Accordion>
+
+<Accordion title="リージョンやサービスが明示的な拒否による AccessDenied を返す">
+**原因:** サービスコントロールポリシーがブロックしています。AWS のエラーには、リクエストが `with an explicit deny in a service control policy` で拒否されたと記載されます。SCP が `sts:AssumeRole` を拒否している場合は、テスト自体が失敗します。
+
+**確認:** [前提条件](#前提条件)のとおり、アカウントの SCP を一覧表示します。
+
+**対処:** AWS Organizations の管理者に `CloudThinkerAccessRole` を SCP の対象外にするよう依頼するか、エージェントがそのリージョンやサービスを見られないことを受け入れます。
+</Accordion>
+
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **IAMロールを使用** — 長期アクセスキーよりAssumeRoleを優先してください。IAMロールは自動ローテーションされる短期STS認証情報を使用し、シークレットの保存が不要です。
-- **CloudTrailを有効にする** — CloudThinker接続経由のすべてのAPI呼び出しを監査し、完全なアクティビティログを維持します。
+- **ロールを優先する。** CloudThinker は AWS STS を通じてロールを引き受け、短期の認証情報を取得するため、漏洩しうる長期のシークレットはありません。External ID により、他の誰かが CloudThinker を通じてあなたのロールを使うことを防ぎます。
+- **CloudTrail で監査する。** エージェントの呼び出しはすべて通常の AWS API 呼び出しです。CloudThinker は各ロールセッションに `cloudthinker-<first 8 characters of your workspace ID>-<Unix timestamp>` という名前を付け、CloudTrail の **Event history** ではそのセッション名が **User name** として表示されます。セッションをまたいですべての呼び出しを確認するには、CloudTrail Lake または Athena で `userIdentity.sessionContext.sessionIssuer.userName` = `CloudThinkerAccessRole` で絞り込みます。アクセスキーの場合は、**Event history** を **User name** = `CloudThinkerUser` で絞り込みます。
 
----
-
-## 関連
+## 関連ページ
 
 <CardGroup cols={2}>
-  <Card title="エージェント" icon="cloud" href="/ja/guide/agents/overview">
-    CloudThinker と、その作業の仕組み
+  <Card title="Optimize クイックスタート" icon="chart-line" href="/guide/cost-optimization/quickstart">
+    この接続をコストの検出事項と削減の推奨事項に変えます。
   </Card>
-  <Card title="Bring Your Own Key (BYOK)" icon="key" href="/ja/guide/byok">
-    AWS Bedrock認証情報を使用して無制限のLLM使用が可能
+  <Card title="接続" icon="plug" href="/ja/guide/connections/overview">
+    認証情報のローテーション、環境の設定、詳細調査の再実行を行います。
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    書き込み権限を付与する前に、どの変更に人の判断が必要かを決めます。
   </Card>
 </CardGroup>

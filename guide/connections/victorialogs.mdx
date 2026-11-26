@@ -1,0 +1,128 @@
+---
+title: VictoriaLogs
+description: "Connect VictoriaLogs so agents can search log lines, count errors over time, and map log streams and fields."
+icon: "/images/icons/victorialogs.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+
+Connect VictoriaLogs so CloudThinker agents can search log lines with LogsQL, count lines and errors over time, and see which streams and fields you collect. The connection only reads, and signs in with an optional bearer token for VictoriaMetrics Cloud or the vmauth proxy in front of VictoriaLogs.
+
+## Prerequisites
+
+- A VictoriaLogs address that CloudThinker can reach over HTTPS. For a private address, follow [Reaching private services](/guide/connections/overview#reaching-private-services).
+- A bearer token, unless the endpoint needs no authentication. VictoriaLogs has no per-user access control of its own, so put [vmauth](https://docs.victoriametrics.com/victoriametrics/vmauth/) or VictoriaMetrics Cloud in front of it.
+- A CloudThinker workspace where you can add connections.
+
+## Setup
+
+<Steps>
+  <Step title="Create the credential">
+    Pick the one that matches where VictoriaLogs runs:
+    - **VictoriaMetrics Cloud:** open your VictoriaLogs deployment, go to the **Access tokens** tab, and click **Generate Token**. Name it `cloudthinker`, choose the **Read** access level, and click **Generate**. Copy the secret from the **Key** column, and copy the access endpoint from the same tab. See [VictoriaMetrics Cloud access tokens](https://docs.victoriametrics.com/victoriametrics-cloud/deployments/access-tokens/).
+    - **vmauth:** ask your operator to add a user with a `bearer_token` whose routes allow only `/select/logsql/` queries on VictoriaLogs. See [Security and load balancing](https://docs.victoriametrics.com/victorialogs/security-and-lb/).
+  </Step>
+  <Step title="Connect in CloudThinker">
+    Open **Settings → Workspace → Connections**, open the **Discover** tab, and select **VictoriaLogs**. Click **Connect**, fill in the fields below, then click **Connect** in the dialog. CloudThinker runs a LogsQL count over the last 5 minutes to check the address and token.
+
+    **Success state:** the connection shows a **Connected** status with `VictoriaLogs connected; the LogsQL API answered.` CloudThinker then opens a chat that takes a read-only deep look at the connection ("Often takes about 15 min. You can leave the chat."). To run it again later, open the card's **More** menu and choose **Try in chat**.
+  </Step>
+</Steps>
+
+## Connection details
+
+| Field | Required | Description |
+|---|---|---|
+| **VictoriaLogs URL** | Yes | The address of VictoriaLogs or the vmauth in front of it, such as `https://logs.example.com`. It must start with `https://`. Leave off `/select/logsql`, credentials, query strings, and fragments |
+| **Bearer token (optional)** | No | A VictoriaMetrics Cloud access token or a vmauth bearer token. Leave it empty when the endpoint needs no authentication |
+| **Tenant (optional)** | No | `AccountID:ProjectID` for a multitenant VictoriaLogs, such as `12:0`. Leave it empty for the default tenant |
+| **CA certificate (optional)** | No | The PEM of the private CA that issued the VictoriaLogs certificate. Leave it empty to use public trust. CloudThinker always checks the certificate and hostname |
+
+CloudThinker refuses redirects, so enter the exact address VictoriaLogs answers at. If vmauth sets the tenant for your token, leave **Tenant (optional)** empty: vmauth overrides it.
+
+## Required permissions
+
+| Access | Used for |
+|---|---|
+| `GET` on `/select/logsql/` | Searching lines, counting hits and stats, and listing streams, field names, and field values |
+
+<Tip>
+Give CloudThinker its own read-only token, limited to `/select/logsql/` and to the tenants agents need. The connection never ingests or deletes logs.
+</Tip>
+
+## Agent capabilities
+
+| Capability | What CloudThinker does |
+|---|---|
+| **Discovery** | Shows line volume, the top streams, field names, and lines by level for the last hour, or up to 31 days |
+| **Search** | Finds matching log lines with LogsQL, newest first, up to 200 lines per search |
+| **Counts over time** | Counts lines for a query, groups them by a field such as service or level, and shows the peak and latest bucket |
+
+CloudThinker names the query and time window with every count or quoted line. A search shows a limited number of lines, so CloudThinker counts with a stats query, never by counting search results.
+
+Agents cannot ingest new log lines or delete stored logs. Log retention and deletion need your VictoriaLogs operator.
+
+### Verify the connection
+
+```text
+Check my VictoriaLogs connection: show line volume, the top streams, and lines by level for the last hour
+```
+
+### Example prompts
+
+```text
+How many error lines did each service log in VictoriaLogs over the last 6 hours, and when did they peak?
+Find the latest VictoriaLogs lines for the checkout service that mention timeout
+```
+
+## Troubleshooting
+
+<Accordion title="VictoriaLogs rejected the saved credentials.">
+The bearer token is wrong, expired, or revoked. Create a new token, then edit the connection and paste it.
+</Accordion>
+
+<Accordion title="The credentials signed in, but they cannot run queries on that address.">
+The token works, but vmauth or VictoriaMetrics Cloud does not let it query. Give it read access to `/select/logsql/` for the right tenant.
+</Accordion>
+
+<Accordion title="That address did not accept a LogsQL query. Check that it is VictoriaLogs and not VictoriaMetrics.">
+The address belongs to another service, often VictoriaMetrics. Use the VictoriaLogs address. For VictoriaMetrics, add a [VictoriaMetrics connection](/guide/connections/victoriametrics) instead.
+</Accordion>
+
+<Accordion title="That address has no LogsQL API. Check the URL.">
+Nothing answered at `/select/logsql` under that address. Check the host and any path the proxy adds. Enter the address without `/select/logsql`.
+</Accordion>
+
+<Accordion title="VictoriaLogs answered with a redirect. Use the exact VictoriaLogs address.">
+Enter the final HTTPS address VictoriaLogs serves directly, not one that redirects to it.
+</Accordion>
+
+<Accordion title="Enter the tenant as AccountID:ProjectID, such as 12:0.">
+**Tenant (optional)** takes two numbers separated by a colon. Leave it empty for the default tenant.
+</Accordion>
+
+<Accordion title="The VictoriaLogs certificate is not trusted.">
+Install a certificate from a trusted authority, or paste the issuing CA certificate into **CA certificate (optional)**. If CloudThinker says the CA certificate is not valid PEM, paste the full certificate, including its `BEGIN` and `END` lines.
+</Accordion>
+
+<Accordion title="Could not reach VictoriaLogs over HTTPS. Check the URL and that the sandbox can reach it.">
+CloudThinker could not open a connection to that address. Confirm the URL starts with `https://` and that your firewall lets CloudThinker reach VictoriaLogs. Browser access from your laptop alone is not enough.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- Log lines can hold secrets and personal data. CloudThinker quotes only the lines your question needs, so ask narrow questions about sensitive streams.
+- Scope the token to the tenants agents need. VictoriaLogs itself does not check tenant access.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="VictoriaMetrics" icon="/images/icons/victoriametrics.svg" href="/guide/connections/victoriametrics">
+    Query metrics, series cardinality, and alerts.
+  </Card>
+  <Card title="Graylog" icon="/images/icons/graylog.svg" href="/guide/connections/graylog">
+    Search messages and streams with a read-only API token.
+  </Card>
+</CardGroup>

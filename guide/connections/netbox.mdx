@@ -1,0 +1,145 @@
+---
+title: NetBox
+description: "Connect NetBox so agents can look up devices, sites, IP addresses, and prefixes, and make approved status and IP changes."
+icon: "/images/icons/netbox.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+import ApprovalDefault from '/snippets/approval-default.mdx';
+
+Connect NetBox so CloudThinker agents can look up what your team recorded about devices, sites, IP addresses, and prefixes, find free addresses, and compare that record with live data from other connections. Through your [Approvals](/guide/approvals/overview), agents can also set a device's status, add a journal entry, or reserve the next free IP address. The connection signs in with one NetBox **API token**.
+
+## Prerequisites
+
+- A NetBox or NetBox Cloud instance that CloudThinker can reach over HTTPS. For a private address, follow [Reaching private services](/guide/connections/overview#reaching-private-services).
+- A NetBox user for CloudThinker, and an administrator who can grant that user permissions.
+- A CloudThinker workspace where you can add connections.
+
+## Setup
+
+<Steps>
+  <Step title="Grant the user permissions in NetBox">
+    Ask your NetBox administrator to create an object permission for the CloudThinker user, or a group it belongs to, with the **View** action on the object types in [Required permissions](#required-permissions). Add the change actions only if agents may make approved changes. See [NetBox permissions](https://netboxlabs.com/docs/netbox/administration/permissions/).
+  </Step>
+  <Step title="Create the API token in NetBox">
+    Sign in to NetBox as that user and open the API tokens page under your user profile. Create a token. Leave **write enabled** off for a read-only connection, and turn it on only to allow approved changes. Set an expiry if your policy needs one. Copy the token now. See [NetBox's token instructions](https://netboxlabs.com/docs/netbox/integrations/rest-api/#tokens).
+
+    CloudThinker accepts both v2 tokens (they start with `nbt_`, from NetBox v4.5) and older v1 tokens. NetBox deprecated v1 tokens in v4.6 and removes them in v5.0, so create a v2 token.
+  </Step>
+  <Step title="Connect in CloudThinker">
+    Open **Settings → Workspace → Connections**, open the **Discover** tab, and select **NetBox**. Click **Connect**, fill in the fields below, then click **Connect** in the dialog. CloudThinker reads the NetBox status and counts the devices the token can see.
+
+    **Success state:** the connection shows a **Connected** status with `NetBox <version> connected; the token sees <count> devices.` CloudThinker then opens a chat that takes a read-only deep look at the connection ("Often takes about 15 min. You can leave the chat."). To run it again later, open the card's **More** menu and choose **Try in chat**.
+  </Step>
+</Steps>
+
+## Connection details
+
+| Field | Required | Description |
+|---|---|---|
+| **NetBox URL** | Yes | The address you open NetBox at, such as `https://netbox.example.com` or `https://example.com/netbox`. It must start with `https://`. Leave off `/api`, credentials, query strings, and fragments |
+| **API token** | Yes | A NetBox API token. It can't contain spaces or line breaks |
+| **CA certificate (optional)** | No | The PEM of the private CA that issued the NetBox certificate, up to 64 KiB. Leave it empty to use public trust. CloudThinker always checks the certificate and hostname |
+
+CloudThinker refuses redirects, so enter the exact address NetBox answers at, including any path such as `/netbox`.
+
+## Required permissions
+
+| NetBox permission | Used for |
+|---|---|
+| **View** on devices, interfaces, and sites | Device lookups, interfaces with cable peers, and site lists |
+| **View** on prefixes and IP addresses | Address owners, prefix details, and free addresses |
+| **View** on journal entries, circuits, and virtual machines | Recent journal entries and inventory counts |
+| **Change** on devices (optional) | Approved device status changes |
+| **Add** on journal entries (optional) | Approved journal entries |
+| **Add** on IP addresses (optional) | Approved IP reservations |
+
+The token can do only what its user may do, so agents see only records that user can view.
+
+<Tip>
+Start with a read-only token: **View** permissions only, and **write enabled** off. Add the change permissions later, scoped with constraints to the sites or prefixes agents may change.
+</Tip>
+
+## Agent capabilities
+
+| Capability | What CloudThinker does | Checked by Approvals |
+|---|---|---|
+| **Discovery** | Shows the NetBox version, sample sites, counts of devices, virtual machines, circuits, prefixes, and IP addresses, and how many devices are offline or failed | No |
+| **Devices** | Searches devices by site, role, status, or name, and shows one device's interfaces, cable peers, IP addresses, and latest journal entries | No |
+| **Addresses** | Shows who owns an IP address, and a prefix's VRF, site, VLAN, and next free addresses | No |
+| **Device status** | Sets one device's status, such as offline, active, or failed | Yes |
+| **Journal entry** | Adds one journal entry to one device | Yes |
+| **IP reservation** | Reserves the next free address in one prefix, with a description | Yes |
+
+Writes also need **Allow writes** on, which starts on. To lock writes in CloudThinker, open **NetBox** in **Settings → Workspace → Connections** and turn off the **Allow writes** switch on its detail panel.
+
+<ApprovalDefault />
+
+Each change touches one object. Before it asks, CloudThinker names the device or prefix, its current status or next free address, and the change, then reports the state before and after. Agents can't delete objects, edit other fields, change cabling, or make bulk changes. Make those in NetBox.
+
+NetBox holds the state your team recorded, not live device state. When it disagrees with a live connection, CloudThinker says so.
+
+### Verify the connection
+
+```text
+Check my NetBox connection: show the version, inventory counts, and how many devices are offline or failed
+```
+
+### Example prompts
+
+```text
+Which devices at site ams1 are offline or failed in NetBox, and what are their primary IPs?
+Who owns 10.20.30.40 in NetBox, and which free addresses are left in 10.20.30.0/24?
+Reserve the next free address in 10.20.30.0/24 for the new build runner
+```
+
+## Troubleshooting
+
+<Accordion title="NetBox did not accept the API token.">
+The token is wrong, expired, or revoked. Create a new token in NetBox, then edit the connection and paste it.
+</Accordion>
+
+<Accordion title="The token works, but its user cannot view devices. Give it view permission on DCIM devices.">
+Grant the token's user **View** on devices, then connect again. During a run, HTTP 403 on one section means the user lacks view or change permission for that object type.
+</Accordion>
+
+<Accordion title="NetBox answered with a redirect. Use the exact address you open NetBox at, including any path such as /netbox.">
+Enter the final HTTPS address NetBox serves directly. Keep its path and leave off `/api`.
+</Accordion>
+
+<Accordion title="That address has no NetBox REST API. Check the URL and any path such as /netbox.">
+Confirm the address belongs to NetBox and includes any path NetBox is served under.
+</Accordion>
+
+<Accordion title="The NetBox certificate is not trusted.">
+Install a certificate from a trusted authority, or paste the issuing CA certificate into **CA certificate (optional)**. It must hold only PEM certificate blocks, including their `BEGIN` and `END` lines.
+</Accordion>
+
+<Accordion title="Could not reach NetBox over HTTPS. Check the URL and that the sandbox can reach it.">
+CloudThinker could not open a connection to that address. Confirm the URL starts with `https://` and that your firewall lets CloudThinker reach NetBox. Browser access from your laptop alone is not enough.
+</Accordion>
+
+<Accordion title="Several devices share that name">
+CloudThinker needs the site to pick one device. Name the site in your request, for example "the device edge-01 at site ams1".
+</Accordion>
+
+<Accordion title="An agent says the NetBox write tool is off">
+**Allow writes** is off on this connection, so the change was refused and nothing changed. Turn it on in the connection's detail panel, or make the change in NetBox.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- Keep **write enabled** off on the token unless you want approved changes. A read-only token can't change NetBox even if it leaks.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="AWX" icon="/images/icons/awx.svg" href="/guide/connections/awx">
+    Inspect Ansible inventories, then launch a job template.
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Decide which changes run on their own and which wait for you
+  </Card>
+</CardGroup>

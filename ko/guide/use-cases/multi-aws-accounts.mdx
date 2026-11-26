@@ -1,96 +1,209 @@
 ---
-title: '멀티 AWS 계정 운영'
-description: 'IAM AssumeRole 단축키를 사용하여 하나의 워크스페이스에서 여러 AWS 계정을 운영하고 온디맨드로 계정 컨텍스트를 전환하세요'
+title: 여러 AWS 계정에서 작업하기
+description: "여러 AWS 계정을 하나의 워크스페이스에 연결한 다음, 간단한 프롬프트로 계정 간 지출을 비교하고 비용 및 보안 문제를 찾습니다."
 icon: layer-group
 ---
 
-프로덕션, 개발, 스테이징 AWS 계정을 관리하는 플랫폼 팀이 단일 CloudThinker 워크스페이스에서 세 계정 모두에 걸쳐 비용을 쿼리하고, 보안을 감사하며, 인시던트를 조사할 수 있습니다.
+대부분의 팀은 하나 이상의 AWS 계정을 운영합니다. 프로덕션용, 스테이징용, 개발용, 때로는 그 이상입니다. 이 가이드에서는 세 계정을 하나의 CloudThinker 워크스페이스에 연결한 다음, 세 계정 모두에 걸친 질문을 합니다. 돈이 어디로 가는지, 무엇이 유휴 상태인지, 어떤 IAM 접근이 위험한지입니다.
 
-## 시나리오
+**준비물:**
 
-귀하의 조직은 프로덕션, 개발, 스테이징을 위한 별도의 AWS 계정을 유지하고 있습니다. 중앙화된 플랫폼 팀은 모든 사람에게 프로덕션 접근 권한을 부여하거나 워크스페이스를 전환하다가 계속해서 컨텍스트를 잃지 않고 크로스 계정 가시성이 필요합니다. 해결책: CloudThinker를 기본 AWS 계정에 연결하고, 각 대상 계정에 IAM 역할을 생성하며, [CloudThinker](/ko/guide/agents/overview)에게 어떤 계정에서 작업할지 알려주는 단축키를 정의하면 — 모두 하나의 워크스페이스에서 처리됩니다.
+- CloudThinker 워크스페이스. [빠른 시작](/ko/quickstart)에서 하나를 만듭니다.
+- 각 AWS 계정에서 IAM 역할을 만들 권한과, 각 계정의 [AWS CloudShell](https://console.aws.amazon.com/cloudshell/home) 접근 권한.
+- 비용 질문의 경우: 각 계정에서 Cost Explorer가 켜져 있어야 합니다. 새 계정에서 AWS가 Cost Explorer를 활성화하는 데 최대 24시간이 걸릴 수 있습니다. 역할의 `ReadOnlyAccess` 정책에는 Optimize가 사용하는 `ce:Get*` 읽기 권한이 이미 포함되어 있습니다. AWS는 Cost Explorer API 요청을 별도로 청구합니다(AWS 정가 기준 요청당 USD 0.01).
 
-## 단계별 안내
+## 여러 계정이 동작하는 방식
+
+각 AWS 계정은 CloudThinker에서 각각 별도의 연결입니다. 허브 계정도, 설정할 역할 체이닝도 없습니다. 계정을 연결하면 CloudThinker는 그 계정의 읽기 전용 역할(`CloudThinkerAccessRole`)을 맡고 단기 자격 증명을 받습니다.
+
+에이전트는 연결할 때 입력한 두 필드로 계정을 고릅니다.
+
+| 필드 | 입력할 내용 | 예시 |
+|---|---|---|
+| **Alias** | 프롬프트에서 사용할 짧은 이름 | `production` |
+| **Description** | 계정에 담긴 것. 에이전트는 이를 읽고 계정을 선택합니다. | `Production AWS account, customer-facing workloads` |
+
+<Tip>
+계정을 구별할 수 있는 설명을 작성하세요. "AWS account"를 세 번 쓰면 에이전트가 선택할 근거가 없습니다. "Staging, mirrors production, reset weekly"는 근거가 됩니다.
+</Tip>
+
+## 계정 연결
+
+계정마다 이 단계를 한 번씩 반복합니다. 조직 전체 또는 StackSets 온보딩은 없습니다. 각 대화상자가 자체 External ID를 생성하므로 각 계정에 자체 연결 대화상자가 필요합니다. Terraform이나 CloudFormation으로 역할을 만들고 싶다면, 각 대화상자에서 **Manual steps**를 펼쳐 신뢰 정책을 확인하세요. 액세스 키 방식을 포함한 전체 참조는 [AWS 연결 페이지](/ko/guide/connections/aws)에 있습니다.
 
 <Steps>
-  <Step title="기본 AWS 계정 연결">
-    **Connections**에서 [역할 기반 인증](/ko/guide/connections/aws)을 사용하여 기본 AWS 계정을 추가하세요. 이것이 허브 계정입니다 — 모든 크로스 계정 요청이 이 계정의 IAM 자격 증명에서 시작됩니다.
-
-    **성공 상태:** 연결이 Connections 패널에서 **Connected** 상태를 표시합니다.
+  <Step title="연결 대화상자 열기">
+    사이드바 상단의 워크스페이스 메뉴에서 **Settings → Workspace → Connections**를 열고, **Amazon Web Services**를 선택한 다음 **Connect**를 클릭합니다. **Role-Based** 탭을 선택된 상태로 둡니다.
   </Step>
-
-  <Step title="크로스 계정 IAM 역할 생성">
-    각 대상 AWS 계정에서 다음 신뢰 정책을 가진 IAM 역할을 생성하세요. `PRIMARY_ACCOUNT_ID`를 허브 계정의 AWS 계정 ID로 교체하세요.
-
-    ```json
-    {
-      "Version": "2012-10-17",
-      "Statement": [
-        {
-          "Effect": "Allow",
-          "Principal": {
-            "AWS": "arn:aws:iam::PRIMARY_ACCOUNT_ID:root"
-          },
-          "Action": "sts:AssumeRole"
-        }
-      ]
-    }
-    ```
-
-    권한을 최소로 유지하기 위해 역할에 `ReadOnlyAccess`(또는 범위가 지정된 읽기 전용 정책)를 연결하세요.
-
-    **성공 상태:** 기본 계정에서 `aws sts assume-role`을 실행하여 각 역할이 assume 가능한지 확인할 수 있습니다.
+  <Step title="계정 이름 지정">
+    위 표를 참고하여 **Alias**와 **Description**을 입력합니다. **Default AWS region**은 선택 사항이며 시작점일 뿐입니다. 에이전트는 역할이 도달할 수 있는 모든 리전을 사용할 수 있습니다.
   </Step>
+  <Step title="해당 계정에서 설정 스크립트 실행">
+    **Open CloudShell**을 클릭하고 연결할 AWS 계정에 로그인합니다. 대화상자로 돌아와 **Copy Script to Clipboard**를 클릭하고, CloudShell에 붙여 넣은 다음 Enter를 누릅니다. 스크립트는 AWS 관리형 `ReadOnlyAccess` 정책으로 `CloudThinkerAccessRole`을 만들고 역할의 ARN을 출력합니다.
 
-  <Step title="계정 전환 단축키 정의">
-    **Shortcuts** 패널(워크스페이스 오른쪽 상단)을 열고 대상 계정당 하나의 단축키를 생성하세요. 프롬프트가 실행되기 전에 에이전트가 대상 역할 ARN을 assume하도록 지시하는 **Init Step**을 설정하세요.
+    `ReadOnlyAccess`는 구성뿐 아니라 S3 객체 같은 데이터도 읽을 수 있습니다. 더 좁은 역할을 원한다면 `ViewOnlyAccess`와 `SecurityAudit` 옵션 및 그로 인해 포기하는 것은 [필수 권한](/ko/guide/connections/aws#필요한-권한)을 참조하세요.
 
-    <Frame>
-      <img src="/images/use-cases/01-shortcut-assume-role.png" alt="계정 전환 단축키를 보여주는 CloudThinker Shortcuts 패널" />
-    </Frame>
-    <p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>AssumeRole init step이 있는 Shortcuts 패널</p>
-
-    | 단축키 이름 | Init step |
-    |---|---|
-    | `/switch-to-prod` | `Please assume arn:aws:iam::111111111111:role/CloudThinkerAccessRole and use the STS token for this session.` |
-    | `/switch-to-dev` | `Please assume arn:aws:iam::222222222222:role/CloudThinkerAccessRole and use the STS token for this session.` |
-    | `/switch-to-staging` | `Please assume arn:aws:iam::333333333333:role/CloudThinkerAccessRole and use the STS token for this session.` |
-
-    **성공 상태:** `/`를 입력하면 Shortcuts 자동완성 목록에 각 단축키 이름이 표시됩니다.
+    <Warning>
+    매번 완료하려는 대화상자에서 스크립트를 복사하세요. 각 대화상자는 자체 **AWS External ID**를 생성하며, 스크립트는 그 ID를 역할의 신뢰 정책에 포함합니다. 다른 계정의 대화상자에서 복사한 스크립트는 일치하지 않습니다.
+    </Warning>
   </Step>
+  <Step title="Role ARN을 붙여 넣고 연결">
+    **AWS Role ARN**에 ARN을 붙여 넣고, **AWS External ID (Auto-generated)**는 그대로 둔 다음 **Connect**를 클릭합니다.
 
-  <Step title="크로스 계정 작업 실행">
-    프롬프트 앞에 단축키 이름을 붙이세요. CloudThinker가 작업하기 전에 대상 역할을 assume하므로 모든 결과는 해당 계정으로 범위가 지정됩니다.
-
-    ```text
-    /switch-to-prod @CloudThinker Build an AWS daily cost report as a dashboard
-    ```
-
-    CloudThinker가 프로덕션 역할을 assume하고, 해당 계정의 Cost Explorer와 CloudWatch를 쿼리하여 프로덕션으로 범위가 지정된 비용 대시보드를 반환합니다.
-
-    ```text
-    /switch-to-dev @CloudThinker Summarize unused EC2 instances in the dev account
-    ```
-
-    **성공 상태:** CloudThinker의 응답이 허브가 아닌 대상 계정의 리소스를 참조합니다.
+    **성공 상태:** 계정에 **Connected** 상태가 표시됩니다.
+  </Step>
+  <Step title="연결 후 환경 설정">
+    연결 대화상자는 환경을 묻지 않으므로 지금 설정합니다. **Amazon Web Services** 상세 패널에서 계정 행의 연필 아이콘을 클릭하고, **Edit Instance**에서 **Environment**를 **Production**, **Staging** 또는 **Development**로 설정합니다. 이는 사람과 에이전트를 위해 계정에 레이블을 붙입니다. [Approval Rules](/guide/approvals/rules)는 이 값을 읽지 않습니다. Rule에는 Environment 필드가 없으므로, **Connections**에서 그 연결을 고를 때만 계정에 적용됩니다.
   </Step>
 </Steps>
 
-## 효과적인 이유
+완료되면 **Connections**에 세 개의 Amazon Web Services 연결(예: `production`, `staging`, `development`)이 각각 **Connected**로 나열됩니다.
 
-- **[역할 기반 인증](/ko/guide/connections/aws)** — 허브 계정의 IAM 자격 증명이 `sts:AssumeRole` 호출을 수행하므로, 각 대상 계정에 대해 장기 자격 증명이 공유되거나 저장되지 않습니다.
-- **IAM 최소 권한** — 각 크로스 계정 역할에 `ReadOnlyAccess`를 연결하면 단축키가 오용되더라도 에이전트가 할 수 있는 일이 제한됩니다. 보안 정책이 허용하는 경우 `:root` 대신 특정 보안 주체 ARN을 사용하세요.
-- **단축키** — 프롬프트 전에 주입되는 init step이 매번 역할 ARN을 다시 입력하지 않고도 계정 컨텍스트를 설정합니다. 단축키는 계정별로 지식이나 지침의 범위를 지정하는 데도 사용됩니다.
-- **[CloudThinker](/ko/guide/agents/overview)** — 역할 컨텍스트가 설정되면 AWS 계정 전반의 비용 분석, 리소스 감사, 인프라 쿼리를 처리합니다.
-- **[워크스페이스](/ko/guide/workspaces)** — 팀에게 완전한 격리(계정별 별도 지식 베이스, 감사 추적, 접근 통제)가 필요할 때는 단축키 대신 계정당 하나의 워크스페이스를 생성하세요.
+## 에이전트가 도달할 수 있는 계정 확인
 
-## 직접 시도해 보기
+무엇이든 비교하기 전에 모든 계정이 응답하는지 확인하세요. 새 대화에서 다음을 물어봅니다.
+
+```text
+List every AWS account you can reach through my connections. For each one, show the alias, the 12-digit account ID, and the regions you can see.
+```
+
+**예상 결과:** 연결마다 실제 계정 ID가 있는 한 행. 에이전트는 **Default AWS region**에 제한되지 않으며, 역할이 도달할 수 있는 모든 리전을 사용할 수 있습니다. 서비스 제어 정책(SCP)으로 차단된 리전은 그곳에서 `AccessDenied`를 반환합니다. 계정이 없거나 오류가 표시되면, 이후 비교에서 조용히 건너뛰지 않도록 지금 고치세요([문제 해결](#문제-해결) 참조).
+
+## 계정 간 지출 비교
+
+두 가지 방법이 있습니다. 저장되고 반복 가능한 수치가 필요하면 Optimize를 사용하세요. 일회성 질문이라면 채팅 프롬프트를 사용하세요.
+
+| 원하는 것 | 사용할 것 | 위치 |
+|---|---|---|
+| 모든 계정을 다루고 계정마다 섹션이 있는 절감 보고서 | **All accounts** 범위의 [Optimize 보고서](/ko/guide/cost-optimization/reports) | **Optimize → Reports** |
+| 한 계정의 서비스별 또는 리전별 지출 | [Cost Explorer](/ko/guide/cost-optimization/analytics) | **Optimize → Cost Explorer**, 페이지 제목 옆에서 계정 선택 |
+| 자신의 말로 묻는 빠른 나란히 비교 답변 | 채팅 프롬프트 | 아무 대화 |
+
+### 전체 계정 보고서 생성
+
+<Steps>
+  <Step title="Reports 열기">
+    사이드바에서 **Optimize → Reports**를 선택합니다.
+  </Step>
+  <Step title="범위 선택">
+    보고서 카드 위의 선택기에서 **All accounts**를 선택합니다.
+  </Step>
+  <Step title="보고서 선택">
+    **Savings opportunities**를 선택합니다.
+
+    **성공 상태:** 새 대화가 열리고, 완성된 보고서가 계정마다 섹션이 있는 아티팩트로 나타납니다.
+  </Step>
+</Steps>
+
+보고서는 Optimize가 이미 저장한 비용 데이터를 사용하므로 새 데이터를 위해 AWS를 호출하지 않습니다. Optimize는 하루에 한 번 새 청구 데이터를 가져옵니다. Optimize 페이지 헤더의 **Updated** 버튼은 각 계정이 마지막으로 갱신된 시간을 보여 줍니다. 누락된 데이터는 0이 아니라 공백으로 표시되며, Optimize는 서로 다른 통화를 절대 합산하지 않습니다.
+
+정기적으로 보고서를 실행하려면 **Scheduled reports**에서 **Add schedule**을 선택합니다. 일정은 만들 때 포함한 계정을 유지하므로, 다른 계정을 연결한 후에는 다시 만드세요. [정기 보고서 예약](/ko/guide/cost-optimization/reports#반복-보고서-예약)을 참조하세요.
+
+### 채팅으로 묻기
+
+추측할 필요가 없도록 별칭으로 계정을 지정하세요.
+
+```text
+Compare last month's AWS spend for production, staging, and development. Show a table with the top five services in each account and flag any service that grew more than 20% from the month before.
+```
+
+**예상 결과:** 계정별 표(또는 하나의 통합 표)에 서비스 이름과 금액이 있고, 20%를 넘게 증가한 서비스가 표시됩니다.
+
+## 각 계정에서 비용 낭비 찾기
+
+비프로덕션 계정에는 잊힌 리소스가 쌓이기 쉽습니다. 모든 계정에 같은 질문을 한 번에 하세요.
+
+```text
+In staging and development, find EC2 instances with average CPU under 10% over the last two weeks, and unattached EBS volumes. Group the results by account and include instance IDs, types, and regions.
+```
+
+**예상 결과:** AWS 콘솔에서 찾아볼 수 있는 리소스 ID가 있는 계정별 목록. 역할이 읽기 전용이므로 아무것도 중지되거나 삭제되지 않습니다.
+
+예상 금액과 함께 순위가 매겨진 절감 항목을 보려면 **Optimize → Issues**를 열고 페이지 헤더에서 각 계정을 고르세요. [권장 사항](/ko/guide/cost-optimization/recommendations)을 참조하세요.
+
+## 계정 간 보안 문제 찾기
+
+`ReadOnlyAccess` 역할로 에이전트는 연결된 모든 계정의 IAM 역할, 사용자, 정책을 검토할 수 있습니다. 빠르게 효과를 보는 두 프롬프트:
+
+```text
+List IAM users and roles that haven't been used in 90 days in production, staging, and development. Group by account and show the last-used date for each.
+```
+
+```text
+Across all my AWS accounts, find IAM users with access keys older than 90 days and any user without MFA. Show one table per account.
+```
+
+**예상 결과:** ID 이름과 날짜가 있는 계정별 표. 정리 목록으로 사용하세요. 에이전트는 발견한 것을 보고하기만 하며 아무것도 제거하지 않습니다.
+
+<Note>
+에이전트의 모든 호출은 일반적인 AWS API 호출입니다. 한 계정에서 정확히 무엇이 실행되었는지 보려면, 그 계정의 CloudTrail을 `CloudThinkerAccessRole`로 필터링하세요.
+</Note>
+
+## 일부 계정에서만 에이전트가 변경하도록 허용
+
+설정 스크립트의 역할은 읽기 전용이므로, 더 많은 권한을 부여할 때까지 AWS는 모든 계정에서 모든 쓰기를 거부합니다. 예를 들어 에이전트가 개발 계정에서는 수정하되 프로덕션에서는 절대 수정하지 않게 하려면:
+
+1. 개발 계정의 `CloudThinkerAccessRole`에 필요한 쓰기 작업만 추가합니다. 프로덕션 역할은 `ReadOnlyAccess`로 둡니다. 예를 들어 다음 인라인 정책은 `env=dev` 태그가 있는 인스턴스만 에이전트가 중지하고 시작하도록 허용합니다.
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": ["ec2:StopInstances", "ec2:StartInstances"],
+         "Resource": "arn:aws:ec2:*:*:instance/*",
+         "Condition": { "StringEquals": { "aws:ResourceTag/env": "dev" } }
+       }
+     ]
+   }
+   ```
+
+2. Connections의 **Amazon Web Services** 상세 패널에서 **Allow writes** 스위치를 확인합니다. AWS에서는 기본적으로 켜져 있습니다. 나중에 역할이 바뀌더라도 읽기 전용으로 남아야 하는 연결에서는 끄세요.
+3. **Ask first** [Rule](/guide/approvals/rules)을 추가하고 **Connections**에서 스테이징과 프로덕션 연결을 고르면, 그곳에서 쓰기가 실행되기 전에 사람이 승인합니다. 모든 쓰기가 사람을 기다리게 하려면 대신 Approval mode를 **Manual**로 설정하세요.
+
+IAM 권한과 **Allow writes**가 결합되는 방식은 [쓰기 권한](/ko/guide/connections/aws#쓰기-권한)을 참조하세요.
+
+## 문제 해결
+
+<AccordionGroup>
+  <Accordion title="답변에서 계정이 빠짐">
+    **원인:** 연결이 **Connected**가 아니거나, **Description**이 너무 모호해서 에이전트가 프롬프트와 매칭하지 못합니다.
+
+    **해결:** **Settings → Workspace → Connections**에서 계정 상태를 확인하세요. 그런 다음 **Description**을 편집하여 계정에 담긴 것을 적고, 프롬프트에서 별칭으로 지정하세요.
+  </Accordion>
+  <Accordion title="두 번째 계정이 sts:AssumeRole에서 AccessDenied로 실패함">
+    **원인:** 스크립트나 신뢰 정책이 다른 계정의 대화상자에서 왔으므로 External ID가 일치하지 않습니다.
+
+    **해결:** 그 계정에 대해 새 연결 대화상자를 열고 표시되는 스크립트를 실행하세요. 그곳에 `CloudThinkerAccessRole`이 이미 있으면 스크립트가 멈춥니다. 다른 CloudThinker 연결이 그 역할을 사용하지 않는다면, CloudShell에서 삭제하고 새 스크립트를 실행하세요.
+
+    ```bash
+    aws iam detach-role-policy --role-name CloudThinkerAccessRole \
+      --policy-arn arn:aws:iam::aws:policy/ReadOnlyAccess
+    aws iam delete-role --role-name CloudThinkerAccessRole
+    ```
+
+    그렇지 않다면 대화상자에서 **Manual steps**를 펼치고 표시된 External ID로 기존 역할의 신뢰 정책을 업데이트하세요.
+  </Accordion>
+  <Accordion title="비용 질문이 한 계정에 대해 데이터를 반환하지 않음">
+    **확인:** 그 계정에서 Cost Explorer가 켜져 있고 활성화까지 24시간이 지났는지 확인하세요. AWS Organizations의 멤버 계정은 관리 계정에 의해 Cost Explorer가 차단될 수 있습니다.
+
+    **해결:** Cost Explorer를 켜거나, 관리 계정을 연결하여 조직 전체의 비용을 확인하세요.
+  </Accordion>
+  <Accordion title="예약된 전체 계정 보고서가 새 계정을 건너뜀">
+    **원인:** 보고서 일정은 만들 때 포함한 계정을 유지합니다. 나중에 연결한 계정은 추가되지 않습니다.
+
+    **해결:** **All accounts**를 선택한 상태로 **Optimize → Reports**에서 일정을 다시 만드세요.
+  </Accordion>
+</AccordionGroup>
+
+## 다음 단계
 
 <CardGroup cols={2}>
   <Card title="AWS 계정 연결" icon="/images/icons/aws.svg" href="/ko/guide/connections/aws">
-    CloudThinker가 계정 전반에서 역할을 assume할 수 있도록 역할 기반 인증을 설정하세요.
+    단일 AWS 연결의 모든 필드, 권한, 해결 방법.
   </Card>
-  <Card title="워크스페이스" icon="layer-group" href="/ko/guide/workspaces">
-    계정 간 완전한 격리가 필요할 때 전용 워크스페이스를 생성하세요.
+  <Card title="Optimize 보고서" icon="file-lines" href="/ko/guide/cost-optimization/reports">
+    한 계정 또는 모든 계정의 절감 보고서를 생성하거나 예약합니다.
   </Card>
 </CardGroup>

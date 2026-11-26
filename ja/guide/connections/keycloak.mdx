@@ -1,48 +1,57 @@
 ---
 title: Keycloak
-description: "Keycloak を CloudThinker に接続してアイデンティティとアクセス管理の運用を実現"
+description: "Keycloak のレルムを接続し、エージェントがユーザー、クライアント、ロール、グループ、認証フローを監査し、Approvals を通じて ID の変更を行えるようにします"
 icon: "/images/icons/keycloak.svg"
 ---
 
+import ApprovalDefault from '/snippets/approval-default.mdx';
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
-Keycloak レルムを接続して、[CloudThinker](/ja/guide/agents/overview)がレルムの検査、クライアントの監査、ユーザーとロールの確認、アイデンティティとアクセス設定の分析を行えるようにします。
-
-Keycloak は、対象レルムで `realm-management` ロールを持つ**コンフィデンシャルなサービスアカウントクライアント**を使って認証します。
-
-## 対応プラットフォーム
-
-| プラットフォーム | サポート |
-|----------|---------|
-| **セルフホスト Keycloak** | 全バージョン |
-| **Phase Two** | マネージド Keycloak サービス |
+Keycloak のレルムを接続すると、CloudThinker のエージェントはユーザー、クライアント、ロール、グループ、アイデンティティプロバイダー、認証フローを確認し、ワークスペースの Approvals を通じて ID の変更を行えます。接続は**サービスアカウント**としてサインインします。これはレルム内のコンフィデンシャルクライアントで、クライアントクレデンシャルグラントを使い、`realm-management` ロールによってエージェントが見られる範囲と変更できる範囲が決まります。
 
 ## 前提条件
 
-- CloudThinker で検査する **Keycloak レルム**。
-- コンフィデンシャルクライアントの作成とサービスアカウントロールの割り当てに必要な**管理者アクセス** — `kcadm.sh`（セルフホスト）またはレルムコンソール（Phase Two）。
-- レルムの**ベース URL** と**レルム名**。
+- CloudThinker からネットワーク経由で到達できる Keycloak サーバー。ファイアウォールの内側にあるサーバーについては [Reaching private services](/ja/guide/connections/overview#プライベートサービスへの到達) を参照してください。CloudThinker は `http` をブロックしませんが、その場合クライアントシークレットが暗号化されずに送られるため、`https` を使ってください。
+- 対象のレルムでクライアントを作成し、サービスアカウントロールを割り当てられる管理者。
+- レルム名。
+- CloudThinker ワークスペースでの **Admin** ロール。接続の追加と編集ができます。[Roles](/guide/security/roles) を参照してください。
 
 <Info>
-接続のスコープは `cloudthinker-svc` サービスアカウントに付与したロールに制限されます。CloudThinker が必要とする範囲をカバーする最小権限の `realm-management` ロールを割り当ててください。
+1 つのワークスペースが持てる Keycloak 接続は 1 つで、対象は 1 つのレルムです。エージェントは `<KEYCLOAK_URL>/realms/<KEYCLOAK_REALM>/protocol/openid-connect/token` からトークンを取得するため、ベース URL は `/realms` より前の部分にする必要があります。
 </Info>
 
 ## セットアップ
 
-どちらの方法でも同じ成果物を作成します：対象レルムのサービスアカウントに `realm-management` ロールが付与された `cloudthinker-svc` コンフィデンシャルクライアントです。セルフホストは `kcadm.sh` を使い、Phase Two はレルムコンソールを使います。
+どちらのタブでも作成されるものは同じです。サービスアカウントが有効で、そのサービスアカウントに `realm-management` ロールが付いた、`cloudthinker-svc` という名前のコンフィデンシャルクライアントです。
 
 <Tabs>
-  <Tab title="セルフホスト Keycloak">
-
-    Keycloak の管理 CLI である `kcadm.sh` でクライアントをプロビジョニングします。利用可能な任意のシェルから実行してください。
+  <Tab title="Admin console">
+    セルフホストの Keycloak と、Phase Two などのマネージド Keycloak で使えます。
 
     <Steps>
-      <Step title="認証する">
+      <Step title="クライアントを作成する">
+        管理コンソールで対象のレルムに切り替え、**Clients** を開いて **Create client** を選択します。**Client ID** を `cloudthinker-svc` にして **Next** を選択します。**Client authentication** をオンにし、**Service accounts roles** にチェックを入れ、他のフローはオフのままにします。**Next**、続いて **Save** を選択します。
+      </Step>
+      <Step title="realm-management ロールを割り当てる">
+        クライアントを開き、**Service accounts roles** で **Assign role** を選択します。クライアントで絞り込み、`realm-management` を検索してロールを選びます。読み取り専用の監査には、`view-realm`、`view-users`、`query-users`、`view-clients`、`query-clients`、`query-groups` を選びます。変更を許可する場合は[必要な権限](#必要な権限)を参照してください。一覧は複数ページにわたることがあります。
+      </Step>
+      <Step title="クライアントシークレットをコピーする">
+        同じクライアントで **Credentials** を開き、**Client Secret** をコピーします。
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="kcadm.sh">
+    Keycloak サーバーに到達できる任意のマシンから、Keycloak の管理 CLI を使います。
+
+    <Steps>
+      <Step title="サインインする">
         ```bash
         kcadm.sh config credentials \
-          --server http://localhost:8080 --realm master \
-          --user admin --password '<admin-password>'
+          --server https://keycloak.example.com --realm master \
+          --user admin
         ```
+
+        `--password` は省略してください。そうすると `kcadm.sh` がパスワードを尋ね、パスワードがシェル履歴に残りません。サーバーが `/auth` の下で提供されている場合は、`--server` に `/auth` を付けてください。
       </Step>
       <Step title="クライアントを作成する">
         ```bash
@@ -51,21 +60,19 @@ Keycloak は、対象レルムで `realm-management` ロールを持つ**コン�
           -s publicClient=false \
           -s serviceAccountsEnabled=true \
           -s standardFlowEnabled=false \
-          -s directAccessGrantsEnabled=false \
-          -s 'redirectUris=[]'
+          -s directAccessGrantsEnabled=false
         ```
       </Step>
-      <Step title="realm-management ロールを割り当てる">
+      <Step title="読み取り専用の realm-management ロールを割り当てる">
         ```bash
         kcadm.sh add-roles -r <your-realm> \
           --uusername service-account-cloudthinker-svc \
           --cclientid realm-management \
-          --rolename realm-admin
+          --rolename view-realm --rolename view-users --rolename query-users \
+          --rolename view-clients --rolename query-clients --rolename query-groups
         ```
-
-        最小権限が必要な場合は、より限定的なロール（例：`view-realm`・`view-users`）を使用してください。
       </Step>
-      <Step title="クライアントシークレットを取得する">
+      <Step title="クライアントシークレットをコピーする">
         ```bash
         CID=$(kcadm.sh get clients -r <your-realm> \
           -q clientId=cloudthinker-svc --fields id --format csv --noquotes | tail -n1)
@@ -74,151 +81,129 @@ Keycloak は、対象レルムで `realm-management` ロールを持つ**コン�
           --fields value --format csv --noquotes | tail -n1
         ```
       </Step>
-      <Step title="CloudThinker に接続を追加する">
-        **Connections → Keycloak** に移動し、以下を入力します：
-
-        - **KEYCLOAK_URL**：`http://<host-ip>:8080`
-        - **KEYCLOAK_REALM**：レルム名
-        - **KEYCLOAK_CLIENT_ID**：`cloudthinker-svc`
-        - **KEYCLOAK_CLIENT_SECRET**：前のステップで取得したシークレット
-
-        **Connect** をクリックします。成功すると CloudThinker は **Connected** ステータスを表示します。
-      </Step>
     </Steps>
-
-  </Tab>
-
-  <Tab title="Phase Two">
-
-    [Phase Two](https://dash.phasetwo.io/realms) 経由のマネージド Keycloak 向けです。
-
-    <Steps>
-      <Step title="レルムコンソールを開く">
-        [Phase Two ダッシュボード](https://dash.phasetwo.io/realms)で、接続するレルムのコンソールを開きます。
-      </Step>
-      <Step title="クライアントを作成する">
-        **Clients** タブ → **Create client** に移動し、以下を設定します：
-
-        - **Client ID**：`cloudthinker-svc`
-        - **Next** をクリック
-        - **Client authentication** と **Authorization** を有効化
-        - **Next** → **Save** をクリック
-      </Step>
-      <Step title="realm-management ロールを割り当てる">
-        作成したクライアントを開き、**Service account roles** → **Assign roles** に移動します。
-
-        `realm-management` を検索して、CloudThinker に使用させたいロールを割り当てます。見落としを防ぐため、すべての `realm-management` ロールを割り当てることを推奨します（両方のページを確認してください）。
-      </Step>
-      <Step title="クライアントシークレットを取得する">
-        同じクライアントで **Credentials** を開き、**Client Secret** の値をコピーします。
-      </Step>
-      <Step title="レルム URL を取得する">
-        [https://dash.phasetwo.io/realms](https://dash.phasetwo.io/realms) に戻り、レルムカードを開いて **Details** をクリックします。**Host** の値（例：`https://<region>.auth.ac/auth`）をコピーします。
-      </Step>
-      <Step title="CloudThinker に接続を追加する">
-        **Connections → Keycloak** に移動し、以下を入力します：
-
-        - **KEYCLOAK_URL**：レルム詳細の Host URL（例：`https://<region>.auth.ac/auth`）
-        - **KEYCLOAK_REALM**：レルム名
-        - **KEYCLOAK_CLIENT_ID**：`cloudthinker-svc`
-        - **KEYCLOAK_CLIENT_SECRET**：Credentials ステップで取得したシークレット
-
-        **Connect** をクリックします。成功すると CloudThinker は **Connected** ステータスを表示します。
-      </Step>
-    </Steps>
-
   </Tab>
 </Tabs>
 
-## 接続詳細
+次に、接続を追加します。
+
+<Steps>
+  <Step title="CloudThinker で接続を追加する">
+    **Settings → Workspace → Connections** を開き、**Keycloak** を選択して、[接続の詳細](#接続の詳細)にあるフィールドを入力します。**Connect** をクリックします。
+
+    **成功状態:** 接続に **Connecting**、**Verifying** と表示され、その後 **Connected** になります。CloudThinker はサービスアカウントとしてサインインし、レルムのユーザー数を数えます。これにより、シークレットと `view-users` ロールの両方が確認されます。
+  </Step>
+</Steps>
+
+## 接続の詳細
 
 | フィールド | 説明 | 例 |
 |-------|-------------|---------|
-| **KEYCLOAK_URL** | Keycloak のベース URL | `http://<host-ip>:8080` |
-| **KEYCLOAK_REALM** | 対象レルム名 | `my-realm` |
-| **KEYCLOAK_CLIENT_ID** | サービスアカウントのクライアント ID | `cloudthinker-svc` |
-| **KEYCLOAK_CLIENT_SECRET** | Credentials ステップで取得したクライアントシークレット | — |
+| **KEYCLOAK_URL** | Keycloak のベース URL。`/realms/...` は含めません。古い Keycloak や Phase Two のようにサーバーが `/auth` の下で提供されている場合は `/auth` を含めます | `https://keycloak.example.com` |
+| **KEYCLOAK_REALM** | クライアントがあり、エージェントが作業するレルム | `production` |
+| **KEYCLOAK_CLIENT_ID** | サービスアカウントクライアントのクライアント ID | `cloudthinker-svc` |
+| **KEYCLOAK_CLIENT_SECRET** | **Credentials** タブのクライアントシークレット | |
+
+Phase Two の場合は、Phase Two ダッシュボードのレルムカードからベース URL をコピーします。**Details** を選択して **Host** をコピーしてください。
 
 ## 必要な権限
 
-`cloudthinker-svc` サービスアカウントには対象レルムの `realm-management` ロールが必要です。主なロール：
+サービスアカウントに `realm-management` のクライアントロールを割り当てます。用途をカバーする最小限のセットを選んでください。
 
-| ロール | 用途 |
-|------|---------|
-| `view-realm` | レルム設定の読み取り |
-| `view-users` | ユーザーの一覧表示と検査 |
-| `view-clients` | クライアントの一覧表示と検査 |
-| `query-users`・`query-clients`・`query-groups` | ルックアップクエリの実行 |
-| `manage-users`・`manage-clients`・`manage-realm` | 変更操作（必要な場合のみ割り当て） |
+| エージェントにさせたいこと | ロール |
+|--------------------|-------|
+| 接続テストに合格し、ユーザーを監査する | `view-users`、`query-users` |
+| レルム設定、アイデンティティプロバイダー、認証フローを確認する | `view-realm` |
+| クライアントとクライアントロールを確認する | `view-clients`、`query-clients` |
+| グループとメンバーを確認する | `query-groups` と `view-users` |
+| ユーザー、グループ、メンバーシップを作成、更新、削除する | `manage-users` |
+| クライアントやクライアントロールを作成・削除する、またはシークレットをローテーションする | `manage-clients` |
+| レルム設定や認証フローを変更する | `manage-realm` |
+
+`realm-admin` は上のすべてのロールを含みます。最も手軽で最も広い選択肢なので、エージェントにレルム全体を管理させる場合にのみ使ってください。
 
 <Tip>
-読み取り専用分析には `view-*` と `query-*` ロールのみを割り当ててください。CloudThinker に変更操作を行わせる場合にのみ `manage-*` ロールを追加してください。
+監査には `view-*` と `query-*` のロールだけを割り当ててください。ロールが足りない場合、`view-users` でない限り、接続の失敗ではなく該当する質問での `403 Forbidden` として現れます。
 </Tip>
 
 ## エージェントの機能
 
-接続後、CloudThinker は以下を実行できます：
+| 機能 | エージェントができること | 承認 |
+|------------|--------------------|----------|
+| **Users** | ユーザーの一覧表示と件数、ユーザー名での検索、直接および有効なロールとグループメンバーシップの表示 | 不要 |
+| **Clients** | クライアントとそのロールの一覧表示、どのフローがオンかなどの設定の確認 | 不要 |
+| **Roles and groups** | レルムロール、グループ、グループメンバーの一覧表示 | 不要 |
+| **Identity providers** | アイデンティティプロバイダーとそのマッパーの一覧表示 | 不要 |
+| **Auth flows** | 認証フローとその実行ステップの一覧表示 | 不要 |
+| **User changes** | ユーザーの作成、更新、削除、パスワードのリセット、確認メールの送信、ロールとグループメンバーシップの変更 | Approvals を通る |
+| **Client changes** | クライアントとクライアントロールの作成・削除、クライアントシークレットのローテーション | Approvals を通る |
+| **Realm, group, and flow changes** | グループとサブグループの作成、名前変更、削除、フローの作成・削除、実行ステップの要件の変更。レルムの作成には `create-realm` ロールも必要で、これは `master` レルムにしか存在しません | Approvals を通る |
 
-| 機能 | 説明 |
-|------------|-------------|
-| **レルム検査** | レルム設定と構成の確認 |
-| **クライアント監査** | クライアントの一覧表示、フローと認可設定のレビュー |
-| **ユーザー管理** | ユーザー・セッション・クレデンシャル状態の表示 |
-| **ロールとグループのレビュー** | ロール・コンポジット・グループ階層の検査 |
-| **アクセス分析** | 過剰権限のサービスアカウントや古いクライアントの特定 |
+読み取りは確認なしで実行されます。接続の詳細パネルにある **Allow writes** はデフォルトでオンです。オフにするとすべての変更を拒否します。すべての変更は、まず [Approvals](/guide/approvals/overview) を通ります。
+
+<ApprovalDefault />
+
+一覧の読み取りはデフォルトで最大 100 件を返すため、大きなレルムでは全員ではなく、グループ、クライアント、ユーザー名を指定して質問してください。
+
+CloudThinker は新しいユーザーパスワードを標準入力で Keycloak に渡すため、コマンドログには残りません。ただし会話で入力すると会話には残る可能性があるため、ユーザーには Keycloak で自分のパスワードをリセットしてもらう方法をおすすめします。
+
+<Warning>
+クライアントシークレットのローテーションは実行した瞬間に反映され、古いシークレットは使えなくなります。依頼する前に、そのクライアントの所有者に知らせてください。
+</Warning>
 
 ### 接続を確認する
 
 ```text
-list all clients in the realm to verify the Keycloak connection
+How many users are in my Keycloak realm?
 ```
+
+ユーザー数が返ってきます。これに必要なのは `view-users` だけです。クライアントへのアクセスも確認するには、どのクライアントで direct access grants が有効になっているかを質問してください。これには `view-clients` が必要です。
 
 ### プロンプト例
 
 ```text
-list all clients in the realm and flag any with direct access grants enabled
-show service accounts with realm-admin and review whether each is needed
-audit users without 2FA enabled
+What are the effective realm roles of the user alice?
+Which service accounts hold realm-admin, and does each one need it?
+Show the steps of the browser authentication flow and which are required
 ```
 
 ## トラブルシューティング
 
-<Accordion title="401 Unauthorized">
-- クライアントシークレットが正しくコピーされているか確認してください
-- クライアントで **Client authentication** が有効になっているか確認してください
-- サービスアカウントに `realm-management` ロールが割り当てられているか確認してください
+<Accordion title="Failed to connect to Keycloak">
+CloudThinker がトークンを取得できなかったか、ユーザー数を数えられませんでした。次の順に確認してください。
+- **KEYCLOAK_URL** が CloudThinker から到達でき、`/realms` の手前で終わっていること。サーバーが `/auth` の下で提供されている場合は `/auth` を付けてください。
+- **KEYCLOAK_REALM** がクライアントを作成したレルムであること。名前は大文字と小文字を区別します。
+- クライアントで **Client authentication** と **Service accounts roles** がオンになっており、シークレットが欠けずにコピーされていること。
+- サービスアカウントに `view-users` があること。
 </Accordion>
 
-<Accordion title="レルム操作で 403 Forbidden">
-- サービスアカウントがその操作に必要な `realm-management` ロールを持っていません
-- セルフホスト：不足しているロールで `add-roles` を再実行してください
-- Phase Two：ロール割り当てリストの両ページを再確認してください
+<Accordion title="クライアントにシークレットがない">
+クライアントがパブリックになっています。**Client authentication** をオンにするか、`kcadm.sh` で `publicClient=false` を設定してから、**Credentials** でシークレットをコピーしてください。
 </Accordion>
 
-<Accordion title="Keycloak URL に到達できない">
-- セルフホスト：ベース URL が Keycloak のホスト名と一致しているか確認してください
-- Phase Two：レルムの **Details → Host** フィールドから URL を正確にコピーしてください
+<Accordion title="一部の質問で 403 Forbidden になる">
+トークンは機能していますが、サービスアカウントにそのエンドポイント用のロールがありません。読み取りの質問には `view-*` または `query-*` のロール、変更には `manage-*` のロールが必要です。[必要な権限](#必要な権限)からロールを追加してください。ロールは次のトークンから適用されるため、質問をやり直してください。
 </Accordion>
 
-<Accordion title="クライアントシークレットが空">
-- クライアントはコンフィデンシャルである必要があります — `publicClient=false`（セルフホスト）または **Client authentication** が有効（Phase Two）
-- パブリッククライアントにはシークレットがありません
+<Accordion title="エージェントに 100 人しか表示されない">
+一覧の読み取りはデフォルトで 100 件で止まります。特定のユーザー名やグループを指定して質問するか、エージェントに続きの結果をページ送りするよう依頼してください。
 </Accordion>
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **専用クライアント** — `cloudthinker-svc` を共有の管理クライアントではなく、専用のサービスアカウントクライアントとして使用してください。
-- **シークレットのローテーション** — **Credentials** タブからクライアントシークレットを定期的にローテーションしてください。
+- **専用のクライアントを使う**: `cloudthinker-svc` は CloudThinker 専用にしておくと、他のアプリに影響を与えずに取り消せます。
+- **シークレットをローテーションする**: シークレットを再生成した瞬間に接続は切れるため、両方の手順を続けて行ってください。Keycloak は単一接続のサービスなので、その行には鉛筆アイコンがありません。Keycloak の **Credentials** でシークレットを再生成してから、**Settings → Workspace → Connections** を開き、**Keycloak** を選択します。**Error** と表示されたら **Replace credentials** をクリックし、保存済みの認証情報の横にある **Replace…** をクリックして、新しい **KEYCLOAK_CLIENT_SECRET** を貼り付け、**Save and test** をクリックします。[認証情報をローテーションする](/ja/guide/connections/overview#認証情報をローテーションする)を参照してください。
+- **監査に `realm-admin` を使わない**: 上の読み取りの行にあるすべての質問は、読み取り専用ロールでカバーできます。
 
 ## 関連
 
 <CardGroup cols={2}>
-  <Card title="エージェント" icon="shield-halved" href="/ja/guide/agents/overview">
-    CloudThinker と、その作業の仕組み
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    どの Keycloak の変更を実行し、どれを人の承認待ちにし、どれを拒否するかを決めます。
   </Card>
-  <Card title="接続の概要" icon="plug" href="/ja/guide/connections/overview">
-    利用可能な全接続
+  <Card title="Connections" icon="plug" href="/ja/guide/connections/overview">
+    接続できるすべてのサービスと、接続ステータスの仕組みを確認します。
   </Card>
 </CardGroup>

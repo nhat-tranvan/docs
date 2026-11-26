@@ -1,193 +1,172 @@
 ---
 title: Elasticsearch
-description: "ログ分析・インデックス管理・検索パフォーマンス最適化のためにElasticsearchをCloudThinkerに接続します"
+description: "Elasticsearch を接続し、エージェントが読み取り専用のアクセスでログの検索、マッピングの読み取り、ES|QL の実行、シャードとクラスターのヘルス確認を行えるようにします"
 icon: "/images/icons/elasticsearch.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
-ElasticsearchクラスターをCloudThinkerに接続すると、エージェントがログの検索、オブザーバビリティデータの分析、インシデントの調査を行えるようになります。
-
-Elasticsearchは、特定のインデックスおよびクラスター権限にスコープされた**APIキー**で認証します。
-
----
+Elasticsearch クラスターを接続すると、CloudThinker のエージェントがインシデントの調査中に、インデックスの一覧表示、フィールドマッピングの読み取り、DSL 検索と ES|QL クエリの実行、シャードの割り当ての確認を行えるようになります。接続は **API キー** または **ユーザー名とパスワード** でサインインし、公開されるツールはすべて読み取りです。
 
 ## 前提条件
 
-- CloudThinkerから到達可能な **Elasticsearch**（7.x、8.x）、**OpenSearch**（1.x、2.x）、**AWS OpenSearch Service**、または **Elastic Cloud** クラスター。
-- APIキーを作成するための Kibana（**Stack Management → Security → API Keys**）または Elasticsearch API への管理者アクセス。
-- クラスターエンドポイントURL。
-
----
+- CloudThinker がネットワーク経由で到達できる HTTPS エンドポイントを持つ Elasticsearch クラスター（Elastic Cloud のデプロイや公開 DNS 名など）。`localhost` やプライベートアドレスには CloudThinker Cloud から到達できません。
+- ファイアウォールや Elastic Cloud のトラフィックフィルターがクラスターを保護している場合は、CloudThinker の送信元 IP を許可してください。このドキュメントでは CloudThinker の送信元 IP の一覧を公開していません。CloudThinker の担当者に問い合わせるか、[お問い合わせ](https://cloudthinker.io/contact)ください。その他の選択肢は [Reaching private services](/ja/guide/connections/overview#プライベートサービスへの到達) を参照してください。
+- API キー（Kibana の **Stack Management → Security → API keys**、または `_security/api_key` API）または専用ユーザーを作成する権限。
+- エージェントに読ませるインデックスパターン（`logs-*` や `filebeat-*` など）。
 
 ## セットアップ
 
 <Steps>
-  <Step title="Kibanaを開く">
-    Kibanaインスタンスにアクセスし、管理者権限でサインインします。
-  </Step>
-  <Step title="APIキーへ移動">
-    **Stack Management → Security → API Keys** へ移動します。
-  </Step>
-  <Step title="APIキーを作成">
-    **Create API key** をクリックし、次の情報を入力します:
-    - **Name**: `cloudthinker-readonly`
-  </Step>
-  <Step title="権限を設定">
-    読み取り専用アクセス用のロールディスクリプターを追加します（完全なJSONは[必要な権限](#必要な権限)を参照）。最低限、クラスターに `monitor`、必要なインデックスパターンに `read` + `view_index_metadata` を付与してください。
-  </Step>
-  <Step title="生成してコピー">
-    **Create API key** をクリックし、エンコードされたキーをすぐにコピーします。Elasticsearchはキーを再表示しません。
-  </Step>
-  <Step title="クラスターエンドポイントを確認">
-    Elasticsearchエンドポイントをコピーします:
-    - セルフホスト: `https://elasticsearch.your-domain.com:9200`
-    - Elastic Cloud: デプロイ設定から確認
-    - AWS OpenSearch: AWSコンソールのドメインエンドポイント
-  </Step>
-  <Step title="CloudThinkerで接続を追加">
-    **Connections → Elasticsearch** に移動し、次の情報を入力します:
-    - **Cluster URL**: Elasticsearchエンドポイント
-    - **API Key**: コピーしたエンコード済みキー
-    - **Index patterns**: アクセスするパターン（例: `logs-*`）
+  <Step title="読み取り専用の API キーを作成する">
+    Kibana で **Dev Tools** を開き、下のリクエストを実行します。`logs-*` は自分のインデックスパターンに置き換えてください。
 
-    **Connect** をクリックします。CloudThinkerが認証情報を検証し、**Connected** ステータスを表示します。
+    ```http
+    POST /_security/api_key
+    {
+      "name": "cloudthinker",
+      "expiration": "90d",
+      "role_descriptors": {
+        "cloudthinker_read": {
+          "cluster": ["monitor"],
+          "indices": [
+            {
+              "names": ["logs-*"],
+              "privileges": ["read", "view_index_metadata", "monitor"]
+            }
+          ]
+        }
+      }
+    }
+    ```
+
+    レスポンスの `encoded` の値をコピーします。Elasticsearch は一度しか表示しません。
+
+    **Stack Management → Security → API keys** で **Create API key** をクリックし、**Control security privileges** をオンにして同じ `role_descriptors` オブジェクトを貼り付けて、キーを作成することもできます。
+  </Step>
+  <Step title="クラスターのエンドポイントをコピーする">
+    `https://elasticsearch.example.com:9200` のように、スキームとポートを含む完全な URL を使います。Elastic Cloud では、デプロイのページから Elasticsearch のエンドポイントをコピーします。
+  </Step>
+  <Step title="CloudThinker で接続を追加する">
+    **Settings → Workspace → Connections** を開き、**Elasticsearch** を選びます。**ES_URL** にエンドポイントを入力し、**Authentication** で **API key** を選んで、encoded のキーを貼り付けます。クラスターが自己署名証明書を使っている場合を除き、**TLS certificate** は **Verify** のままにします。**Connect** をクリックします。
+
+    **成功時の状態:** 接続に **Connecting** と **Verifying** が表示され、その後 **Connected** になります。テストが失敗すると、クラスターが返したメッセージとともにエラーが表示されます。[トラブルシューティング](#トラブルシューティング)と照合してください。
   </Step>
 </Steps>
 
-<Warning>
-APIキーは作成直後にコピーしてください。Elasticsearchはキーを再表示しないため、紛失した場合は新しいキーを作成する必要があります。
-</Warning>
-
----
-
 ## 接続の詳細
 
-| フィールド | 説明 | 例 |
-|-------|-------------|---------|
-| **ES_URL** | ElasticsearchクラスターURL | `https://your-cluster.es.region.cloud.es.io:9243` |
-| **ES_API_KEY** | Base64エンコードされたAPIキー | `VnVhQk...` |
+| フィールド | 必須 | 説明 | 例 |
+|-------|----------|-------------|---------|
+| **ES_URL** | はい | スキームとポートを含むクラスターのエンドポイント | `https://elasticsearch.example.com:9200` |
+| **Authentication** | はい | **API key**（デフォルト）または **Username & password** | **API key** |
+| **API key** | API key の場合のみ | 作成時のレスポンスの `encoded` の値 | `VnVhQ2ZHY0JDZGJr...` |
+| **Username** | Username & password の場合のみ | 専用の Elasticsearch ユーザー | `cloudthinker` |
+| **Password** | Username & password の場合のみ | そのユーザーのパスワード | |
+| **TLS certificate** | いいえ | **Verify**（デフォルト）または **Allow self-signed** | **Verify** |
 
-設定する一般的なインデックスパターン:
-
-| パターン | ユースケース |
-|---------|----------|
-| `logs-*` | アプリケーションログ |
-| `filebeat-*` | Filebeatで収集したログ |
-| `metricbeat-*` | インフラストラクチャメトリクス |
-| `apm-*` | アプリケーションパフォーマンスデータ |
-| `kubernetes-*` | Kubernetesクラスターログ |
-
----
+方式は 1 つだけ入力してください。API キーとユーザー名またはパスワードの両方を入力すると、"Choose either an API key or username and password." というメッセージで接続が拒否されます。
 
 ## 必要な権限
 
-### 最小権限
+| エージェントに必要なこと | 付与するもの |
+|----------------|-------|
+| クラスターのヘルスを確認する | クラスター権限 `monitor` |
+| インデックスを一覧表示し、シャードの割り当てを読む | パターンに対するインデックス権限 `monitor` |
+| フィールドマッピングを読む | パターンに対するインデックス権限 `view_index_metadata` |
+| DSL 検索と ES\|QL クエリを実行する | パターンに対するインデックス権限 `read` |
 
-```json
+**Username & password** を使う場合は、同じ権限を持つロールと、そのロールを持つユーザーを作成します。各リクエストは **Dev Tools** で個別に実行してください。
+
+```http
+POST /_security/role/cloudthinker_read
 {
   "cluster": ["monitor"],
   "indices": [
     {
-      "names": ["logs-*", "metrics-*"],
-      "privileges": ["read"]
+      "names": ["logs-*"],
+      "privileges": ["read", "view_index_metadata", "monitor"]
     }
   ]
 }
 ```
 
-### 推奨
-
-```json
+```http
+POST /_security/user/cloudthinker
 {
-  "cluster": ["monitor", "read_ilm"],
-  "indices": [
-    {
-      "names": ["*"],
-      "privileges": ["read", "view_index_metadata"]
-    }
-  ]
+  "password": "<a long random password>",
+  "roles": ["cloudthinker_read"]
 }
 ```
 
 <Tip>
-CloudThinkerが必要とするインデックスパターンに対してのみ `read` 権限を付与してください。CloudThinkerのAPIキーに `write` やクラスター管理者権限を付与しないでください。
+`*` ではなく、エージェントが必要とするインデックスパターンを列挙してください。`logs-*` にスコープを限定したキーは、検索で求められても `customers` インデックスを読めません。
 </Tip>
 
----
+## エージェントの機能
 
-## エージェント機能
+| 機能 | エージェントができること |
+|------------|--------------------|
+| **Index inventory** | インデックスをステータスとドキュメント数とともに一覧表示し、`logs-app-*` などの命名パターンを見つけます |
+| **Mappings** | 絞り込む前にフィールド名と型を読み、存在するフィールドをクエリで使うようにします |
+| **Search** | 期間、並べ替え、結果サイズを指定した範囲付きの DSL クエリを実行します |
+| **ES\|QL** | サービスごとのエラー数など、ES\|QL で集計します。常に `LIMIT` を付けます |
+| **Shards and health** | 未割り当てのシャードを見つけ、クラスターのヘルスを green、yellow、red で報告します |
 
-接続後、エージェントは次のことができます:
+この接続には、書き込み、削除、クラスター設定の変更を行うツールはありません。
 
-| 機能 | 説明 |
-|------------|-------------|
-| **ログ検索** | アプリケーションおよびインフラストラクチャログを検索 |
-| **エラー分析** | エラーパターンと異常を検出 |
-| **インシデント調査** | サービス間でイベントを相関付け |
-| **メトリクスクエリ** | 保存されたメトリクスデータをクエリ |
-
-### 接続を確認
-
-```text
-Search Elasticsearch for application errors in the last hour
-```
-
-### プロンプト例
+### 接続を確認する
 
 ```text
-Search logs for authentication failures in the last 24 hours
-Find error patterns in application logs for the api-gateway service
-Search for pod crash events in Kubernetes logs
+Check Elasticsearch cluster health and list the five largest indices by document count
 ```
 
----
+ヘルスのステータス、未割り当てのシャードを含むシャード数、ドキュメント数付きの 5 つのインデックス名が返されることを確認します。
+
+### プロンプトの例
+
+```text
+Count ERROR log lines per service in logs-app-* over the last hour
+Search logs-* for authentication failures in the last 24 hours and group them by source IP
+Why is the cluster yellow? List the unassigned shards and the indices they belong to
+```
 
 ## トラブルシューティング
 
-<Accordion title="接続が拒否される">
-- クラスターURLが正しく、CloudThinkerから到達可能であることを確認してください。
-- ファイアウォールルールがCloudThinkerのエグレスIPを許可しているか確認してください。
-- AWS OpenSearchの場合、パブリックアクセスを有効にするか、VPCエンドポイントを設定してください。
-- Elasticsearchが実行中でリクエストを受け付けていることを確認してください。
+<Accordion title="接続がタイムアウトまたは connection refused で失敗する">
+**ES_URL** が、CloudThinker が到達できないアドレスを指しています。公開エンドポイントを使い、スキームとポートを含め、ファイアウォールや Elastic Cloud のトラフィックフィルターが CloudThinker の送信元 IP を許可していることを確認してください（[前提条件](#前提条件)を参照）。
 </Accordion>
 
-<Accordion title="認証に失敗した">
-- APIキーが正しく、期限切れになっていないか確認してください。
-- キーに必要なインデックスおよびクラスター権限があることを確認してください。
-- AWS OpenSearchの場合、IAMロールまたはアクセスポリシーが正しく設定されているか確認してください。
+<Accordion title="401 Unauthorized">
+API キーが誤っている、期限切れ、または無効化されているか、パスワードが変更されています。新しいキーを作成し、`id` や `api_key` フィールドだけではなく `encoded` の値で[認証情報を置き換え](/ja/guide/connections/overview#認証情報をローテーションする)てください。
 </Accordion>
 
-<Accordion title="APIキーの期限切れ">
-- **Stack Management → Security → API Keys** に移動します。
-- 同じ権限で新しいキーを作成します。
-- CloudThinkerの接続設定でキーを更新します。
+<Accordion title="1 つのインデックスで security_exception が発生する">
+キーまたはユーザーに、そのインデックスへの権限がありません。新しいキーの `names` にそのパターンを追加してから、接続の[認証情報を置き換え](/ja/guide/connections/overview#認証情報をローテーションする)てください。
 </Accordion>
 
-<Accordion title="データが返されない">
-- インデックスパターンがクラスター内の既存インデックスに一致しているか確認してください。
-- APIキーがそれらのインデックスに対して `read` 権限を持っているか確認してください。
-- インデックスにリクエストした時間範囲のデータが含まれていることを確認してください。
+<Accordion title="セルフホストのクラスターで証明書エラーが発生する">
+クラスターが自己署名証明書を使っています。そのクラスターを信頼できる場合にのみ、**TLS certificate** を **Allow self-signed** に設定してください。
 </Accordion>
 
----
+<Accordion title="検索が何も返さない">
+インデックスパターンが一致しない、フィールド名がプロンプトの想定と異なる、または期間にデータがありません。まずインデックスを一覧表示し、そのインデックスのマッピングを読むようエージェントに依頼してください。
+</Accordion>
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **APIキーのローテーション** — APIキーは90日ごとにローテーションし、キー作成時に有効期限を設定してください
-- **インデックスの制限** — CloudThinkerが実際に必要とするインデックスパターンにキーを制限し、`*` へのアクセスを許可しないでください
+- **キーに有効期限を設定する**: `90d` などの `expiration` により、漏洩したキーが使える期間を制限できます。期限切れになる前に新しいキーを作成し、接続を開いて行の鉛筆アイコンをクリックし、**Edit Instance** で **Replace…** をクリックします。新しいキーを貼り付けて **Save and test** をクリックします。テストが失敗した場合、CloudThinker は古いキーを保持するため、切り替え中にエージェントがアクセスを失うことはありません。
+- **インデックスされた内容は機密として扱う**: ログには、アプリケーションが書き込んだトークンや個人データが含まれていることがあります。キーは、エージェントに読ませたいインデックスにスコープを限定してください。
 
----
-
-## 関連情報
+## 関連ページ
 
 <CardGroup cols={2}>
-  <Card title="エージェント" icon="shield-check" href="/ja/guide/agents/overview">
-    CloudThinker と、その作業の仕組み
+  <Card title="根本原因分析" icon="magnifying-glass" href="/ja/guide/incident/root-cause-analysis">
+    エージェントがログ検索を使ってインシデントの原因を見つける方法を確認します。
   </Card>
-  <Card title="Grafana 接続" icon="/images/icons/grafana.svg" href="/ja/guide/connections/grafana">
-    Elasticsearchデータの可視化
+  <Card title="接続の概要" icon="plug" href="/ja/guide/connections/overview">
+    認証情報のローテーション、プライベートサービスへの到達、すべての接続の確認を行います。
   </Card>
 </CardGroup>

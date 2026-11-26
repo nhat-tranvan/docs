@@ -1,96 +1,209 @@
 ---
-title: 'マルチAWSアカウントの運用'
-description: 'IAM AssumeRoleショートカットを使ってアカウントコンテキストをオンデマンドで切り替えながら、単一のワークスペースから複数のAWSアカウントを運用する'
+title: 複数の AWS アカウントにまたがって作業する
+description: "複数の AWS アカウントを 1 つのワークスペースに接続し、平易なプロンプトで、それらにまたがって支出を比較し、コストとセキュリティの問題を見つけます。"
 icon: layer-group
 ---
 
-本番・開発・ステージングのAWSアカウントを管理するプラットフォームチームが、単一のCloudThinkerワークスペースからすべてのアカウントのコストを照会し、セキュリティを監査し、インシデントを調査できます。
+ほとんどのチームは、複数の AWS アカウントを運用しています。本番用、ステージング用、開発用、ときにはそれ以上です。このウォークスルーでは、そのうち 3 つを 1 つの CloudThinker のワークスペースに接続し、3 つすべてにまたがる質問をします。お金がどこに使われているか、何がアイドル状態か、どの IAM のアクセスが危険かです。
 
-## シナリオ
+**必要なもの:**
 
-あなたの組織は本番・開発・ステージング用に別々のAWSアカウントを維持しています。一元化されたプラットフォームチームは、全員に本番アクセスを与えることなく、またワークスペースを切り替えてコンテキストを失い続けることなく、クロスアカウントの可視性が必要です。解決策は、CloudThinkerをプライマリAWSアカウントに接続し、各ターゲットアカウントにIAMロールを作成し、[CloudThinker](/ja/guide/agents/overview)にどのアカウントで操作するかを指示するショートカットを定義することです——すべて単一のワークスペースから行います。
+- CloudThinker のワークスペース。[クイックスタート](/ja/quickstart)で作成されます。
+- 各 AWS アカウントで IAM ロールを作成する権限と、それぞれでの [AWS CloudShell](https://console.aws.amazon.com/cloudshell/home) へのアクセス。
+- コストの質問の場合: 各アカウントで Cost Explorer が有効になっていること。新しいアカウントでは、AWS が有効化するまでに最大 24 時間かかることがあります。ロールの `ReadOnlyAccess` ポリシーには、Optimize が使う `ce:Get*` の読み取りがすでに含まれています。AWS は Cost Explorer の API リクエストを別途課金します（AWS の定価で 1 リクエストあたり USD 0.01）。
 
-## ウォークスルー
+## 複数のアカウントの仕組み
+
+各 AWS アカウントは、CloudThinker でそれぞれ独立した接続です。ハブのアカウントも、セットアップすべきロールの連鎖もありません。アカウントを接続すると、CloudThinker はそのアカウントの読み取り専用のロール（`CloudThinkerAccessRole`）を引き受け、その短期の認証情報を取得します。
+
+エージェントは、接続時に入力する 2 つのフィールドからアカウントを選びます。
+
+| フィールド | 入力する内容 | 例 |
+|---|---|---|
+| **Alias** | プロンプトで使う短い名前 | `production` |
+| **Description** | アカウントが持つもの。エージェントはこれを読んでアカウントを選び分けます。 | `Production AWS account, customer-facing workloads` |
+
+<Tip>
+アカウントを区別できる説明を書いてください。「AWS account」が 3 回並んでいても、エージェントには選ぶ手がかりがありません。「Staging, mirrors production, reset weekly」なら手がかりになります。
+</Tip>
+
+## アカウントを接続する
+
+アカウントごとに、これらの手順を 1 回ずつ繰り返します。組織全体や StackSets でのオンボーディングはありません。各ダイアログが独自の External ID を生成するため、アカウントごとに専用の接続ダイアログが必要です。Terraform や CloudFormation でロールを作成したい場合は、各ダイアログで **Manual steps** を展開して信頼ポリシーを確認してください。アクセスキーの方法を含む完全なリファレンスは、[AWS 接続のページ](/ja/guide/connections/aws)にあります。
 
 <Steps>
-  <Step title="プライマリAWSアカウントを接続する">
-    **Connections** でプライマリAWSアカウントを[ロールベース認証](/ja/guide/connections/aws)を使って追加します。これはハブアカウントです——すべてのクロスアカウントリクエストはこのIAM IDから発信されます。
-
-    **成功の確認：** ConnectionsパネルでConnections が**Connected**ステータスを表示していること。
+  <Step title="接続ダイアログを開く">
+    サイドバー上部のワークスペースメニューから **Settings → Workspace → Connections** を開き、**Amazon Web Services** を選んで **Connect** をクリックします。**Role-Based** タブは選択したままにします。
   </Step>
-
-  <Step title="クロスアカウントIAMロールを作成する">
-    各ターゲットAWSアカウントに、以下の信頼ポリシーを持つIAMロールを作成します。`PRIMARY_ACCOUNT_ID`をハブアカウントのAWSアカウントIDに置き換えてください。
-
-    ```json
-    {
-      "Version": "2012-10-17",
-      "Statement": [
-        {
-          "Effect": "Allow",
-          "Principal": {
-            "AWS": "arn:aws:iam::PRIMARY_ACCOUNT_ID:root"
-          },
-          "Action": "sts:AssumeRole"
-        }
-      ]
-    }
-    ```
-
-    権限を最小限に抑えるため、ロールに `ReadOnlyAccess`（またはスコープを絞った読み取り専用ポリシー）をアタッチします。
-
-    **成功の確認：** プライマリアカウントから `aws sts assume-role` を実行して、各ロールが引き受け可能であることを確認できること。
+  <Step title="アカウントに名前を付ける">
+    上の表に従って **Alias** と **Description** を入力します。**Default AWS region** は任意で、出発点にすぎません。エージェントは、ロールが到達できる任意のリージョンを使えます。
   </Step>
+  <Step title="そのアカウントでセットアップのスクリプトを実行する">
+    **Open CloudShell** をクリックし、接続する AWS アカウントにサインインします。ダイアログに戻り、**Copy Script to Clipboard** をクリックして、CloudShell に貼り付け、Enter キーを押します。スクリプトは、AWS 管理の `ReadOnlyAccess` ポリシーを持つ `CloudThinkerAccessRole` を作成し、ロールの ARN を出力します。
 
-  <Step title="アカウント切り替えショートカットを定義する">
-    **Shortcuts**パネル（任意のワークスペースの右上）を開き、ターゲットアカウントごとに1つのショートカットを作成します。**Init Step**に、プロンプトが実行される前にターゲットロールARNをエージェントに引き受けるよう指示する内容を設定します。
+    `ReadOnlyAccess` は、設定だけでなく、S3 のオブジェクトなどのデータも読めます。より範囲の狭いロールについては、[必要な権限](/ja/guide/connections/aws#必要な権限)で `ViewOnlyAccess` と `SecurityAudit` の選択肢と、それで失われるものを参照してください。
 
-    <Frame>
-      <img src="/images/use-cases/01-shortcut-assume-role.png" alt="アカウント切り替えショートカットを表示するCloudThinker Shortcutsパネル" />
-    </Frame>
-    <p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>AssumeRoleのInit Stepを持つShortcutsパネル</p>
-
-    | ショートカット名 | Init Step |
-    |---|---|
-    | `/switch-to-prod` | `Please assume arn:aws:iam::111111111111:role/CloudThinkerAccessRole and use the STS token for this session.` |
-    | `/switch-to-dev` | `Please assume arn:aws:iam::222222222222:role/CloudThinkerAccessRole and use the STS token for this session.` |
-    | `/switch-to-staging` | `Please assume arn:aws:iam::333333333333:role/CloudThinkerAccessRole and use the STS token for this session.` |
-
-    **成功の確認：** `/`を入力したときに、各ショートカット名がShortcartsのオートコンプリートリストに表示されること。
+    <Warning>
+    スクリプトは毎回、今完了させようとしているダイアログからコピーしてください。各ダイアログは独自の **AWS External ID** を生成し、スクリプトはそれをロールの信頼ポリシーに組み込みます。別のアカウントのダイアログからコピーしたスクリプトは一致しません。
+    </Warning>
   </Step>
+  <Step title="Role ARN を貼り付けて接続する">
+    ARN を **AWS Role ARN** に貼り付け、**AWS External ID (Auto-generated)** はそのままにして、**Connect** をクリックします。
 
-  <Step title="クロスアカウント操作を実行する">
-    プロンプトの先頭にショートカット名を付けます。CloudThinker は行動する前にターゲットロールを引き受けるため、すべての結果はそのアカウントにスコープされます。
-
-    ```text
-    /switch-to-prod Build an AWS daily cost report as a dashboard
-    ```
-
-    CloudThinker は本番ロールを引き受け、そのアカウントのCost ExplorerとCloudWatchをクエリし、本番にスコープされたコストダッシュボードを返します。
-
-    ```text
-    /switch-to-dev Summarize unused EC2 instances in the dev account
-    ```
-
-    **成功の確認：** CloudThinker の応答がハブではなくターゲットアカウントのリソースを参照していること。
+    **成功時の状態:** アカウントに **Connected** のステータスが表示されます。
+  </Step>
+  <Step title="接続後に環境を設定する">
+    接続ダイアログでは環境を尋ねないため、ここで設定します。**Amazon Web Services** の詳細パネルで、アカウントの行の鉛筆アイコンをクリックし、**Edit Instance** で **Environment** を **Production**、**Staging**、**Development** のいずれかに設定します。これは人とエージェントのためにアカウントにラベルを付けるものです。[Approval Rules](/guide/approvals/rules) はこれを読みません。Rule には Environment のフィールドがないため、Rule がアカウントをカバーするのは、**Connections** でその接続を選んだ場合だけです。
   </Step>
 </Steps>
 
-## 成果の要因
+完了すると、**Connections** に 3 つの Amazon Web Services の接続（例: `production`、`staging`、`development`）が、それぞれ **Connected** として一覧されます。
 
-- **[ロールベース認証](/ja/guide/connections/aws)** — ハブアカウントのIAM IDが `sts:AssumeRole` 呼び出しを実行するため、各ターゲットアカウントの長期的な認証情報を共有・保存する必要がありません。
-- **IAM最小権限** — 各クロスアカウントロールに `ReadOnlyAccess` をアタッチすることで、ショートカットが誤用された場合でもエージェントが実行できる操作を制限します。セキュリティポリシーで許可される場合は `:root` の代わりに特定のプリンシパルARNを使用してください。
-- **Shortcuts** — プロンプトの前に挿入されるInit Stepが、ロールARNを毎回入力することなくアカウントコンテキストを設定します。Shortcutsを使えばアカウントごとにナレッジや指示をスコープすることもできます。
-- **[CloudThinker](/ja/guide/agents/overview)** — ロールコンテキストが設定されれば、AWSアカウント全体のコスト分析・リソース監査・インフラクエリを処理します。
-- **[ワークスペース](/ja/guide/workspaces)** — チームがアカウントごとに完全な分離（別々のナレッジベース、監査証跡、またはアクセス制御）を必要とする場合は、ショートカットを使う代わりにアカウントごとにワークスペースを作成してください。
+## エージェントが到達できるアカウントを確認する
 
-## 試してみる
+何かを比較する前に、すべてのアカウントが応答することを確認します。新しい会話で、次のように尋ねます。
+
+```text
+List every AWS account you can reach through my connections. For each one, show the alias, the 12-digit account ID, and the regions you can see.
+```
+
+**期待される結果:** 接続ごとに、実際のアカウント ID を含む 1 行。エージェントは **Default AWS region** に限定されず、ロールが到達できる任意のリージョンを使えます。サービスコントロールポリシー（SCP）でブロックされたリージョンでは `AccessDenied` が返ります。アカウントが欠けていたりエラーが表示されたりする場合は、後の比較で何の通知もなくスキップされないよう、今修正してください（[トラブルシューティング](#トラブルシューティング)を参照）。
+
+## アカウントをまたいで支出を比較する
+
+方法は 2 つあります。保存された、繰り返し使える数値が欲しい場合は Optimize を使います。1 回限りの質問の場合はチャットのプロンプトを使います。
+
+| 欲しいもの | 使うもの | 場所 |
+|---|---|---|
+| すべてのアカウントを、それぞれ 1 つのセクションでカバーする削減のレポート | **All accounts** のスコープの [Optimize のレポート](/ja/guide/cost-optimization/reports) | **Optimize → Reports** |
+| 1 つのアカウントのサービス別やリージョン別の支出 | [Cost Explorer](/ja/guide/cost-optimization/analytics) | **Optimize → Cost Explorer** で、ページタイトルの横でアカウントを選ぶ |
+| 自分の言葉での、手早い並べての回答 | チャットのプロンプト | 任意の会話 |
+
+### すべてのアカウントのレポートを生成する
+
+<Steps>
+  <Step title="Reports を開く">
+    サイドバーで **Optimize → Reports** を選びます。
+  </Step>
+  <Step title="スコープを選ぶ">
+    レポートのカードの上のセレクターで **All accounts** を選びます。
+  </Step>
+  <Step title="レポートを選ぶ">
+    **Savings opportunities** を選びます。
+
+    **成功時の状態:** 新しい会話が開き、完成したレポートが、アカウントごとに 1 つのセクションを持つアーティファクトとして表示されます。
+  </Step>
+</Steps>
+
+レポートは Optimize がすでに保存しているコストデータを使うため、最新のデータのために AWS を呼び出すことはありません。Optimize は 1 日に 1 回新しい請求データを取得します。Optimize のページヘッダーの **Updated** ボタンに、各アカウントが最後に更新された時刻が表示されます。データの欠落はゼロではなく欠落として表示され、Optimize が異なる通貨を合算することはありません。
+
+レポートを定期的に実行するには、**Scheduled reports** で **Add schedule** を選びます。スケジュールは作成時に取り込んだアカウントを保持するため、別のアカウントを接続した後は作り直してください。[定期レポートをスケジュールする](/ja/guide/cost-optimization/reports#定期レポートをスケジュールする)を参照してください。
+
+### チャットで尋ねる
+
+推測の余地がないよう、アカウントをエイリアスで指定します。
+
+```text
+Compare last month's AWS spend for production, staging, and development. Show a table with the top five services in each account and flag any service that grew more than 20% from the month before.
+```
+
+**期待される結果:** アカウントごとの表（または 1 つにまとめた表）にサービス名と金額が示され、20% を超えて増えたサービスが指摘されます。
+
+## 各アカウントのコストの無駄を見つける
+
+非本番のアカウントには、忘れられたリソースがたまりがちです。すべてのアカウントに同じ質問を一度に尋ねます。
+
+```text
+In staging and development, find EC2 instances with average CPU under 10% over the last two weeks, and unattached EBS volumes. Group the results by account and include instance IDs, types, and regions.
+```
+
+**期待される結果:** AWS コンソールで調べられるリソース ID を含む、アカウントごとの一覧。ロールは読み取り専用のため、何も停止・削除されません。
+
+見積もり額付きのランク付けされた削減には、**Optimize → Issues** を開き、ページヘッダーで各アカウントを選びます。[Recommendations](/ja/guide/cost-optimization/recommendations) を参照してください。
+
+## アカウントをまたいでセキュリティの問題を見つける
+
+`ReadOnlyAccess` のロールにより、エージェントは接続されたすべてのアカウントで IAM のロール、ユーザー、ポリシーを確認できます。すぐに効果が出る 2 つのプロンプト:
+
+```text
+List IAM users and roles that haven't been used in 90 days in production, staging, and development. Group by account and show the last-used date for each.
+```
+
+```text
+Across all my AWS accounts, find IAM users with access keys older than 90 days and any user without MFA. Show one table per account.
+```
+
+**期待される結果:** ID の名前と日付を含む、アカウントごとの表。クリーンアップの一覧として使ってください。エージェントは見つけたものを報告するだけで、何も削除しません。
+
+<Note>
+エージェントが行うすべての呼び出しは、通常の AWS の API の呼び出しです。アカウントで何が実行されたかを正確に確認するには、そのアカウントの CloudTrail を `CloudThinkerAccessRole` で絞り込んでください。
+</Note>
+
+## 一部のアカウントでだけエージェントに変更を許可する
+
+セットアップのスクリプトのロールは読み取り専用のため、さらに権限を付与するまで、AWS はすべてのアカウントですべての書き込みを拒否します。たとえば、開発では修正させたいが本番では決してさせたくない場合:
+
+1. 開発のアカウントの `CloudThinkerAccessRole` に、必要な書き込みの操作だけを追加します。本番のロールは `ReadOnlyAccess` のままにします。たとえば、次のインラインポリシーでは、エージェントは `env=dev` のタグが付いたインスタンスだけを停止・開始できます。
+
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": ["ec2:StopInstances", "ec2:StartInstances"],
+         "Resource": "arn:aws:ec2:*:*:instance/*",
+         "Condition": { "StringEquals": { "aws:ResourceTag/env": "dev" } }
+       }
+     ]
+   }
+   ```
+
+2. Connections の **Amazon Web Services** の詳細パネルで、**Allow writes** のスイッチを確認します。AWS ではデフォルトでオンです。後でロールが変わっても読み取り専用のままにすべき接続では、オフにしてください。
+3. **Ask first** の [Rule](/guide/approvals/rules) を追加し、**Connections** でステージングと本番の接続を選んで、そこで書き込みが実行される前に人が承認するようにします。すべての書き込みを人の判断待ちにするには、代わりに Approval mode を **Manual** に設定します。
+
+IAM の権限と **Allow writes** がどう組み合わさるかは、[書き込みアクセス](/ja/guide/connections/aws#書き込みアクセス)を参照してください。
+
+## トラブルシューティング
+
+<AccordionGroup>
+  <Accordion title="回答にアカウントが含まれていない">
+    **原因:** 接続が **Connected** になっていないか、その **Description** が曖昧すぎて、エージェントがプロンプトと照合できません。
+
+    **対処:** **Settings → Workspace → Connections** でアカウントのステータスを確認します。次に、**Description** を編集してアカウントが持つものを書き、プロンプトではエイリアスで指定してください。
+  </Accordion>
+  <Accordion title="2 つ目のアカウントが sts:AssumeRole で AccessDenied になる">
+    **原因:** スクリプトや信頼ポリシーが別のアカウントのダイアログからのもので、External ID が一致しません。
+
+    **対処:** そのアカウントのために新しい接続ダイアログを開き、表示されたスクリプトを実行します。`CloudThinkerAccessRole` がすでにそこにある場合、スクリプトは停止します。他の CloudThinker の接続がそのロールを使っていない場合は、CloudShell でそれを削除してから新しいスクリプトを実行します。
+
+    ```bash
+    aws iam detach-role-policy --role-name CloudThinkerAccessRole \
+      --policy-arn arn:aws:iam::aws:policy/ReadOnlyAccess
+    aws iam delete-role --role-name CloudThinkerAccessRole
+    ```
+
+    そうでない場合は、ダイアログで **Manual steps** を展開し、表示された External ID で既存のロールの信頼ポリシーを更新してください。
+  </Accordion>
+  <Accordion title="1 つのアカウントでコストの質問にデータが返らない">
+    **確認:** そのアカウントで Cost Explorer がオンになっていて、有効化から 24 時間経っていること。AWS Organizations のメンバーアカウントは、管理アカウントによって Cost Explorer がブロックされていることがあります。
+
+    **対処:** Cost Explorer をオンにするか、組織全体のコストを見るために管理アカウントを接続してください。
+  </Accordion>
+  <Accordion title="スケジュールされたすべてのアカウントのレポートが新しいアカウントをスキップする">
+    **原因:** レポートのスケジュールは、作成時に取り込んだアカウントを保持します。後から接続したアカウントは追加されません。
+
+    **対処:** **Optimize → Reports** で、**All accounts** を選択してスケジュールを作り直してください。
+  </Accordion>
+</AccordionGroup>
+
+## 次のステップ
 
 <CardGroup cols={2}>
-  <Card title="AWSアカウントを接続する" icon="/images/icons/aws.svg" href="/ja/guide/connections/aws">
-    CloudThinker がアカウント間でロールを引き受けられるようロールベース認証を設定する。
+  <Card title="AWS アカウントを接続する" icon="/images/icons/aws.svg" href="/ja/guide/connections/aws">
+    1 つの AWS 接続のすべてのフィールド、権限、対処方法。
   </Card>
-  <Card title="ワークスペース" icon="layer-group" href="/ja/guide/workspaces">
-    アカウント間の完全な分離が必要な場合に専用ワークスペースを作成する。
+  <Card title="Optimize のレポート" icon="file-lines" href="/ja/guide/cost-optimization/reports">
+    1 つまたはすべてのアカウントの削減のレポートを生成・スケジュールします。
   </Card>
 </CardGroup>

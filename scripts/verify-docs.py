@@ -67,30 +67,21 @@ for p in PAGES:
             fail("fact9", f"{p}:{line} {m.group(0)!r} — see STYLE.md fact 9 (verify in backend before rewording)")
 
 # ------------------------------------------------- rule enforcement caveat
-# Rule enforcement is off by default; while in preview Rules only record.
-# A page may claim Rules decide only if it also carries the caveat or links it.
-RULES_CLAIM = re.compile(
-    r"(Rules (now )?decide|goes? through Rules|Rules apply before"
-    r"|(Allow|Ask first|Ask-first|Deny)\**\s*\[?Rule"
-    r"|add an? \*\*\w+\*\* \[?Rule|/create-policy"
-    r"|no Rule allows|a Rule allows|Rule decides"
-    r"|routine writes (don't|do not) depend"
-    r"|routine writes run without)", re.I)
-CAVEAT = re.compile(r"(enforcement|in preview|only record|off by default)", re.I)
-# The pages that define the caveat are its source; they need not restate it per mention.
-# Only the pages whose SUBJECT is the caveat are exempt. approvals/overview.mdx was
-# exempt wholesale and that hid two uncaveated claims, so it is checked like any other.
-CAVEAT_HOME = {"guide/concepts.mdx", "guide/approvals/approval-mode.mdx",
-               "guide/approvals/rules.mdx"}
+# Rule enforcement is always on (backend workspace_service sets
+# policy_enforcement_enabled=True; the runtime setting says "Policy enforcement is
+# always on"). Rules decide first today, so the old "off by default / in preview"
+# caveat is now false and must not come back.
+STALE_CAVEAT = re.compile(
+    r"(turns? on Rule enforcement|Rule enforcement is (off|on)\b|once enforcement is on"
+    r"|enforcement is off by default|Rules are in preview|Rules (only )?record what they would"
+    r"|until CloudThinker turns)", re.I)
 for p in PAGES:
-    if p in CAVEAT_HOME:
+    if p == "changelog.mdx":
         continue
     body = read(p)
-    for m in RULES_CLAIM.finditer(body):
+    for m in STALE_CAVEAT.finditer(body):
         line = body[: m.start()].count("\n") + 1
-        window = body[max(0, m.start() - 600) : m.end() + 600]
-        if not CAVEAT.search(window):
-            fail("rules-caveat", f"{p}:{line} {m.group(0)!r} with no enforcement caveat nearby")
+        fail("rules-caveat", f"{p}:{line} {m.group(0)!r} — Rule enforcement is always on; drop the caveat")
 
 # ------------------------------------------------------- banned vocabulary
 BANNED = {
@@ -102,6 +93,12 @@ BANNED = {
     r"Deep Response Engine|\bDRE\b": "retired module name; use Resolve",
     r"\bOlivier\b": "misspelling of the retired persona",
     r"[Ss]cheduled tasks?\b": "retired name; the surface is an Automation",
+    r"Admin Settings": "no such page; use Settings → Organization → <page> (STYLE fact 7)",
+    r"More → Workspace settings": "More holds Projects, Rooms, Library; use Settings → Workspace → <page> (STYLE fact 7)",
+    r"Builtin Connections|MCP Connections\*\* tab|\*\*Built-in\*\* tab|\*\*MCP servers\*\* tab": "Connections tabs are Connected and Discover; MCP is Add → Custom MCP server",
+    r"/create-policy\b": "the skill is /creating-policy",
+    r"Run Discovery|Partial discovery|Discovery (now |then )?runs|\*\*Discovery\*\* section|runs \[[Dd]iscovery\]|read Discovery results|read-only \[discovery\]": "Discovery is retired; first connect opens a deep-look chat",
+    r"\*\*On duty\*\*": "the Resolve switch is AI auto-investigate (STYLE fact 9)",
 }
 # Pages that document retired names on purpose. A page opts out either by living
 # here or by carrying the marker comment below, so the gate stays useful elsewhere.

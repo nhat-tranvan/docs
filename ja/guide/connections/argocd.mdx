@@ -1,221 +1,208 @@
 ---
 title: ArgoCD
-description: "ArgoCD を CloudThinker に接続して GitOps 運用とアプリケーション管理を行う"
+description: "Argo CD を接続すると、エージェントが同期ずれや劣化したアプリを見つけ、イベントとログを読み、Approvals を経てアプリを同期できます"
 icon: "/images/icons/argocd.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
-ArgoCD インスタンスを接続して、[CloudThinker](/ja/guide/agents/overview)がデプロイメントの分析、アプリケーションの管理、GitOps ワークフローのトラブルシューティングを行えるようにします。ArgoCD は **API トークン** で認証します。セルフホストインスタンスと Akuity Platform ではセットアップ手順が異なります。
-
----
+Argo CD を接続すると、CloudThinker のエージェントがアプリケーションを一覧表示し、同期ずれや劣化の理由を説明し、Kubernetes のイベントと Pod のログを読み、承認を経てアプリを同期できるようになります。接続は 1 つの Argo CD **API token** でサインインし、セルフホストの Argo CD と Akuity Platform の両方で動作します。
 
 ## 前提条件
 
-- CloudThinker からアクセス可能な ArgoCD インスタンス（セルフホストの場合デフォルトポート `8888`、または [Akuity Platform](https://akuity.cloud) 経由の管理型）。
-- **ArgoCD CLI** がインストール済み（`brew install argocd`）。Akuity Platform の場合は [Akuity CLI](https://docs.akuity.io/akuity-platform/akuity-cli) も必要。
-- `apiKey` 機能の有効化とトークン生成のための ArgoCD 管理者権限。
+- CloudThinker から HTTPS で到達できる Argo CD サーバー。`localhost` やクラスター内部のアドレスは使えません。
+- ローカルアカウントを作成しトークンを生成できる、Argo CD の管理者アクセス。
+- トークンを生成するための、マシン上の [Argo CD CLI](https://argo-cd.readthedocs.io/en/stable/cli_installation/)。
+- セルフホストの場合のみ: `argocd-cm` と `argocd-rbac-cm` の ConfigMap を編集するための、`argocd` 名前空間への `kubectl` アクセス。
 
----
+サーバーがプライベートネットワーク上にある場合は、[Reaching private services](/ja/guide/connections/overview#プライベートサービスへの到達) を参照してください。
 
 ## セットアップ
 
-ArgoCD のプラットフォームを選択してください：
+`admin` を使う代わりに、専用の `cloudthinker` アカウントを作成します。そうすれば、そのトークンには付与した RBAC 権限だけが含まれ、他の人に影響を与えずに取り消せます。
 
 <Tabs>
-  <Tab title="セルフホスト ArgoCD">
-
+  <Tab title="Self-hosted Argo CD">
     <Steps>
-      <Step title="接続情報を取得する">
-        ArgoCD が起動してアクセス可能な状態であることを確認します。ホスト IP アドレスを取得します：
+      <Step title="API キーアクセスを持つローカルアカウントを作成する">
+        Web ログインではなく API キーのみを使える `cloudthinker` アカウントを追加します。
 
         ```bash
-        hostname -I | awk '{print $1}'
+        kubectl -n argocd patch configmap argocd-cm --type merge \
+          -p '{"data":{"accounts.cloudthinker":"apiKey"}}'
         ```
       </Step>
-      <Step title="API トークンを生成する">
-        `apiKey` 機能を有効化し、管理者アカウントのトークンを生成します：
+      <Step title="トークンを生成する">
+        管理者としてサインインし、新しいアカウントのトークンを生成します。
 
         ```bash
-        kubectl -n argocd patch configmap argocd-cm --type merge -p '{"data":{"accounts.admin":"apiKey, login"}}'
-        argocd login <host-ip>:8888 --username admin --password '<password>' --insecure
-        argocd account generate-token --account admin --insecure
+        argocd login argocd.example.com --username admin
+        argocd account generate-token --account cloudthinker --expires-in 90d
         ```
+
+        トークンをコピーします。サーバーが自己署名証明書を使っている場合に限り、両方のコマンドに `--insecure` を追加します。`--expires-in` を付けないとトークンは無期限になるため、有効期間を設定し、期限切れになる前に新しいトークンを生成してください。
+
+        **成功時の状態:** 2 つ目のコマンドが長いトークン文字列を出力します。
       </Step>
-      <Step title="CloudThinker に接続を追加する">
-        **Connections → ArgoCD** に移動し、以下を入力します：
+      <Step title="アカウントに読み取りアクセスを付与する">
+        `kubectl -n argocd edit configmap argocd-rbac-cm` を実行し、既存の `policy.csv` に次の行を追加します。
 
-        - **Base URL**: `https://<host-ip>:8888`
-        - **API Token**: 前のステップで生成したトークン
-        - **TLS Verification**: 無効化
-        - **Read-only Mode**: 有効化
+        ```csv
+        p, role:cloudthinker, applications, get, */*, allow
+        p, role:cloudthinker, logs, get, */*, allow
+        g, cloudthinker, role:cloudthinker
+        ```
 
-        **Connect** をクリックします。CloudThinker が認証情報を検証し、**Connected** ステータスを表示します。
+        新しい ConfigMap を適用するのではなく、既存の ConfigMap を編集してください。新しい `argocd-rbac-cm` を `kubectl apply` するとポリシー全体が置き換わり、他のユーザーが締め出される可能性があります。エージェントに変更を許可するには、[Required permissions](#必要な権限) の行を追加します。
+      </Step>
+      <Step title="CloudThinker で接続を追加する">
+        **Settings → Workspace → Connections** を開き、**Discover** タブを開いて **ArgoCD** を選びます。次を入力します。
+
+        - **ARGOCD_BASE_URL**: `https://argocd.example.com` などのサーバーアドレス
+        - **ARGOCD_API_TOKEN**: コピーしたトークン
+        - **NODE_TLS_REJECT_UNAUTHORIZED**（TLS 検証）: **Verify TLS (default)**、または自己署名証明書の場合は **Skip TLS verification**
+        - **READ_ONLY**: **Read-only** に変更します。フォームのデフォルトは **Full access (default)** です。
+
+        **Connect** をクリックします。
+
+        **成功時の状態:** ダイアログが閉じ、接続に **Connected** と表示されます。このステータスはトークンや RBAC が機能することを証明するものではないため、下の確認用プロンプトを実行してください。
       </Step>
     </Steps>
-
   </Tab>
-
   <Tab title="Akuity Platform">
-
     <Steps>
-      <Step title="CLI をインストールする">
-        ArgoCD CLI をインストールします：
+      <Step title="システムアカウントを作成する">
+        [Akuity Portal](https://akuity.cloud) で Argo CD インスタンスを開き、**Settings → System Accounts** に移動して、**apiKey** の機能を持つ `cloudthinker` という名前のアカウントを追加します。
+      </Step>
+      <Step title="トークンを生成する">
+        管理者としてインスタンスにサインインし、新しいアカウントのトークンを生成します。
 
         ```bash
-        brew install argocd
+        argocd login <instance-id>.cd.akuity.cloud --grpc-web --username admin
+        argocd account generate-token --account cloudthinker --grpc-web --expires-in 90d
         ```
 
-        Akuity CLI をインストールします：
+        トークンをコピーします。
+      </Step>
+      <Step title="アカウントに読み取りアクセスを付与する">
+        Akuity Portal で、インスタンスの RBAC ポリシーに次の行を追加します。
 
-        ```bash
-        curl -sSL -o /tmp/akuity \
-          "https://dl.akuity.io/akuity-cli/$(curl -sL https://dl.akuity.io/akuity-cli/stable.txt)/$(uname)/$(uname -m)/akuity"
-        chmod +x /tmp/akuity
-        sudo mv /tmp/akuity /usr/local/bin/akuity
+        ```csv
+        p, role:cloudthinker, applications, get, */*, allow
+        p, role:cloudthinker, logs, get, */*, allow
+        g, cloudthinker, role:cloudthinker
         ```
       </Step>
-      <Step title="管理者アカウントを作成する">
-        [Akuity Portal](https://akuity.cloud) で：
+      <Step title="CloudThinker で接続を追加する">
+        **Settings → Workspace → Connections** を開き、**Discover** タブを開いて **ArgoCD** を選びます。次を入力します。
 
-        1. **Organization** → **API Keys** → **Create API Key** をクリック（ロール：Owner）。
-        2. ArgoCD インスタンスの **Settings** → **System Accounts** に移動。
-        3. **Add Account** → 名前：`admin` をクリック。
-        4. **login** と **apiKey** の両方の機能を有効化し、パスワードを設定します。
-      </Step>
-      <Step title="API トークンを生成する">
-        ログインしてトークンを生成します：
+        - **ARGOCD_BASE_URL**: `https://<instance-id>.cd.akuity.cloud`
+        - **ARGOCD_API_TOKEN**: コピーしたトークン
+        - **NODE_TLS_REJECT_UNAUTHORIZED**（TLS 検証）: **Verify TLS (default)**
+        - **READ_ONLY**: **Read-only** に変更します。フォームのデフォルトは **Full access (default)** です。
 
-        ```bash
-        argocd login <instance-id>.cd.akuity.cloud --grpc-web \
-          --username admin --password '<your-password>'
-        argocd account generate-token --account admin --grpc-web
-        ```
-      </Step>
-      <Step title="CloudThinker に接続を追加する">
-        **Connections → ArgoCD** に移動し、以下を入力します：
+        **Connect** をクリックします。
 
-        - **Base URL**: `https://<instance-id>.cd.akuity.cloud`
-        - **API Token**: 前のステップで生成したトークン
-        - **TLS Verification**: 有効化
-        - **Read-only Mode**: 有効化
-
-        **Connect** をクリックします。CloudThinker が認証情報を検証し、**Connected** ステータスを表示します。
+        **成功時の状態:** ダイアログが閉じ、接続に **Connected** と表示されます。下の確認用プロンプトを実行して、トークンと RBAC が機能することを確認してください。
       </Step>
     </Steps>
-
   </Tab>
 </Tabs>
 
----
-
 ## 接続の詳細
 
-| フィールド | 説明 | 例 |
+| フィールド | 説明 | デフォルト |
 |-------|-------------|---------|
-| **Base URL** | ArgoCD サーバーアドレス | `https://192.168.1.100:8888`（セルフホスト）、`https://<id>.cd.akuity.cloud`（Akuity） |
-| **API Token** | ArgoCD 管理者アカウント用に生成されたトークン | — |
-| **TLS Verification** | Akuity の場合は有効化し、自己署名証明書を使用するセルフホストの場合は無効化する | — |
-| **Read-only Mode** | 未承認の書き込みを防ぐために有効化する | — |
+| **ARGOCD_BASE_URL** | Argo CD サーバーのアドレス（HTTPS） | なし |
+| **ARGOCD_API_TOKEN** | CloudThinker が使うアカウントのトークン | なし |
+| **NODE_TLS_REJECT_UNAUTHORIZED** | TLS 検証。**Verify TLS (default)** はサーバー証明書を確認します。**Skip TLS verification** は自己署名証明書を受け入れます。ローカルまたは開発用のサーバーでのみ使ってください | Verify TLS |
+| **READ_ONLY** | **Read-only** は、同期、作成、更新、削除、リソースアクションのツールをオフにします。**Full access (default)** はそれらをオンのままにします | Full access |
 
----
+<Warning>
+**READ_ONLY** のデフォルトは **Full access (default)** です。エージェントに同期や変更を提案させたい場合を除き、**Read-only** に切り替えてください。アカウントに付与されていない操作は、RBAC が引き続きブロックします。
+</Warning>
 
 ## 必要な権限
 
-ArgoCD に以下の RBAC ポリシーを適用して、CloudThinker に読み取り専用アクセスを付与します：
+セットアップの読み取り用の行で、すべての読み取りをカバーします。`applications, get` はアプリケーションのステータス、リソースツリー、管理対象リソース、イベントを、`logs, get` は Pod のログの読み取りをカバーします。エージェントに提案させたい変更ごとに行を追加します。
 
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: argocd-rbac-cm
-  namespace: argocd
-data:
-  policy.default: role:readonly
-  policy.csv: |
-    p, role:cloudthinker-readonly, applications, get, */*, allow
-    p, role:cloudthinker-readonly, applications, list, */*, allow
-    p, role:cloudthinker-readonly, repositories, get, *, allow
-    p, role:cloudthinker-readonly, repositories, list, *, allow
-    p, role:cloudthinker-readonly, clusters, get, *, allow
-    p, role:cloudthinker-readonly, clusters, list, *, allow
-    g, cloudthinker-readonly, role:cloudthinker-readonly
-```
-
-```bash
-kubectl apply -f argocd-rbac.yaml
-```
-
-<Tip>
-最小権限の原則に従い、アプリケーション、リポジトリ、クラスターへの `get` および `list` アクションのみ付与してください。
-</Tip>
-
----
+| 機能 | ポリシーの行 |
+|------------|-------------|
+| 同期 | `p, role:cloudthinker, applications, sync, */*, allow` |
+| アプリケーションの変更 | `p, role:cloudthinker, applications, create, */*, allow`<br />`p, role:cloudthinker, applications, update, */*, allow`<br />`p, role:cloudthinker, applications, delete, */*, allow` |
+| リソースアクション | `p, role:cloudthinker, applications, action/*, */*, allow` |
 
 ## エージェントの機能
 
-接続後、CloudThinker は ArgoCD アプリケーションの調査と操作を行えます。
+| 機能 | エージェントができること | 承認 |
+|------------|--------------------|----------|
+| **Discovery** | アプリケーションを、同期ステータス、ヘルス、リポジトリ、パス、名前空間とともに一覧表示し、異常または同期ずれのものについてはリソースツリーと最近のイベントも示します | 不要 |
+| **Application detail** | 1 つのアプリの spec、管理対象リソース、実際の状態と期待する状態の差分を読みます | 不要 |
+| **Events and logs** | アプリやリソースの Kubernetes イベントと、そのワークロードの Pod のログを読みます | 不要 |
+| **Sync** | 1 つのアプリケーションの同期をトリガーします | 必要。Read-only ではオフ |
+| **Change applications** | アプリケーションを作成、更新、削除します | 必要。Read-only ではオフ |
+| **Resource actions** | 管理対象リソースで再起動などのアクションを実行します | 必要。Read-only ではオフ |
 
-| 機能 | 説明 |
-|------------|-------------|
-| **アプリケーションのステータス** | 同期ステータス、ヘルス状態、最終同期時刻を確認する |
-| **デプロイメント分析** | 同期外れや失敗したデプロイメントを特定する |
-| **リポジトリの洞察** | Git リポジトリの状態とコミットを分析する |
-| **ヘルスモニタリング** | すべてのアプリのアプリケーションヘルスを追跡する |
-| **同期操作** | 手動同期をトリガーする — **承認が必要** |
+すべての変更は [Approvals](/guide/approvals/overview) を経由し、却下されたリクエストは再試行されません。エージェントに同期させるには、**READ_ONLY** を **Full access (default)** に設定し、`applications, sync` の権限を追加します。どちらかが欠けていると、エージェントは読み取りしかできません。
 
 ### 接続を確認する
 
 ```text
-List all ArgoCD applications and show their sync and health status
+List my Argo CD applications with their sync status and health, and call out any that are OutOfSync or Degraded
 ```
 
-### プロンプト例
+アプリケーション名と、**Synced** や **OutOfSync** などの同期ステータス、**Healthy** や **Degraded** などのヘルスステータスの表が返され、最後に件数が示されることを確認します。
+
+### プロンプトの例
 
 ```text
-Show all out-of-sync ArgoCD applications and report the details
-Analyze deployment failures for the payment service and recommend fixes
-Check the health status of all applications in production
+Why is the checkout app Degraded? Check its resource tree, recent events, and pod logs
+Which resources in payments-api differ from Git, and what changed?
+Sync the payments-api app and tell me when it's Healthy
 ```
 
----
+アプリケーション名を指定してください。エージェントはアプリケーション一覧の実際の名前を使い、推測はしません。同期のプロンプトには **Full access (default)** と `applications, sync` の権限が必要です。
 
 ## トラブルシューティング
 
-<Accordion title="ArgoCD サーバーに接続できない">
-セルフホストインスタンスの場合、Base URL には `localhost` ではなくホスト IP アドレスを使用してください。サーバーがポートフォワードの背後にある場合は、`kubectl port-forward svc/argocd-server -n argocd 8888:443 --address 0.0.0.0` を実行してください。ホストに到達できない場合はファイアウォールルールを確認してください。
+<Accordion title="Connect が fetch failed で失敗する">
+CloudThinker が **ARGOCD_BASE_URL** に到達できないか、サーバーの証明書が拒否されました。アドレスが `localhost` やクラスター内部の名前ではなく、公開された HTTPS であることを確認してください。自己署名証明書の場合は、**NODE_TLS_REJECT_UNAUTHORIZED** を **Skip TLS verification** に設定します。
 </Accordion>
 
-<Accordion title="401 Unauthorized">
-API トークンが正しいこと、および管理者アカウントで `login` と `apiKey` の両方の機能が有効化されていることを確認してください。セルフホストの場合は `argocd-cm` にパッチが適用されているか、Akuity の場合はポータルのシステムアカウント機能を確認してください。
+<Accordion title="リクエストが 401 を返す">
+トークンがない、期限切れ、または別のアカウント用に生成されています。`argocd account generate-token --account cloudthinker --expires-in 90d` を再実行し、接続を編集して新しいトークンを貼り付けます。
 </Accordion>
 
-<Accordion title="API トークンを生成できない">
-アカウントで `apiKey` 機能が有効化されていません。`argocd account get` を実行してアカウントの機能を確認し、`apiKey` を有効化してから再試行してください。
+<Accordion title="Permission denied (code 7)">
+アカウントの RBAC ロールがその操作を許可していません。[Required permissions](#必要な権限) の `policy.csv` の行を確認してください。ログには `logs, get`、同期には `applications, sync` が必要です。
 </Accordion>
 
-<Accordion title="TLS 証明書エラー">
-セルフホストインスタンスの場合、接続設定で TLS 検証を無効化してください（CLI の `--insecure` フラグと同等）。Akuity の場合、TLS 検証は有効のままにしてください。
+<Accordion title="アプリケーション一覧が空になる">
+ロールがそれらのプロジェクトへのアクセスを付与していません。ポリシーの `*/*` パターンはすべてのプロジェクトをカバーします。範囲を絞った場合は、エージェントに見せたいプロジェクトを追加してください。
 </Accordion>
 
----
+<Accordion title="同期、作成、更新、削除が利用できない">
+**READ_ONLY** が **Read-only** に設定されています。エージェントにそれらの変更を提案させたい場合は、接続を編集して **Full access (default)** に切り替えます。
+</Accordion>
+
+<Accordion title="トークンの生成が失敗する">
+アカウントに `apiKey` の機能がありません。`argocd account get --account cloudthinker` で確認してから、セットアップの最初のステップを繰り返します。
+</Accordion>
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **読み取り専用 RBAC** — `argocd-rbac-cm` に `role:cloudthinker-readonly` ポリシーを適用し、接続の読み取り専用モードを有効化して未承認の書き込みを防ぎます。
-- **トークンのローテーション** — ArgoCD API トークンを定期的にローテーションし、CloudThinker でも更新してください。
+- **専用アカウント**: CloudThinker には、API キーアクセスのみを持つ専用の `cloudthinker` アカウントを与え、`admin` のトークンは決して使わないでください。
+- **本番環境では TLS 検証をオンのままにする**: スキップするのは、自己署名証明書を使うローカルまたは開発用のサーバーだけにしてください。
 
----
-
-## 関連
+## 関連ページ
 
 <CardGroup cols={2}>
-  <Card title="エージェント" icon="dharmachakra" href="/ja/guide/agents/overview">
-    CloudThinker と、その作業の仕組み
-  </Card>
   <Card title="Kubernetes 接続" icon="/images/icons/kubernetes.svg" href="/ja/guide/connections/kubernetes">
-    Kubernetes クラスターを接続する
+    Argo CD のデプロイ先のクラスターをエージェントに読ませます。
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    どの同期や変更を人の判断待ちにするかを制御します。
   </Card>
 </CardGroup>

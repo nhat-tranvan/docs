@@ -1,270 +1,191 @@
 ---
 title: Redis
-description: "자체 호스팅, Upstash, Redis Cloud 배포 환경에서 캐시 성능 모니터링을 위해 Redis를 CloudThinker에 연결합니다"
+description: "읽기 전용 ACL 사용자로 Redis를 연결하여 에이전트가 메모리, 키 크기, 만료, 클라이언트, 명령 지연 시간을 검사할 수 있게 합니다"
 icon: "/images/icons/redis.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ko/connection-security.mdx';
+import ApprovalDefault from '/snippets/approval-default.mdx';
 
-Redis 데이터베이스를 연결하면 [CloudThinker](/ko/guide/agents/overview)가 키스페이스 사용량을 검사하고, 명령 패턴을 분석하며, 데이터베이스 상태를 모니터링할 수 있습니다.
-
-## 지원 플랫폼
-
-| 플랫폼 | 지원 |
-|----------|---------|
-| **자체 호스팅 Redis** | 6.x, 7.x (바닐라 및 Redis Stack) |
-| **Upstash Redis** | 전체 플랜 |
-| **Redis Cloud** | 전체 플랜 |
+자체 호스팅 Redis, Upstash, Redis Cloud 같은 Redis 서버를 연결하면 CloudThinker 에이전트가 메모리와 축출(eviction)을 검사하고, 가장 큰 키와 TTL이 없는 키를 찾고, 클라이언트를 나열하고, 명령 지연 시간을 읽을 수 있습니다. CloudThinker에는 연결 URL 하나(`REDIS_URL`)만 제공합니다. 에이전트는 해당 사용자의 ACL이 허용하는 명령을 실행할 수 있으며, 연결의 쓰기 도구는 먼저 [Approvals](/guide/approvals/overview)를 거칩니다.
 
 ## 사전 요구사항
 
-- 네트워크를 통해 CloudThinker에서 접근 가능한 Redis 인스턴스.
-- ACL 사용자(자체 호스팅) 또는 RBAC 사용자(Upstash/Redis Cloud)를 생성할 관리자 접근.
-- 자격증명이 포함된 `REDIS_URL` 연결 문자열.
+- CloudThinker가 인터넷에서 접근할 수 있는 Redis 엔드포인트. 에이전트는 CloudThinker Cloud에서 연결하므로 `localhost`와 사설 주소는 사용자의 네트워크가 아니라 CloudThinker 쪽에서 해석됩니다. 프라이빗 링크 옵션이 없으므로 Amazon ElastiCache, MemoryDB 같은 VPC 전용 서비스는 연결할 수 없습니다. [Reaching private services](/ko/guide/connections/overview#비공개-서비스-접근)를 참고하세요.
+- 전용 ACL 사용자를 원한다면 Redis 6 이상. 이전 버전은 공유 비밀번호 하나만 지원합니다.
+- `ACL SETUSER`를 실행하거나 관리형 프로바이더 콘솔에서 사용자를 만들 수 있는 관리자 권한.
 
 ## 설정
 
-Redis 플랫폼을 선택하여 구체적인 연결 방법을 확인하세요.
-
-<Tabs>
-  <Tab title="자체 호스팅 Redis">
-    두 가지 일반적인 배포 형태를 지원합니다:
-
-    - **바닐라 Redis** — 모듈 없이 최소 이미지. 코어 Redis 명령만 필요한 경우 사용.
-    - **Redis Stack** — RediSearch, RedisJSON, RedisTimeSeries, Bloom을 번들. CloudThinker가 `FT.*`, `JSON.*`, `TS.*`, `BF.*` 명령을 사용해야 할 때 사용. 바닐라에서는 이 명령들이 소프트 실패.
-
-    <Steps>
-      <Step title="Redis 시작">
-        **바닐라 Redis (모듈 없음):**
-        ```bash
-        docker run -d --name redis-min \
-          -p 6379:6379 \
-          redis:7-alpine \
-          redis-server --requirepass <admin-password> --appendonly yes
-        ```
-
-        관리자 비밀번호는 `--requirepass` 서버 플래그로 설정합니다. `--appendonly yes`는 재시작 간 내구성을 위해 AOF를 활성화합니다.
-
-        **Redis Stack (모듈 및 포트 8001의 RedisInsight UI 포함):**
-        ```bash
-        docker run -d --name redis-stack \
-          -p 6379:6379 -p 8001:8001 \
-          -e REDIS_ARGS="--requirepass <admin-password>" \
-          redis/redis-stack:latest
-        ```
-
-        인스턴스 확인:
-        ```bash
-        redis-cli -a <admin-password> ping
-        # PONG
-        ```
-      </Step>
-      <Step title="읽기 전용 ACL 사용자 생성">
-        CloudThinker 전용 사용자를 생성하세요. Redis ACL 사용자 이름은 `[A-Za-z0-9_-]`를 허용합니다. `cloudthinker-readonly`를 사용하세요.
+<Steps>
+  <Step title="읽기 전용 사용자 만들기">
+    <Tabs>
+      <Tab title="자체 호스팅 Redis">
+        키를 읽고 에이전트가 사용하는 진단 명령만 실행할 수 있는 사용자를 만듭니다.
 
         ```bash
-        redis-cli -a <admin-password> ACL SETUSER cloudthinker-readonly on \
-          '><readonly-password>' \
-          '~*' \
-          '+@read' '-@write' '-@dangerous' '-@admin'
+        redis-cli --askpass ACL SETUSER cloudthinker-readonly on \
+          '><readonly-password>' '~*' \
+          -@all +@read +info +ping +select '+client|list' -keys
         ```
 
-        - `on` — 사용자 활성화
-        - `><readonly-password>` — 비밀번호 설정 (`>` 접두사는 ACL 문법)
-        - `~*` — 모든 키 일치; 더 엄격한 범위 지정은 `~app:*` 사용
-        - `+@read -@write -@dangerous -@admin` — 읽기만; 쓰기, `FLUSHALL`/`CONFIG`/`DEBUG`/`SHUTDOWN`, 복제 차단
-        - 선택 사항: `-@slow`를 추가하여 대용량 컬렉션에서 `KEYS`, `SMEMBERS`, `HGETALL` 차단
-      </Step>
-      <Step title="재시작 후에도 ACL 유지">
-        컨테이너 재시작 후에도 ACL이 유지되도록 `users.acl` 파일을 마운트하세요:
+        | 부분 | 의미 |
+        |------|---------|
+        | `'><readonly-password>'` | 비밀번호를 설정합니다. `>`는 ACL 구문입니다 |
+        | `'~*'` | 모든 키를 허용합니다. `'~app:*'`처럼 접두사로 좁히세요 |
+        | `-@all +@read` | 아무 권한 없이 시작한 뒤 `GET`, `SCAN`, `TYPE`, `TTL` 같은 읽기 명령을 허용합니다 |
+        | `+info +ping +select '+client\|list'` | 서버 통계, 상태 확인, 데이터베이스 인덱스 선택, 클라이언트 나열을 허용합니다 |
+        | `-keys` | 대형 인스턴스를 멈추게 할 수 있는 `KEYS`를 차단합니다. 에이전트는 대신 `SCAN`을 사용합니다 |
+
+        `--askpass`는 관리자 비밀번호를 입력받으므로 셸 기록에 남지 않습니다. `default`로 로그인하지 않는다면 `--user <admin-user>`를 추가하세요. `'+client|list'`의 따옴표는 유지하세요. 따옴표가 없으면 셸이 `|`를 파이프로 읽습니다.
+
+        재시작 후에도 유지되도록 저장하세요. `aclfile`을 사용한다면 `ACL SAVE`를, 사용자가 `redis.conf`에 있다면 `CONFIG REWRITE`를 실행합니다.
+      </Tab>
+      <Tab title="관리형 Redis">
+        모든 프로바이더가 같은 ACL 규칙을 받습니다. 콘솔 필드에는 따옴표 없이 붙여넣고, 셸에서는 `'+client|list'`의 따옴표를 유지하세요.
 
         ```text
-User default on ><admin-password> ~* &* +
-User cloudthinker-readonly on ><readonly-password> ~* +---
-```
+        ~* -@all +@read +info +ping +select +client|list -keys
+        ```
 
-파일을 마운트하여 Redis를 시작하세요:
-```bash
--v $PWD/users.acl:/data/users.acl
-```
-서버 명령에 `--aclfile /data/users.acl`을 추가하세요.
-</Step>
-<Step title="읽기 전용 사용자 확인">
-```bash
-Redis-cli -u redis://cloudthinker-readonly:<readonly-password>SET foo bar
-# (error) NOPERM ... has no permissions to run the 'set' command
+        - **Redis Cloud**: **Data Access Control**로 이동합니다. 위 규칙으로 Redis ACL을 추가하고, 이를 데이터베이스에 적용하는 역할을 만든 뒤, 그 역할로 사용자를 만듭니다.
+        - **Azure Cache for Redis**: `rediss://`와 함께 TLS 포트 `6380`을 사용하고, 캐시의 방화벽 규칙에서 CloudThinker의 egress IP를 허용합니다.
 
-Redis-cli -u redis://cloudthinker-readonly:<readonly-password>GET foo
-# 정상 동작
-```
-</Step>
-<Step title="네트워크 접근 설정">
-CloudThinker가 데이터베이스에 접근할 수 있는지 확인하세요:
-- CloudThinker IP를 방화벽 또는 보안 그룹에 추가
-- Redis가 접근 가능한 인터페이스에 바인딩되어 있는지 확인 (`bind 127.0.0.1`만 설정된 경우 피할 것)
-</Step>
-<Step title="CloudThinker에 연결 추가">
-**Connections → Redis**로 이동하여 **REDIS_URL**로 연결 문자열을 입력하세요:
+        그런 다음 해당 사용자의 TCP 또는 Redis CLI 연결 URL을 복사합니다. REST 또는 SDK URL은 사용하지 마세요. CloudThinker는 Redis 프로토콜로 통신합니다.
+      </Tab>
+    </Tabs>
+  </Step>
+  <Step title="사용자가 읽기 전용인지 확인">
+    ```bash
+    redis-cli -u 'rediss://cloudthinker-readonly@redis.example.com:6379' --askpass SET probe 1
+    redis-cli -u 'rediss://cloudthinker-readonly@redis.example.com:6379' --askpass INFO memory
+    ```
 
-```
-Redis://cloudthinker-readonly:<readonly-password>
-```
+    서버가 TLS를 사용하지 않을 때만 `redis://`를 사용하세요. 서버와 맞지 않는 스킴은 `NOPERM`이 아니라 연결 오류로 실패합니다.
 
-배포 환경에서 TLS를 종료하는 경우 `rediss://` (두 번째 `s` 주의)를 사용하세요. **Connect**를 클릭하세요. 성공하면 CloudThinker가 **Connected** 상태를 표시합니다.
-</Step>
+    **성공 상태:** `SET`이 `NOPERM`으로 실패하고, `INFO memory`가 메모리 통계를 출력합니다.
+  </Step>
+  <Step title="네트워크 접근 열기">
+    방화벽, 보안 그룹, 프로바이더 허용 목록에서 CloudThinker의 egress IP로부터 Redis 포트로 들어오는 연결을 허용합니다. 이 문서에는 CloudThinker의 egress IP 목록을 게시하지 않습니다. CloudThinker 담당자에게 문의하거나 [contact us](https://cloudthinker.io/contact)로 연락하세요. 포트는 기본 `6379`, Azure TLS는 `6380`이며, Redis Cloud에서는 데이터베이스마다 할당됩니다. 자체 호스팅 Redis에서는 `redis.conf`의 `bind`가 `127.0.0.1`만으로 되어 있지 않은지 확인하세요.
+  </Step>
+  <Step title="CloudThinker에서 연결 추가">
+    **Settings → Workspace → Connections**를 열고 **Redis**를 선택한 뒤 상세 패널에서 **Connect**를 클릭합니다. 대화 상자에서 필요하면 **Alias**와 **Description**을 변경합니다. URL을 **REDIS_URL**에 붙여넣고 **Connect**를 클릭합니다.
+
+    ```text
+    rediss://cloudthinker-readonly:<readonly-password>@redis.example.com:6379/0
+    ```
+
+    **성공 상태:** 연결이 **Connecting**과 **Verifying**을 거쳐 **Connected**로 표시됩니다. 이후 CloudThinker가 [deep look](/ko/guide/connections/overview#연결한-다음에-일어나는-일) 채팅을 열고, 에이전트가 서버를 탐색합니다.
+  </Step>
 </Steps>
-</Tab>
-<Tab title="Upstash Redis">
-<Steps>
-<Step title="데이터베이스 생성">
-[Upstash Redis 콘솔](https://console.upstash.com/redis)을 열고 **Create Database**를 클릭하세요. 모달에서:
-- **Database Name** 입력
-- **Primary Region** 및 **Cloud Provider** 선택
-- **Eviction** 활성화 (권장)
-- **Next** 클릭, 플랜 선택 후 확인
-</Step>
-<Step title="TCP 연결 URL 복사">
-데이터베이스 페이지에서 **Connection** 섹션으로 스크롤하세요. 기본 탭은 **REST**입니다 — **TCP** 탭으로 전환하여 URL을 복사하세요:
 
-```
-Rediss://<username>:<password>
-```
+## 연결 세부 정보
 
-`<hash>`는 데이터베이스에 고유하고, `<port>`는 일반적으로 `6379`입니다. Upstash는 TLS를 강제하므로 스킴은 `rediss://`입니다.
-</Step>
-<Step title="읽기 전용 사용자 생성 (선택 사항)">
-Upstash는 데이터베이스 페이지의 **RBAC** 탭에서 RBAC를 지원합니다. RBAC를 활성화한 후 읽기 전용 권한으로 `cloudthinker-readonly`라는 계정을 생성하세요. ACL 모델은 자체 호스팅 설정과 동일합니다 — `+허용하고 `-`-`-거부하세요.
+| 필드 | 필수 | 설명 | 예시 |
+|-------|----------|-------------|---------|
+| **Alias** | 아니요 | 이 서버의 짧은 이름. `redis-1`처럼 다음 사용 가능한 alias가 미리 채워집니다 | `prod-cache` |
+| **Description** | 아니요 | 이 서버가 무엇인지. 에이전트가 인스턴스를 고를 때 읽습니다 | `Production session cache` |
+| **REDIS_URL** | 예 | 스킴, 사용자, 비밀번호, 호스트, 포트, 선택적 데이터베이스 인덱스를 포함한 전체 URL | `rediss://cloudthinker-readonly:<password>@redis.example.com:6379/0` |
 
-정확한 UI 흐름은 [Upstash RBAC 문서](https://upstash.com/docs/redis/overall/enterprise참조하세요.
-</Step>
-<Step title="CloudThinker에 연결 추가">
-**Connections → Redis**로 이동하여 **REDIS_URL**로 URL을 붙여넣으세요. **Connect**를 클릭하세요. 성공하면 CloudThinker가 **Connected** 상태를 표시합니다.
-</Step>
-</Steps>
-</Tab>
-<Tab title="Redis Cloud">
-<Steps>
-<Step title="데이터베이스 생성">
-[Redis Cloud 데이터베이스 페이지](https://cloud.redis.io/열고 **New database**를 클릭하세요. 플랜, **Database Name**, **Database Version**, **Cloud Vendor**, **Region**을 선택하고 **Create Database**를 클릭하세요.
+| URL 부분 | 값 |
+|----------|--------|
+| 스킴 | TLS는 `rediss://`(Upstash에서 필수), 일반 TCP는 `redis://` |
+| 사용자 | ACL 사용자. Upstash와 비밀번호만 있는 Redis에서는 `default` 사용 |
+| 포트 | 기본 `6379`, Azure TLS는 `6380`. Redis Cloud는 데이터베이스마다 포트를 할당하므로 콘솔에서 복사 |
+| 데이터베이스 인덱스 | 끝에 `/0`부터 `/15`. `0`이면 생략 |
 
-데이터베이스 페이지로 돌아가면 새 데이터베이스가 목록에 표시됩니다.
-</Step>
-<Step title="연결 URL 복사">
-데이터베이스 타일에서 **Connection to database** 카드를 찾고 **Connect**를 클릭하세요. 사이드 패널에서:
-- 기본 **Redis SDK clients** 드롭다운 닫기
-- **Redis CLI** 선택
-- URL 복사
+비밀번호의 특수 문자는 URL 인코딩하세요(`@`는 `%40`).
 
-URL 형식:
-```
-Redis://<username>:<password>
-```
+## 필요 권한
 
-Redis Cloud 포트는 일반적으로 `6379`가 아닌 `13xxx` 범위입니다.
-</Step>
-<Step title="읽기 전용 역할 및 사용자 생성">
-[Data Access Control 역할 페이지](https://cloud.redis.io/여세요:
-- **New role**을 클릭하고 이름을 `cloudthinker-readonly`로 지정
-- **ACL Rules**를 **Read-Only**로 설정
-- 이 역할이 접근할 데이터베이스 선택
-- **Save role** 클릭
-
-그런 다음 이 역할에 바인딩된 사용자를 생성하거나 할당하고, 해당 사용자의 자격증명을 연결 URL에 사용하세요.
-</Step>
-<Step title="CloudThinker에 연결 추가">
-**Connections → Redis**로 이동하여 **REDIS_URL**로 URL을 붙여넣으세요. **Connect**를 클릭하세요. 성공하면 CloudThinker가 **Connected** 상태를 표시합니다.
-</Step>
-</Steps>
-</Tab>
-</Tabs>
-
-연결 세부 정보
-
-| 필드 | 설명 | 예시 |
-|-------|-------------|---------|
-| **REDIS_URL** | 자격증명을 포함한 Redis 연결 URI | `redis://cloudthinker-readonly:pass|
-| **TLS/SSL** | TLS를 요구하려면 `rediss://` 스킴 사용 | Upstash는 `rediss://`; 다른 환경에서는 선택 사항 |
-| **Port** | Redis 포트 | `6379` (자체 호스팅, Upstash); `13xxx` (Redis Cloud) |
-| **Database index** | 논리적 DB 인덱스 | `0` |
-
-필요 권한
-
-CloudThinker 사용자에게 권장하는 ACL 카테고리:
-
-| 카테고리 | 설정 | 이유 |
-|----------|---------|-----|
-| `+| 허용 | 키 읽기, `INFO`, `CLIENT LIST` 등 실행 |
-| `-| 거부 | `SET`, `DEL` 및 기타 변경 명령 차단 |
-| `-| 거부 | `FLUSHALL`, `CONFIG`, `DEBUG`, `SHUTDOWN`, 복제 차단 |
-| `-| 거부 | 관리 명령 차단 |
-| `-*(선택 사항)* | 거부 | 대용량 컬렉션에서 `KEYS`, `SMEMBERS`, `HGETALL` 차단 |
+| 에이전트에게 허용할 작업 | 허용 항목 |
+|--------------------|-------|
+| 키, 유형, TTL, 크기, 키 개수 읽기 | `+@read`와 `~*` 같은 키 패턴 |
+| 메모리, 축출, 적중률, 복제, 명령 통계 읽기 | `+info` |
+| 연결된 클라이언트 보기 | `+client\|list` |
+| `0` 이외의 데이터베이스 인덱스 사용 | `+select` |
+| 키 변경 | `+@write` 같은 쓰기 카테고리. 권장하지 않습니다. [쓰기 권한](#쓰기-권한)을 참고하세요 |
 
 <Tip>
-키 범위 지정(`~*`은 모든 키, `~app:*`은 특정 프리픽스)으로 CloudThinker 사용자가 접근할 수 있는 키를 좁힙니다. `~*`로 시작하고 필요에 따라 조정하세요.
+사용자를 읽기 전용으로 유지하세요. 읽기 전용 ACL은 무엇이 승인되든 Redis에서 모든 쓰기를 막습니다.
 </Tip>
 
-에이전트 기능
+## 에이전트 기능
 
-연결이 완료되면 CloudThinker가 할 수 있는 작업:
+| 기능 | 에이전트가 할 수 있는 일 |
+|------------|--------------------|
+| **메모리와 축출** | 사용 메모리, 단편화 비율, `maxmemory` 정책, 축출 수, 적중률 읽기 |
+| **키스페이스** | 데이터베이스별 키 개수 세기, `SCAN`으로 키 샘플링, 유형·크기·TTL 읽기 |
+| **만료 감사** | 데이터베이스별로 TTL이 있는 키와 없는 키를 비교하고, 이를 `maxmemory` 정책과 대조 |
+| **가장 큰 키** | 샘플링한 키를 크기(문자열 길이, 또는 리스트·해시·셋·정렬된 셋의 요소 수) 순으로 정렬. 기본 샘플은 `SCAN`으로 얻은 100개 키이므로 결과는 추정치이며, 스캔이 모든 키를 다루지 못했으면 답변에 그렇게 표시됩니다 |
+| **클라이언트와 지연 시간** | 연결된 클라이언트를 나열하고 `INFO commandstats`에서 명령별 호출 수와 지연 시간 읽기 |
+| **복제** | 역할, 연결된 레플리카, 복제 오프셋 읽기 |
+| **모듈** | 서버에 해당 모듈이 로드되어 있으면 RediSearch 인덱스와 RedisJSON 문서 읽기 |
 
-| 기능 | 설명 |
-|------------|-------------|
-| **키스페이스 분석** | 키 패턴, 크기, TTL 분포 검사 |
-| **명령 통계** | `INFO commandstats`를 통한 명령 지연 및 처리량 검토 |
-| **성능 메트릭** | 메모리, 연결, 축출, 복제 지연 모니터링 |
-| **모듈 인사이트** | RediSearch 인덱스, RedisJSON 문서, TimeSeries 검사 (Redis Stack 전용) |
-
-연결 확인
+### 연결 확인
 
 ```text
-Run Redis INFO and summarize memory usage, connected clients, and keyspace stats
+Summarize Redis memory usage, connected clients, eviction policy, and key counts per database
 ```
+
+사용 메모리와 최대치, 클라이언트 수, `maxmemory` 정책, 각 데이터베이스 인덱스의 키 개수가 나와야 합니다. `NOPERM` 오류에는 빠진 명령이 표시됩니다. `ACL SETUSER cloudthinker-readonly`로 추가한 뒤 다시 요청하세요.
 
 ### 예시 프롬프트
 
 ```text
-Analyze hot keys and memory distribution on the production Redis instance
-Check memory fragmentation ratio and eviction stats
-Review replication lag on the Redis replica
+Which sampled keys are the largest, and what share of keys in each database has no TTL?
+Is Redis evicting keys? Show the eviction policy, evictions, and hit rate
+Which commands have the highest average latency according to commandstats?
 ```
+
+## 쓰기 권한
+
+Redis 연결에는 쓰기 도구가 있습니다. ACL이 쓰기를 허용하면 각 도구는 먼저 [Approvals](/guide/approvals/overview)를 거치며, [rule](/guide/approvals/rules)로 먼저 묻게 하거나 거부할 수 있습니다.
+
+<ApprovalDefault />
+
+| 분류 | 도구 |
+|---|---|
+| Write | 값 설정, 만료 설정, 이름 변경, 게시, 리스트에서 꺼내기, 해시·리스트·셋·정렬된 셋·스트림·JSON 문서에 추가 |
+| Destructive | 키 삭제, 또는 해시·리스트·셋·정렬된 셋·스트림·JSON 문서에서 항목 제거 |
+| 명령에 따라 다름 | 원시 Redis 명령: `GET` 같은 읽기는 묻지 않고 실행되고, `DEL`이나 `FLUSHALL`은 destructive로, 그 밖의 명령은 write로 분류됩니다 |
 
 ## 문제 해결
 
-<Accordion title="인증 실패 (NOAUTH / WRONGPASS)">
-- 연결 URL의 사용자 이름과 비밀번호를 확인하세요
-- 자체 호스팅의 경우: `ACL WHOAMI` 및 `ACL LIST`로 사용자가 활성화되어 있는지 확인하세요
-- Upstash 및 Redis Cloud의 경우: REST 또는 SDK URL이 아닌 TCP/Redis CLI URL을 복사했는지 확인하세요
+<Accordion title="NOAUTH 또는 WRONGPASS">
+사용자 또는 비밀번호가 틀렸거나 없습니다. **REDIS_URL**에서 URL 인코딩을 포함해 둘 다 확인하세요. Upstash에서는 사용자로 `default`를, 비밀번호로 데이터베이스 토큰을 사용합니다. 자체 호스팅 Redis에서는 `ACL LIST`를 실행해 사용자가 존재하고 `on` 상태인지 확인하세요.
 </Accordion>
 
-<Accordion title="NOPERM — 명령 실행 권한 없음">
-- 쓰기 명령에 대한 읽기 전용 사용자 동작이 의도한 대로 작동 중
-- 읽기도 차단된 경우 ACL 규칙을 다시 확인하세요 — `+@read`가 부여되어 있어야 합니다
+<Accordion title="연결이 닫히거나 Connected에 도달하지 않음">
+대개 URL 형식이 잘못된 경우입니다. 스킴(TLS 엔드포인트에는 `rediss://`, Upstash는 필수), 호스트, 포트, 비밀번호 포함 여부를 확인하세요. 프로바이더의 REST 또는 SDK URL은 동작하지 않습니다. TCP 또는 Redis CLI URL을 사용하세요.
 </Accordion>
 
-<Accordion title="연결 거부됨 또는 타임아웃">
-- CloudThinker에서 호스트와 포트에 접근 가능한지 확인하세요
-- 자체 호스팅의 경우: Redis가 `127.0.0.1`만으로 바인딩되어 있지 않은지 확인하세요
-- CloudThinker IP를 방화벽 또는 클라우드 공급자 허용 목록에 추가하세요
+<Accordion title="연결 거부 또는 시간 초과">
+CloudThinker가 서버에 도달할 수 없습니다. 방화벽, 보안 그룹, 프로바이더 허용 목록과 `redis.conf`의 `bind`가 `127.0.0.1`만으로 되어 있지 않은지 확인하세요. 사설 네트워크의 서버는 먼저 도달 가능한 엔드포인트가 필요합니다.
 </Accordion>
 
-<Accordion title="모듈 명령 실패 (FT.*, JSON.*, TS.*, BF.*)">
-- 바닐라 Redis에는 모듈이 포함되어 있지 않습니다. Redis Stack(`redis/redis-stack`) 또는 필요한 모듈을 번들한 관리형 서비스를 실행하세요.
+<Accordion title="INFO, CLIENT LIST, 또는 읽기 명령에서 NOPERM">
+ACL에 명령이 빠져 있습니다. `ACL SETUSER cloudthinker-readonly ...`로 `+info`, `'+client|list'`, 또는 오류에 표시된 카테고리를 추가한 뒤 다시 요청하세요. 읽기 전용 사용자가 쓰기 명령에서 `NOPERM`을 받는 것은 정상입니다.
+</Accordion>
+
+<Accordion title="Command is not available: FT.* 또는 JSON.*">
+서버에 RediSearch 또는 RedisJSON 모듈이 로드되어 있지 않습니다. 많은 호스팅 요금제가 이 모듈을 제공하지 않습니다. 나머지 기능은 모두 계속 동작합니다.
 </Accordion>
 
 ## 보안
 
 <ConnectionSecurity />
 
-- **TLS에 rediss:// 사용** — 배포 환경이 TLS를 지원하는 경우 전송 중 데이터를 암호화하기 위해 `rediss://` 스킴을 사용하세요.
-- **ACL 유지** — 자체 호스팅 배포에서는 `aclfile`을 사용하여 읽기 전용 사용자가 재시작 후에도 유지되도록 하세요.
+- **`rediss://`를 사용하세요**: 일반 `redis://`는 비밀번호와 모든 값을 암호화하지 않고 보냅니다. 서버나 프로바이더가 지원하면 항상 TLS를 사용하세요.
+- **키 범위를 제한하세요**: `~*`를 `~cache:*`처럼 에이전트에게 필요한 접두사로 바꿔, 세션 토큰이나 기타 민감한 키에 접근하지 못하게 하세요.
 
 ## 관련 항목
 
 <CardGroup cols={2}>
-  <Card title="에이전트" icon="database" href="/ko/guide/agents/overview">
-    데이터베이스 중심 최적화 에이전트
+  <Card title="MongoDB" icon="/images/icons/mongodb.svg" href="/ko/guide/connections/mongodb">
+    MongoDB 또는 Atlas를 읽기 전용 모드로 연결합니다.
   </Card>
-  <Card title="MongoDB 연결" icon="/images/icons/mongodb.svg" href="/ko/guide/connections/mongodb">
-    MongoDB 데이터베이스 설정 방법
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    어떤 Redis 쓰기를 실행할지, 사람을 기다릴지, 거부할지 결정합니다.
   </Card>
 </CardGroup>

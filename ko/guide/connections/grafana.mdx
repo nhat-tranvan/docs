@@ -1,182 +1,167 @@
 ---
 title: Grafana
-description: "대시보드 통합, 메트릭 분석, 통합 옵저버빌리티를 위해 Grafana를 CloudThinker에 연결하세요"
+description: "Viewer 서비스 계정으로 Grafana를 연결하여 에이전트가 대시보드를 검색하고, 메트릭과 로그를 쿼리하고, 알림 규칙을 확인할 수 있도록 합니다"
 icon: "/images/icons/grafana.svg"
 ---
 
+import ApprovalDefault from '/snippets/approval-default.mdx';
 import ConnectionSecurity from '/snippets/ko/connection-security.mdx';
 
-Grafana 인스턴스를 연결하여 CloudThinker 에이전트가 대시보드에 접근하고, 메트릭을 쿼리하며, 분석 중에 시각화를 참조할 수 있도록 합니다.
-
-Grafana는 Viewer 역할로 범위가 지정된 **서비스 계정 토큰**으로 인증합니다.
-
----
+Grafana 인스턴스를 연결하면 [CloudThinker](/ko/guide/agents/overview)가 팀이 이미 가진 대시보드, 데이터 소스, 알림 규칙을 바탕으로 작업할 수 있습니다. 패널을 채팅에 복사하지 않아도 에이전트가 알맞은 대시보드를 찾고, Grafana를 통해 Prometheus나 Loki 쿼리를 실행하고, 어떤 알림이 발생 중인지 알려 줍니다. 이 연결은 **service account token**으로 로그인합니다. 이는 사용자가 만들고 **Viewer** 역할로 범위를 지정하는, 사람이 아닌 Grafana ID입니다.
 
 ## 지원 플랫폼
 
-| 플랫폼 | 지원 |
-|--------|------|
-| **Grafana OSS** | 9.x, 10.x |
-| **Grafana Enterprise** | 모든 버전 |
-| **Grafana Cloud** | 모든 티어 |
-
----
+| 플랫폼 | 지원 여부 |
+|----------|-----------|
+| **Grafana OSS** | 예, 9.1 이상(서비스 계정은 9.1에서 정식 출시되었습니다) |
+| **Grafana Enterprise** | 예 |
+| **Grafana Cloud** | 예 |
 
 ## 사전 요구 사항
 
-- CloudThinker에서 접근 가능한 **Grafana 인스턴스** (OSS, Enterprise, 또는 Cloud).
-- **Administration → Users and access → Service Accounts**에서 서비스 계정을 생성할 관리자 접근 권한.
-- Grafana 인스턴스 URL.
-
----
+- HTTPS로 공용 인터넷에서 접근할 수 있는 Grafana 인스턴스. 연결은 CloudThinker Cloud에서 실행되므로, 비공개 인스턴스에는 [Reaching private services](/ko/guide/connections/overview#비공개-서비스-접근)의 옵션 중 하나가 필요합니다. 방화벽을 사용한다면 CloudThinker의 egress IP를 허용합니다. 이 문서는 CloudThinker의 egress IP 목록을 게시하지 않습니다. CloudThinker 담당자에게 문의하거나 [문의](https://cloudthinker.io/contact)하세요.
+- 공개적으로 신뢰할 수 있는 유효한 TLS 인증서. 자체 서명 인증서는 실패합니다.
+- 서비스 계정을 만들 수 있는 Grafana 관리자 접근 권한.
+- Grafana 조직마다 연결 하나. 서비스 계정은 자신이 만들어진 조직만 볼 수 있으므로, 여러 조직이 있다면 각 조직에 서비스 계정을 만들고 각각 연결을 추가합니다.
+- 연결을 추가하고 편집할 수 있는 CloudThinker 워크스페이스의 **Admin** 역할. [Roles](/guide/security/roles)를 참조하세요.
 
 ## 설정
 
 <Steps>
-  <Step title="Grafana 열기">
-    Grafana 인스턴스로 이동하여 관리자 권한으로 로그인합니다.
-  </Step>
-  <Step title="서비스 계정 메뉴로 이동">
-    **Administration → Users and access → Service Accounts**로 이동합니다.
-  </Step>
-  <Step title="서비스 계정 생성">
-    **Add service account**를 클릭하고 다음을 입력합니다:
-    - **Name**: `cloudthinker-readonly`
-    - **Role**: **Viewer** 선택
+  <Step title="Viewer 서비스 계정 생성">
+    Grafana에서 **Administration → Users and access → Service accounts**로 이동하여 **Add service account**를 클릭합니다. 다음을 설정합니다:
 
-    **Create**를 클릭하여 서비스 계정을 생성합니다.
+    - **Display name**: `cloudthinker-readonly`
+    - **Role**: **Viewer**
+
+    **Create**를 클릭합니다.
   </Step>
   <Step title="토큰 생성">
-    새 서비스 계정 페이지에서:
-    1. **Add service account token**을 클릭합니다.
-    2. 토큰 이름을 입력합니다 (예: `cloudthinker-token`).
-    3. 선택적으로 만료 날짜를 설정합니다.
-    4. **Generate token**을 클릭합니다.
-    5. **즉시 토큰을 복사합니다** — 이후에는 다시 표시되지 않습니다.
+    새 서비스 계정 페이지에서 **Add service account token**을 클릭하고, 이름(예: `cloudthinker`)을 지정하고, 90일 같은 만료 기간을 설정한 다음 **Generate token**을 클릭합니다. 토큰이 만료되면 교체할 때까지 연결이 401로 실패합니다. [Token expired](#문제-해결)를 참조하세요.
+
+    지금 토큰을 복사합니다. 토큰은 `glsa_`로 시작하며, Grafana는 다시 표시하지 않습니다.
   </Step>
   <Step title="CloudThinker에 연결 추가">
-    **Connections → Grafana**로 이동하여 다음을 입력합니다:
-    - **Grafana URL**: 인스턴스 URL (예: `https://grafana.your-domain.com`)
-    - **Service Account Token**: 방금 복사한 토큰
+    **Settings → Workspace → Connections**를 열고 **Discover** 탭을 연 다음 **Grafana**를 선택합니다. 다음을 입력합니다:
 
-    **Connect**를 클릭합니다. CloudThinker가 자격 증명을 확인하고 **Connected** 상태를 표시합니다.
+    - **GRAFANA_URL**: 인스턴스의 기본 URL(예: `https://grafana.example.com` 또는 `https://your-stack.grafana.net`)
+    - **GRAFANA_SERVICE_ACCOUNT_TOKEN**: `glsa_` 토큰
+    - **Alias**와 **Description**: 선택 사항. 에이전트는 설명을 읽고 올바른 인스턴스를 선택하므로, 둘 이상 추가한다면 조직이나 환경 이름을 적습니다
+
+    **Connect**를 클릭합니다.
+
+    **성공 상태:** 연결이 **Connecting**과 **Verifying**을 거쳐 **Connected**로 표시됩니다. 검증에 실패하면 **Failed**가 표시되고 오류 메시지가 나타납니다. 메시지를 [문제 해결](#문제-해결)과 대조합니다.
   </Step>
 </Steps>
 
-<Warning>
-생성 직후 서비스 계정 토큰을 복사하세요. Grafana는 이후에 토큰을 다시 표시하지 않으며, 분실 시 새 토큰을 생성해야 합니다.
-</Warning>
-
----
-
 ## 연결 세부 정보
 
-| 필드 | 설명 | 예시 |
-|------|------|------|
-| **GRAFANA_URL** | Grafana 인스턴스 URL | `https://your-instance.grafana.net` |
-| **GRAFANA_SERVICE_ACCOUNT_TOKEN** | 생성된 서비스 계정 토큰 | `glsa_xxxxx...` |
-
----
+| 필드 | 필수 | 예시 | 설명 |
+|-------|----------|---------|-------------|
+| **GRAFANA_URL** | 예 | `https://grafana.example.com` | 인스턴스의 기본 URL로, 브라우저에서 여는 주소입니다 |
+| **GRAFANA_SERVICE_ACCOUNT_TOKEN** | 예 | `glsa_...` | 에이전트가 대신 작업하는 서비스 계정의 토큰 |
 
 ## 필요 권한
 
-| 역할 | 부여하는 권한 |
-|------|--------------|
-| **Viewer** | 대시보드 조회, 데이터 소스 쿼리, 어노테이션 조회, 폴더 내용 접근 |
-| **Editor** | Viewer 권한에 더해 어노테이션 생성 및 대시보드 스냅샷 저장 |
+| 역할 | 에이전트가 얻는 권한 | 사용할 때 |
+|------|-----------------|-------------|
+| **Viewer** | 대시보드와 폴더 검색 및 읽기, 데이터 소스 쿼리, 알림 규칙과 주석 읽기 | 조사. 권장 |
+| **Editor** | Viewer에 더해 대시보드, 주석, 알림 규칙 변경. 각 변경은 [Approvals](/guide/approvals/overview)를 거칩니다 | 에이전트가 그런 변경을 하게 하려는 경우에만 |
+
+에이전트는 서비스 계정이 볼 수 있는 것만 봅니다. 대시보드 폴더에 제한된 권한이 있다면 서비스 계정을 해당 폴더에 추가해야 에이전트가 그 대시보드를 찾을 수 있습니다.
 
 <Tip>
-읽기 전용 조사에는 **Viewer** 역할을 지정하세요. 어노테이션 생성 또는 대시보드 스냅샷이 필요한 경우에만 Editor를 사용하세요.
+서비스 계정을 **Viewer**로 유지하세요. 그러면 에이전트가 무엇을 요청하든 Grafana 쪽에서 모든 변경을 거부합니다.
 </Tip>
-
----
 
 ## 에이전트 기능
 
-연결 후 에이전트는 다음을 수행할 수 있습니다:
+| 기능 | 에이전트가 할 수 있는 일 |
+|------------|--------------------|
+| **Dashboards and folders** | 이름이나 태그로 검색하고, 대시보드의 패널과 쿼리를 읽고, 패널의 쿼리를 실행합니다 |
+| **Metrics** | 레이블 및 메트릭 탐색과 함께 Prometheus 데이터 소스에 대해 PromQL을 실행합니다 |
+| **Logs** | Loki 데이터 소스에 대해 LogQL을 실행하고, 지원되는 데이터 소스 전반에서 로그를 검색합니다 |
+| **Other data sources** | Grafana에 구성된 Elasticsearch, CloudWatch, ClickHouse 데이터 소스를 쿼리합니다 |
+| **Alerting** | 알림 규칙과 상태를 나열하고 어떤 규칙이 발생 중인지 보여 줍니다 |
+| **Annotations** | 문제 발생 시점 전후의 배포 마커 같은 주석을 읽습니다 |
+| **Grafana Cloud features** | 스택에 있는 경우: Grafana Incident, OnCall 일정, Sift 조사, Pyroscope 프로필 |
 
-| 기능 | 설명 |
-|------|------|
-| **대시보드 접근** | 분석 시 기존 대시보드 참조 |
-| **메트릭 쿼리** | Grafana를 통해 데이터 소스 쿼리 |
-| **어노테이션 읽기** | 컨텍스트를 위한 대시보드 어노테이션 접근 |
-| **알림 상태** | Grafana 알림 규칙 상태 확인 |
+에이전트는 Grafana를 통해 쿼리하므로, 데이터 소스는 Grafana 인스턴스에 구성되어 있고 서비스 계정이 사용할 수 있을 때만 작동합니다.
 
-### 연결 확인
+Grafana가 연결되면 [Resolve](/ko/guide/incident/overview)도 인시던트를 조사하는 동안 알림 규칙을 읽고 메트릭 범위를 쿼리할 수 있습니다. Grafana 알림을 Resolve로 보내는 것은 별도의 webhook 설정입니다. [Webhook integrations](/ko/guide/incident/webhook-integrations/overview)를 참조하세요.
+
+### 연결 검증
 
 ```text
-Check Grafana for active alert rules and summarize any that are firing
+List the Grafana alert rules that are firing right now, and the data sources configured in Grafana
 ```
+
+발생 중인 규칙의 이름과 상태(또는 발생 중인 규칙이 없다는 안내)에 이어, Prometheus나 Loki 같은 유형과 함께 각 데이터 소스가 표시됩니다.
 
 ### 예시 프롬프트
 
 ```text
-Check the AWS cost dashboard for anomalies
-Reference the Kubernetes cluster dashboard for pod health
-Query database metrics from the Grafana data source
+Find the Grafana dashboard for the checkout service and summarize what its panels show for the last hour
+Using Grafana's Prometheus data source, which pods restarted most in the last 24 hours?
+Search Loki through Grafana for errors from the payments app since 09:00 and group them by message
 ```
 
-### 지원되는 데이터 소스
+## 쓰기 권한
 
-CloudThinker는 Grafana에 구성된 데이터 소스를 통해 쿼리할 수 있습니다:
+이 연결은 대시보드 편집, 주석 추가, 알림 규칙 변경처럼 무언가를 바꾸는 Grafana 도구를 호출할 수 있습니다. 무언가를 바꾸는 모든 호출은 [Approvals](/guide/approvals/overview)를 거치며, Grafana는 서비스 계정의 역할이 허용할 때만 이를 허용합니다. **Viewer**에서는 Grafana가 모두 거부합니다.
 
-| 데이터 소스 | 쿼리 지원 |
-|------------|-----------|
-| Prometheus | PromQL 쿼리 |
-| InfluxDB | InfluxQL / Flux |
-| Elasticsearch | Lucene / KQL |
-| CloudWatch | CloudWatch 메트릭 |
-| Loki | LogQL 쿼리 |
+<ApprovalDefault />
 
----
+이 연결에는 **Allow writes** 스위치가 없으므로, CloudThinker 자체의 읽기 전용 설정이 여기에는 없습니다. 쓰기를 막는 것은 서비스 계정의 Grafana 역할이므로, 변경을 원하지 않는다면 **Viewer**로 유지합니다.
 
 ## 문제 해결
 
 <Accordion title="연결 실패">
-- Grafana URL이 CloudThinker에서 접근 가능한지 확인합니다.
-- SSL 인증서가 유효한지 확인합니다.
-- 프록시가 연결을 차단하지 않는지 확인합니다.
-- Grafana가 실행 중이고 접근 가능한지 확인합니다.
+- 네트워크 외부의 브라우저에서 **GRAFANA_URL**을 열어 인터넷에서 접근 가능한지 확인하거나, 방화벽에서 CloudThinker를 허용합니다.
+- TLS 인증서가 유효하고 자체 서명이 아닌지 확인합니다.
+- 대시보드 경로 없이 기본 URL만 사용합니다.
 </Accordion>
 
-<Accordion title="인증 실패">
-- 서비스 계정 토큰이 올바른지 확인합니다.
-- 토큰이 만료되지 않았는지 확인합니다.
-- 서비스 계정이 활성 상태인지 확인합니다.
-- 계정에 IP 제한이 설정되어 있지 않은지 확인합니다.
+<Accordion title="인증 실패 또는 401">
+- 토큰을 다시 확인합니다. 문자가 누락되었다면 다시 복사합니다.
+- 토큰이 만료되지 않았는지, **Administration → Users and access → Service accounts**에서 서비스 계정이 활성화되어 있는지 확인합니다.
 </Accordion>
 
 <Accordion title="토큰 만료">
-- **Administration → Service Accounts**로 이동합니다.
-- CloudThinker 서비스 계정을 선택합니다.
-- 새 토큰을 생성합니다.
-- CloudThinker 연결 설정에서 토큰을 업데이트합니다.
+Grafana에서 서비스 계정을 열고 새 토큰을 생성한 다음, 연결의 **GRAFANA_SERVICE_ACCOUNT_TOKEN**에 붙여넣습니다. Grafana에서 이전 토큰을 삭제합니다.
 </Accordion>
 
-<Accordion title="대시보드에 접근할 수 없음">
-- 서비스 계정에 Viewer 역할이 있는지 확인합니다.
-- 폴더 권한에 서비스 계정이 포함되어 있는지 확인합니다.
-- 대시보드가 제한된 폴더에 있지 않은지 확인합니다.
+<Accordion title="내가 볼 수 있는 대시보드를 에이전트가 찾지 못함">
+대시보드가 서비스 계정이 볼 수 없는 폴더에 있습니다. 해당 폴더에 대해 서비스 계정에 **View** 권한을 부여합니다.
 </Accordion>
 
----
+<Accordion title="데이터 소스 쿼리가 실패함">
+Explore에서 내가 접근할 수 있다고 해서 서비스 계정도 접근할 수 있는 것은 아닙니다. 두 가지를 확인합니다:
+
+- Grafana Enterprise 또는 Cloud에서는 데이터 소스의 **Permissions** 탭을 열고 서비스 계정(또는 서비스 계정이 가진 역할)이 쿼리할 수 있는지 확인합니다.
+- 서비스 계정으로 테스트합니다: `curl -H "Authorization: Bearer glsa_..." https://<grafana>/api/datasources`. 응답에 데이터 소스가 없으면 서비스 계정이 사용할 수 없는 것입니다.
+
+에이전트는 Grafana 자체가 쿼리할 수 있는 데이터 소스만 쿼리할 수 있습니다.
+</Accordion>
+
+<Accordion title="Incident, OnCall 또는 Sift 요청이 실패함">
+이들은 Grafana Cloud 기능입니다. 스택에서 켜져 있을 때만 작동합니다. 일부 Grafana Cloud 앱에는 자체 접근 역할이 있으므로, **Viewer**로 충분하지 않다면 Grafana에서 서비스 계정에 대한 앱의 역할 설정을 확인합니다.
+</Accordion>
 
 ## 보안
 
 <ConnectionSecurity />
 
-- **Viewer 역할만 사용** — CloudThinker 서비스 계정에 Editor 또는 Admin 역할을 절대 부여하지 마세요.
-- **토큰 만료** — 만료 날짜를 설정하고 90일마다 서비스 계정 토큰을 교체합니다.
+- **Viewer만**: CloudThinker 서비스 계정에는 **Viewer**를 부여하고, **Admin**은 절대 부여하지 마세요.
+- **만료되는 토큰**: 모든 토큰에 만료 기간을 설정하고 정기 일정에 따라 교체합니다.
 
----
-
-## 관련 항목
+## 관련 문서
 
 <CardGroup cols={2}>
-  <Card title="Elasticsearch 연결" icon="/images/icons/elasticsearch.svg" href="/ko/guide/connections/elasticsearch">
-    로그 데이터 소스 연결
+  <Card title="Prometheus" icon="/images/icons/prometheus.svg" href="/ko/guide/connections/prometheus">
+    Prometheus가 Grafana 뒤에 있지 않을 때 직접 쿼리합니다.
   </Card>
-  <Card title="AWS 연결" icon="/images/icons/aws.svg" href="/ko/guide/connections/aws">
-    CloudWatch 메트릭 연결
+  <Card title="Webhook integrations" icon="bell" href="/ko/guide/incident/webhook-integrations/overview">
+    Grafana 알림을 Resolve로 보내 조사가 자동으로 시작되게 합니다.
   </Card>
 </CardGroup>

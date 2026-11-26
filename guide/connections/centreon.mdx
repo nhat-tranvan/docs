@@ -1,0 +1,136 @@
+---
+title: Centreon
+description: "Connect Centreon with an API token so agents review problems and downtimes, then acknowledge, recheck, or set downtime."
+icon: "/images/icons/centreon.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+import ApprovalDefault from '/snippets/approval-default.mdx';
+
+Connect Centreon so [CloudThinker](/guide/agents/overview) can review hosts, services, problems, and downtimes, and, if you allow it, acknowledge a problem, run a check now, or set downtime. The connection signs in with a Centreon API token and can do only what that token's user is allowed to do.
+
+## Prerequisites
+
+- A Centreon web server that CloudThinker can reach over HTTPS. For a private address, follow [Reaching private services](/guide/connections/overview#reaching-private-services).
+- A Centreon user for CloudThinker, and an administrator who can set its access control lists (ACLs).
+- The **Admin** role in your CloudThinker workspace. See [Roles](/guide/security/roles).
+
+## Setup
+
+<Steps>
+  <Step title="Give the user access in Centreon">
+    Ask your Centreon administrator to add the CloudThinker user to an ACL access group. Under **Administration → ACL → Resources Access**, choose the hosts and services agents should see. Under **Menus Access**, give the group the **Resources Status** page. For changes, also grant the acknowledgement, downtime, and check actions under **Actions Access**. See [Centreon's ACL guide](https://docs.centreon.com/docs/administration/access-control-lists/).
+  </Step>
+  <Step title="Create an API token">
+    Sign in to Centreon as that user, or as an administrator who creates the token for that user. Go to **Administration → Authentication Tokens** (**API Tokens** in some versions), click **Add**, choose the **API** type, and click **Generate new token**. Copy the token: Centreon does not show it again. See [Centreon's token instructions](https://docs.centreon.com/cloud/administration/authentication-tokens/).
+  </Step>
+  <Step title="Connect in CloudThinker">
+    Open **Settings → Workspace → Connections**, open the **Discover** tab, and select **Centreon**. Click **Connect**, fill in the fields below, then click **Connect** in the dialog.
+
+    **Success state:** the connection shows a **Connected** status and reports how many hosts and services the token sees. CloudThinker then opens a chat that takes a read-only deep look at the connection ("Often takes about 15 min. You can leave the chat."). To run it again later, open the card's **More** menu and choose **Try in chat**.
+  </Step>
+</Steps>
+
+## Connection details
+
+| Field | Required | Description |
+|---|---|---|
+| **Centreon URL** | Yes | The HTTPS address you open Centreon at, including its path, such as `https://monitor.example.com/centreon`. Leave off `/api`, credentials, query strings, and fragments |
+| **API token** | Yes | The token you generated. It acts as its user |
+| **CA certificate (optional)** | No | The PEM of the private certificate authority that issued the Centreon certificate. Leave it empty to use public trust. CloudThinker always checks the certificate and hostname |
+
+CloudThinker refuses redirects, so enter the exact address Centreon answers at.
+
+## Required permissions
+
+The token has its user's rights. Centreon ACLs decide which hosts and services that user sees and what it may do.
+
+| You want agents to | Centreon access |
+|---|---|
+| Review hosts, services, problems, and downtimes | The **Resources Status** page in **Menus Access**, and the hosts and services in **Resources Access** |
+| Also acknowledge, remove an acknowledgement, set downtime, or run a check now | The matching acknowledgement, downtime, and check actions in **Actions Access** |
+
+<Tip>
+Start with a user that can only open **Resources Status**. Agents can still investigate everything it sees, and no approval, mistaken or automatic, can change anything in Centreon.
+</Tip>
+
+## Agent capabilities
+
+| Capability | What agents can do |
+|---|---|
+| **Overview** | Count hosts, services, current problems, unhandled problems, and downtimes, with the worst unhandled problems first |
+| **Problems** | List hosts that are down and services in a problem state, with how long and the check output. Acknowledged problems and problems in downtime are left out unless you ask |
+| **One host** | Read a host's status, address, and poller, its services worst first, and its downtimes |
+| **Changes** | Acknowledge one host or service problem or remove its acknowledgement, run one check now, set downtime on one host or service, or end one downtime |
+
+Reads run without asking. Each change targets one host or service, and the agent reads it again afterwards to confirm the change. A downtime starts at once and lasts from 1 minute to 7 days. A downtime on a host covers every service on that host, and the agent says so before it asks.
+
+Agents cannot change configuration, add hosts, or send custom notifications. Make those changes in Centreon.
+
+Writes also need **Allow writes** on, which starts on. To lock writes in CloudThinker, open **Centreon** in **Settings → Workspace → Connections** and turn off the **Allow writes** switch on its detail panel.
+
+<ApprovalDefault />
+
+### Verify the connection
+
+```text
+Give me a Centreon overview: host, service, and problem totals, the worst unhandled problems, and current downtimes
+```
+
+Expect real host and service names with totals. A failed section is unavailable data, not zero problems.
+
+### Example prompts
+
+```text
+Which Centreon hosts are down and which services are critical right now?
+How is web-prod-01 doing in Centreon? Show its services worst first
+Set a 2-hour Centreon downtime on db-prod-01 for planned maintenance
+```
+
+## Troubleshooting
+
+<Accordion title="Centreon rejected the API token. It may have expired or been revoked.">
+Generate a new token in Centreon, then edit the connection and paste it into **API token**.
+</Accordion>
+
+<Accordion title="The token works, but its user cannot open Resources Status. Give that user access to it.">
+Add **Resources Status** to the user's access group under **Administration → ACL → Menus Access**, then connect again. If a change fails later with a permission error, grant the matching action under **Actions Access**.
+</Accordion>
+
+<Accordion title="That address has no Centreon API. Use the address you open Centreon at, such as https://monitor.example.com/centreon.">
+Enter the address from your browser, including its path such as `/centreon`. Leave off `/api`.
+</Accordion>
+
+<Accordion title="Centreon answered with a redirect. Use the exact https address you open Centreon at.">
+Enter the final HTTPS address Centreon serves directly, not an address that forwards to it.
+</Accordion>
+
+<Accordion title="The Centreon certificate is not trusted.">
+Install a certificate from a trusted authority, or paste the issuing CA certificate into **CA certificate (optional)**. If CloudThinker says the CA certificate is not valid PEM, paste the full certificate, including its `BEGIN` and `END` lines.
+</Accordion>
+
+<Accordion title="Could not reach Centreon over HTTPS. Check the URL and that the sandbox can reach it.">
+CloudThinker could not open a connection to that address. Confirm the URL starts with `https://` and that your firewall lets CloudThinker reach Centreon. Browser access from your laptop alone is not enough.
+</Accordion>
+
+<Accordion title="An agent says the Centreon write tool is off">
+**Allow writes** is off on this connection, so the change was refused and nothing changed. Turn it on in the connection's detail panel, or make the change in Centreon.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- Scope the user with **Resources Access** to the hosts and services agents need.
+- If the token has an expiration date, generate a new token before it lapses and update the connection.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Approval rules" icon="shield-check" href="/guide/approvals/rules">
+    Decide which Centreon changes run, wait for a person, or are refused.
+  </Card>
+  <Card title="Icinga" icon="/images/icons/icinga.svg" href="/guide/connections/icinga">
+    Check hosts and services in Icinga 2, then acknowledge or recheck one.
+  </Card>
+</CardGroup>

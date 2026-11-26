@@ -1,208 +1,171 @@
 ---
 title: PostgreSQL
-description: "PostgreSQL データベースを CloudThinker に接続してクエリ分析、インデックス最適化、パフォーマンス監視を実現"
+description: "PostgreSQL データベースを接続し、エージェントが遅いクエリの特定、インデックスの提案、VACUUM、ロック、レプリケーションのヘルス確認を行えるようにします"
 icon: "/images/icons/postgresql.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
-PostgreSQL データベースを接続して、[CloudThinker](/ja/guide/agents/overview)がクエリを分析し、パフォーマンスを最適化し、データベースの健全性を監視できるようにします。
-
-## 対応プラットフォーム
-
-| プラットフォーム | サポート |
-|----------|---------|
-| **セルフホスト PostgreSQL** | 12.x・13.x・14.x・15.x・16.x |
-| **AWS RDS PostgreSQL** | 全バージョン |
-| **AWS Aurora PostgreSQL** | 全バージョン |
-| **Google Cloud SQL** | 全 PostgreSQL バージョン |
-| **Azure Database for PostgreSQL** | Flexible Server・Single Server |
+PostgreSQL データベースを接続すると、CloudThinker のエージェントがスキーマを読み、遅いクエリをランク付けし、インデックスを推奨し、VACUUM、ロック、レプリケーションのヘルスを確認できるようになります。専用の読み取り専用ユーザーの接続 URL を 1 つ CloudThinker に渡し、接続は制限モードで実行されます。すべてのクエリが読み取り専用のため、承認があってもエージェントは書き込めません。
 
 ## 前提条件
 
-- CloudThinker からネットワーク経由で到達可能な PostgreSQL インスタンス。
-- 専用ユーザーの作成と権限付与に必要な管理者アクセス。
-- クエリレベルの分析が必要な場合は `pg_stat_statements` 拡張のインストール（低速クエリデータに必要）。
+- CloudThinker がインターネットから到達できる PostgreSQL のエンドポイント（セルフホストの PostgreSQL、Amazon RDS または Aurora、Cloud SQL、Azure Database for PostgreSQL など）。エージェントは CloudThinker Cloud から接続するため、`localhost` やプライベートアドレスはあなたのネットワークではなく CloudThinker 側で解決されます。
+- この接続には、まだプライベートリンクや VPN の選択肢はありません。データベースがプライベートの場合は、CloudThinker の送信元 IP に制限したエンドポイントを公開してください。リードレプリカを公開すればプライマリはプライベートのままにできますが、そのクエリ統計はレプリカ自身のワークロードだけを対象にします。[Reaching private services](/ja/guide/connections/overview#プライベートサービスへの到達) を参照してください。
+- `CREATE ROLE` と `GRANT` を実行できる管理者アカウント。
+- 遅いクエリのランク付けとワークロードに基づくインデックスのアドバイスが必要な場合は、`pg_stat_statements` 拡張機能。それ以外はすべて、これがなくても機能します。
 
 ## セットアップ
 
 <Steps>
-  <Step title="管理者として接続する">
-    管理者アカウントで PostgreSQL インスタンスに接続します：
-    ```bash
-    psql -h your-host -U postgres -d your-database
-    ```
-  </Step>
-  <Step title="読み取り専用ユーザーを作成する">
-    CloudThinker 専用のユーザーを作成します：
+  <Step title="読み取り専用のユーザーを作成する">
+    管理者として接続し、CloudThinker 用のログインロールを作成します。
+
     ```sql
-    CREATE USER cloudthinker_readonly WITH PASSWORD 'your-secure-password';
+    CREATE ROLE cloudthinker_readonly WITH LOGIN PASSWORD '<secure-password>';
     ```
   </Step>
-  <Step title="接続とスキーマのアクセスを付与する">
-    接続とスキーマの使用を許可します：
+  <Step title="読み取りアクセスを付与する">
+    分析したいデータベースで次を実行します。`public` 以外にエージェントに読ませるスキーマがあれば、スキーマの行をスキーマごとに繰り返します。
+
     ```sql
     GRANT CONNECT ON DATABASE your_database TO cloudthinker_readonly;
     GRANT USAGE ON SCHEMA public TO cloudthinker_readonly;
-    GRANT USAGE ON SCHEMA information_schema TO cloudthinker_readonly;
-    ```
-  </Step>
-  <Step title="SELECT 権限を付与する">
-    既存および今後作成されるすべてのテーブルとビューに SELECT を付与します：
-    ```sql
     GRANT SELECT ON ALL TABLES IN SCHEMA public TO cloudthinker_readonly;
-    GRANT SELECT ON ALL TABLES IN SCHEMA information_schema TO cloudthinker_readonly;
-
-    ALTER DEFAULT PRIVILEGES IN SCHEMA public
-    GRANT SELECT ON TABLES TO cloudthinker_readonly;
+    ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA public GRANT SELECT ON TABLES TO cloudthinker_readonly;
+    GRANT pg_monitor TO cloudthinker_readonly;
     ```
+
+    `app_owner` は、アプリケーションのテーブルを作成するロール（多くの場合マイグレーションを実行するロール）に置き換えてください。デフォルト権限は指定したロールが作成したテーブルだけを対象にするため、テーブルを作成するロールごとにその行を繰り返します。
+
+    `pg_monitor` により、エージェントは自分のものだけでなく、すべてのセッション、ロック、クエリ統計を見られます。
   </Step>
-  <Step title="pg_stat_statements を有効化する">
-    この拡張はクエリ分析に必要です：
+  <Step title="pg_stat_statements をオンにする">
+    多くのマネージドサービスではすでにプリロードされているため、まず確認します。
+
     ```sql
-    -- 拡張を有効化（スーパーユーザーが必要）
+    SHOW shared_preload_libraries;
+    ```
+
+    `pg_stat_statements` がない場合は、`shared_preload_libraries` に追加して PostgreSQL を再起動します。RDS、Aurora、Cloud SQL では、パラメータグループまたはデータベースフラグで設定して再起動します。すでに含まれている場合は再起動は不要です。その後、対象のデータベースで管理者として次を実行します。
+
+    ```sql
     CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
-
-    -- ユーザーにアクセスを付与
-    GRANT SELECT ON pg_stat_statements TO cloudthinker_readonly;
     ```
 
-    RDS/Aurora の場合はパラメータグループに追加します：
-    ```
-    shared_preload_libraries = 'pg_stat_statements'
-    ```
+    **成功時の状態:** `cloudthinker_readonly` としてサインインした状態で、`SELECT count(*) FROM pg_stat_statements;` がエラーではなく数値を返します。これで `pg_monitor` の付与が機能していることも確認できます。
   </Step>
-  <Step title="ネットワークアクセスを設定する">
-    CloudThinker がデータベースに到達できるよう設定します：
-    - CloudThinker の IP をセキュリティグループまたはファイアウォールに追加
-    - RDS の場合：パブリックアクセスを有効化するか VPC ピアリングを使用
-  </Step>
-  <Step title="CloudThinker に接続を追加する">
-    **Connections → PostgreSQL** に移動し、以下を入力します：
-    - **Host**：データベースのホスト名または IP
-    - **Port**：データベースポート（デフォルト：`5432`）
-    - **Database**：データベース名
-    - **Username**：`cloudthinker_readonly`
-    - **Password**：上記で設定したパスワード
-    - **SSL mode**：`require`（推奨）
+  <Step title="ネットワークアクセスを開く">
+    ファイアウォール、セキュリティグループ、または承認済みネットワークのリストで、CloudThinker の送信元 IP からの PostgreSQL のポート（デフォルト `5432`）への受信接続を許可します。このドキュメントでは CloudThinker の送信元 IP の一覧を公開していません。CloudThinker の担当者に問い合わせるか、[お問い合わせ](https://cloudthinker.io/contact)ください。
 
-    **Connect** をクリックします。成功すると CloudThinker は **Connected** ステータスを表示します。
+    セルフホストの PostgreSQL では、`pg_hba.conf` で、それらのアドレスから `cloudthinker_readonly` がサインインできるようにします。IP ごとに 1 行です。
+
+    ```text
+    hostssl your_database cloudthinker_readonly <cloudthinker-ip>/32 scram-sha-256
+    ```
+
+    その後、`SELECT pg_reload_conf();` で設定を再読み込みします。マネージドサービスではこれは自動で処理されます。
+  </Step>
+  <Step title="CloudThinker で接続を追加する">
+    **Settings → Workspace → Connections** を開き、**PostgreSQL** を選んで、詳細パネルの **Connect** をクリックします。ダイアログで必要に応じて **Alias** と **Description** を変更します（複数接続する場合、エージェントは説明を読んで適切なデータベースを選びます）。**DATABASE_URI** に URL を貼り付け、**Connect** をクリックします。
+
+    ```text
+    postgresql://cloudthinker_readonly:<secure-password>@db.example.com:5432/your_database?sslmode=require
+    ```
+
+    **成功時の状態:** 接続に **Connecting** と **Verifying** が表示され、その後 **Connected** になります。その後、CloudThinker が[詳細調査](/ja/guide/connections/overview#接続した後に起こること)のチャットを開き、エージェントがデータベースを探索します。
   </Step>
 </Steps>
 
-## 接続詳細
+## 接続の詳細
 
-| フィールド | 説明 | デフォルト |
-|-------|-------------|---------|
-| **Host** | データベースのホスト名または IP | — |
-| **Port** | PostgreSQL ポート | `5432` |
-| **Database** | データベース名 | — |
-| **Username** | 専用ユーザー（例：`cloudthinker_readonly`） | — |
-| **Password** | ユーザーパスワード | — |
-| **SSL mode** | `disable`・`allow`・`prefer`・`require`・`verify-ca`・`verify-full` | `require` |
-| **Connection timeout** | 接続待機秒数 | `10` |
-| **Statement timeout** | クエリ実行の最大時間（ミリ秒） | `30000` |
+| フィールド | 必須 | 説明 | 例 |
+|-------|----------|-------------|---------|
+| **Alias** | いいえ | このデータベースの短い名前。`postgres-1` など、次に空いているエイリアスが入力済みです | `prod-db` |
+| **Description** | いいえ | このデータベースの内容。エージェントはこれを読んでインスタンスを選びます | `Production orders database` |
+| **DATABASE_URI** | はい | 完全な接続 URL: ユーザー、パスワード、ホスト、ポート、データベース、SSL モード | `postgresql://cloudthinker_readonly:<password>@db.example.com:5432/shop?sslmode=require` |
 
-接続文字列の形式：
+フォームでは URL のフィールドに **DATABASE_URI** というラベルが付いています。各接続は、URL で指定された 1 つのデータベースを対象にします。別のデータベースを分析するには、別の **Alias** で PostgreSQL の接続をもう 1 つ追加します。
 
-```
-postgresql://cloudthinker_readonly:your-secure-password@your-host:5432/your-database
-```
+パスワードに `@`、`:`、`/`、`#` が含まれる場合は、URL エンコードしてください（例: `@` は `%40` になります）。そうしないと URL を解析できません。
 
 ## 必要な権限
 
-### 最小権限
-
-```sql
-GRANT CONNECT ON DATABASE dbname TO cloudthinker_readonly;
-GRANT USAGE ON SCHEMA public TO cloudthinker_readonly;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO cloudthinker_readonly;
-```
-
-### 推奨（フル分析）
-
-```sql
--- 上記すべてに加えて：
-GRANT SELECT ON pg_stat_statements TO cloudthinker_readonly;
-GRANT SELECT ON pg_stat_activity TO cloudthinker_readonly;
-GRANT SELECT ON pg_stat_user_tables TO cloudthinker_readonly;
-GRANT SELECT ON pg_stat_user_indexes TO cloudthinker_readonly;
-GRANT SELECT ON pg_statio_user_tables TO cloudthinker_readonly;
-GRANT pg_read_all_stats TO cloudthinker_readonly;  -- PostgreSQL 14+
-```
+| エージェントにさせたいこと | 付与するもの |
+|--------------------|-------|
+| スキーマ、テーブル、インデックスを読み、読み取り専用のクエリを実行する | データベースへの `CONNECT`、各スキーマへの `USAGE`、そのテーブルへの `SELECT` |
+| すべてのセッション、ロック、ブロックしているクエリを見る | `pg_monitor` |
+| 遅いクエリをランク付けし、ワークロードに基づくインデックスのアドバイスを得る | `pg_stat_statements` 拡張機能と `pg_monitor` |
+| インデックスを作成せずにテストする | 管理者がインストールした `hypopg` 拡張機能。マネージドサービスによって異なるため、プロバイダーの対応拡張機能の一覧を確認してください |
 
 <Tip>
-まず最小権限から始め、クエリレベルの分析とキャッシュヒットレポートを解放するために推奨の統計情報権限を追加してください。
+ユーザーは読み取り専用のままにしてください。制限モードがすでにエージェントからの書き込みをブロックしていますが（書き込みが Approvals を経由する [MySQL](/ja/guide/connections/mysql) とは異なります）、`SELECT` のみのロールであれば、どちらかの層に誤りがあってもデータは変更されません。
 </Tip>
 
 ## エージェントの機能
 
-接続後、CloudThinker は以下を実行できます：
-
-| 機能 | 説明 |
-|------------|-------------|
-| **クエリ分析** | 低速クエリの特定、実行計画の分析 |
-| **インデックス推奨** | 不足しているインデックスの発見、未使用インデックスの特定 |
-| **パフォーマンスメトリクス** | 接続数・I/O・キャッシュヒット率の監視 |
-| **テーブル統計** | テーブルの膨張・デッドタプル・Vacuum 状態の分析 |
-| **レプリケーション監視** | レプリカのラグとストリーミング状態の確認 |
+| 機能 | エージェントができること |
+|------------|--------------------|
+| **Schema inspection** | スキーマ、テーブル、ビュー、シーケンスを一覧表示し、カラムの型、制約、インデックスを読みます |
+| **Read-only SQL** | `SELECT` クエリを実行して、データに関する質問に答えます |
+| **Slow queries** | `pg_stat_statements` から、合計時間、平均時間、全体のリソース使用量でステートメントをランク付けします |
+| **Query plans and index advice** | クエリを explain し、1 つのクエリまたはワークロード全体に対してインデックスを推奨し、`hypopg` で仮想インデックスをテストします |
+| **Health checks** | 無効、重複、肥大化、未使用のインデックス、キャッシュヒット率、上限に近いシーケンス、接続の使用状況を見つけます |
+| **Vacuum and locks** | テーブルの肥大化、遅れている autovacuum、トランザクション ID の周回のリスク、ブロックしているクエリを報告します |
+| **Replication** | レプリカの遅延とレプリケーションスロットのヘルスを確認します |
 
 ### 接続を確認する
 
 ```text
-check PostgreSQL connection health and list active database sessions
+List the schemas and tables in the connected PostgreSQL database with their sizes
 ```
 
-### プロンプト例
+スキーマごとにまとめられたテーブル名とそのサイズが返されることを確認します。`permission denied` のエラーには、ユーザーが読めないオブジェクトが示されます。
+
+### プロンプトの例
 
 ```text
-analyze slow queries on the production PostgreSQL instance
-find missing indexes on the orders table
-show database performance metrics including cache hit rates
+Which 10 queries use the most resources on PostgreSQL, and what indexes would help them?
+Run a health check on the database and list the indexes I can safely drop
+Is anything blocking right now? Show the blocking and waiting queries
 ```
 
 ## トラブルシューティング
 
-<Accordion title="接続が拒否される">
-- ホストとポートが正しいか確認してください
-- セキュリティグループまたはファイアウォールが CloudThinker の IP を許可しているか確認してください
-- RDS の場合：「Publicly accessible」が有効になっているか、VPC ピアリングを使用しているか確認してください
-- PostgreSQL が正しいインターフェースでリッスンしているか確認してください
+<Accordion title="Connection refused またはタイムアウト">
+CloudThinker がホストに到達できません。**DATABASE_URI** のホストとポートが公開されているか到達可能であること、ファイアウォールやセキュリティグループが CloudThinker を許可していること、`postgresql.conf` の `listen_addresses` が `localhost` になっていないことを確認してください。RDS では、インスタンスがパブリックアクセス可能であるか、ネットワーク構成を通じて到達可能である必要があります。
 </Accordion>
 
-<Accordion title="認証に失敗した">
-- ユーザー名とパスワードが正しいか確認してください
-- `pg_hba.conf` が接続方式を許可しているか確認してください
-- ユーザーがデータベースに `CONNECT` 権限を持っているか確認してください
+<Accordion title="Password authentication failed、または no pg_hba.conf entry">
+ユーザーまたはパスワードが誤っているか、`pg_hba.conf` が CloudThinker のアドレスからのこのユーザーを許可していません。**DATABASE_URI** でパスワードが URL エンコードされていることを確認し、ユーザー用の `pg_hba.conf` の行を追加して、PostgreSQL を再読み込みしてください。
 </Accordion>
 
-<Accordion title="pg_stat_statements が見つからない">
-- 拡張がインストールされているか確認：`SELECT * FROM pg_extension WHERE extname = 'pg_stat_statements';`
-- `shared_preload_libraries` に `pg_stat_statements` が含まれているか確認してください
-- `shared_preload_libraries` 変更後は PostgreSQL を再起動してください
-- RDS の場合：パラメータグループを変更してインスタンスを再起動してください
+<Accordion title="pg_stat_statements が見つからない、または遅いクエリのデータがない">
+拡張機能が読み込まれていないか、作成されていません。`SHOW shared_preload_libraries;` に `pg_stat_statements` が含まれていることを確認し、追加したばかりの場合は再起動して、対象のデータベースで `CREATE EXTENSION pg_stat_statements;` を実行してください。統計は最後のリセットから始まるため、新しいサーバーには履歴がほとんどありません。
 </Accordion>
 
-<Accordion title="権限が拒否された">
-- ユーザーが必要なテーブルに `SELECT` 権限を持っているか確認してください
-- PostgreSQL 14+ では `pg_read_all_stats` ロールを付与してください
-- psql で `\dn+` を使ってスキーマ権限を確認してください
+<Accordion title="テーブルやスキーマへの Permission denied">
+ユーザーに、スキーマへの `USAGE` またはテーブルへの `SELECT` がありません。付与の後に作成されたテーブルには、それを作成するロールを指定した `ALTER DEFAULT PRIVILEGES FOR ROLE` の行が必要です。
+</Accordion>
+
+<Accordion title="HypoPG がインストールされていない">
+仮想インデックスのテストには `hypopg` 拡張機能が必要です。インストールするか、テストせずにインデックスの推奨を依頼してください。
 </Accordion>
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **SSL 必須** — 転送中のデータを暗号化するために、常に SSL モード `require` 以上を使用してください。
-- **最小権限** — CloudThinker ユーザーには `SELECT` のみを付与し、書き込みアクセスは絶対に付与しないでください。
+- **転送中に暗号化する**: **DATABASE_URI** に `sslmode=require` を付け、認証情報と結果が平文でネットワークを通らないようにしてください。`verify-full` には CloudThinker 側でサーバーの CA 証明書も必要ですが、接続にはそれを指定するフィールドがないため、`require` を使ってください。
+- **すべてのクエリで制限モード**: CloudThinker は PostgreSQL の接続を読み取り専用で起動するため、ロールの付与が許可していたとしても、エージェントは書き込めません。
 
-## 関連
+## 関連ページ
 
 <CardGroup cols={2}>
-  <Card title="エージェント" icon="database" href="/ja/guide/agents/overview">
-    CloudThinker と、その作業の仕組み
+  <Card title="CockroachDB" icon="/images/icons/cockroachdb.svg" href="/guide/connections/cockroachdb">
+    読み取り用と書き込み用の別々のユーザーで、PostgreSQL 互換の CockroachDB クラスターを接続します。
   </Card>
-  <Card title="MySQL 接続" icon="/images/icons/mysql.svg" href="/ja/guide/connections/mysql">
-    MySQL データベースの同様のセットアップ
+  <Card title="MySQL" icon="/images/icons/mysql.svg" href="/ja/guide/connections/mysql">
+    MySQL も読み取り専用のユーザーで接続します。PostgreSQL と異なり、MySQL の書き込みはブロックされるのではなく Approvals を経由します。
   </Card>
 </CardGroup>

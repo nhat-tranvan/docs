@@ -1,187 +1,267 @@
 ---
-title: Google Cloud
-description: "서비스 계정을 통해 Google Cloud를 CloudThinker에 연결하여 리소스 관리, 비용 최적화, 보안 모니터링을 실현하세요"
+title: Google Cloud Platform
+description: "서비스 계정 JSON 키로 Google Cloud 프로젝트를 연결하여 에이전트가 컴퓨팅, GKE, BigQuery, ID, 비용을 조사할 수 있도록 합니다."
 icon: "/images/icons/gcp.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ko/connection-security.mdx';
 
-GCP 프로젝트를 연결하여 CloudThinker 에이전트가 Google Cloud 서비스 전반에서 비용을 분석하고, 리소스를 최적화하고, 보안을 감사하고, 인프라를 관리할 수 있도록 합니다.
+CloudThinker는 프로젝트에 대해 Google Cloud CLI를 실행하여 컴퓨팅, GKE, BigQuery, 스토리지, ID, 비용에 대한 질문에 답합니다. 서비스 계정의 JSON 키로 연결하며, 해당 서비스 계정의 IAM 역할이 에이전트가 접근할 수 있는 범위를 결정합니다.
 
-GCP는 **서비스 계정 키** (JSON 파일)로 인증합니다. 서비스 계정의 IAM 역할이 각 에이전트가 접근할 수 있는 범위를 결정합니다.
-
----
+<Warning>
+이 연결은 서비스 계정 JSON 키만 받습니다. Workload Identity Federation과 가장(impersonation)은 지원되지 않습니다.
+</Warning>
 
 ## 사전 요구 사항
 
-- IAM 관리자 권한이 있는 GCP 프로젝트.
-- 프로젝트에서 서비스 계정을 생성하고 IAM 역할을 할당할 권한.
-- 브라우저에서 접근 가능한 [Google Cloud 콘솔](https://console.cloud.google.com/).
+- 서비스 계정을 만들고 IAM 역할을 부여할 수 있는 Google Cloud 프로젝트.
+- 서비스 계정 키를 생성할 수 있는 권한. 조직이 `constraints/iam.disableServiceAccountKeyCreation`을 적용한다면(2024년 5월 이후 생성된 조직의 기본값), 시작하기 전에 조직 정책 관리자에게 이 프로젝트에 대한 예외를 요청합니다. 정책 변경이 적용되는 데 몇 분이 걸릴 수 있습니다.
+- 연결이 다룰 모든 프로젝트에서, 답을 얻으려는 서비스의 API가 활성화되어 있어야 합니다. 꺼져 있는 서비스에 대해서는 에이전트가 `API not enabled`를 받습니다. API를 활성화하려면 프로젝트에 대한 **Service Usage Admin**(`roles/serviceusage.serviceUsageAdmin`) 또는 Owner가 필요합니다. 프로젝트, 인벤토리, GKE, BigQuery, IAM 검토, 메트릭, 로그, Cloud Storage를 다루는 일반적인 세트는 다음과 같습니다:
 
-<Info>
-뷰어 수준 서비스 계정은 비용 분석, 보안 감사, 리소스 검사에 충분합니다. 쓰기 기능이 필요한 경우에만 역할을 확장하세요.
-</Info>
+  ```bash
+  APIS="cloudresourcemanager.googleapis.com serviceusage.googleapis.com \
+    compute.googleapis.com container.googleapis.com bigquery.googleapis.com \
+    iam.googleapis.com monitoring.googleapis.com logging.googleapis.com storage.googleapis.com"
 
----
+  # One project
+  gcloud services enable $APIS --project=PROJECT_ID
+
+  # Every project you can see, for a folder or organization grant
+  for P in $(gcloud projects list --format="value(projectId)"); do
+    gcloud services enable $APIS --project="$P"
+  done
+  ```
+- 연결을 추가하고 편집할 수 있는 CloudThinker 워크스페이스의 **Admin** 역할. [Roles](/guide/security/roles)를 참조하세요.
+- 비용 질문과 [Optimize](/ko/guide/cost-optimization/overview)를 위해: BigQuery로의 Cloud Billing **Standard usage cost** 내보내기. Optimize는 연결된 프로젝트의 결제 테이블만 읽으므로, 내보내기 데이터 세트는 서비스 계정과 같은 프로젝트에 있어야 합니다. 이를 만들려면 **Billing Account Administrator**가 **Billing → Billing export → BigQuery export**로 이동하여 **Standard usage cost** 아래에서 **Edit settings**를 클릭합니다. [Google 설정 가이드](https://cloud.google.com/billing/docs/how-to/export-data-bigquery-setup)를 참조하세요. 새 내보내기는 첫 행이 나타나기까지 몇 시간이 걸릴 수 있으므로, 첫날에는 Optimize가 비어 보일 수 있습니다.
 
 ## 설정
 
+먼저 Google Cloud에서 서비스 계정을 만든 다음, 그 키를 CloudThinker에 업로드합니다.
+
+<Tabs>
+  <Tab title="Google Cloud console">
+    <Steps>
+      <Step title="서비스 계정 생성">
+        [Google Cloud console](https://console.cloud.google.com/)에서 프로젝트를 선택하고 **IAM & Admin → Service Accounts**로 이동합니다. **Create service account**를 클릭하고 이름을 `cloudthinker-readonly`로 지정한 다음 **Create and continue**를 클릭합니다.
+      </Step>
+      <Step title="읽기 전용 역할 부여">
+        **Viewer**(`roles/viewer`)를 추가합니다. Optimize를 사용하려면 **BigQuery Job User**(`roles/bigquery.jobUser`)도 추가합니다. **Done**을 클릭합니다. 조직이 Viewer 같은 기본 역할을 금지한다면 대신 [필요 권한](#필요-권한)의 사전 정의된 역할을 사용합니다.
+      </Step>
+      <Step title="Optimize용: 결제 데이터 세트 공유">
+        **BigQuery**로 이동하여 결제 내보내기 데이터 세트를 선택하고 **Sharing → Permissions → Add principal**을 클릭합니다. 서비스 계정의 이메일을 입력하고 **BigQuery Data Viewer**를 선택한 다음 **Save**를 클릭합니다. Optimize를 사용하지 않는다면 건너뜁니다.
+      </Step>
+      <Step title="JSON 키 생성">
+        서비스 계정을 열고 **Keys** 탭으로 이동하여 **Add key → Create new key**를 클릭합니다. **JSON**을 선택하고 **Create**를 클릭합니다. 키 파일은 한 번만 다운로드되며 다시 다운로드할 수 없습니다.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="gcloud CLI">
+    [Cloud Shell](https://shell.cloud.google.com/) 또는 Google Cloud에 로그인된 터미널에서 다음을 실행합니다. `PROJECT_ID`를 프로젝트 ID로 바꿉니다.
+
+    ```bash
+    PROJECT_ID=your-project-id
+    SA=cloudthinker-readonly@$PROJECT_ID.iam.gserviceaccount.com
+
+    gcloud iam service-accounts create cloudthinker-readonly \
+      --project="$PROJECT_ID" --display-name="CloudThinker read-only"
+
+    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+      --member="serviceAccount:$SA" --role="roles/viewer"
+
+    # Optimize only: skip these two commands if you don't use Optimize.
+    # Replace BILLING_DATASET with the billing export dataset's name
+    # and DATASET_LOCATION with its location, for example US or EU.
+    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+      --member="serviceAccount:$SA" --role="roles/bigquery.jobUser"
+    bq query --project_id="$PROJECT_ID" --location=DATASET_LOCATION --use_legacy_sql=false \
+      "GRANT \`roles/bigquery.dataViewer\` ON SCHEMA \`$PROJECT_ID.BILLING_DATASET\` TO 'serviceAccount:$SA'"
+
+    gcloud iam service-accounts keys create cloudthinker-key.json --iam-account="$SA"
+    ```
+
+    마지막 명령은 키를 `cloudthinker-key.json`에 씁니다. Cloud Shell에서는 `cloudshell download cloudthinker-key.json`으로 컴퓨터에 다운로드하고, CloudThinker에 업로드한 후 `rm cloudthinker-key.json`으로 Cloud Shell 사본을 삭제합니다.
+  </Tab>
+</Tabs>
+
+그런 다음 CloudThinker에서 연결합니다:
+
 <Steps>
-  <Step title="서비스 계정 생성">
-    [Google Cloud 콘솔](https://console.cloud.google.com/)에서 프로젝트를 선택하고 **IAM & Admin → Service accounts**로 이동하세요. **Create Service Account**를 클릭하고 다음을 입력하세요:
-    - **Name**: `cloudthinker-readonly`
-    - **Description**: CloudThinker 모니터링을 위한 읽기 전용 접근
+  <Step title="연결 대화상자 열기">
+    **Settings → Workspace → Connections**를 열고 **Google Cloud Platform**을 선택한 다음 **Connect**를 클릭합니다.
   </Step>
-  <Step title="역할 할당">
-    필요한 뷰어 역할을 부여하세요:
-    - `Viewer` (기본 읽기 접근)
-    - `Monitoring Viewer` (모니터링 데이터용)
-    - `Security Reviewer` (보안 분석용)
+  <Step title="프로젝트 이름 지정">
+    **Alias**(예: `prod-gcp`)와 **Description**(예: `Production GCP project, GKE workloads`)을 입력합니다. 연결이 여러 개일 때 에이전트는 설명을 읽고 올바른 연결을 선택합니다.
   </Step>
-  <Step title="JSON 키 생성">
-    목록에서 생성한 서비스 계정을 클릭하고, **Keys** 탭 → **Add key** → **Create new key**로 이동하여 **JSON** 형식을 선택하고 **Create**를 클릭하세요. 키 파일을 다운로드하여 안전하게 보관하세요.
+  <Step title="키 업로드 및 리전 선택">
+    JSON 키 파일을 **GOOGLE_SERVICE_ACCOUNT_KEY**로 끌어다 놓거나, 클릭하여 찾아봅니다. **GCP_DEFAULT_REGION** 목록에서 주 리전을 선택합니다. 기본값은 `us-central1`입니다. **Connect**를 클릭합니다.
+
+    **성공 상태:** 상태가 **Connecting**과 **Verifying**을 거치고, 프로젝트가 **Connected** 상태로 표시됩니다. 이 프로젝트에 Optimize가 아직 켜져 있지 않으면 CloudThinker는 deep look을 시작하는 대신 **Turn on Optimize?**를 묻습니다. **Turn on Optimize**를 클릭해 첫 비용 스캔을 시작하거나 **Not now**를 클릭합니다. 에이전트가 프로젝트를 살펴보게 하려면 카드의 **More** 메뉴를 열고 **Try in chat**을 선택합니다. [연결 후 일어나는 일](/ko/guide/connections/overview#연결한-다음에-일어나는-일)을 참고하세요.
   </Step>
-  <Step title="CloudThinker에 연결 추가">
-    **Connections → GCP**로 이동하여 JSON 키 파일을 업로드하거나 내용을 붙여 넣으세요. **Connect**를 클릭하세요. CloudThinker가 자격 증명을 확인하고 **Connected** 상태를 표시합니다.
+  <Step title="환경 설정">
+    **Settings → Workspace → Connections**에서 **Google Cloud Platform**을 열고 프로젝트 행의 연필 아이콘을 클릭한 다음 **Edit Instance**에서 **Environment**를 설정합니다. 이 값은 사람과 에이전트를 위해 프로젝트에 레이블을 붙입니다.
+  </Step>
+  <Step title="검증 질문하기">
+    채팅을 열고 [검증 질문](#연결-검증)을 합니다. 답변에 실제 프로젝트 ID가 나열되어야 합니다.
   </Step>
 </Steps>
+
+### 더 많은 프로젝트 연결
+
+| 옵션 | 방법 | 적합한 경우 |
+|---|---|---|
+| 서비스 계정 하나, 여러 프로젝트 | 각 프로젝트에서 서비스 계정에 같은 역할을 부여하거나, 폴더 또는 조직에 한 번 부여합니다 | 여러 프로젝트를 살펴볼 수 있는 연결 하나를 원하는 경우 |
+| 프로젝트마다 연결 하나 | 각 프로젝트에서 설정을 반복하고 **Google Cloud Platform**에서 새 별칭으로 **Connect**를 다시 클릭합니다 | 프로젝트가 서로 다른 팀에 속하거나, 각각 연결된 프로젝트에 내보내기가 있는 서로 다른 결제 계정에 있는 경우 |
 
 <Warning>
-JSON 키 파일을 안전하게 보관하세요. 버전 관리에 커밋하거나 공개적으로 공유하지 마세요.
+[승인 규칙](/guide/approvals/rules)은 연결 전체에 적용되므로, 프로덕션과 개발 프로젝트가 섞인 폴더 권한 부여는 모든 프로젝트에 같은 규칙이 적용됩니다. 프로젝트마다 다른 승인 규칙이 필요하다면 프로젝트마다 연결 하나를 사용하세요.
 </Warning>
 
-### 멀티 프로젝트 설정
+어떤 옵션을 선택하든 Optimize는 키가 속한 프로젝트(키의 `project_id`)에서만 결제 데이터를 읽습니다. 프로젝트에 결제 내보내기가 없는 프로젝트별 연결은 Optimize 비용 데이터를 받지 못합니다. 결제 내보내기는 해당 결제 계정의 모든 프로젝트를 다루므로, 서비스 계정을 내보내기가 있는 프로젝트에 두고, 폴더 또는 조직에 **Viewer**를 부여하고, 한 번 연결합니다. 폴더에 부여하려면 **Folder IAM Admin**(`roles/resourcemanager.folderIamAdmin`)이 필요합니다. 조직에 부여하려면 **Organization Administrator**(`roles/resourcemanager.organizationAdmin`)가 필요합니다:
 
-여러 GCP 프로젝트가 있는 조직의 경우:
+```bash
+BILLING_PROJECT=your-billing-project-id
+SA=cloudthinker-readonly@$BILLING_PROJECT.iam.gserviceaccount.com
 
-<Steps>
-  <Step title="조직 수준 접근 권한 부여">
-    서비스 계정에 조직 또는 폴더 수준에서 역할을 부여하여 모든 대상 프로젝트에 접근할 수 있도록 하세요.
-  </Step>
-  <Step title="청구 계정 접근 추가">
-    프로젝트 간 비용 분석을 위해 **Billing Account Viewer**를 추가하세요.
-  </Step>
-  <Step title="프로젝트 추가">
-    CloudThinker는 연결 후 접근 가능한 프로젝트를 자동으로 검색합니다.
-  </Step>
-</Steps>
+# Find the organization ID, then the folder ID
+gcloud organizations list
+gcloud resource-manager folders list --organization=ORGANIZATION_ID
 
----
+# Grant on one folder
+gcloud resource-manager folders add-iam-policy-binding FOLDER_ID \
+  --member="serviceAccount:$SA" --role="roles/viewer"
+
+# Or grant on the whole organization
+gcloud organizations add-iam-policy-binding ORGANIZATION_ID \
+  --member="serviceAccount:$SA" --role="roles/viewer"
+```
 
 ## 연결 세부 정보
 
 | 필드 | 설명 | 예시 |
-|-------|-------------|---------|
-| **Service Account Key (JSON)** | 연결 대화상자에 업로드하거나 붙여 넣는 전체 GCP 서비스 계정 키 JSON | `{"type": "service_account", "project_id": "your-project-id", ...}` |
+|---|---|---|
+| **Alias** | 이 연결의 짧은 이름. 비워 두면 자동으로 정해집니다. | `prod-gcp` |
+| **Description** | 프로젝트가 무엇인지. 에이전트는 이를 사용해 연결 중에서 선택합니다. | `Production GCP project` |
+| **GOOGLE_SERVICE_ACCOUNT_KEY** | 업로드한 서비스 계정의 JSON 키 파일 | `cloudthinker-key.json` |
+| **GCP_DEFAULT_REGION** | 에이전트 명령의 시작 리전으로, 검색 가능한 목록에서 선택합니다. 기본값은 `us-central1`입니다. | `us-central1` |
 
-키 파일의 구조는 다음과 같습니다:
+키 파일은 `type`, `project_id`, `private_key`, `client_email` 같은 필드가 있는 JSON입니다. 수정하지 않고 그대로 업로드합니다.
 
-```json
-{
-  "type": "service_account",
-  "project_id": "your-project-id",
-  "private_key_id": "key-id",
-  "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
-  "client_email": "cloudthinker-readonly@your-project.iam.gserviceaccount.com",
-  "client_id": "123456789012345678901",
-  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-  "token_uri": "https://oauth2.googleapis.com/token"
-}
-```
-
----
+**Environment**(**Production**, **Staging**, **Development**, **Not set**)는 연결 대화상자에 없습니다. 설정 단계에서처럼 연결 후에 설정합니다. 이 값은 사람과 에이전트를 위해 프로젝트에 레이블을 붙입니다. 승인 규칙은 이 값을 읽지 않으므로, 한 프로젝트에 적용할 Rule은 해당 연결을 지정합니다.
 
 ## 필요 권한
 
-### 최소 (읽기 전용 분석)
+| 원하는 작업 | 역할 | 부여 대상 |
+|---|---|---|
+| 인벤토리, 상태, IAM 질문 | Viewer(`roles/viewer`) | 각 프로젝트, 또는 폴더나 조직 |
+| Optimize 비용 데이터 | BigQuery Data Viewer(`roles/bigquery.dataViewer`) | 결제 내보내기 데이터 세트(또는 프로젝트) |
+| Optimize 비용 쿼리 | BigQuery Job User(`roles/bigquery.jobUser`) | 연결된 프로젝트 |
+| 에이전트가 특정 변경을 하도록 | 해당 변경에 필요한 좁은 역할만 | 변경이 일어나는 곳. [쓰기 권한](#쓰기-권한)을 참조하세요. |
 
-```
-roles/viewer                    # 기본 읽기 접근
-roles/monitoring.viewer         # Cloud Monitoring 접근
-roles/logging.viewer            # Cloud Logging 접근
-```
+조직이 기본 역할을 금지한다면 Viewer 대신 필요한 영역의 사전 정의된 읽기 역할을 부여합니다:
 
-### 권장 (전체 분석)
-
-```
-# 위의 모든 역할에 추가:
-roles/compute.viewer            # Compute Engine 세부 정보
-roles/container.viewer          # GKE 클러스터 접근
-roles/cloudsql.viewer           # Cloud SQL 접근
-roles/bigquery.dataViewer       # BigQuery 분석
-roles/billing.viewer            # 청구 및 비용 데이터
-roles/securitycenter.viewer     # Security Command Center
-```
+| 영역 | 역할 |
+|---|---|
+| 프로젝트 및 폴더 나열 | Browser(`roles/browser`) |
+| Compute Engine | Compute Viewer(`roles/compute.viewer`) |
+| GKE | Kubernetes Engine Viewer(`roles/container.viewer`) |
+| IAM 검토 | Security Reviewer(`roles/iam.securityReviewer`) |
+| 메트릭 | Monitoring Viewer(`roles/monitoring.viewer`) |
+| 로그 | Logs Viewer(`roles/logging.viewer`) |
 
 <Tip>
-최소 역할로 시작하고 필요에 따라 추가하세요. 프로젝트 수준의 뷰어 역할은 비용 분석과 대부분의 보안 감사에 충분합니다.
+**Viewer**는 아무것도 변경할 수 없으므로 안전한 시작점입니다. Viewer는 구성뿐 아니라 데이터도 읽습니다. BigQuery에서 Viewer는 기본 프로젝트 수준 읽기 접근을 유지하는 모든 데이터 세트를 읽습니다. 민감한 데이터 세트에 에이전트가 접근하지 못하게 하려면 해당 데이터 세트에서 기본 접근을 제거하거나, Viewer 대신 커스텀 역할을 사용하세요.
 </Tip>
-
----
 
 ## 에이전트 기능
 
-연결되면 에이전트가 GCP 리소스를 분석하고 최적화할 수 있습니다.
-
 | 영역 | CloudThinker가 하는 일 |
-|-------|------------------|
-| 비용 | 비용 분석, VM 적정 크기 조정, 약정 사용 권장 사항, 리소스 최적화 |
-| 보안 | Security Command Center 결과, IAM 감사, 컴플라이언스 검사 |
-| 데이터베이스 | Cloud SQL 성능, BigQuery 최적화, Spanner 튜닝 |
-| Kubernetes | GKE 클러스터 관리, 워크로드 최적화, Autopilot 분석 |
+|---|---|
+| **Inventory** | 서비스 계정이 볼 수 있는 프로젝트 전반에서 Compute Engine, GKE, Cloud Storage, BigQuery 및 기타 리소스를 나열하고 설명합니다 |
+| **Identity** | 광범위하거나 사용되지 않는 접근이 있는지 IAM 바인딩과 서비스 계정을 검토합니다 |
+| **Containers** | GKE 클러스터와 노드 풀의 구성 및 상태를 확인합니다 |
+| **Cost** | BigQuery 결제 내보내기를 읽어 프로젝트, 서비스, 레이블별로 지출을 분석합니다. [Optimize](/ko/guide/cost-optimization/overview)에 데이터를 제공합니다. |
+| **Changes** | **Allow writes**가 켜져 있고, 서비스 계정이 허용하고, 승인 설정이 허용할 때만 Google Cloud CLI 쓰기를 실행합니다 |
 
 ### 연결 검증
 
 ```text
-Run a GCP account check and list connected projects and active services
+Which Google Cloud projects can you reach through my GCP connection, and which services are enabled in each?
 ```
+
+답변에 실제 프로젝트 ID가 나열됩니다. 폴더 또는 조직 권한 부여의 경우 그 아래의 모든 프로젝트가 나타나야 합니다.
 
 ### 예시 프롬프트
 
 ```text
-Analyze Compute Engine costs over the last 30 days and recommend right-sizing opportunities
-Audit GCP IAM bindings and flag any over-permissioned service accounts
-Inspect GKE cluster health and report any pod failures or resource pressure
+List Compute Engine instances that have been stopped for more than 30 days and the disks still attached to them
+Find service accounts with the Owner or Editor role in my projects
+Break down last month's Google Cloud spend by project and service
 ```
 
----
+## 쓰기 권한
+
+연결 세부 정보 패널의 **Allow writes**는 에이전트가 Google Cloud에서 무언가를 변경할 수 있는지 제어합니다. 기본적으로 켜져 있지만, **Viewer**와 BigQuery 읽기 역할만 있는 서비스 계정은 아무것도 변경할 수 없으므로, 더 많은 권한을 부여하기 전까지 Google Cloud가 모든 쓰기를 거부합니다.
+
+| IAM 역할 | Allow writes | 결과 |
+|---|---|---|
+| 읽기 전용 역할만 | 켜짐 또는 꺼짐 | 읽기 전용. Google Cloud가 모든 변경을 거부합니다. |
+| 추가 쓰기 역할 부여됨 | 꺼짐 | 읽기 전용. CloudThinker가 Google Cloud에 도달하기 전에 모든 변경을 거부합니다. |
+| 추가 쓰기 역할 부여됨 | 켜짐 | 에이전트가 변경을 제안할 수 있습니다. [Rules와 Approval mode](/guide/approvals/overview)가 각 변경을 결정합니다. |
+
+CloudThinker에서도 쓰기를 잠그려면 **Settings → Workspace → Connections**를 열고 **Google Cloud Platform**을 선택한 다음 세부 정보 패널에서 **Allow writes** 스위치를 끕니다.
 
 ## 문제 해결
 
-<Accordion title="권한 거부 오류">
-서비스 계정에 필요한 역할이 있는지 확인하세요. 프로젝트 수준 IAM 바인딩을 확인하고, API가 활성화되어 있는지 (Compute, Monitoring 등) 확인하고, JSON 키가 유효하고 만료되지 않았는지 확인하세요.
+<Accordion title="키를 만들 수 없음: 키 생성이 비활성화됨">
+**원인:** 조직 정책 `constraints/iam.disableServiceAccountKeyCreation`이 적용되어 있습니다.
+
+**해결:** 조직 정책 관리자에게 이 프로젝트의 키 생성을 허용하거나 대신 키를 만들어 달라고 요청합니다. 예외가 이미 부여되었다면 몇 분 기다립니다. 정책 변경이 적용되는 데 시간이 걸립니다. 또한 프로젝트나 폴더처럼 더 하위 수준에 설정된 정책이 여전히 제약을 적용하지 않는지 확인합니다.
 </Accordion>
 
-<Accordion title="잘못된 키 파일">
-JSON 파일이 완전하고 올바르게 형식화되어 있는지 확인하세요. 개인 키가 잘리지 않았는지, 여분의 공백이나 문자가 추가되지 않았는지 확인하세요. GCP 콘솔에서 키를 다시 생성해보세요.
+<Accordion title="업로드가 거부되거나 테스트가 즉시 실패함">
+**원인:** 파일이 원본 JSON 키가 아닙니다. 흔한 경우는 P12 키, 복사한 일부 내용, 또는 편집되어 `private_key` 줄바꿈이 사라진 파일입니다.
+
+**해결:** 새 JSON 키를 만들고 다운로드한 파일을 수정하지 않고 업로드합니다.
 </Accordion>
 
-<Accordion title="청구 데이터 없음">
-**Billing Account Viewer** 역할이 할당되어 있는지 확인하세요. Cloud Billing API를 활성화하고 BigQuery로의 청구 내보내기가 설정되어 있는지 확인하세요.
+<Accordion title="에이전트가 PERMISSION_DENIED 또는 'API not enabled'를 받음">
+**확인:** 서비스 계정에 질문한 프로젝트의 역할이 있고, 해당 서비스(예: Compute Engine 또는 Kubernetes Engine)의 API가 그 프로젝트에서 활성화되어 있는지 확인합니다.
+
+**해결:** 프로젝트 또는 폴더에 **Viewer**를 부여하거나, **APIs & Services**에서 API를 활성화합니다. 다시 연결할 필요는 없습니다. 다음 요청부터 새 접근 권한을 사용합니다.
 </Accordion>
 
-<Accordion title="GKE 접근 문제">
-**Kubernetes Engine Viewer** 역할이 할당되어 있는지 확인하세요. 클러스터가 접근 가능한 프로젝트에 있는지 확인하고 클러스터가 Workload Identity를 사용하는지 확인하세요.
+<Accordion title="Optimize가 결제 내보내기를 찾을 수 없다고 표시함">
+**원인:** Optimize에는 연결된 프로젝트에 Cloud Billing Standard usage cost 내보내기 테이블(`gcp_billing_export_v1_...`)이 필요합니다.
+
+**해결:** **Billing → Billing export**에서 서비스 계정과 같은 프로젝트의 데이터 세트를 가리키도록 Standard usage cost 내보내기를 켭니다. Optimize가 테이블이 연결된 프로젝트 밖에 있다고 표시하면, 내보내기를 옮기거나 내보내기가 있는 프로젝트에 서비스 계정을 만듭니다. 테이블을 선택하라고 하면 Optimize가 사용할 테이블을 선택합니다.
 </Accordion>
 
----
+<Accordion title="테스트에 Timed out이 표시됨">
+**원인:** 테스트가 시간 안에 끝나지 않았습니다. Google Cloud 엔드포인트는 공개되어 있으므로 네트워크 문제인 경우는 드뭅니다.
+
+**해결:** 다시 연결합니다. 계속 시간 초과되면 [문의](https://cloudthinker.io/contact)하세요.
+</Accordion>
+
+<Accordion title="연결에 Error가 표시됨">
+**원인:** 키가 삭제 또는 비활성화되었거나, 조직 정책(`constraints/iam.serviceAccountKeyExpiryHours`)에 의해 만료되었습니다.
+
+**해결:** 새 키를 만든 다음 연결을 열고 **Replace credentials**를 클릭하여 업로드합니다. 그러면 **Replace…**와 같은 대화상자인 **Edit Instance**가 열립니다. 상태가 **Connected**가 되면 예약된 작업이 다시 시작됩니다.
+</Accordion>
 
 ## 보안
 
 <ConnectionSecurity />
 
-- **프로젝트 범위** — CloudThinker가 접근해야 하는 GCP 프로젝트로만 서비스 계정의 IAM 역할을 제한하세요.
-- **키 보관** — 서비스 계정 JSON을 시크릿 매니저에 저장하고 CloudThinker에 업로드한 후 로컬 복사본을 삭제하세요.
-
----
+- **키의 로컬 사본을 삭제합니다.** JSON 파일을 업로드한 후 다운로드 폴더에서 삭제하거나 시크릿 관리자에 보관합니다. 키를 가진 사람은 누구나 서비스 계정의 접근 권한을 얻습니다.
+- **최소 90일마다 교체합니다.** [`constraints/iam.serviceAccountKeyExpiryHours`](https://cloud.google.com/resource-manager/docs/organization-policy/restricting-service-accounts#limit_key_expiry) 정책으로 키의 수명을 제한합니다. 교체하려면 새 키를 만들고, 프로젝트 행의 연필 아이콘을 클릭하여 **Edit Instance**의 **Replace…**로 업로드한 다음, 서비스 계정의 **Keys** 탭에서 이전 키를 삭제합니다. [Rotate a credential](/ko/guide/connections/overview#자격-증명-교체)을 참조하세요.
 
 ## 관련 문서
 
 <CardGroup cols={2}>
-  <Card title="AWS 연결" icon="/images/icons/aws.svg" href="/ko/guide/connections/aws">
-    Amazon Web Services 연결
+  <Card title="Optimize 빠른 시작" icon="chart-line" href="/guide/cost-optimization/quickstart">
+    결제 내보내기를 비용 결과와 절감 권장 사항으로 바꿉니다.
   </Card>
-  <Card title="에이전트" icon="dharmachakra" href="/ko/guide/agents/overview">
-    GKE를 위한 Kubernetes 중심 에이전트
+  <Card title="연결" icon="plug" href="/ko/guide/connections/overview">
+    자격 증명을 교체하고 환경을 설정합니다.
   </Card>
 </CardGroup>

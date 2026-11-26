@@ -1,173 +1,212 @@
 ---
 title: MCP
-description: "Model Context Protocol(MCP)을 통해 커스텀 도구와 API를 CloudThinker에 연결하여 에이전트 기능을 확장합니다"
+description: "자체 MCP 서버를 연결하면 CloudThinker 에이전트가 기본 제공 연결과 함께 그 서버의 도구를 호출할 수 있습니다."
 icon: "/images/icons/mcp.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ko/connection-security.mdx';
 
-Model Context Protocol(MCP)을 사용하면 CloudThinker가 커스텀 도구와 서비스에 연결할 수 있습니다. MCP를 사용하여 자체 [연결](/ko/guide/connections/overview)로 에이전트 기능을 확장하세요.
+Model Context Protocol(MCP)은 AI 에이전트에게 도구를 제공하기 위한 개방형 표준입니다. 내부 메트릭 API, 티켓 시스템, 레거시 서비스 앞단 등에서 MCP 서버를 운영한다면, 이를 커스텀 [연결](/ko/guide/connections/overview)로 추가할 수 있으며, 서버가 제공하는 모든 도구를 에이전트가 호출할 수 있게 됩니다.
 
----
+## 사전 요구 사항
 
-## MCP란?
+- 인터넷에서 접근할 수 있고 **Streamable HTTP** 또는 **Server-Sent Events**(SSE)를 사용하는 MCP 서버. 접근할 수 있는 대상을 제한하려면 CloudThinker의 egress IP를 허용 목록에 추가하세요. 이 문서는 CloudThinker의 egress IP 목록을 공개하지 않습니다. CloudThinker 담당자에게 문의하거나 [문의하기](https://cloudthinker.io/contact)를 이용하세요.
+- 서버의 엔드포인트 URL(예: `https://mcp.example.com/mcp`).
+- 서버가 요구하는 경우 서버용 자격 증명. CloudThinker 전용으로만 발급하세요([필수 권한](#필수-권한) 참조).
+- 워크스페이스에서 연결을 편집할 권한.
 
-MCP(Model Context Protocol)는 AI 에이전트를 외부 도구 및 데이터 소스에 연결하기 위한 개방형 프로토콜입니다. 다음을 위한 표준화된 방법을 제공합니다:
-
-- 에이전트가 호출할 수 있는 도구 노출
-- 에이전트에 컨텍스트와 데이터 제공
-- 모든 서비스와의 커스텀 통합 활성화
-
----
+<Note>
+CloudThinker는 공용 인터넷으로 서버에 접근하며, 연결에 설정한 정적 HTTP 헤더로 인증합니다. 보통 서버가 확인하는 토큰을 담은 `Authorization` 헤더입니다. MCP 양식에는 OAuth 로그인이 없으므로, OAuth만 받는 서버는 연결할 수 없습니다.
+</Note>
 
 ## 설정
 
 <Steps>
-  <Step title="MCP 서버 준비">
-    MCP 서버가 실행 중이고 접근 가능한지 확인합니다:
-    - Server-Sent Events(SSE) 전송 지원
-    - 공개적으로 접근 가능한 엔드포인트(또는 VPN 접근)
-    - 올바른 MCP 프로토콜 응답 반환
+  <Step title="MCP 양식 열기">
+    **Settings → Workspace → Connections**를 열고 **Add**를 클릭한 다음 **Custom MCP server**를 선택합니다. **Create MCP connection** 대화상자가 열립니다.
   </Step>
-  <Step title="연결 생성">
-    **Connections → MCP**로 이동하여 **Add MCP Connection**을 클릭합니다.
+  <Step title="서버 세부 정보 입력">
+    - **URL**: 서버 엔드포인트(예: `https://mcp.example.com/mcp`). [서버 URL 규칙](#서버-url-규칙)을 참조하세요.
+    - **Connection name**: 팀이 알아볼 수 있는 이름(예: `Internal metrics`).
+    - **Prefix**: 이 서버의 짧은 핸들(예: `metrics`). 도구는 `metrics__tool_name`으로 표시되며, 승인 요청과 Rules에서 이 접두사를 보게 됩니다.
+    - **Description**: 선택 사항, 최대 500자.
+    - **Transport type**: 서버가 사용하는 **Streamable HTTP** 또는 **Server-Sent Events**.
   </Step>
-  <Step title="기본 정보 설정">
-    연결 세부 정보를 입력합니다:
-    - **Name**: 연결의 설명적인 이름
-    - **Prefix**: 도구 접두사 (예: `mytools` → `mytools_function_name`)
+  <Step title="헤더 추가">
+    **Headers (optional)**에서 서버에 필요한 헤더마다 **Add header**를 클릭하고 **Key**와 **Value**를 입력합니다(예: `Authorization`과 `Bearer <your-token>`). CloudThinker는 모든 요청에 이 헤더를 보냅니다. 헤더 키는 고유해야 합니다.
   </Step>
-  <Step title="전송 설정">
-    연결 전송을 설정합니다:
-    - **Transport Type**: Server-Sent Events
-    - **URL**: MCP 서버 엔드포인트
-    - **Timeout**: 연결 타임아웃 (기본값: 5초)
-    - **SSE Read Timeout**: 이벤트 스트림 타임아웃 (기본값: 30초)
+  <Step title="필요하면 시간 제한 조정">
+    도구가 오래 걸리는 쿼리를 실행하는 경우에만 **Advanced settings**를 엽니다.
+
+    - **Timeout (seconds)**: 서버 응답을 기다리는 시간. 기본값 30, 허용 범위 0.1~300.
+    - **SSE Read Timeout (seconds)**: 이벤트 스트림을 기다리는 시간. 기본값 300, 허용 범위 1~600.
   </Step>
-  <Step title="환경 변수 추가">
-    필요한 환경 변수를 설정합니다:
-    - API 키
-    - 인증 토큰
-    - 커스텀 설정
-  </Step>
-  <Step title="테스트 및 생성">
-    연결을 테스트하고 저장합니다. 서버가 올바르게 응답하면 CloudThinker에 **Connected** 상태가 표시됩니다.
+  <Step title="만들기">
+    **Create**를 클릭합니다. CloudThinker가 서버에 접속하여 도구 목록을 불러옵니다.
+
+    **성공 상태:** **Connected** 탭에서 연결에 **Connected**가 표시되고, 상세 패널의 **Server config** 아래에 전송 방식과 URL이 표시됩니다. 실패하면 **Connection error** 알림이 이유를 설명합니다. [문제 해결](#문제-해결)을 참조하세요.
   </Step>
 </Steps>
 
----
+<Warning>
+URL에 자격 증명을 넣지 마세요(`https://user:password@host/mcp`). 양식이 거부합니다. 기본 인증에는 키가 `Authorization`이고 값이 `Basic <base64 of user:password>`인 헤더를 추가하세요.
+</Warning>
 
 ## 연결 세부 정보
 
-| 필드 | 설명 | 필수 여부 |
-|-------|-------------|----------|
-| **Name** | 연결 표시 이름 | 예 |
-| **Prefix** | 도구 이름 접두사 | 예 |
-| **URL** | MCP 서버 엔드포인트 | 예 |
-| **Timeout** | 연결 타임아웃(초) | 아니오 (기본값: 5) |
-| **SSE Read Timeout** | 이벤트 스트림 타임아웃(초) | 아니오 (기본값: 30) |
-| **Environment Variables** | 설정을 위한 키-값 쌍 | 아니오 |
+| 필드 | 필수 | 설명 | 예시 |
+|-------|----------|-------------|---------|
+| **Connection name** | 예 | 팀이 알아볼 수 있는 이름 | `Internal metrics` |
+| **Description** | 아니요 | 최대 500자 | `Internal metrics API` |
+| **Prefix** | 예 | 짧은 핸들. 도구는 `prefix__tool_name`으로 표시됩니다 | `metrics` |
+| **Transport type** | 예 | **Streamable HTTP** 또는 **Server-Sent Events** | **Streamable HTTP** |
+| **URL** | 예 | 서버 엔드포인트. [서버 URL 규칙](#서버-url-규칙)을 참조하세요 | `https://mcp.example.com/mcp` |
+| **Headers (optional)** | 아니요 | 헤더마다 **Key**와 **Value** 하나씩, 모든 요청에 전송 | `Authorization` / `Bearer <your-token>` |
+| **Timeout (seconds)** | 예, 미리 채워짐, **Advanced settings**에 있음 | 응답 대기 시간. 기본값 30, 허용 범위 0.1~300 | `30` |
+| **SSE Read Timeout (seconds)** | 예, 미리 채워짐, **Advanced settings**에 있음 | 이벤트 스트림 대기 시간. 기본값 300, 허용 범위 1~600 | `300` |
 
----
+### 서버 URL 규칙
 
-## MCP 서버 예시
+| URL | 결과 |
+|---|---|
+| `https://mcp.example.com/mcp` | 권장. 인증서는 공인 인증 기관에서 발급된 것이어야 합니다. 자체 서명 인증서는 거부됩니다. |
+| `http://203.0.113.10:8000/mcp` | "Not encrypted. Headers and tool results are sent as plain text." 경고와 함께 허용됩니다. 토큰이 암호화되지 않은 채 전송됩니다. |
+| `http://localhost:8000/mcp`, `http://10.0.0.5/mcp`, `http://192.168.1.20/mcp` | 거부됩니다. CloudThinker는 루프백, 사설, 클라우드 메타데이터 주소에 접근할 수 없습니다. |
+| 사설 주소로 확인되는 호스트 이름 | 공개 주소처럼 보이더라도 거부됩니다. |
 
-날씨 조회 도구를 제공하는 간단한 MCP 서버:
+<Warning>
+`http://` URL을 차단하는 워크스페이스 설정은 없습니다. 토큰을 받는 서버에는 `https://`를 사용하고, 서버가 HTTP만 지원한다면 [HTTPS를 추가](#리버스-프록시로-https-추가)하세요.
+</Warning>
 
-```python
-from mcp import Server, Tool
+### 리버스 프록시로 HTTPS 추가
 
-server = Server("weather-tools")
+서버가 HTTP만 지원한다면 앞에 리버스 프록시를 두세요. [Caddy](https://caddyserver.com/docs/install)를 사용하는 경우:
 
-@server.tool()
-async def get_weather(location: str) -> str:
-    """Get current weather for a location."""
-    # Your implementation here
-    return f"Weather for {location}: Sunny, 72°F"
+<Steps>
+  <Step title="DNS가 서버를 가리키게 하기">
+    서버의 공인 IP를 가리키는 DNS `A` 레코드(예: `mcp.example.com`)를 만듭니다.
+  </Step>
+  <Step title="Caddy 구성">
+    포트를 MCP 서버가 수신하는 포트로 바꾸어 `Caddyfile`로 저장합니다.
 
-if __name__ == "__main__":
-    server.run()
+    ```text
+    mcp.example.com {
+        reverse_proxy localhost:8000
+    }
+    ```
+  </Step>
+  <Step title="Caddy 시작">
+    포트 80과 443을 열고 Caddy를 시작합니다. Caddy가 스스로 공인 인증서를 요청합니다.
+
+    **성공 상태:** 브라우저에서 `https://mcp.example.com`이 유효한 인증서로 열립니다. **URL**에 `https://mcp.example.com/mcp`를 입력하세요.
+  </Step>
+</Steps>
+
+## 필수 권한
+
+연결이 무엇을 할 수 있는지는 서버가 결정합니다. CloudThinker는 사용자가 제공한 헤더 값만 보관합니다.
+
+<Tip>
+CloudThinker만 사용하는 토큰을 발급하여, 다른 것에 영향을 주지 않고 취소할 수 있게 하세요. 노출된 도구에 필요한 최소한의 접근 권한으로 범위를 정하고, 읽기 도구만으로 시작하고, 서버가 모든 요청에서 토큰을 검증하게 하세요.
+</Tip>
+
+## 에이전트 기능
+
+연결하면 CloudThinker가 서버의 도구 목록을 불러옵니다. 각 도구는 `prefix__tool_name`으로 에이전트에게 제공되며, 접두사는 연결에 설정한 것입니다. 접두사가 `weather`인 서버가 `get_forecast`를 제공하면 에이전트는 `weather__get_forecast`라는 도구를 받습니다.
+
+에이전트는 서버가 제공하는 도구만 호출할 수 있습니다. MCP 연결에는 **Allow writes** 스위치가 없으므로, **Manual**을 선택하면 사람이 모든 쓰기 도구 호출을 승인합니다. 서버에서 도구를 빼는 것이 항상 유효한 또 다른 통제이며, 읽기를 막는 유일한 방법입니다. 읽기는 항상 묻지 않고 실행됩니다.
+
+**Deny** [Rule](/guide/approvals/rules)은 쓰기 도구 하나를 완전히 거부하고, 나머지는 계속 묻게 할 수 있습니다.
+
+### 읽기와 쓰기가 결정되는 방식
+
+CloudThinker는 도구 목록을 불러올 때 각 도구를 읽기 또는 쓰기로 분류합니다.
+
+| 확인 순서 | 결과 |
+|---|---|
+| 도구가 `readOnlyHint: true`를 선언함 | 읽기 |
+| 도구가 `destructiveHint: true`를 선언함 | 쓰기 |
+| 도구 이름에 읽기 단어가 포함됨: `get`, `list`, `search`, `query`, `read`, `describe`, `show`, `find`, `fetch`, `check`, `count`, `view`, `lookup`, `browse`, `inspect`, `export`, `download` | 읽기 |
+| 그 밖의 모든 경우 | 쓰기 |
+
+이름의 단어는 `_`와 `-`로 나뉘므로, `list_tickets`와 `get-status`는 읽기이고, `listTickets`(한 단어)와 `close_ticket`은 쓰기입니다. 읽기는 묻지 않고 실행됩니다. 쓰기는 [Rules](/guide/approvals/rules)와 [Approval mode](/guide/approvals/approval-mode)를 거칩니다.
+
+<Warning>
+이름 어디에든 읽기 단어가 있으면, `destructiveHint: true`를 선언하지 않는 한 그 도구는 읽기가 됩니다. `get_and_delete_user`와 `check_and_fix`는 읽기로 간주되어 승인 없이 실행됩니다. 데이터를 변경하는 모든 도구에 `destructiveHint: true`를 설정하세요.
+</Warning>
+
+**Edit**을 클릭하고 URL, 헤더 또는 전송 방식의 변경을 저장하면, CloudThinker가 도구 목록을 다시 불러오고 모든 도구를 다시 분류합니다. 이름이나 설명만 변경하면 다시 불러오지 않습니다.
+
+### 연결 확인
+
+채팅을 시작하고 `#`을 입력하여 연결을 선택한 다음 질문합니다.
+
+```text
+#Internal metrics List the tools this connection exposes, then call the simplest read-only one and show me the result.
 ```
 
-접두사 `weather`로 연결하면 에이전트는 다음을 호출할 수 있습니다:
+**성공 상태:** CloudThinker가 `prefix__tool_name` 이름으로 도구를 나열하고, 승인 요청 없이 읽기 도구 하나의 출력을 반환합니다.
+
+### 예시 프롬프트
+
+`#Internal metrics`를 연결 이름으로 바꾸세요.
+
+```text
+#Internal metrics What is the current status of the checkout service?
+#Internal metrics Compare today's error counts with the last 7 days and flag anything unusual.
+#Internal metrics Which tools here can change data? Describe what each one does before calling any of them.
 ```
-weather_get_weather(location="San Francisco")
-```
 
----
+## 문제 해결
 
-## 사용 사례
-
-### 커스텀 데이터 소스
-
-독점 데이터베이스 또는 API 연결:
-- 내부 메트릭 시스템
-- 커스텀 모니터링 도구
-- 비즈니스 인텔리전스 플랫폼
-
-### 특화 도구
-
-도메인별 기능 추가:
-- 커스텀 컴플라이언스 검사
-- 내부 자동화 스크립트
-- 레거시 시스템 통합
-
-### 외부 서비스
-
-서드파티 서비스 통합:
-- 커뮤니케이션 플랫폼
-- 티켓팅 시스템
-- 기본 제공되지 않는 클라우드 서비스
-
----
-
-## 모범 사례
-
-- **HTTPS 엔드포인트** — MCP 서버는 HTTPS를 통해서만 노출합니다.
-- **API 키 로테이션** — 환경 변수에 저장된 자격 증명을 정기적으로 교체합니다.
-- **인증 구현** — 처리 전에 CloudThinker에서 오는 요청을 검증합니다.
-- **적절한 타임아웃 설정** — 서버의 응답 특성에 맞게 Timeout과 SSE Read Timeout을 조정합니다.
-- **서버 헬스 모니터링** — 연결 중단을 조기에 감지할 수 있도록 오류율과 지연 시간을 추적합니다.
-- **오류 처리** — 서버를 중단시키지 않고 구조화된 MCP 오류 응답을 반환합니다.
-
----
-
-## 트러블슈팅
-
-<Accordion title="연결 타임아웃">
-MCP 서버가 실행 중인지 확인하고, 네트워크 연결을 점검하며, 타임아웃 값을 늘리고, 방화벽이 트래픽을 허용하는지 확인합니다.
-</Accordion>
-
-<Accordion title="도구가 표시되지 않음">
-접두사가 올바르게 설정되어 있는지 확인하고, MCP 서버가 도구 정의를 반환하는지 확인하며, 프로토콜 버전이 호환되는지 확인하고, 서버 로그에서 오류를 검토합니다.
-</Accordion>
-
-<Accordion title="인증 오류">
-환경 변수가 올바르게 설정되어 있는지 확인하고, API 키가 유효한지 확인하며, 서버가 자격 증명을 올바르게 검증하는지 확인합니다.
-</Accordion>
-
-<Accordion title="SSE 연결 끊김">
-SSE 읽기 타임아웃을 늘리고, 프록시 간섭을 확인하며, 서버가 keepalive 이벤트를 전송하는지 확인하고, 네트워크 안정성을 검토합니다.
-</Accordion>
-
----
+<AccordionGroup>
+  <Accordion title="This connection did not respond in time. Try connecting again.">
+    서버가 **Timeout (seconds)** 안에 응답하지 않았습니다. 서버가 실행 중인지, 방화벽이 CloudThinker의 egress IP를 허용하는지 확인한 다음, 시간 제한을 늘리고 다시 시도하세요.
+  </Accordion>
+  <Accordion title="This server does not use HTTPS on this port.">
+    URL이 `https://`로 시작하지만, 서버가 해당 포트에서 일반 HTTP를 사용합니다. URL을 `http://`로 바꾸거나 [HTTPS를 추가](#리버스-프록시로-https-추가)하세요.
+  </Accordion>
+  <Accordion title="This server's TLS certificate is not trusted: it is self-signed, expired, or issued for another name.">
+    자체 서명 인증서를 Let's Encrypt 같은 공인 인증 기관의 인증서로 바꾸세요. 만료된 인증서는 갱신하세요. **URL**의 호스트 이름이 인증서와 일치하는지 확인하세요.
+  </Accordion>
+  <Accordion title="This server refused the connection.">
+    해당 호스트와 포트에서 수신 중인 것이 없습니다. URL을 수정하거나 서버를 시작하세요.
+  </Accordion>
+  <Accordion title="URL points to a private or metadata IP address / URL resolves to a private or metadata IP address">
+    URL에 사설 주소가 포함되어 있거나, DNS가 호스트 이름을 사설 주소로 매핑합니다. "URL points to a blocked internal hostname" 메시지는 `localhost` 같은 이름에 해당합니다. 공개 호스트 이름이나 IP 주소를 사용하세요.
+  </Accordion>
+  <Accordion title="Could not resolve hostname">
+    DNS에 **URL**의 호스트 이름에 대한 레코드가 없습니다. 철자를 확인하세요. 네트워크 내부에만 있는 이름은 확인되지 않습니다.
+  </Accordion>
+  <Accordion title="The provider rejected these credentials. Update them, then connect again.">
+    서버가 401 또는 403을 반환했습니다. 헤더 키와 값을 확인하고, 서버에서 토큰이 아직 유효한지, 서버가 토큰을 어떤 방식으로 기대하는지(예: `Bearer`와 사용자 지정 헤더) 확인하세요.
+  </Accordion>
+  <Accordion title="The provider endpoint was not found. Check the connection settings.">
+    호스트는 응답했지만 경로가 잘못되었습니다. 많은 서버가 `/mcp` 또는 `/sse`에서 MCP를 제공합니다. 정확한 경로는 서버 문서를 확인하세요.
+  </Accordion>
+  <Accordion title="연결되었지만 도구가 없음">
+    서버가 도구 목록 응답에 도구를 반환하는지 확인하고 서버 자체 로그를 살펴보세요. 서버가 나열하지 않는 도구는 호출할 수 없습니다.
+  </Accordion>
+  <Accordion title="SSE 연결이 끊어짐">
+    **SSE Read Timeout (seconds)**를 늘리고, CloudThinker와 서버 사이의 프록시가 오래 유지되는 연결을 버퍼링하거나 끊지 않는지 확인하고, 서버가 keepalive 이벤트를 보내게 하세요.
+  </Accordion>
+</AccordionGroup>
 
 ## 보안
 
 <ConnectionSecurity />
 
-- **HTTPS 엔드포인트** — MCP 서버는 HTTPS를 통해서만 노출하고 CloudThinker 요청 출처를 검증합니다.
-- **범위 제한 자격 증명** — API 키와 토큰은 서버 코드에 하드코딩하지 않고 환경 변수에 저장합니다.
-
----
+- **HTTPS 사용.** `http://`에서는 토큰을 포함한 헤더와 도구 결과가 평문으로 전송됩니다.
+- **도구 힌트 표시.** CloudThinker가 각 도구를 의도한 대로 다루도록 `readOnlyHint`와 `destructiveHint`를 설정하세요.
+- **헤더 자격 증명 교체.** 서버에서 토큰을 교체한 다음 연결을 편집하여 헤더 값을 업데이트하세요.
 
 ## 관련 항목
 
 <CardGroup cols={2}>
-  <Card title="개요" icon="plug" href="/ko/guide/connections/overview">
-    모든 연결 유형
+  <Card title="승인 Rules 설정" icon="shield-check" href="/guide/approvals/rules">
+    서버의 쓰기 도구 중 어떤 것을 실행할지, 먼저 물을지, 거부할지 정합니다.
   </Card>
-  <Card title="에이전트" icon="robot" href="/ko/guide/agents/overview">
-    에이전트가 연결을 사용하는 방법
+  <Card title="Connections 개요" icon="plug" href="/ko/guide/connections/overview">
+    자체 서버를 만들기 전에 모든 기본 제공 연결을 확인하세요.
   </Card>
 </CardGroup>

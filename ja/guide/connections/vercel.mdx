@@ -1,129 +1,125 @@
 ---
 title: Vercel
-description: "プロジェクト一覧、デプロイ検査、実行時ログのトリアージ、ドメイン監査のためにVercelをCloudThinkerに接続します"
+description: "Vercel を接続し、CloudThinker が失敗したデプロイのトリアージ、ランタイムログの読み取り、ドメインとエイリアスの監査を行えるようにします"
 icon: "/images/icons/vercel.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+import ApprovalDefault from '/snippets/approval-default.mdx';
 
-Vercelアカウントを接続して、CloudThinkerエージェントがプロジェクトの一覧表示、デプロイとビルドイベントの検査、実行時ログの取得、ドメインとエイリアスの監査を実行できるようにします。また、スタックしたデプロイのキャンセルやプロジェクトの一時停止など、承認が必要な制御操作も行えます。
-
-Vercelの認証は、CloudThinkerが公式Vercel MCPサーバー（`@vercel/sdk`）に渡す**アクセストークン**で行います。トークンの**スコープ**（個人アカウントまたは特定のチーム）がエージェントのアクセス範囲を決定します。OAuthフローは不要です。
+Vercel を接続すると、CloudThinker のエージェントがデプロイが失敗した理由を突き止め、ランタイムログを読み、どのデプロイが稼働中かを確認し、ドメインを監査できるようになります。さらに、[Approvals](/guide/approvals/overview) を経て、デプロイのキャンセルやプロジェクトの一時停止も行えます。接続には 1 つの Vercel **アクセストークン** を使い、トークンのスコープ（個人アカウントまたは 1 つのチーム）によって、エージェントが見られる範囲が決まります。
 
 ---
 
 ## 前提条件
 
-- 調査したいチームとプロジェクトにアクセスできる**Vercelアカウント**。
-- 適切なチームにスコープされた**アクセストークン**。
-- そのスコープのトークンを作成する権限。
-
-<Info>
-CloudThinkerが必要とするチームのみにトークンをスコープしてください。接続の読み取り操作はVercelリソースを変更しません。変更するのは3つの承認ゲートの制御操作のみです。
-</Info>
+- 調査したいチームとプロジェクトを閲覧できる Vercel アカウント。
+- そのチームでアクセストークンを作成する権限。
+- 接続の追加に必要な、CloudThinker ワークスペースの **Admin** ロール。[Roles](/guide/security/roles) を参照してください。
 
 ---
 
 ## セットアップ
 
 <Steps>
-  <Step title="アクセストークンを作成">
-    Vercelで **Settings → Tokens → Create Token** に移動します：
-    - **名前**：`cloudthinker`
-    - **スコープ**：CloudThinkerがアクセスすべき**チーム**（または個人アカウント）を選択
-    - **有効期限**：有効期間を選択してローテーション計画を立てる
+  <Step title="Vercel でアクセストークンを作成する">
+    Vercel でアバターメニューを開き、**Account Settings → Tokens**（[直接リンク](https://vercel.com/account/settings/tokens)）に移動します。トークンを作成します。
+    - **Name**: `cloudthinker`
+    - **Scope**: CloudThinker に到達させる 1 つのチーム、または個人アカウント。トークンはそのスコープにしか到達しないため、プロジェクトが複数のチームにまたがる場合は、チームごとにトークンを作成し、それぞれを独立した接続として追加します。
+    - **Expiration**: 日付を選び、ローテーションをカレンダーに登録します
 
-    トークンをすぐにコピーしてください — Vercelは一度しか表示しません。
+    今すぐトークンをコピーしてください。Vercel は一度しか表示しません。
   </Step>
-  <Step title="CloudThinkerに接続を追加">
-    **Connections → Vercel** に移動して次を入力します：
-    - **Token**：作成したアクセストークン
+  <Step title="CloudThinker で接続を追加する">
+    **Settings → Workspace → Connections** を開きます。**Discover** タブで **Vercel** を検索し、トークンを **VERCEL_TOKEN** に貼り付けて、**Connect** をクリックします。
 
-    **Connect** をクリックします。CloudThinkerがVercel MCPサーバーを起動し、**Connected** ステータスに変わります。
+    **成功時の状態:** CloudThinker の Vercel のカードに **Connected** と表示されます。Vercel の場合、これはトークンが保存されたことを意味し、機能することを意味するわけではありません。
+  </Step>
+  <Step title="確認用のプロンプトを実行する">
+    Vercel は接続の開始時にはどのトークンでも受け入れ、最初の実際の呼び出しで初めて確認します。入力を誤ったトークンや期限切れのトークンでも **Connected** と表示されるため、頼る前に[確認用のプロンプト](#接続を確認する)を実行してください。
+
+    **成功時の状態:** CloudThinker が Vercel のユーザー、チーム、プロジェクトを返します。代わりに `403 Not authorized (invalidToken)` が返る場合、トークンは不正です。[トラブルシューティング](#トラブルシューティング)を参照してください。
   </Step>
 </Steps>
 
-<Warning>
-アクセストークンは作成直後にコピーしてください。紛失した場合は新しいトークンを作成する必要があります。
-</Warning>
-
 ---
 
-## 接続詳細
+## 接続の詳細
 
-| フィールド | 説明 | 例 |
-|-------|-------------|---------|
-| **VERCEL_TOKEN** | MCPのBearerトークンとして使用されるVercelアクセストークン | — |
-
-<Note>
-CloudThinkerはトークンのスコープからチームとプロジェクトを解決するため、チームIDやURLの手動設定は不要です。
-</Note>
+| フィールド | 説明 |
+|-------|-------------|
+| **VERCEL_TOKEN** | Vercel のアクセストークン。CloudThinker はそのスコープからチームとプロジェクトを見つけるため、チーム ID を入力する必要はありません。 |
 
 ---
 
 ## 必要な権限
 
-CloudThinkerがアクセスすべきプロジェクト、デプロイ、ドメイン、ログを持つ**チーム**にトークンをスコープしてください。読み取り操作はそれらのリソースを参照できるトークンであれば機能します。3つの制御操作にはさらに、それを許可するトークンスコープとCloudThinkerでの明示的な[承認](/guide/approvals/overview)の両方が必要です。
+Vercel のトークンには読み取り専用の選択肢がありません。スコープが主な制御です。1 つのチームにスコープを限定したトークンは、他のチームのプロジェクトには到達できません。
+
+| エージェントができること | 必要なもの |
+|------------|-------|
+| プロジェクト、デプロイ、ログ、ドメイン、エイリアスを読む | それらを所有するチームにスコープを限定したトークン |
+| デプロイのキャンセル、プロジェクトの一時停止または再開 | 同じトークンと、Approvals の通過 |
 
 <Tip>
-最小権限を守ってください。トークンを単一のチームにスコープして有効期限を設定してください。ガードレールを外すのではなく、制御操作は承認ゲートのままにしておいてください。
+トークンは 1 つのチームにスコープを限定し、有効期限を設定してください。この接続には読み取り専用モードはありません。**Manual** を選び、キャンセル、一時停止、再開のすべてを人が承認するようにしてください。
+
+Rule を使えば絞り込めます。最も手早いのは[チャットで依頼する](/guide/approvals/rules#ask-for-one-rule-in-chat)方法です。`Propose a Deny Rule for cancelling deployments and pausing or unpausing projects on my Vercel connection` はそれらの操作を完全に拒否し、`Propose an Ask first Rule before cancelling deployments or pausing projects in production on my Vercel connection` は本番環境のものを人に回します。
 </Tip>
+
+<ApprovalDefault />
 
 ---
 
 ## エージェントの機能
 
-接続後、エージェントはVercelのプロジェクトとデプロイへの読み取りアクセスを持ちます。
-
 | 機能 | 説明 |
 |------------|-------------|
-| **チームとプロジェクト** | チームとプロジェクトの一覧表示、プロジェクトドメインの検査 |
-| **デプロイ** | デプロイ、デプロイイベント、ビルド出力の一覧表示と検査 |
-| **実行時ログ** | エラートリアージのための実行時ログの取得 |
-| **ドメインとエイリアス** | ドメイン、ドメイン設定、エイリアスの監査 |
-| **アカウント** | 認証済みVercelユーザーを読み取り |
-| **デプロイ制御** | デプロイのキャンセル、プロジェクトの一時停止と再開 — **承認が必要** |
+| **Deployment triage** | デプロイのビルドイベントとランタイムログのエラーを読み、失敗した理由を説明します |
+| **Deployment health** | プロジェクトごとにデプロイの状態を数え、エラーの連続を見つけ、30 分以上止まっているビルドを指摘します |
+| **Production status** | エイリアスを稼働中のデプロイに対応付け、ロールバック先にできる以前のデプロイを提案します |
+| **Build performance** | デフォルトでは過去 7 日間（プロンプトで別の期間を指定できます）のプロジェクトごとのビルド時間（p50、p95、最大）を比較し、最も遅いビルドを一覧表示します |
+| **Domains and aliases** | ドメインの設定を確認し、未検証のドメインを見つけ、エイリアスを一覧表示します |
+| **Controls** | デプロイのキャンセル、プロジェクトの一時停止、プロジェクトの再開。それぞれ Approvals を経由します |
 
-<Info>
-`Cancel deployment`、`Pause project`、`Unpause project` は承認ゲートされています。CloudThinkerは実行前に確認を求めます。読み取り専用操作は承認なしで実行されます。
-</Info>
+ロールバックの提案はアドバイスにすぎません。CloudThinker には、Vercel でロールバックや再デプロイを行うツールはありません。
 
 ### 接続を確認する
 
 ```text
-Check the Vercel connection and list accessible teams and projects
+Check my Vercel connection: show the signed-in user, my teams, and my projects with their latest deployment state
 ```
 
-### プロンプト例
+### プロンプトの例
 
 ```text
-List all projects across my Vercel teams with their framework and latest deployment status and report as a table
-The latest production deployment failed — pull the build events, find the error, and recommend a fix
-Show runtime error logs for my Vercel project over the last 6 hours and alert on 5xx spikes
+Why did the latest production deployment of my web project fail? Show the build error and a fix
+Which Vercel builds are stuck right now, and which are getting slower this week?
+Audit my Vercel domains and list any that are unverified or misconfigured
 ```
 
-<Note>
-プロジェクトが多数あるアカウントの場合は、エージェントが絞り込んだ結果を返せるよう、単一のチームまたはプロジェクトにリクエストをスコープしてください。
-</Note>
+アカウントに多くのプロジェクトがある場合は、プロンプトでチームやプロジェクトを指定してください。回答が早く返り、焦点が絞られます。
 
 ---
 
 ## トラブルシューティング
 
-<Accordion title="401または403 Unauthorized">
-トークンが存在しない、期限切れ、または失効しています。新しいVercelトークンを作成して接続を再設定してください。
+既存の接続のトークンを交換するには、接続を開き、インスタンスの編集アイコンをクリックし、**Edit Instance** で **Replace…** をクリックして、新しいトークンを貼り付け、**Save and test** をクリックします。[Rotate a credential](/ja/guide/connections/overview#認証情報をローテーションする) を参照してください。
+
+<Accordion title="すべてのリクエストが 403 Not authorized (invalidToken) で失敗する">
+トークンが誤っている、期限切れ、または取り消されています。Vercel は最初の呼び出しでしかトークンを確認しないため、接続には **Connected** と表示されていました。新しいトークンを作成し、接続で置き換えてください。
 </Accordion>
 
-<Accordion title="エージェントが期待するチームやプロジェクトを参照できない">
-トークンのスコープにそれらのチームが含まれていません。正しいチームにスコープした新しいトークンを作成して再接続してください。
+<Accordion title="1 つのチームやプロジェクトが 403 Forbidden で失敗する">
+他のリクエストは機能しますが、トークンのスコープにそのチームが含まれていません。正しいチームにスコープを限定したトークンを作成し、接続で置き換えてください。
 </Accordion>
 
-<Accordion title="CloudThinkerがVercelはすでに接続済みと言う">
-ワークスペースごとに許可されるVercel接続は1つのみです。既存の接続を使用するか、再接続する前に削除してください。
+<Accordion title="プロジェクトやデプロイで 404 Not Found">
+名前や ID が誤っているか、トークンのスコープ外のチームに属しています。まずプロジェクトを一覧表示するよう CloudThinker に依頼し、その一覧の名前を使ってください。
 </Accordion>
 
-<Accordion title="制御アクションが実行されなかった">
-キャンセル・一時停止・再開には、アクションを許可するトークンスコープとCloudThinkerでの明示的な承認の両方が必要です。プロンプトが表示されたらアクションを承認し、トークンのスコープがそれを許可していることを確認してください。
+<Accordion title="キャンセルや一時停止が実行されなかった">
+操作はまず [Approvals](/guide/approvals/overview) を経由し、CloudThinker は拒否されたリクエストを再試行しません。**Manual** で人が却下した可能性があります。Auto では、何も変更を許可しない場合に Approval mode が **Refuse** に設定されている可能性があります。**Deny** の Rule が完全に拒否している場合もあります。実行させたい場合は、もう一度依頼してください。
 </Accordion>
 
 ---
@@ -132,18 +128,19 @@ Show runtime error logs for my Vercel project over the last 6 hours and alert on
 
 <ConnectionSecurity />
 
-- **トークンの有効期限を設定** — トークン作成時に有効期限を選択してローテーション計画を立ててください。Vercelトークンは自動ローテーションされません。
-- **制御操作の承認** — キャンセル・一時停止・再開のアクションは、ガードレールを外すのではなく承認ゲートのままにしておいてください。
+- **読み取り専用のトークンはない**: Vercel には読み取り専用の認証情報がないため、上記の読み取り専用のアドバイスはここには当てはまりません。チームにスコープを限定したトークンを使い、**Manual** を選んですべての変更を人が承認するようにし、さらに **Deny** または **Ask first** の Rule を加えてください。
+- **ローテーションを計画する**: Vercel のトークンは自動ではローテーションされません。作成時に有効期限を設定し、その日付より前に置き換えてください。
+- **ランタイムログに注意する**: アプリは自身のログにシークレットを出力することがあります。CloudThinker は、モデルやチャットが見る前に、ツールの出力内の認証情報の形をした値をプレースホルダーに置き換えますが（[Data protection](/guide/security/data-protection) を参照）、珍しい形式のシークレットはすり抜けることがあります。シークレットは発生元でログから除外してください。
 
 ---
 
-## 関連
+## 関連ページ
 
 <CardGroup cols={2}>
-  <Card title="MCP接続" icon="/images/icons/mcp.svg" href="/ja/guide/connections/mcp">
-    MCPでカスタムツールとサービスを接続
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    どの Vercel の操作を単独で実行し、どれをあなたの判断待ちにするかを決めます
   </Card>
-  <Card title="承認" icon="shield-check" href="/guide/approvals/overview">
-    承認ゲートアクションの仕組み
+  <Card title="接続の概要" icon="plug" href="/ja/guide/connections/overview">
+    接続できるすべてのプラットフォームと、認証情報のローテーション方法を確認します
   </Card>
 </CardGroup>

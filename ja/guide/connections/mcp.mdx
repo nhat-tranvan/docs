@@ -1,173 +1,212 @@
 ---
 title: MCP
-description: "Model Context Protocol（MCP）を通じてカスタムツールと API を CloudThinker に接続してエージェントの機能を拡張する"
+description: "独自の MCP サーバーを接続し、CloudThinker のエージェントが組み込みの接続と並べてそのツールを呼び出せるようにします。"
 icon: "/images/icons/mcp.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
-Model Context Protocol（MCP）により、CloudThinker はカスタムツールやサービスに接続できます。MCP を使用して、独自の[接続](/ja/guide/connections/overview)でエージェントの機能を拡張してください。
+Model Context Protocol（MCP）は、AI エージェントにツールを公開するためのオープン標準です。社内のメトリクス API、チケットシステム、レガシーサービスの前段などで MCP サーバーを運用している場合は、それをカスタムの[接続](/ja/guide/connections/overview)として追加でき、サーバーが提供するすべてのツールをエージェントが呼び出せるようになります。
 
----
+## 前提条件
 
-## MCP とは何か
+- **Streamable HTTP** または **Server-Sent Events**（SSE）で通信し、インターネットから到達できる MCP サーバー。到達できる相手を制限するには、CloudThinker の送信元 IP を許可リストに追加してください。このドキュメントでは CloudThinker の送信元 IP の一覧を公開していません。CloudThinker の担当者に問い合わせるか、[お問い合わせ](https://cloudthinker.io/contact)ください。
+- サーバーのエンドポイント URL（例: `https://mcp.example.com/mcp`）。
+- サーバーが必要とする場合は、その認証情報。CloudThinker 専用のものを発行してください（[必要な権限](#必要な権限)を参照）。
+- ワークスペースで接続を編集する権限。
 
-MCP（Model Context Protocol）は、AI エージェントを外部ツールやデータソースに接続するためのオープンプロトコルです。以下のことを実現するための標準化された方法を提供します：
-
-- エージェントが呼び出せるツールを公開する
-- エージェントにコンテキストとデータを提供する
-- あらゆるサービスとのカスタム連携を可能にする
-
----
+<Note>
+CloudThinker は公開インターネット経由でサーバーに到達し、接続に設定した静的な HTTP ヘッダーで認証します。通常は、サーバーが確認するトークンを含む `Authorization` ヘッダーです。MCP のフォームには OAuth のサインインがないため、OAuth しか受け付けないサーバーは接続できません。
+</Note>
 
 ## セットアップ
 
 <Steps>
-  <Step title="MCP サーバーを準備する">
-    MCP サーバーが起動してアクセス可能な状態であることを確認します：
-    - Server-Sent Events（SSE）トランスポートをサポートしている
-    - 公開アクセス可能なエンドポイントを持つ（または VPN アクセス）
-    - 適切な MCP プロトコルのレスポンスを返す
+  <Step title="MCP のフォームを開く">
+    **Settings → Workspace → Connections** を開き、**Add** をクリックして **Custom MCP server** を選びます。**Create MCP connection** ダイアログが開きます。
   </Step>
-  <Step title="接続を作成する">
-    **Connections → MCP** に移動し、**Add MCP Connection** をクリックします。
+  <Step title="サーバーの詳細を入力する">
+    - **URL**: `https://mcp.example.com/mcp` などのサーバーのエンドポイント。[サーバー URL のルール](#サーバー-url-のルール)を参照してください。
+    - **Connection name**: `Internal metrics` など、チームが認識できる名前。
+    - **Prefix**: `metrics` など、このサーバーの短い識別子。ツールは `metrics__tool_name` として表示され、承認リクエストや Rules でもこのプレフィックスが表示されます。
+    - **Description**: 任意、最大 500 文字。
+    - **Transport type**: サーバーが通信する方式に応じて、**Streamable HTTP** または **Server-Sent Events**。
   </Step>
-  <Step title="基本情報を設定する">
-    接続の詳細を入力します：
-    - **Name**: 接続のわかりやすい名前
-    - **Prefix**: ツールのプレフィックス（例：`mytools` → `mytools_function_name`）
+  <Step title="ヘッダーを追加する">
+    **Headers (optional)** で、サーバーが必要とするヘッダーごとに **Add header** をクリックし、**Key** と **Value** を入力します（例: `Authorization` と `Bearer <your-token>`）。CloudThinker はすべてのリクエストでこれらのヘッダーを送信します。ヘッダーのキーは一意でなければなりません。
   </Step>
-  <Step title="トランスポートを設定する">
-    接続トランスポートをセットアップします：
-    - **Transport Type**: Server-Sent Events
-    - **URL**: MCP サーバーのエンドポイント
-    - **Timeout**: 接続タイムアウト（デフォルト：5 秒）
-    - **SSE Read Timeout**: イベントストリームタイムアウト（デフォルト：30 秒）
+  <Step title="必要に応じてタイムアウトを調整する">
+    ツールが長いクエリを実行する場合にのみ、**Advanced settings** を開きます。
+
+    - **Timeout (seconds)**: サーバーの応答を待つ時間。デフォルトは 30、0.1〜300 の範囲で設定できます。
+    - **SSE Read Timeout (seconds)**: イベントストリームを待つ時間。デフォルトは 300、1〜600 の範囲で設定できます。
   </Step>
-  <Step title="環境変数を追加する">
-    必要な環境変数を設定します：
-    - API キー
-    - 認証トークン
-    - カスタム設定
-  </Step>
-  <Step title="テストして作成する">
-    接続をテストして保存します。サーバーが正しく応答すると、CloudThinker は **Connected** ステータスを表示します。
+  <Step title="作成する">
+    **Create** をクリックします。CloudThinker がサーバーに接続し、ツールの一覧を読み込みます。
+
+    **成功時の状態:** **Connected** タブで接続に **Connected** と表示され、詳細パネルの **Server config** にトランスポートと URL が表示されます。失敗した場合は、**Connection error** のアラートが理由を説明します。[トラブルシューティング](#トラブルシューティング)を参照してください。
   </Step>
 </Steps>
 
----
+<Warning>
+URL に認証情報（`https://user:password@host/mcp`）を含めないでください。フォームが拒否します。Basic 認証には、キーが `Authorization`、値が `Basic <base64 of user:password>` のヘッダーを追加してください。
+</Warning>
 
 ## 接続の詳細
 
-| フィールド | 説明 | 必須 |
-|-------|-------------|----------|
-| **Name** | 接続の表示名 | はい |
-| **Prefix** | ツール名のプレフィックス | はい |
-| **URL** | MCP サーバーのエンドポイント | はい |
-| **Timeout** | 接続タイムアウト（秒） | いいえ（デフォルト：5） |
-| **SSE Read Timeout** | イベントストリームタイムアウト（秒） | いいえ（デフォルト：30） |
-| **Environment Variables** | 設定用のキーと値のペア | いいえ |
+| フィールド | 必須 | 説明 | 例 |
+|-------|----------|-------------|---------|
+| **Connection name** | はい | チームが認識できる名前 | `Internal metrics` |
+| **Description** | いいえ | 最大 500 文字 | `Internal metrics API` |
+| **Prefix** | はい | 短い識別子。ツールは `prefix__tool_name` として表示されます | `metrics` |
+| **Transport type** | はい | **Streamable HTTP** または **Server-Sent Events** | **Streamable HTTP** |
+| **URL** | はい | サーバーのエンドポイント。[サーバー URL のルール](#サーバー-url-のルール)を参照 | `https://mcp.example.com/mcp` |
+| **Headers (optional)** | いいえ | ヘッダーごとに 1 つの **Key** と **Value**。すべてのリクエストで送信されます | `Authorization` / `Bearer <your-token>` |
+| **Timeout (seconds)** | はい（入力済み、**Advanced settings** 内） | 応答を待つ時間。デフォルト 30、0.1〜300 | `30` |
+| **SSE Read Timeout (seconds)** | はい（入力済み、**Advanced settings** 内） | イベントストリームを待つ時間。デフォルト 300、1〜600 | `300` |
 
----
+### サーバー URL のルール
 
-## MCP サーバーの例
+| URL | 結果 |
+|---|---|
+| `https://mcp.example.com/mcp` | 推奨。証明書は公的な認証局によるものでなければなりません。自己署名証明書は拒否されます。 |
+| `http://203.0.113.10:8000/mcp` | 受け付けられますが、"Not encrypted. Headers and tool results are sent as plain text." という警告が出ます。トークンは暗号化されずに送信されます。 |
+| `http://localhost:8000/mcp`、`http://10.0.0.5/mcp`、`http://192.168.1.20/mcp` | 拒否されます。CloudThinker はループバック、プライベート、クラウドのメタデータのアドレスに到達できません。 |
+| プライベートアドレスに解決されるホスト名 | 公開されているように見えても拒否されます。 |
 
-天気検索ツールを提供するシンプルな MCP サーバー：
+<Warning>
+`http://` の URL をブロックするワークスペースの設定はありません。トークンを受け取るサーバーには `https://` を使い、HTTP しか話さない場合は [HTTPS を追加](#リバースプロキシで-https-を追加する)してください。
+</Warning>
 
-```python
-from mcp import Server, Tool
+### リバースプロキシで HTTPS を追加する
 
-server = Server("weather-tools")
+サーバーが HTTP しか話さない場合は、その前にリバースプロキシを置きます。[Caddy](https://caddyserver.com/docs/install) の場合:
 
-@server.tool()
-async def get_weather(location: str) -> str:
-    """Get current weather for a location."""
-    # Your implementation here
-    return f"Weather for {location}: Sunny, 72°F"
+<Steps>
+  <Step title="DNS をサーバーに向ける">
+    サーバーの公開 IP を指す DNS の `A` レコード（例: `mcp.example.com`）を作成します。
+  </Step>
+  <Step title="Caddy を設定する">
+    これを `Caddyfile` として保存し、ポートを MCP サーバーが待ち受けるポートに置き換えます。
 
-if __name__ == "__main__":
-    server.run()
+    ```text
+    mcp.example.com {
+        reverse_proxy localhost:8000
+    }
+    ```
+  </Step>
+  <Step title="Caddy を起動する">
+    ポート 80 と 443 を開いて Caddy を起動します。Caddy が自動で公的な証明書を取得します。
+
+    **成功時の状態:** ブラウザで `https://mcp.example.com` が有効な証明書で読み込まれます。**URL** に `https://mcp.example.com/mcp` を入力します。
+  </Step>
+</Steps>
+
+## 必要な権限
+
+接続で何ができるかはサーバーが決めます。CloudThinker は、あなたが渡したヘッダーの値を保持するだけです。
+
+<Tip>
+CloudThinker 専用のトークンを発行すれば、他に影響を与えずに取り消せます。公開するツールが必要とする最小限のアクセスにスコープを限定し、まず読み取りツールだけから始め、サーバーにはリクエストのたびにトークンを検証させてください。
+</Tip>
+
+## エージェントの機能
+
+接続後、CloudThinker はサーバーのツール一覧を読み込みます。各ツールは `prefix__tool_name` としてエージェントから利用でき、プレフィックスは接続に設定したものです。プレフィックスが `weather` で `get_forecast` を公開するサーバーでは、エージェントは `weather__get_forecast` というツールを使えます。
+
+エージェントが呼び出せるのは、サーバーが提供するツールだけです。MCP 接続には **Allow writes** スイッチがないため、**Manual** を選ぶと、書き込みツールのすべての呼び出しを人が承認するようになります。サーバーからツールを外すことも常に有効なもう 1 つの制御で、読み取りを止める唯一の方法です。読み取りは常に確認なしで実行されます。
+
+**Deny** の [Rule](/guide/approvals/rules) を使えば、1 つの書き込みツールを完全に拒否し、他は確認を求め続けるようにできます。
+
+### 読み取りと書き込みの判定方法
+
+CloudThinker はツール一覧を読み込むときに、各ツールを読み取りと書き込みに分類します。
+
+| 確認（順に） | 結果 |
+|---|---|
+| ツールが `readOnlyHint: true` を宣言している | 読み取り |
+| ツールが `destructiveHint: true` を宣言している | 書き込み |
+| ツール名に読み取りの単語が含まれる: `get`、`list`、`search`、`query`、`read`、`describe`、`show`、`find`、`fetch`、`check`、`count`、`view`、`lookup`、`browse`、`inspect`、`export`、`download` | 読み取り |
+| それ以外 | 書き込み |
+
+名前の単語は `_` と `-` で区切られるため、`list_tickets` と `get-status` は読み取り、`listTickets`（1 単語）と `close_ticket` は書き込みになります。読み取りは確認なしで実行されます。書き込みは [Rules](/guide/approvals/rules) と [Approval mode](/guide/approvals/approval-mode) を経由します。
+
+<Warning>
+名前のどこかに読み取りの単語があれば、`destructiveHint: true` を宣言していない限り、そのツールは読み取りになります。`get_and_delete_user` や `check_and_fix` は読み取りとみなされ、承認なしで実行されます。データを変更するすべてのツールに `destructiveHint: true` を設定してください。
+</Warning>
+
+**Edit** をクリックして URL、ヘッダー、トランスポートの変更を保存すると、CloudThinker はツール一覧を再読み込みし、すべてのツールを再分類します。名前や説明だけを変更しても再読み込みされません。
+
+### 接続を確認する
+
+チャットを開始し、`#` を入力して接続を選んでから、次のように質問します。
+
+```text
+#Internal metrics List the tools this connection exposes, then call the simplest read-only one and show me the result.
 ```
 
-プレフィックス `weather` で接続後、エージェントは以下を呼び出せます：
+**成功時の状態:** CloudThinker が `prefix__tool_name` の名前でツールを一覧表示し、承認リクエストなしで、読み取りツールの 1 つからの出力を返します。
+
+### プロンプトの例
+
+`#Internal metrics` は接続の名前に置き換えてください。
+
+```text
+#Internal metrics What is the current status of the checkout service?
+#Internal metrics Compare today's error counts with the last 7 days and flag anything unusual.
+#Internal metrics Which tools here can change data? Describe what each one does before calling any of them.
 ```
-weather_get_weather(location="San Francisco")
-```
-
----
-
-## ユースケース
-
-### カスタムデータソース
-
-独自データベースや API に接続する：
-- 社内メトリクスシステム
-- カスタム監視ツール
-- ビジネスインテリジェンスプラットフォーム
-
-### 専門ツール
-
-ドメイン固有の機能を追加する：
-- カスタムコンプライアンスチェック
-- 社内自動化スクリプト
-- レガシーシステム連携
-
-### 外部サービス
-
-サードパーティサービスを連携する：
-- コミュニケーションプラットフォーム
-- チケットシステム
-- 組み込みでないクラウドサービス
-
----
-
-## ベストプラクティス
-
-- **HTTPS エンドポイント** — MCP サーバーは HTTPS のみで公開してください。
-- **API キーのローテーション** — 環境変数に保存された認証情報を通常のスケジュールでローテーションしてください。
-- **認証を実装する** — 処理前に CloudThinker からの受信リクエストを検証してください。
-- **適切なタイムアウトを設定する** — サーバーのレスポンス特性に合わせて Timeout と SSE Read Timeout を調整してください。
-- **サーバーのヘルスを監視する** — 接続断が早期に検出されるよう、エラーレートとレイテンシを追跡してください。
-- **エラーを適切に処理する** — サーバーをクラッシュさせるのではなく、構造化された MCP エラーレスポンスを返してください。
-
----
 
 ## トラブルシューティング
 
-<Accordion title="接続タイムアウト">
-MCP サーバーが起動しているか確認し、ネットワーク接続を確認し、タイムアウト値を増やし、ファイアウォールがトラフィックを許可していることを確認してください。
-</Accordion>
-
-<Accordion title="ツールが表示されない">
-プレフィックスが正しく設定されているか確認し、MCP サーバーがツール定義を返していることを確認し、プロトコルバージョンが互換性があることを確認し、エラーのサーバーログを確認してください。
-</Accordion>
-
-<Accordion title="認証エラー">
-環境変数が正しく設定されているか確認し、API キーが有効であることを確認し、サーバーが認証情報を正しく検証していることを確認してください。
-</Accordion>
-
-<Accordion title="SSE 接続が切断される">
-SSE 読み取りタイムアウトを増やし、プロキシの干渉を確認し、サーバーがキープアライブイベントを送信していることを確認し、ネットワークの安定性を確認してください。
-</Accordion>
-
----
+<AccordionGroup>
+  <Accordion title="This connection did not respond in time. Try connecting again.">
+    サーバーが **Timeout (seconds)** 以内に応答しませんでした。サーバーが稼働していて、ファイアウォールが CloudThinker の送信元 IP を許可していることを確認してから、タイムアウトを引き上げて再試行してください。
+  </Accordion>
+  <Accordion title="This server does not use HTTPS on this port.">
+    URL は `https://` で始まっていますが、サーバーはそのポートでプレーンな HTTP を話しています。URL を `http://` に変更するか、[HTTPS を追加](#リバースプロキシで-https-を追加する)してください。
+  </Accordion>
+  <Accordion title="This server's TLS certificate is not trusted: it is self-signed, expired, or issued for another name.">
+    自己署名証明書は、Let's Encrypt などの公的な認証局の証明書に置き換えてください。期限切れの証明書は更新してください。**URL** のホスト名が証明書と一致していることを確認してください。
+  </Accordion>
+  <Accordion title="This server refused the connection.">
+    そのホストとポートで何も待ち受けていません。URL を修正するか、サーバーを起動してください。
+  </Accordion>
+  <Accordion title="URL points to a private or metadata IP address / URL resolves to a private or metadata IP address">
+    URL にプライベートアドレスが含まれているか、DNS がホスト名をプライベートアドレスにマッピングしています。"URL points to a blocked internal hostname" というメッセージは `localhost` などの名前に該当します。公開ホスト名または IP アドレスを使ってください。
+  </Accordion>
+  <Accordion title="Could not resolve hostname">
+    **URL** のホスト名の DNS レコードがありません。綴りを確認してください。ネットワーク内にしか存在しない名前は解決されません。
+  </Accordion>
+  <Accordion title="The provider rejected these credentials. Update them, then connect again.">
+    サーバーが 401 または 403 を返しました。ヘッダーのキーと値を確認し、トークンがサーバーでまだ有効であること、サーバーがトークンをどう受け取るか（`Bearer` かカスタムヘッダーかなど）を確認してください。
+  </Accordion>
+  <Accordion title="The provider endpoint was not found. Check the connection settings.">
+    ホストは応答しましたが、パスが誤っています。多くのサーバーは `/mcp` または `/sse` で MCP を提供します。正確なパスはサーバーのドキュメントで確認してください。
+  </Accordion>
+  <Accordion title="接続されているのにツールが見つからない">
+    サーバーがツール一覧のレスポンスでツールを返していることを確認し、サーバー自身のログを確認してください。サーバーが一覧に含めないツールは呼び出せません。
+  </Accordion>
+  <Accordion title="SSE の接続が切れる">
+    **SSE Read Timeout (seconds)** を引き上げ、CloudThinker とサーバーの間のプロキシが長時間の接続をバッファリングしたり切断したりしていないことを確認し、サーバーにキープアライブのイベントを送信させてください。
+  </Accordion>
+</AccordionGroup>
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **HTTPS エンドポイント** — MCP サーバーは HTTPS のみで公開し、CloudThinker のリクエスト元を検証してください。
-- **スコープされた認証情報** — API キーとトークンはサーバーコードにハードコードせず、環境変数に保存してください。
+- **HTTPS を使う。** `http://` では、トークンを含むヘッダーとツールの結果が平文で送信されます。
+- **ツールのヒントを付ける。** `readOnlyHint` と `destructiveHint` を設定し、CloudThinker が各ツールを意図どおりに扱うようにしてください。
+- **ヘッダーの認証情報をローテーションする。** サーバーでトークンを置き換えてから、接続を編集してヘッダーの値を更新してください。
 
----
-
-## 関連
+## 関連ページ
 
 <CardGroup cols={2}>
-  <Card title="概要" icon="plug" href="/ja/guide/connections/overview">
-    すべての接続タイプ
+  <Card title="承認 Rules を設定する" icon="shield-check" href="/guide/approvals/rules">
+    サーバーの書き込みツールのうち、どれを実行し、事前に確認し、拒否するかを決めます。
   </Card>
-  <Card title="エージェント" icon="robot" href="/ja/guide/agents/overview">
-    エージェントが接続をどのように使用するか
+  <Card title="接続の概要" icon="plug" href="/ja/guide/connections/overview">
+    独自のサーバーを作る前に、すべての組み込みの接続を確認します。
   </Card>
 </CardGroup>

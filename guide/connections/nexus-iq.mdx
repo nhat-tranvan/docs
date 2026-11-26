@@ -1,0 +1,134 @@
+---
+title: Sonatype Nexus IQ Server
+description: "Connect Nexus IQ Server with a read-only user token to review applications, policy violations, and risky components."
+icon: "/images/icons/nexus.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+
+Connect Sonatype Nexus IQ Server, also sold as Sonatype Lifecycle, so [CloudThinker](/guide/agents/overview) can review applications, policy violations, and the components behind them. The connection signs in with an IQ Server **user token** and only reads data.
+
+## Prerequisites
+
+- An IQ Server installation that CloudThinker can reach over HTTPS. For a private address, follow [Reaching private services](/guide/connections/overview#reaching-private-services).
+- An IQ Server administrator who can create a role and grant it at your organizations.
+- The **Admin** role in your CloudThinker workspace. See [Roles](/guide/security/roles).
+
+## Setup
+
+<Steps>
+  <Step title="Create a read-only role">
+    Ask your IQ Server administrator to click the **System Preferences** icon, then **Roles**, and click **Create Role**. Enter a name such as `cloudthinker-reader`, set only **View IQ Elements** to **Can**, and click **Save**. See [Sonatype's role instructions](https://help.sonatype.com/en/role-management.html).
+  </Step>
+  <Step title="Grant the role at your organizations">
+    Click the **Organization & Policies** icon and select each organization CloudThinker should review. Click **Access**, then **Add Role**. Choose the role, move the CloudThinker user to **Associated**, and click **Add**.
+  </Step>
+  <Step title="Generate a user token">
+    Sign in to IQ Server as that user. Open the user menu, choose **Manage User Token**, and click **Generate User Token**. Copy the **User Code** and **Passcode**. IQ Server shows them only once. See [Sonatype's user token instructions](https://help.sonatype.com/en/iq-server-user-tokens.html).
+  </Step>
+  <Step title="Add the connection in CloudThinker">
+    Open **Settings → Workspace → Connections**, open the **Discover** tab, and select **Sonatype Nexus IQ Server**. Click **Connect**, fill in the fields below, then click **Connect** in the dialog.
+
+    **Success state:** the connection shows a **Connected** status and reports how many applications the user sees. CloudThinker then opens a chat that takes a read-only deep look at the connection ("Often takes about 15 min. You can leave the chat."). To run it again later, open the card's **More** menu and choose **Try in chat**.
+  </Step>
+</Steps>
+
+## Connection details
+
+| Field | Required | Description |
+|---|---|---|
+| **IQ Server URL** | Yes | The HTTPS address you open IQ Server at, including any context path, such as `https://iq.example.com` or `https://example.com/iq`. Leave off `/api/v2`, credentials, query strings, and fragments |
+| **User token code** | Yes | The user code of the user token, or a username |
+| **User token passcode** | Yes | The passcode of that user token, or the user's password |
+| **CA certificate (optional)** | No | The PEM of the private certificate authority that issued the IQ Server certificate, starting with `-----BEGIN CERTIFICATE-----`. Leave it empty to use public trust. CloudThinker always checks the certificate and hostname |
+
+CloudThinker refuses redirects, so enter the exact address IQ Server answers at. Prefer a user token over a password: you can revoke the token without changing the user's sign-in.
+
+## Required permissions
+
+| IQ Server permission | Used for |
+|---|---|
+| **View IQ Elements** | Reading organizations, applications, policy evaluations, and policy reports |
+
+Grant the role only at the organizations agents should review. Applications and reports follow the user's access, so agents see nothing outside those organizations.
+
+<Tip>
+Use a dedicated user whose role has only **View IQ Elements**. The connection never writes, but a narrow role keeps the token harmless if it leaks.
+</Tip>
+
+## Agent capabilities
+
+| Capability | What agents can read |
+|---|---|
+| **Applications** | Organizations and applications, with the latest policy evaluation for each stage, such as `build`, `stage-release`, `release`, or `operate` |
+| **Evaluation health** | Applications that were never evaluated, and evaluations older than 30 days unless you ask for another age |
+| **Policy violations** | One application's latest report, with violations by threat band and the affected components, highest threat first |
+| **Components** | Each affected component and its package URL, so agents can match it to packages in other connections such as [Nexus Repository](/guide/connections/nexus) |
+
+Threat bands follow Sonatype: critical is 8 to 10, severe 4 to 7, moderate 2 to 3, and low 1. Agents leave waived and grandfathered violations out of counts unless you ask for them. Every figure comes from a report's evaluation date, not the application's current code.
+
+Agents cannot start an evaluation, waive a violation, or change policies, applications, or organizations. Make those changes in IQ Server.
+
+### Verify the connection
+
+```text
+List my Nexus IQ organizations and applications, with the latest evaluation for each stage. Flag applications that were never evaluated.
+```
+
+Expect real organization and application names, with a stage and evaluation date per application. A failed section is unavailable data, not an empty list.
+
+### Example prompts
+
+```text
+Which Nexus IQ applications have critical policy violations in their latest release report?
+Show the affected components and package URLs for payments-api, highest threat first
+Which applications in my Nexus IQ organization have not been evaluated in the last 30 days?
+```
+
+## Troubleshooting
+
+<Accordion title="IQ Server rejected the user token code and passcode.">
+The code or passcode is wrong, or the token expired. Generate a new user token in IQ Server, then edit the connection and paste both values.
+</Accordion>
+
+<Accordion title="The user signed in, but it cannot view applications. Give its role View IQ Elements.">
+Grant the role with **View IQ Elements** at the organizations to review, then connect again. During an investigation, HTTP 403 on one section means the role is missing at that organization or application.
+</Accordion>
+
+<Accordion title="IQ Server answered with a redirect. Use the exact address, including any context path such as /iq.">
+Enter the final HTTPS address IQ Server serves directly. Keep its context path and leave off `/api/v2`.
+</Accordion>
+
+<Accordion title="That address has no IQ Server REST API. Check the URL and any context path such as /iq.">
+Confirm the address belongs to IQ Server, not Nexus Repository or another Sonatype service. Check the context path with your administrator.
+</Accordion>
+
+<Accordion title="The IQ Server certificate is not trusted.">
+Install a certificate from a trusted authority, or paste the issuing CA certificate into **CA certificate (optional)**. If CloudThinker says the CA certificate is not valid PEM, paste the full certificate, including its `BEGIN` and `END` lines.
+</Accordion>
+
+<Accordion title="Could not reach IQ Server over HTTPS. Check the URL and that the sandbox can reach it.">
+CloudThinker could not open a connection to that address. Confirm the URL starts with `https://` and that your firewall lets CloudThinker reach IQ Server. Browser access from your laptop alone is not enough.
+</Accordion>
+
+<Accordion title="An application has never been evaluated">
+IQ Server has no policy evaluation for that application or stage. Run an evaluation from your build pipeline or the IQ Server UI, then ask again.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- Grant **View IQ Elements** only at the organizations agents need, and keep the role free of other permissions.
+- If your administrator enables user token expiry, generate a new token before it lapses and update the connection.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Sonatype Nexus Repository" icon="/images/icons/nexus.svg" href="/guide/connections/nexus">
+    Inspect the repositories and component versions your builds publish.
+  </Card>
+  <Card title="SonarQube" icon="/images/icons/sonarqube.svg" href="/guide/connections/sonarqube">
+    Let agents explain failed quality gates and triage code issues.
+  </Card>
+</CardGroup>

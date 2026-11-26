@@ -1,0 +1,149 @@
+---
+title: VictoriaMetrics
+description: "Connect VictoriaMetrics so agents can run MetricsQL, find series cardinality and firing alerts, and take approved snapshots."
+icon: "/images/icons/victoriametrics.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+import ApprovalDefault from '/snippets/approval-default.mdx';
+
+Connect VictoriaMetrics so CloudThinker agents can run MetricsQL queries, find what drives series count, check down scrape targets and vmalert alerts, and take or delete storage snapshots through your [Approvals](/guide/approvals/overview). The connection uses the Prometheus-compatible query API and an optional bearer token for VictoriaMetrics Cloud or the vmauth proxy in front of VictoriaMetrics.
+
+## Prerequisites
+
+- A VictoriaMetrics query address that CloudThinker can reach over HTTPS: single-node VictoriaMetrics, a cluster's vmselect, or a VictoriaMetrics Cloud access endpoint. For a private address, follow [Reaching private services](/guide/connections/overview#reaching-private-services).
+- A bearer token, unless the endpoint needs no authentication.
+- A CloudThinker workspace where you can add connections.
+
+## Setup
+
+<Steps>
+  <Step title="Create the credential">
+    Pick the one that matches where VictoriaMetrics runs:
+    - **VictoriaMetrics Cloud:** open your deployment, go to the **Access tokens** tab, and click **Generate Token**. Name it `cloudthinker`, choose the **Read** access level, and click **Generate**. Copy the secret from the **Key** column, and copy the access endpoint from the same tab. See [VictoriaMetrics Cloud access tokens](https://docs.victoriametrics.com/victoriametrics-cloud/deployments/access-tokens/).
+    - **vmauth:** ask your operator to add a user with a `bearer_token` whose routes allow the query API. See [vmauth](https://docs.victoriametrics.com/victoriametrics/vmauth/).
+  </Step>
+  <Step title="Find the query address">
+    Use the address you would put in front of `/api/v1`:
+    - Single-node: `https://vm.example.com`.
+    - Cluster: the vmselect path for your tenant, such as `https://vmselect.example.com/select/0/prometheus`. See [the cluster URL format](https://docs.victoriametrics.com/victoriametrics/cluster-victoriametrics/).
+    - VictoriaMetrics Cloud: the access endpoint from the previous step.
+  </Step>
+  <Step title="Connect in CloudThinker">
+    Open **Settings → Workspace → Connections**, open the **Discover** tab, and select **VictoriaMetrics**. Click **Connect**, fill in the fields below, then click **Connect** in the dialog. CloudThinker runs one query to check the address and token.
+
+    **Success state:** the connection shows a **Connected** status with `VictoriaMetrics connected; the query API answered.` CloudThinker then opens a chat that takes a read-only deep look at the connection ("Often takes about 15 min. You can leave the chat."). To run it again later, open the card's **More** menu and choose **Try in chat**.
+  </Step>
+</Steps>
+
+## Connection details
+
+| Field | Required | Description |
+|---|---|---|
+| **Query URL** | Yes | The Prometheus-compatible query address, such as `https://vm.example.com`, `https://vmselect.example.com/select/0/prometheus`, or your VictoriaMetrics Cloud access endpoint. It must start with `https://`. Leave off `/api/v1`, credentials, query strings, and fragments |
+| **Bearer token (optional)** | No | A VictoriaMetrics Cloud access token or a vmauth bearer token. Leave it empty when the endpoint needs no authentication |
+| **CA certificate (optional)** | No | The PEM of the private CA that issued the VictoriaMetrics certificate. Leave it empty to use public trust. CloudThinker always checks the certificate and hostname |
+
+CloudThinker refuses redirects, so enter the exact address VictoriaMetrics answers at.
+
+## Required permissions
+
+| Access | Used for |
+|---|---|
+| Query API (`/api/v1/`) | MetricsQL queries, build info, and series cardinality |
+| Alerts and rules | vmalert alerts and rule health, when VictoriaMetrics proxies vmalert |
+| Snapshot endpoints (optional) | Approved snapshot creates and deletes on single-node VictoriaMetrics |
+
+<Tip>
+Use a **Read** token for queries. Snapshot endpoints must accept the same token, or have no separate snapshot auth key. Expose them through vmauth only if you want CloudThinker to manage snapshots.
+</Tip>
+
+## Agent capabilities
+
+| Capability | What CloudThinker does | Checked by Approvals |
+|---|---|---|
+| **Discovery** | Shows the server version, top metrics by series, scrape jobs with down targets, and firing and pending alerts | No |
+| **Queries** | Runs instant and range MetricsQL queries. A range series is summarized as first, last, min, and max | No |
+| **Cardinality** | Shows total series and the metrics, labels, and label pairs that drive them | No |
+| **Alerts** | Lists firing and pending alerts, and alert rules with their last error | No |
+| **Create snapshot** | Takes a storage snapshot and checks that it exists | Yes |
+| **Delete snapshot** | Deletes one exact snapshot by name and checks that it is gone | Yes |
+
+Writes also need **Allow writes** on, which starts on. To lock writes in CloudThinker, open **VictoriaMetrics** in **Settings → Workspace → Connections** and turn off the **Allow writes** switch on its detail panel.
+
+<ApprovalDefault />
+
+Snapshots work only on single-node VictoriaMetrics. vmselect has no snapshot API, and on a cluster your operator takes snapshots on each vmstorage node. Agents cannot delete series, import data, or change retention or flags. Those changes need your VictoriaMetrics operator.
+
+### Verify the connection
+
+```text
+Check my VictoriaMetrics connection: show the server version, top metrics by series, and scrape jobs with down targets
+```
+
+### Example prompts
+
+```text
+Which metrics and labels drive series cardinality in VictoriaMetrics?
+Which vmalert alerts are firing right now, and which alert rules are failing?
+Take a VictoriaMetrics snapshot before tonight's upgrade
+```
+
+## Troubleshooting
+
+<Accordion title="VictoriaMetrics rejected the saved credentials.">
+The bearer token is wrong, expired, or revoked. Create a new token, then edit the connection and paste it.
+</Accordion>
+
+<Accordion title="The credentials signed in, but they cannot run queries on that address.">
+The token works, but vmauth or VictoriaMetrics Cloud does not let it query. Give it read access to the query API.
+</Accordion>
+
+<Accordion title="That address did not accept a query. For a cluster, use the vmselect path such as /select/0/prometheus.">
+A cluster answers queries only under the vmselect path for a tenant. Add `/select/<accountID>/prometheus` to **Query URL**.
+</Accordion>
+
+<Accordion title="That address has no query API. Check the URL and any path such as /select/0/prometheus.">
+Nothing answered at `/api/v1/query` under that address. Check the host and path. Enter the address without `/api/v1`.
+</Accordion>
+
+<Accordion title="VictoriaMetrics answered with a redirect. Use the exact query address, including any path such as /select/0/prometheus.">
+Enter the final HTTPS address VictoriaMetrics serves directly, not one that redirects to it.
+</Accordion>
+
+<Accordion title="The VictoriaMetrics certificate is not trusted.">
+Install a certificate from a trusted authority, or paste the issuing CA certificate into **CA certificate (optional)**. If CloudThinker says the CA certificate is not valid PEM, paste the full certificate, including its `BEGIN` and `END` lines.
+</Accordion>
+
+<Accordion title="Could not reach VictoriaMetrics over HTTPS. Check the URL and that the sandbox can reach it.">
+CloudThinker could not open a connection to that address. Confirm the URL starts with `https://` and that your firewall lets CloudThinker reach VictoriaMetrics. Browser access from your laptop alone is not enough.
+</Accordion>
+
+<Accordion title="Alerts are missing or the alerts section fails">
+VictoriaMetrics shows alerts only when it proxies vmalert. Ask your operator to set `-vmalert.proxyURL`, or read alerts in vmalert.
+</Accordion>
+
+<Accordion title="A snapshot fails with HTTP 404">
+The address is not single-node VictoriaMetrics, for example vmselect, so it has no snapshot API. On a cluster, your operator takes snapshots on each vmstorage node.
+</Accordion>
+
+<Accordion title="An agent says the VictoriaMetrics write tool is off">
+**Allow writes** is off on this connection, so the change was refused and nothing changed. Turn it on in the connection's detail panel, or make the change in VictoriaMetrics.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- Read the snapshot name before you approve a delete. A deleted snapshot can't be restored.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="VictoriaLogs" icon="/images/icons/victorialogs.svg" href="/guide/connections/victorialogs">
+    Search log lines, counts over time, streams, and fields.
+  </Card>
+  <Card title="Prometheus" icon="/images/icons/prometheus.svg" href="/guide/connections/prometheus">
+    Query live and historical metrics, labels, and alerts.
+  </Card>
+</CardGroup>

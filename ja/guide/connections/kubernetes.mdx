@@ -1,321 +1,392 @@
 ---
 title: Kubernetes
-description: "Kubernetes クラスターを CloudThinker に接続してワークロード分析、リソース最適化、クラスター運用を実現"
+description: "読み取り専用の kubeconfig で Kubernetes クラスターを接続し、エージェントが失敗している Pod のトリアージ、ノードの逼迫の確認、RBAC の確認を行えるようにします"
 icon: "/images/icons/kubernetes.svg"
 ---
 
+import ApprovalDefault from '/snippets/approval-default.mdx';
+
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
-Kubernetes クラスターを接続して、[CloudThinker](/ja/guide/agents/overview) がワークロードを分析し、リソースを最適化し、クラスター運用を管理できるようにします。
-
-Kubernetes は、**クラウドプロバイダーによる自動検出**（EKS・GKE・AKS の場合）または、セルフマネージドクラスター向けの**サービスアカウントトークン**とクラスターエンドポイント情報を使って接続します。
-
----
+Kubernetes クラスターを接続すると、CloudThinker がクラッシュループや Pending の Pod を見つけ、ログとイベントを読み、ノードの逼迫を確認し、RBAC とネットワークポリシーを確認できるようになります。専用の読み取り専用サービスアカウントとしてサインインする **kubeconfig ファイル** をアップロードします。ロールアウトの再起動などの変更はワークスペースの Approvals を経由し、書き込みの RBAC を付与した場合にのみ実行されます（[書き込みアクセス](#書き込みアクセス)を参照）。
 
 ## 前提条件
 
-接続前に Metrics Server をインストールしてください。Pod とノードのリソースメトリクスに必要です：
+- CloudThinker がインターネット経由で API サーバーに到達できるクラスター。コマンドは CloudThinker のクラウドで実行されるため、プライベートのみのエンドポイントでは接続テストが失敗します。API へのアクセスを制限している場合（EKS の public access CIDR、GKE の authorized networks、AKS の authorized IP ranges）は、`0.0.0.0/0` に開放する代わりに CloudThinker の送信元 IP を追加してください。このドキュメントでは CloudThinker の送信元 IP の一覧を公開していません。CloudThinker の担当者に問い合わせるか、[お問い合わせ](https://cloudthinker.io/contact)ください。その他の選択肢は [Reaching private services](/ja/guide/connections/overview#プライベートサービスへの到達) を参照してください。
+- そのクラスターへの `kubectl` アクセスと、Namespace、ClusterRole、ClusterRoleBinding を作成する権限。
+- マネージドクラスター（EKS、GKE、AKS）が発行する kubeconfig は `aws`、`gcloud`、`az` の exec プラグインでサインインするため、CloudThinker では機能しません。ステップ 2 で機能するものを作成します。サービスアカウントのトークンは Kubernetes 自体が確認するため、クラウドの IAM でマッピングする必要はありません（たとえば EKS のアクセスエントリは不要です）。
+- 任意: クラスター内の [Metrics Server](https://github.com/kubernetes-sigs/metrics-server)。これがなくても、エージェントは Pod のステータスとノードの状態を報告しますが、CPU とメモリのライブの使用量は報告できません。
+- 接続を追加・編集できる、CloudThinker ワークスペースの **Admin** ロール。[Roles](/guide/security/roles) を参照してください。
 
-```bash
-kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-```
-
-| コンポーネント | 用途 |
-|-----------|---------|
-| **Metrics Server** | Pod とノードのリソースメトリクスに必要 |
-| **kube-state-metrics** | 拡張クラスターメトリクス（任意） |
-| **ネットワークアクセス** | CloudThinker がクラスター API サーバーに到達できる必要があります |
-
-### 対応プラットフォーム
-
-| プラットフォーム | サポート |
-|----------|---------|
-| **Amazon EKS** | 全バージョン |
-| **Google GKE** | Standard、Autopilot |
-| **Azure AKS** | 全バージョン |
-| **セルフマネージド** | Kubernetes 1.24+ |
-| **Rancher** | RKE、RKE2 |
-| **OpenShift** | 4.x |
-
----
+<Info>
+Kubernetes 接続はワークスペースごとに **1 つ** で、エージェントは kubeconfig の **current context** で作業します。調べたい 1 つのクラスターの kubeconfig をアップロードしてください。複数のクラスターには、[クラスターごとに 1 つのワークスペース](/ja/guide/workspaces#ワークスペースを作成する)を使うか、Rancher が管理するクラスター全体のインベントリとヘルスのために [Rancher 接続](/guide/connections/rancher)を追加してください。
+</Info>
 
 ## セットアップ
 
-<Tabs>
-  <Tab title="クラウドプロバイダー経由（推奨）">
-    ### クラウド接続からの自動検出
+<Steps>
+  <Step title="読み取り専用のサービスアカウントを作成する">
+    このマニフェストを `cloudthinker-reader.yaml` として保存します。サービスアカウントのトークンである Secret も 1 つ作成されますが、それを読むのはステップ 2 のあなただけです。ロールが許可する内容は[必要な権限](#必要な権限)で説明しています。
 
-    AWS・GCP・Azure をすでに接続している場合、マネージド Kubernetes クラスターは自動的に検出されます。
-
-    <Steps>
-      <Step title="クラウドプロバイダーを接続する">
-        まず [AWS](/ja/guide/connections/aws)、[GCP](/ja/guide/connections/gcp)、または [Azure](/ja/guide/connections/azure) の接続を設定します。
-      </Step>
-      <Step title="クラスターが自動検出される">
-        EKS・GKE・AKS クラスターが CloudThinker に自動的に表示されます。分析を有効にするクラスターを選択してください。有効化された各クラスターに **Connected** ステータスが表示されます。
-      </Step>
-    </Steps>
-  </Tab>
-
-  <Tab title="直接 Kubeconfig">
-    ### サービスアカウントを使った手動セットアップ
-
-    セルフマネージドクラスター、またはクラウドプロバイダー接続で提供される範囲を超えたアクセスが必要な場合：
-
-    <Steps>
-      <Step title="名前空間を作成する（任意）">
-        専用の名前空間を作成します：
-        ```yaml
-        apiVersion: v1
-        kind: Namespace
-        metadata:
-          name: cloudthinker
-        ```
-      </Step>
-      <Step title="サービスアカウントを作成する">
-        ```yaml
-        apiVersion: v1
-        kind: ServiceAccount
-        metadata:
-          name: cloudthinker-readonly
-          namespace: cloudthinker
-        ```
-      </Step>
-      <Step title="ClusterRole を作成する">
-        ```yaml
-        apiVersion: rbac.authorization.k8s.io/v1
+    <Accordion title="cloudthinker-reader.yaml">
+      ```yaml
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: cloudthinker
+      ---
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: cloudthinker-reader
+        namespace: cloudthinker
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: cloudthinker-reader
+      rules:
+      - apiGroups: [""]
+        resources: ["pods", "pods/log", "nodes", "namespaces", "services", "endpoints", "events", "configmaps", "persistentvolumeclaims", "persistentvolumes", "resourcequotas", "limitranges", "serviceaccounts", "replicationcontrollers"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["apps"]
+        resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["batch"]
+        resources: ["jobs", "cronjobs"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["autoscaling"]
+        resources: ["horizontalpodautoscalers"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["networking.k8s.io"]
+        resources: ["ingresses", "networkpolicies"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["policy"]
+        resources: ["poddisruptionbudgets"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["storage.k8s.io"]
+        resources: ["storageclasses"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["metrics.k8s.io"]
+        resources: ["pods", "nodes"]
+        verbs: ["get", "list"]
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: cloudthinker-reader
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
         kind: ClusterRole
-        metadata:
-          name: cloudthinker-readonly
-        rules:
-        - apiGroups: [""]
-          resources: ["*"]
-          verbs: ["get", "list", "watch"]
-        - apiGroups: ["apps", "extensions"]
-          resources: ["*"]
-          verbs: ["get", "list", "watch"]
-        - apiGroups: ["autoscaling"]
-          resources: ["*"]
-          verbs: ["get", "list", "watch"]
-        - apiGroups: ["metrics.k8s.io"]
-          resources: ["pods", "nodes"]
-          verbs: ["get", "list"]
-        ```
-      </Step>
-      <Step title="ClusterRoleBinding を作成する">
-        ```yaml
-        apiVersion: rbac.authorization.k8s.io/v1
-        kind: ClusterRoleBinding
-        metadata:
-          name: cloudthinker-readonly
-        roleRef:
-          apiGroup: rbac.authorization.k8s.io
-          kind: ClusterRole
-          name: cloudthinker-readonly
-        subjects:
-        - kind: ServiceAccount
-          name: cloudthinker-readonly
-          namespace: cloudthinker
-        ```
-      </Step>
-      <Step title="長期トークンを作成する">
-        Kubernetes 1.24 以降では、長期トークン用の Secret を作成します：
-        ```yaml
-        apiVersion: v1
-        kind: Secret
-        metadata:
-          name: cloudthinker-readonly-token
-          namespace: cloudthinker
-          annotations:
-            kubernetes.io/service-account.name: cloudthinker-readonly
-        type: kubernetes.io/service-account-token
-        ```
+        name: cloudthinker-reader
+      subjects:
+      - kind: ServiceAccount
+        name: cloudthinker-reader
+        namespace: cloudthinker
+      ---
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: cloudthinker-reader-token
+        namespace: cloudthinker
+        annotations:
+          kubernetes.io/service-account.name: cloudthinker-reader
+      type: kubernetes.io/service-account-token
+      ```
+    </Accordion>
 
-        以下で適用します：
-        ```bash
-        kubectl apply -f cloudthinker-token-secret.yaml
-        ```
-      </Step>
-      <Step title="トークンを取得する">
-        ```bash
-        kubectl get secret cloudthinker-readonly-token -n cloudthinker \
-          -o jsonpath='{.data.token}' | base64 --decode
-        ```
-      </Step>
-      <Step title="クラスター情報を取得する">
-        クラスターエンドポイントを確認します：
-        ```bash
-        kubectl cluster-info
-        ```
+    適用します。
 
-        CA 証明書を抽出します：
-        ```bash
-        kubectl get secret cloudthinker-readonly-token -n cloudthinker \
-          -o jsonpath='{.data.ca\.crt}' | base64 --decode
-        ```
-      </Step>
-      <Step title="CloudThinker に接続を追加する">
-        **Connections → Kubernetes** に移動し、以下を入力します：
-        - クラスター API エンドポイント
-        - サービスアカウントトークン
-        - CA 証明書（自己署名クラスターの場合）
+    ```bash
+    kubectl apply -f cloudthinker-reader.yaml
+    ```
 
-        **Connect** をクリックします。CloudThinker はアクセスを確認し、**Connected** ステータスを表示します。
-      </Step>
-    </Steps>
-  </Tab>
-</Tabs>
+    `cloudthinker` 名前空間、`cloudthinker-reader` サービスアカウント、それにバインドされた読み取り専用の ClusterRole、長期間有効なトークンの Secret が作成されます。
 
----
+    **成功時の状態:** `kubectl get secret cloudthinker-reader-token -n cloudthinker` で、`DATA` の数が 3 の Secret が表示されます。Kubernetes は適用後数秒でトークンを埋めるため、`DATA` が 0 の場合は少し待ってからコマンドを再実行してください。
+  </Step>
+  <Step title="そのアカウント用の kubeconfig を作成する">
+    現在の `kubectl` コンテキストが対象クラスターになっているシェルで実行します。まず、API サーバーのアドレスを読み取って確認します。
 
-## 接続詳細
+    ```bash
+    SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+    echo $SERVER
+    ```
 
-直接接続で CloudThinker が使用する kubeconfig の形式：
+    公開ホスト名または IP が表示される必要があります。`127.0.0.1`、`localhost`、または `10.x` や `192.168.x` などのプライベートアドレス（kind、minikube、k3d、ローカルプロキシの背後でよく見られます）が表示される場合、CloudThinker は到達できないため、作業を止めて先にアクセスを修正してください。
 
-```yaml
-apiVersion: v1
-kind: Config
-clusters:
-- cluster:
-    certificate-authority-data: <base64-encoded-ca-cert>
-    server: https://your-cluster-endpoint:6443
-  name: your-cluster
-contexts:
-- context:
-    cluster: your-cluster
-    user: cloudthinker-readonly
-  name: cloudthinker-context
-current-context: cloudthinker-context
-users:
-- name: cloudthinker-readonly
-  user:
-    token: <your-service-account-token>
-```
+    次に、同じシェルで、トークンと CA 証明書を埋め込んだ `cloudthinker-kubeconfig.yaml` を書き出します。
 
----
+    ```bash
+    CA=$(kubectl get secret cloudthinker-reader-token -n cloudthinker -o jsonpath='{.data.ca\.crt}')
+    TOKEN=$(kubectl get secret cloudthinker-reader-token -n cloudthinker -o jsonpath='{.data.token}' | base64 --decode)
+
+    cat > cloudthinker-kubeconfig.yaml <<EOF
+    apiVersion: v1
+    kind: Config
+    clusters:
+    - name: target
+      cluster:
+        server: ${SERVER}
+        certificate-authority-data: ${CA}
+    users:
+    - name: cloudthinker-reader
+      user:
+        token: ${TOKEN}
+    contexts:
+    - name: cloudthinker
+      context:
+        cluster: target
+        user: cloudthinker-reader
+    current-context: cloudthinker
+    EOF
+    ```
+
+    古い macOS のリリースでは、`base64 --decode` を `base64 -D` に置き換え、最後の `EOF` は行の先頭に置いてください。
+
+    **成功時の状態:** `kubectl --kubeconfig cloudthinker-kubeconfig.yaml get nodes` でノードが一覧表示されます。これは CloudThinker が接続のテストで実行するのと同じコマンドです。
+  </Step>
+  <Step title="CloudThinker で kubeconfig をアップロードする">
+    **Settings → Workspace → Connections** を開き、**Kubernetes** を選んで、**KUBECONFIG** フィールドに `cloudthinker-kubeconfig.yaml` をアップロードします。**Connect** をクリックします。
+
+    **成功時の状態:** 接続に **Connecting** と **Verifying** が表示され、その後 **Connected** のステータスになります。
+  </Step>
+</Steps>
+
+## 接続の詳細
+
+| フィールド | 必須 | 説明 | 例 |
+|-------|----------|-------------|---------|
+| **KUBECONFIG** | はい | kubeconfig ファイル。ファイルピッカーは `.yaml` 拡張子だけを受け付けるため、`.yml` のファイルは選べません。先に `.yaml` に名前を変更してください。CloudThinker はその current context を使います | `cloudthinker-kubeconfig.yaml` |
+
+すべてをファイルに埋め込んでください。ローカルの証明書ファイルを参照する kubeconfig や、`exec` プラグインでサインインする kubeconfig には、CloudThinker にないファイルやツールが必要です。ステップ 2 のトークンベースのファイルなら、そのどちらも避けられます。
 
 ## 必要な権限
 
-### 最小権限（読み取り専用）
+[ステップ 1](#セットアップ) のマニフェストは、エージェントが調べるリソースへの読み取りアクセス（`get`、`list`、`watch`）と、Pod のログおよびメトリクスを付与します。Secret は読めません。
 
-```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: cloudthinker-readonly
-rules:
-- apiGroups: [""]
-  resources: ["pods", "nodes", "services", "namespaces", "events", "configmaps"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["apps"]
-  resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["autoscaling"]
-  resources: ["horizontalpodautoscalers"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["metrics.k8s.io"]
-  resources: ["pods", "nodes"]
-  verbs: ["get", "list"]
-```
+ClusterRoleBinding はすべての名前空間でロールを付与するため、読み取りアクセスは `kube-system` を含むクラスター全体に及びます。一部の名前空間だけを対象にするには、ClusterRoleBinding を、各名前空間で同じ ClusterRole への RoleBinding に置き換えます。その場合、RoleBinding では付与できないため、ノード、名前空間、永続ボリュームなどのクラスタースコープのリソースは回答から外れます。
 
-### 推奨（フル分析）
-
-```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: cloudthinker-full-analysis
-rules:
-- apiGroups: [""]
-  resources: ["pods", "nodes", "services", "namespaces", "events", "configmaps", "secrets", "persistentvolumeclaims", "resourcequotas", "limitranges", "replicationcontrollers"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["apps"]
-  resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["batch"]
-  resources: ["jobs", "cronjobs"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["networking.k8s.io"]
-  resources: ["ingresses", "networkpolicies"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["autoscaling"]
-  resources: ["horizontalpodautoscalers"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["metrics.k8s.io"]
-  resources: ["pods", "nodes"]
-  verbs: ["get", "list"]
-```
+カスタムリソースは対象外のため、エージェントは Argo CD のアプリケーションや Istio の仮想サービスなど、CRD ベースのオブジェクトを見られません。見られるようにするには、各リソースの API グループを含むルールを ClusterRole に追加します。
 
 <Tip>
-まず最小権限の ClusterRole から始め、より広い機能セットが必要になった場合にのみフル分析ロールに拡張してください。書き込みの verb を付与しないでください。get・list・watch だけで CloudThinker の全機能に対応できます。
+ロールは必要なものに絞ってください。ConfigMap に機密の値がある場合は `configmaps` を、RBAC の確認が不要な場合は `rbac.authorization.k8s.io` のルールを削除します。回答に `403` が出た場合、ロールに不足しているリソースが示されます。
 </Tip>
 
+## 書き込みアクセス
+
+エージェントが `scale`、`rollout restart`、`cordon`、`drain`、`apply` などの変更を実行するのは、あなたが会話で依頼した場合だけで、上記の読み取り専用のロールでは `403` で失敗します。接続の詳細パネルにある **Allow writes** が 2 つ目の制御です。デフォルトでオンですが、ロールが許可する範囲を広げることはできません。
+
+| `cloudthinker-reader` サービスアカウントの RBAC | Allow writes | 結果 |
+|---|---|---|
+| 読み取りのルールのみ | オンまたはオフ | 読み取り専用。Kubernetes がすべての変更を `403` で拒否します。 |
+| 書き込みのルールを付与 | オフ | 読み取り専用。CloudThinker がクラスターに届く前にすべての変更を拒否します。 |
+| 書き込みのルールを付与 | オン | エージェントが変更を提案できます。各変更は [Rules と Approval mode](/guide/approvals/overview) が判断します。 |
+
+CloudThinker 側でも書き込みをロックするには、**Settings → Workspace → Connections** を開き、**Kubernetes** を選んで、詳細パネルの **Allow writes** スイッチをオフにします。
+
+<ApprovalDefault />
+
+特定の変更を許可するには、それに必要なものだけを付与します。
+
+- **Scale と rollout restart** は名前空間のワークロードに作用します。関係する各名前空間で、`deployments` への `patch` と、`deployments/scale` への `get` と `patch` を持つ Role を使います。StatefulSet には、`statefulsets` と `statefulsets/scale` に同じものを追加します。DaemonSet には `daemonsets` を追加します（スケールしないため、再起動のみ）。
+- **Apply** には、適用するマニフェスト内の各リソースの種類について、対象の名前空間で `get`、`create`、`patch` が必要です。
+- **Cordon と drain** はクラスタースコープのノードに作用するため、名前空間の Role では許可できません。`nodes` への `patch` と `pods/eviction` への `create` を持つ ClusterRole を使います。drain に必要な Pod と DaemonSet への `get` と `list` は、読み取りロールがすでに提供しています。
+
+書き込みの付与は同じ `cloudthinker-reader` サービスアカウントにバインドされるため、1 つの kubeconfig で読み取りと変更の両方をカバーできます。最初から書き込みアクセスを計画している場合は、両方のマニフェストとステップ 2 で、アカウント名を変更してください（例: `cloudthinker-agent`）。
+
+この例では、1 つの名前空間でのデプロイメントのスケールと、cordon および drain を許可します。`payments` を自分の名前空間に置き換えて `cloudthinker-write.yaml` として保存し、`kubectl apply -f cloudthinker-write.yaml` を実行します。
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cloudthinker-scale
+  namespace: payments
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["patch"]
+- apiGroups: ["apps"]
+  resources: ["deployments/scale"]
+  verbs: ["get", "patch"]
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cloudthinker-scale
+  namespace: payments
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cloudthinker-scale
+subjects:
+- kind: ServiceAccount
+  name: cloudthinker-reader
+  namespace: cloudthinker
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cloudthinker-node-ops
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["patch"]
+- apiGroups: [""]
+  resources: ["pods/eviction"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cloudthinker-node-ops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cloudthinker-node-ops
+subjects:
+- kind: ServiceAccount
+  name: cloudthinker-reader
+  namespace: cloudthinker
+```
+
+**成功時の状態:** `kubectl auth can-i patch deployments/scale -n payments --as=system:serviceaccount:cloudthinker:cloudthinker-reader` が `yes` を出力します。
 
 ## エージェントの機能
 
-接続後、CloudThinker はクラスターを検査・最適化できます。
-
-| 機能 | 説明 |
-|------------|-------------|
-| **リソース分析** | Pod の CPU・メモリ使用量、requests と limits の比較 |
-| **ノードの健全性** | ノードの状態、キャパシティ、割り当て可能なリソース |
-| **ワークロード最適化** | サイジング推奨、HPA チューニング |
-| **トラブルシューティング** | CrashLoopBackOff・OOMKilled・ペンディング Pod |
-| **セキュリティ監査** | RBAC レビュー、Pod セキュリティ、ネットワークポリシー |
+| 機能 | エージェントが行うこと |
+|------------|----------------|
+| **Workload triage** | クラッシュループ、Pending、再起動中の Pod、劣化したデプロイメント、警告イベントを見つけ、ログを読んで理由を説明します |
+| **Node pressure** | ノードの状態、容量、割り当て可能なリソースを報告し、Metrics Server がインストールされていれば CPU とメモリの上位の消費者を示します |
+| **Capacity and scheduling** | リクエストとリミットを使用量と比較し、Pod がスケジュールできない理由を説明します |
+| **Security and RBAC** | ロールバインディング、サービスアカウント、ネットワークポリシー、特権ワークロードを確認します |
+| **Configuration** | 名前空間をまたいで Ingress、サービス、ストレージ、オートスケーラー、イメージを調べます。カスタムリソースにはロールへのルールの追加が必要です |
+| **Changes** | scale、restart、cordon、drain、apply。各変更は Approvals を経由します |
 
 ### 接続を確認する
 
 ```text
-Check the cluster connection and list all namespaces and node count
+Check the Kubernetes connection: list the namespaces, the node count, and any nodes that are not Ready
 ```
 
-### プロンプト例
+名前空間の一覧、ノード数、ノードのステータスが返されます。使用量の数値がない場合、回答には Metrics Server がインストールされていないと示されます。
+
+### プロンプトの例
 
 ```text
-Analyze pod resource utilization in the production namespace and report the top CPU and memory consumers
-Investigate crash loops in the payment service and recommend a fix
-Check node resource pressure across the cluster and alert if any node is near capacity
+Which pods in the payments namespace are crash-looping, and what do their logs say?
+Which nodes are under memory or disk pressure, and what is using the most memory?
+Which service accounts are bound to cluster-admin?
 ```
 
----
+## トークンをローテーションする
+
+Kubernetes は単一接続のサービスのため、正常な状態では鉛筆アイコンや **Edit Instance** ダイアログはありません。新しいトークンを先に作成し、古い Secret は最後に削除してください。先に削除すると、機能する代わりのものができる前にクラスターから切り離されます。
+
+<Steps>
+  <Step title="2 つ目のトークンの Secret を作成する">
+    これを `cloudthinker-reader-token-2.yaml` として保存します。同じサービスアカウントの 2 つ目のトークンで、切り替えの間は両方が機能します。
+
+    ```yaml
+    apiVersion: v1
+    kind: Secret
+    metadata:
+      name: cloudthinker-reader-token-2
+      namespace: cloudthinker
+      annotations:
+        kubernetes.io/service-account.name: cloudthinker-reader
+    type: kubernetes.io/service-account-token
+    ```
+
+    適用します。
+
+    ```bash
+    kubectl apply -f cloudthinker-reader-token-2.yaml
+    ```
+
+    **成功時の状態:** `kubectl get secret cloudthinker-reader-token-2 -n cloudthinker` で、`DATA` の数が 3 の Secret が表示されます。
+  </Step>
+  <Step title="新しいトークンから kubeconfig を作成する">
+    `cloudthinker-reader-token` の代わりに `cloudthinker-reader-token-2` を使って、[セットアップ](#セットアップ)のステップ 2 を繰り返します。
+
+    **成功時の状態:** `kubectl --kubeconfig cloudthinker-kubeconfig.yaml get nodes` でノードが一覧表示されます。
+  </Step>
+  <Step title="CloudThinker で切り替える">
+    接続に **Connected** と表示されている間は、**Kubernetes** の詳細パネルで **Disconnect** をクリックしてから、再度接続して新しい kubeconfig をアップロードします。**Error** と表示されている間は、切断せずに、詳細パネルで **Replace credentials** をクリックして新しい kubeconfig をアップロードします。
+
+    **成功時の状態:** 接続に **Connected** と表示されます。
+  </Step>
+  <Step title="古い Secret を削除する">
+    この段階で初めて、置き換えたトークンを削除します。
+
+    ```bash
+    kubectl delete secret cloudthinker-reader-token -n cloudthinker
+    ```
+  </Step>
+</Steps>
+
+切断して再接続すると、新しい接続が開始されます。
+
+- 切断から再接続までの間、エージェントとスケジュールされた[オートメーション](/guide/automation/automations)はクラスターを使えません。
+- 初回接続時の詳細調査のチャットが再度開き、クレジットを消費します。
+- **Allow writes** はオンに戻ります。オフにしていた場合は、もう一度オフにしてください。
+- Kubernetes 接続を指定している [Rules](/guide/approvals/rules) が、引き続きその接続を含んでいることを確認してください。
+
+ポリシーで長期間有効な認証情報が禁止されている場合は、Secret を使わず、`kubectl create token cloudthinker-reader -n cloudthinker --duration=<time>` による短期のトークンで kubeconfig を作成します。そのトークンが期限切れになると接続が壊れるため、そのたびに kubeconfig を作り直してアップロードします。
 
 ## トラブルシューティング
 
-<Accordion title="クラスターに接続できない">
-API サーバーのエンドポイントがインターネットからアクセス可能か確認してください。ファイアウォールルールとセキュリティグループが CloudThinker の IP を許可しているか確認してください。プライベートクラスターの場合は VPN またはバスティオンアクセスを設定し、API サーバー証明書が有効であることを確認してください。
+テストが失敗すると、`Failed to connect to Kubernetes:` に続いて `kubectl get nodes` の最初のエラー行が表示されます。その行を下の項目と照合してください。
+
+<Accordion title="Unable to connect to the server">
+CloudThinker が kubeconfig の API サーバーに到達できませんでした。`server` のアドレスが VPN からだけでなくインターネットから到達できること、API サーバーの許可リストが外部からのアクセスを許可していることを確認してください。ネットワーク外のマシンから `kubectl --kubeconfig cloudthinker-kubeconfig.yaml get nodes` を実行して確認します。
 </Accordion>
 
-<Accordion title="認証エラー">
-サービスアカウントトークンが正しいか確認してください。ClusterRoleBinding が適用されていること、トークンが期限切れでないことを確認してください。サービスアカウントが正しい名前空間に存在することも確認してください。
+<Accordion title="error: You must be logged in to the server (Unauthorized)">
+トークンが誤っている、期限切れ、または取り消されています。`cloudthinker-reader-token` の Secret がまだ存在することを確認してから、ステップ 2 から kubeconfig を作り直し、[トークンをローテーションする](#トークンをローテーションする)の手順でアップロードしてください。
 </Accordion>
 
-<Accordion title="メトリクスデータがない">
-`kubectl top nodes` を実行して Metrics Server がインストールされているか確認してください。Metrics Server の Pod が動作していること、`metrics.k8s.io` API が利用可能であることを確認してください。
+<Accordion title="回答に Error from server (Forbidden) が出る">
+ClusterRole がそのリソースをカバーしていません。ClusterRoleBinding が適用されていることを確認してから、ロールにリソースを追加してください。
 </Accordion>
 
-<Accordion title="名前空間が見つからない">
-ClusterRole に名前空間の一覧取得権限が含まれているか確認してください。RBAC で特定の名前空間へのアクセスが制限されていないか確認し、サービスアカウントのバインディングがクラスター全体に適用されていることを確認してください。
+<Accordion title="getting credentials: exec、または no such file or directory">
+kubeconfig がローカルのコマンドやファイルパスに依存しています。ステップ 2 のトークンベースの kubeconfig に置き換えてください。
 </Accordion>
 
----
+<Accordion title="回答に CPU やメモリの使用量がない">
+Metrics Server がインストールされていないか、準備ができていません。`kubectl top nodes` を実行して確認してください。Pod のステータス、イベント、ノードの状態はそれがなくても機能します。
+</Accordion>
+
+<Accordion title="Connection 'k8s' already exists. Only one instance is allowed.">
+`k8s` は Kubernetes 接続で、ワークスペースが持てるのは 1 つです。編集するための鉛筆アイコンはないため、CloudThinker を別のクラスターに向けるには、**Kubernetes** の詳細パネルで **Disconnect** をクリックし、別の kubeconfig で再度接続してください。
+</Accordion>
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **読み取り専用アクセス** — CloudThinker サービスアカウントに書き込みの verb を付与しないでください。get・list・watch だけで全エージェント機能に対応できます。
-- **名前空間の分離** — サービスアカウントを専用の名前空間（例：`cloudthinker`）に置くことで、監査と失効管理を簡素化できます。
+- **Secret をロールに含めない。** 上記のマニフェストは Secret の読み取りを一切付与しないため、エージェントは Secret オブジェクトを読めません。Pod のログと ConfigMap は読めるため、機密データが含まれる場合は `pods/log` や `configmaps` をロールから削除してください。Pod の spec に直接設定された環境変数の値は `pods` を通じて読めるため、機密の値は Secret に移してください。
+- **トークンをローテーションする。** トークンの Secret は自動では期限切れにならないため、通常のスケジュールでローテーションしてください。[トークンをローテーションする](#トークンをローテーションする)を参照してください。
+- **1 つのコマンドで取り消す。** トークンの Secret を削除するとすぐにアクセスを遮断でき、`cloudthinker` 名前空間と ClusterRole およびバインディングを削除するとすべてを取り除けます。
 
----
-
-## 関連
+## 関連ページ
 
 <CardGroup cols={2}>
-  <Card title="エージェント" icon="dharmachakra" href="/ja/guide/agents/overview">
-    CloudThinker と、その作業の仕組み
+  <Card title="Rancher" icon="/images/icons/rancher.svg" href="/guide/connections/rancher">
+    Rancher が管理するクラスター全体のインベントリとアクセスを読みます
   </Card>
-  <Card title="AWS 接続" icon="/images/icons/aws.svg" href="/ja/guide/connections/aws">
-    EKS 自動検出のための AWS 接続
+  <Card title="Kubernetes ヘルスモニタリング" icon="heart-pulse" href="/ja/guide/use-cases/kubernetes-health-monitoring">
+    この接続を定期的なクラスターのヘルスチェックに活用します
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    どのクラスターの変更を実行し、人の判断待ちにし、拒否するかを決めます
+  </Card>
+  <Card title="接続の概要" icon="plug" href="/ja/guide/connections/overview">
+    接続のステータスとテストの仕組み
   </Card>
 </CardGroup>

@@ -1,48 +1,57 @@
 ---
 title: Keycloak
-description: "Keycloak을 CloudThinker에 연결하여 ID 및 접근 관리 운영을 수행합니다"
+description: "Keycloak realm을 연결하여 에이전트가 사용자, 클라이언트, 역할, 그룹, 인증 흐름을 감사하고 Approvals를 거쳐 ID 변경을 할 수 있도록 합니다"
 icon: "/images/icons/keycloak.svg"
 ---
 
+import ApprovalDefault from '/snippets/approval-default.mdx';
 import ConnectionSecurity from '/snippets/ko/connection-security.mdx';
 
-Keycloak realm을 연결하면 [CloudThinker](/ko/guide/agents/overview)가 realm을 검사하고, 클라이언트를 감사하며, 사용자 및 역할을 검토하고, ID 및 접근 설정을 분석할 수 있습니다.
+Keycloak realm을 연결하면 CloudThinker 에이전트가 사용자, 클라이언트, 역할, 그룹, ID 공급자, 인증 흐름을 검토하고, 워크스페이스의 Approvals를 거쳐 ID 변경을 할 수 있습니다. 이 연결은 **서비스 계정**으로 로그인합니다. 서비스 계정은 realm 안의 기밀 클라이언트로, client credentials grant를 사용하며, `realm-management` 역할이 에이전트가 보고 변경할 수 있는 범위를 정합니다.
 
-Keycloak은 대상 realm에서 `realm-management` 역할을 보유한 **기밀 서비스 어카운트 클라이언트**로 인증합니다.
+## 사전 요구 사항
 
-## 지원 플랫폼
-
-| 플랫폼 | 지원 |
-|----------|---------|
-| **자체 호스팅 Keycloak** | 전체 버전 |
-| **Phase Two** | 관리형 Keycloak 서비스 |
-
-## 사전 요구사항
-
-- CloudThinker가 검사할 **Keycloak realm**.
-- 기밀 클라이언트를 생성하고 서비스 어카운트 역할을 할당할 **관리자 접근** — `kcadm.sh` (자체 호스팅) 또는 realm 콘솔 (Phase Two).
-- realm의 **기본 URL** 및 **realm 이름**.
+- CloudThinker가 네트워크로 접근할 수 있는 Keycloak 서버. 방화벽 뒤의 서버라면 [Reaching private services](/ko/guide/connections/overview#비공개-서비스-접근)를 참조하세요. CloudThinker는 `http`를 차단하지 않지만, 그 경우 클라이언트 시크릿이 암호화되지 않은 채 전송되므로 `https`를 사용합니다.
+- 대상 realm에 클라이언트를 만들고 서비스 계정 역할을 할당할 수 있는 관리자.
+- realm 이름.
+- 연결을 추가하고 편집할 수 있는 CloudThinker 워크스페이스의 **Admin** 역할. [Roles](/guide/security/roles)를 참조하세요.
 
 <Info>
-연결은 `cloudthinker-svc` 서비스 어카운트에 부여한 역할로 범위가 제한됩니다. CloudThinker에 필요한 최소 권한의 `realm-management` 역할을 할당하세요.
+워크스페이스에는 Keycloak 연결이 하나만 있으며, 이 연결은 하나의 realm을 대상으로 합니다. 에이전트는 `<KEYCLOAK_URL>/realms/<KEYCLOAK_REALM>/protocol/openid-connect/token`에서 토큰을 받으므로, 기본 URL은 `/realms` 앞부분이어야 합니다.
 </Info>
 
 ## 설정
 
-두 방법 모두 동일한 결과물을 생성합니다: 서비스 어카운트에 `realm-management` 역할이 있는 `cloudthinker-svc` 기밀 클라이언트. 자체 호스팅은 `kcadm.sh`를 사용하고, Phase Two는 realm 콘솔을 사용합니다.
+두 탭은 같은 것을 만듭니다. 서비스 계정이 활성화되고 서비스 계정에 `realm-management` 역할이 있는 `cloudthinker-svc`라는 기밀 클라이언트입니다.
 
 <Tabs>
-  <Tab title="자체 호스팅 Keycloak">
-
-    Keycloak의 관리 CLI인 `kcadm.sh`로 클라이언트를 프로비저닝합니다. `kcadm.sh`가 사용 가능한 셸에서 실행하세요.
+  <Tab title="Admin console">
+    자체 호스팅 Keycloak과 Phase Two 같은 관리형 Keycloak에서 작동합니다.
 
     <Steps>
-      <Step title="인증">
+      <Step title="클라이언트 생성">
+        관리 콘솔에서 realm으로 전환하고 **Clients**를 연 다음 **Create client**를 선택합니다. **Client ID**를 `cloudthinker-svc`로 설정하고 **Next**를 선택합니다. **Client authentication**을 켜고 **Service accounts roles**를 선택하며, 다른 흐름은 끈 상태로 둡니다. **Next**를 선택한 다음 **Save**를 선택합니다.
+      </Step>
+      <Step title="realm-management 역할 할당">
+        클라이언트를 열고 **Service accounts roles**로 이동하여 **Assign role**을 선택합니다. 클라이언트로 필터링하고 `realm-management`를 검색한 다음 역할을 선택합니다. 읽기 전용 감사에는 `view-realm`, `view-users`, `query-users`, `view-clients`, `query-clients`, `query-groups`를 선택합니다. 변경을 허용하려면 [필요 권한](#필요-권한)을 참조하세요. 목록이 여러 페이지에 걸쳐 있을 수 있습니다.
+      </Step>
+      <Step title="클라이언트 시크릿 복사">
+        같은 클라이언트에서 **Credentials**를 열고 **Client Secret**을 복사합니다.
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="kcadm.sh">
+    Keycloak 서버에 접근할 수 있는 컴퓨터에서 Keycloak 관리 CLI를 사용합니다.
+
+    <Steps>
+      <Step title="로그인">
         ```bash
         kcadm.sh config credentials \
-          --server http://localhost:8080 --realm master \
-          --user admin --password '<admin-password>'
+          --server https://keycloak.example.com --realm master \
+          --user admin
         ```
+
+        `kcadm.sh`가 비밀번호를 묻도록 `--password`를 생략하면 비밀번호가 셸 기록에 남지 않습니다. 서버가 `/auth` 아래에서 서비스한다면 `--server`에 `/auth`를 추가합니다.
       </Step>
       <Step title="클라이언트 생성">
         ```bash
@@ -51,21 +60,19 @@ Keycloak은 대상 realm에서 `realm-management` 역할을 보유한 **기밀 �
           -s publicClient=false \
           -s serviceAccountsEnabled=true \
           -s standardFlowEnabled=false \
-          -s directAccessGrantsEnabled=false \
-          -s 'redirectUris=[]'
+          -s directAccessGrantsEnabled=false
         ```
       </Step>
-      <Step title="realm-management 역할 할당">
+      <Step title="읽기 전용 realm-management 역할 할당">
         ```bash
         kcadm.sh add-roles -r <your-realm> \
           --uusername service-account-cloudthinker-svc \
           --cclientid realm-management \
-          --rolename realm-admin
+          --rolename view-realm --rolename view-users --rolename query-users \
+          --rolename view-clients --rolename query-clients --rolename query-groups
         ```
-
-        최소 권한을 원한다면 더 좁은 역할(예: `view-realm`, `view-users`)을 사용하세요.
       </Step>
-      <Step title="클라이언트 시크릿 가져오기">
+      <Step title="클라이언트 시크릿 복사">
         ```bash
         CID=$(kcadm.sh get clients -r <your-realm> \
           -q clientId=cloudthinker-svc --fields id --format csv --noquotes | tail -n1)
@@ -74,151 +81,129 @@ Keycloak은 대상 realm에서 `realm-management` 역할을 보유한 **기밀 �
           --fields value --format csv --noquotes | tail -n1
         ```
       </Step>
-      <Step title="CloudThinker에 연결 추가">
-        **Connections → Keycloak**으로 이동하여 다음을 입력하세요:
-
-        - **KEYCLOAK_URL**: `http://<host-ip>:8080`
-        - **KEYCLOAK_REALM**: realm 이름
-        - **KEYCLOAK_CLIENT_ID**: `cloudthinker-svc`
-        - **KEYCLOAK_CLIENT_SECRET**: 이전 단계의 시크릿
-
-        **Connect**를 클릭하세요. 성공하면 CloudThinker가 **Connected** 상태를 표시합니다.
-      </Step>
     </Steps>
-
-  </Tab>
-
-  <Tab title="Phase Two">
-
-    [Phase Two](https://dash.phasetwo.io/realms)를 통한 관리형 Keycloak의 경우.
-
-    <Steps>
-      <Step title="Realm 콘솔 열기">
-        [Phase Two 대시보드](https://dash.phasetwo.io/realms)에서 연결하려는 realm의 콘솔을 여세요.
-      </Step>
-      <Step title="클라이언트 생성">
-        **Clients** 탭 → **Create client**로 이동하여 다음을 설정하세요:
-
-        - **Client ID**: `cloudthinker-svc`
-        - **Next** 클릭
-        - **Client authentication** 및 **Authorization** 활성화
-        - **Next** 클릭 후 **Save**
-      </Step>
-      <Step title="realm-management 역할 할당">
-        새 클라이언트 → **Service account roles** → **Assign roles** 열기.
-
-        `realm-management`를 검색하고 CloudThinker에 사용할 역할을 할당하세요. 누락을 방지하기 위해 두 페이지를 모두 확인하며 모든 `realm-management` 역할을 할당하는 것을 권장합니다.
-      </Step>
-      <Step title="클라이언트 시크릿 가져오기">
-        동일한 클라이언트에서 **Credentials**를 열고 **Client Secret** 아래의 값을 복사하세요.
-      </Step>
-      <Step title="Realm URL 가져오기">
-        [https://dash.phasetwo.io/realms](https://dash.phasetwo.io/realms)로 돌아가서 realm 카드를 열고 **Details**를 클릭하세요. **Host** 아래의 값(예: `https://<region>.auth.ac/auth`)을 복사하세요.
-      </Step>
-      <Step title="CloudThinker에 연결 추가">
-        **Connections → Keycloak**으로 이동하여 다음을 입력하세요:
-
-        - **KEYCLOAK_URL**: realm 세부 정보의 Host URL (예: `https://<region>.auth.ac/auth`)
-        - **KEYCLOAK_REALM**: realm 이름
-        - **KEYCLOAK_CLIENT_ID**: `cloudthinker-svc`
-        - **KEYCLOAK_CLIENT_SECRET**: 자격증명 단계의 시크릿
-
-        **Connect**를 클릭하세요. 성공하면 CloudThinker가 **Connected** 상태를 표시합니다.
-      </Step>
-    </Steps>
-
   </Tab>
 </Tabs>
+
+그런 다음 연결을 추가합니다:
+
+<Steps>
+  <Step title="CloudThinker에 연결 추가">
+    **Settings → Workspace → Connections**를 열고 **Keycloak**을 선택한 다음 [연결 세부 정보](#연결-세부-정보)의 필드를 입력합니다. **Connect**를 클릭합니다.
+
+    **성공 상태:** 연결이 **Connecting**과 **Verifying**을 거쳐 **Connected**로 표시됩니다. CloudThinker는 서비스 계정으로 로그인하여 realm의 사용자 수를 세며, 이로써 시크릿과 `view-users` 역할이 모두 확인됩니다.
+  </Step>
+</Steps>
 
 ## 연결 세부 정보
 
 | 필드 | 설명 | 예시 |
 |-------|-------------|---------|
-| **KEYCLOAK_URL** | Keycloak 기본 URL | `http://<host-ip>:8080` |
-| **KEYCLOAK_REALM** | 대상 realm 이름 | `my-realm` |
-| **KEYCLOAK_CLIENT_ID** | 서비스 어카운트 클라이언트 ID | `cloudthinker-svc` |
-| **KEYCLOAK_CLIENT_SECRET** | 자격증명 단계의 클라이언트 시크릿 | — |
+| **KEYCLOAK_URL** | `/realms/...`를 제외한 Keycloak 기본 URL. 이전 Keycloak 릴리스와 Phase Two처럼 서버가 `/auth` 아래에서 서비스한다면 `/auth`를 포함합니다 | `https://keycloak.example.com` |
+| **KEYCLOAK_REALM** | 클라이언트가 있고 에이전트가 작업하는 realm | `production` |
+| **KEYCLOAK_CLIENT_ID** | 서비스 계정 클라이언트의 Client ID | `cloudthinker-svc` |
+| **KEYCLOAK_CLIENT_SECRET** | **Credentials** 탭의 클라이언트 시크릿 | |
+
+Phase Two의 경우 Phase Two 대시보드의 realm 카드에서 기본 URL을 복사합니다. **Details**를 선택하고 **Host**를 복사합니다.
 
 ## 필요 권한
 
-`cloudthinker-svc` 서비스 어카운트는 대상 realm에서 `realm-management` 역할이 필요합니다. 주요 역할:
+서비스 계정에 `realm-management` 클라이언트 역할을 할당합니다. 용도를 충족하는 가장 좁은 세트를 선택합니다.
 
-| 역할 | 용도 |
-|------|---------|
-| `view-realm` | Realm 설정 읽기 |
-| `view-users` | 사용자 목록 조회 및 검사 |
-| `view-clients` | 클라이언트 목록 조회 및 검사 |
-| `query-users`, `query-clients`, `query-groups` | 조회 쿼리 실행 |
-| `manage-users`, `manage-clients`, `manage-realm` | 변경 수행 (필요한 경우에만 할당) |
+| 에이전트에게 원하는 작업 | 역할 |
+|--------------------|-------|
+| 연결 테스트 통과 및 사용자 감사 | `view-users`, `query-users` |
+| realm 설정, ID 공급자, 인증 흐름 검토 | `view-realm` |
+| 클라이언트와 클라이언트 역할 검토 | `view-clients`, `query-clients` |
+| 그룹과 구성원 검토 | `query-groups`와 `view-users` |
+| 사용자, 그룹, 구성원 자격 생성·업데이트·삭제 | `manage-users` |
+| 클라이언트, 클라이언트 역할 생성 또는 삭제, 시크릿 교체 | `manage-clients` |
+| realm 설정 또는 인증 흐름 변경 | `manage-realm` |
+
+`realm-admin`은 위의 모든 역할을 포함합니다. 가장 빠르지만 가장 광범위한 선택이므로, 에이전트가 realm 전체를 관리해야 할 때만 사용합니다.
 
 <Tip>
-읽기 전용 분석에는 `view-*` 및 `query-*` 역할만 할당하세요. CloudThinker가 변경을 수행해야 하는 경우에만 `manage-*` 역할을 추가하세요.
+감사에는 `view-*`와 `query-*` 역할만 할당하세요. 누락된 역할은 `view-users`가 아닌 한 연결 실패가 아니라 해당 질문에서 `403 Forbidden`으로 나타납니다.
 </Tip>
 
 ## 에이전트 기능
 
-연결이 완료되면 CloudThinker가 할 수 있는 작업:
+| 기능 | 에이전트가 할 수 있는 일 | 승인 |
+|------------|--------------------|----------|
+| **Users** | 사용자를 나열하고 수를 세고, 사용자 이름으로 조회하고, 직접 역할과 유효 역할 및 그룹 구성원 자격을 보여 줍니다 | 아니요 |
+| **Clients** | 클라이언트와 그 역할을 나열하고, 어떤 흐름이 켜져 있는지 같은 설정을 검사합니다 | 아니요 |
+| **Roles and groups** | realm 역할, 그룹, 그룹 구성원을 나열합니다 | 아니요 |
+| **Identity providers** | ID 공급자와 그 매퍼를 나열합니다 | 아니요 |
+| **Auth flows** | 인증 흐름과 그 실행 단계를 나열합니다 | 아니요 |
+| **User changes** | 사용자 생성·업데이트·삭제, 비밀번호 재설정, 인증 이메일 보내기, 역할 및 그룹 구성원 자격 변경 | Approvals를 거침 |
+| **Client changes** | 클라이언트와 클라이언트 역할 생성 또는 삭제, 클라이언트 시크릿 교체 | Approvals를 거침 |
+| **Realm, group, and flow changes** | 그룹과 하위 그룹 생성·이름 변경·삭제, 흐름 생성 또는 삭제, 실행 단계의 요구 사항 변경. realm을 만들려면 `master` realm에만 있는 `create-realm` 역할도 필요합니다 | Approvals를 거침 |
 
-| 기능 | 설명 |
-|------------|-------------|
-| **Realm 검사** | Realm 설정 및 구성 검토 |
-| **클라이언트 감사** | 클라이언트 목록 조회, 플로우 및 인가 설정 검토 |
-| **사용자 관리** | 사용자, 세션, 자격증명 상태 조회 |
-| **역할 및 그룹 검토** | 역할, 복합 역할, 그룹 계층 구조 검사 |
-| **접근 분석** | 과도하게 권한이 부여된 서비스 어카운트 및 오래된 클라이언트 식별 |
+읽기 작업은 묻지 않고 실행됩니다. 연결 세부 정보 패널의 **Allow writes**는 기본적으로 켜져 있으며, 끄면 모든 변경을 거부합니다. 모든 변경은 먼저 [Approvals](/guide/approvals/overview)를 거칩니다.
 
-### 연결 확인
+<ApprovalDefault />
+
+목록 읽기는 기본적으로 최대 100개 항목을 반환하므로, 큰 realm에서는 전체 대신 그룹, 클라이언트 또는 사용자 이름에 대해 질문합니다.
+
+CloudThinker는 새 사용자 비밀번호를 표준 입력으로 Keycloak에 전달하므로 명령 로그에 남지 않습니다. 하지만 대화에 직접 입력하면 대화에는 나타날 수 있으므로, 사용자가 Keycloak을 통해 직접 비밀번호를 재설정하게 하는 편이 좋습니다.
+
+<Warning>
+클라이언트 시크릿 교체는 실행되는 즉시 적용되며, 이전 시크릿은 작동을 멈춥니다. 요청하기 전에 해당 클라이언트의 소유자에게 알리세요.
+</Warning>
+
+### 연결 검증
 
 ```text
-List all clients in the realm to verify the Keycloak connection
+How many users are in my Keycloak realm?
 ```
+
+사용자 수가 표시됩니다. 이 질문에는 `view-users`만 필요합니다. 클라이언트 접근도 확인하려면 어떤 클라이언트에 direct access grants가 활성화되어 있는지 질문합니다. 이 질문에는 `view-clients`가 필요합니다.
 
 ### 예시 프롬프트
 
 ```text
-List all clients in the realm and flag any with direct access grants enabled
-Show service accounts with realm-admin and review whether each is needed
-Audit users without 2FA enabled
+What are the effective realm roles of the user alice?
+Which service accounts hold realm-admin, and does each one need it?
+Show the steps of the browser authentication flow and which are required
 ```
 
 ## 문제 해결
 
-<Accordion title="401 인증되지 않음">
-- 클라이언트 시크릿이 올바르게 복사되었는지 확인하세요
-- 클라이언트에서 **Client authentication**이 활성화되어 있는지 확인하세요
-- 서비스 어카운트에 `realm-management` 역할이 할당되어 있는지 확인하세요
+<Accordion title="Failed to connect to Keycloak">
+CloudThinker가 토큰을 받거나 사용자 수를 세지 못했습니다. 다음 순서로 확인합니다:
+- **KEYCLOAK_URL**이 CloudThinker에서 접근 가능하고 `/realms` 앞에서 끝나는지. 서버가 `/auth` 아래에서 서비스한다면 `/auth`를 추가합니다.
+- **KEYCLOAK_REALM**이 클라이언트를 만든 realm인지. 이름은 대소문자를 구분합니다.
+- 클라이언트에 **Client authentication**과 **Service accounts roles**가 켜져 있고, 시크릿이 전부 복사되었는지.
+- 서비스 계정에 `view-users`가 있는지.
 </Accordion>
 
-<Accordion title="Realm 작업에서 403 금지됨">
-- 서비스 어카운트에 해당 작업에 필요한 `realm-management` 역할이 없음
-- 자체 호스팅: 누락된 역할로 `add-roles`를 재실행하세요
-- Phase Two: 역할 할당 목록의 두 페이지를 모두 다시 확인하세요
+<Accordion title="클라이언트에 시크릿이 없음">
+클라이언트가 공개 클라이언트입니다. **Client authentication**을 켜거나 `kcadm.sh`로 `publicClient=false`를 설정한 다음 **Credentials**에서 시크릿을 복사합니다.
 </Accordion>
 
-<Accordion title="Keycloak URL에 접근할 수 없음">
-- 자체 호스팅: 기본 URL이 Keycloak 호스트명과 일치하는지 확인하세요
-- Phase Two: realm **Details → Host** 필드에서 URL을 정확히 복사하세요
+<Accordion title="일부 질문에서 403 Forbidden">
+토큰은 작동하지만 서비스 계정에 해당 엔드포인트의 역할이 없습니다. 읽기 질문에는 `view-*` 또는 `query-*` 역할이, 변경에는 `manage-*` 역할이 필요합니다. [필요 권한](#필요-권한)에서 역할을 추가합니다. 역할은 다음 토큰부터 적용되므로 질문을 다시 시도합니다.
 </Accordion>
 
-<Accordion title="빈 클라이언트 시크릿">
-- 클라이언트가 기밀이어야 합니다 — `publicClient=false` (자체 호스팅) 또는 **Client authentication** 활성화 (Phase Two)
-- 공개 클라이언트에는 시크릿이 없습니다
+<Accordion title="에이전트가 사용자를 100명만 표시함">
+목록 읽기는 기본적으로 100개에서 멈춥니다. 특정 사용자 이름이나 그룹을 요청하거나, 에이전트에게 더 많은 결과를 페이지별로 넘겨 달라고 요청합니다.
 </Accordion>
 
 ## 보안
 
 <ConnectionSecurity />
 
-- **전용 클라이언트** — 공유 관리자 클라이언트가 아닌 전용 서비스 어카운트 클라이언트로 `cloudthinker-svc`를 사용하세요.
-- **시크릿 교체** — **Credentials** 탭을 통해 주기적으로 클라이언트 시크릿을 교체하세요.
+- **전용 클라이언트 사용**: 다른 앱에 영향을 주지 않고 취소할 수 있도록 `cloudthinker-svc`는 CloudThinker 전용으로 유지합니다.
+- **시크릿 교체**: 시크릿을 다시 생성하는 순간 연결이 끊기므로 두 단계를 함께 진행합니다. Keycloak은 단일 연결 서비스이므로 행에 연필 아이콘이 없습니다. Keycloak의 **Credentials**에서 시크릿을 다시 생성한 다음, **Settings → Workspace → Connections**를 열고 **Keycloak**을 선택합니다. **Error**가 표시되면 **Replace credentials**를 클릭하고, 저장된 자격 증명 옆의 **Replace…**를 클릭하고, 새 **KEYCLOAK_CLIENT_SECRET**을 붙여넣은 다음 **Save and test**를 클릭합니다. [Rotate a credential](/ko/guide/connections/overview#자격-증명-교체)을 참조하세요.
+- **감사에 `realm-admin`을 사용하지 않습니다**: 위 읽기 행의 모든 질문은 읽기 전용 역할로 충분합니다.
 
-## 관련 항목
+## 관련 문서
 
 <CardGroup cols={2}>
-  <Card title="에이전트" icon="shield-halved" href="/ko/guide/agents/overview">
-    보안 및 컴플라이언스 에이전트
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    어떤 Keycloak 변경이 실행되고, 사람을 기다리고, 거부될지 정합니다.
   </Card>
-  <Card title="연결 개요" icon="plug" href="/ko/guide/connections/overview">
-    사용 가능한 모든 연결
+  <Card title="연결" icon="plug" href="/ko/guide/connections/overview">
+    연결할 수 있는 모든 서비스와 연결 상태의 작동 방식을 확인합니다.
   </Card>
 </CardGroup>

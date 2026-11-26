@@ -1,234 +1,248 @@
 ---
 title: ClickHouse
-description: "ClickHouse を CloudThinker に接続してスキーマ調査、分析クエリの調査、および任意の書き込みアクセスを実現"
+description: "ClickHouse を接続して、CloudThinker が分析 SQL でスキーマの探索、テーブルの健全性チェック、遅いクエリのランク付けを行えるようにします"
 icon: "/images/icons/clickhouse.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
-ClickHouse クラスタを接続して、[CloudThinker](/ja/guide/agents/overview)がスキーマを調査し、テーブルの健全性を確認し、分析 SQL で質問に回答できるようにします。新しい接続は読み取り専用です。CloudThinker はすべてのクエリを ClickHouse の `readonly` 設定を有効にした状態で送信します。エージェントにデータを変更させたい場合は **Write access** をオンにし、オブジェクトを削除させたい場合はさらに **Allow DROP and TRUNCATE** をオンにします。
+ClickHouse を接続すると、CloudThinker がデータベースとテーブルを一覧表示し、パーツ数とテーブルサイズを確認し、`system.query_log` から遅いクエリをランク付けし、分析 SQL で質問に答えられるようになります。CloudThinker は HTTP インターフェース経由で ClickHouse ユーザーとしてサインインし、新しい接続は読み取り専用です。
+
+<Warning>
+ClickHouse には Approvals が適用されません。**Write access** を **Full access** に設定すると、書き込みは誰にも確認せずに実行されます。[書き込みアクセス](#書き込みアクセス)を参照してください。
+</Warning>
+
+---
 
 ## 前提条件
 
-- CloudThinker から **HTTP インターフェース**経由で到達可能な ClickHouse サーバー（TLS ありは `8443`、なしは `8123`）。ClickHouse Cloud、セルフホストのクラスタ、Kubernetes 上で Operator が運用するクラスタ、他社のマネージド ClickHouse のいずれでも動作します。CloudThinker が必要とするのはそのポートだけです。
-- 専用ユーザーを作成するための管理者アクセス。
-- ネイティブ TCP ポート（`9000`）は使用しないため、公開する必要はありません。
+- CloudThinker から **HTTP インターフェース**で到達できる ClickHouse サーバー: TLS ありは `8443`、TLS なしは `8123`。ClickHouse Cloud とセルフホストのクラスターのどちらにも対応します。ネイティブ TCP ポート（`9000`）は使用しません。
+- 専用ユーザーを作成するための ClickHouse の管理者ログイン。ClickHouse Cloud では、サービスの **SQL console** で `default` ユーザーとしてセットアップの SQL を実行します。
+- 接続を追加するための CloudThinker のワークスペース Admin ロール。[How access works](/ja/guide/connections/overview#アクセスの仕組み) を参照してください。
+
+---
 
 ## セットアップ
 
 <Steps>
-  <Step title="専用ユーザーを作成する">
-    管理者として接続し、CloudThinker ユーザーを作成します：
+  <Step title="読み取りアクセスを持つ専用ユーザーを作成する">
+    管理者として接続し、次を実行します。
     ```sql
     CREATE USER cloudthinker IDENTIFIED BY 'your-secure-password';
-    ```
-  </Step>
-  <Step title="読み取りアクセスを付与する">
-    エージェントに見せるデータベースへの `SELECT` と、`SHOW` を付与します：
-    ```sql
     GRANT SELECT ON your_database.* TO cloudthinker;
     GRANT SHOW DATABASES, SHOW TABLES, SHOW COLUMNS ON *.* TO cloudthinker;
+    GRANT SELECT ON system.tables TO cloudthinker;
+    GRANT SELECT ON system.columns TO cloudthinker;
+    GRANT SELECT ON system.parts TO cloudthinker;
+    GRANT SELECT ON system.query_log TO cloudthinker;
     ```
+    ClickHouse Cloud では、パスワードがサービスの複雑さのルール（長さ、大文字と小文字の混在、数字、特殊文字）を満たしていないと `CREATE USER` が失敗します。
+
+    `system.*` の権限は、テーブルの健全性と遅いクエリに関する回答に使われます。これらを省略するとそれらの質問は失敗しますが、スキーマに関する質問は引き続き動作します。
+
+    <Warning>
+    `system.query_log` には、`WHERE` 句のリテラルを含むすべてのユーザーのクエリの全文が保存されており、個人データが含まれる可能性があります。この権限を付与すると、エージェントがそれらのクエリを読み、チャットで引用できるようになります。懸念がある場合はこの権限を省略してください。その場合、遅いクエリに関する回答は失敗します。
+    </Warning>
+
+    複数ノードのセルフホストクラスターでは、クラスターがアクセスストレージを複製していない限り、この方法で作成したユーザーは実行したノードにしか存在しません。代わりに、クラスター名を指定した次のバージョンを実行してください。
+    ```sql
+    CREATE USER cloudthinker ON CLUSTER '<cluster>' IDENTIFIED BY 'your-secure-password';
+    GRANT ON CLUSTER '<cluster>' SELECT ON your_database.* TO cloudthinker;
+    GRANT ON CLUSTER '<cluster>' SHOW DATABASES, SHOW TABLES, SHOW COLUMNS ON *.* TO cloudthinker;
+    GRANT ON CLUSTER '<cluster>' SELECT ON system.tables TO cloudthinker;
+    GRANT ON CLUSTER '<cluster>' SELECT ON system.columns TO cloudthinker;
+    GRANT ON CLUSTER '<cluster>' SELECT ON system.parts TO cloudthinker;
+    GRANT ON CLUSTER '<cluster>' SELECT ON system.query_log TO cloudthinker;
+    ```
+    `SELECT name FROM clusterAllReplicas('<cluster>', system.users) WHERE name = 'cloudthinker'` で、すべてのノードにユーザーが存在することを確認してください。
   </Step>
-  <Step title="ユーザーを読み取り専用に固定する（推奨）">
-    接続はデフォルトで読み取り専用ですが、設定プロファイルを使うとクライアントに依存せずサーバー側で制限を維持できます：
+  <Step title="サーバー側でユーザーを読み取り専用に固定する（推奨）">
+    **Write access** をオンにする予定がある場合は、このステップを省略してください。それ以外の場合は、設定プロファイルを追加して、どのクライアントが何を要求しても ClickHouse 自体が書き込みを拒否するようにします。
     ```sql
     CREATE SETTINGS PROFILE cloudthinker_readonly SETTINGS readonly = 1 READONLY;
     ALTER USER cloudthinker SETTINGS PROFILE cloudthinker_readonly;
     ```
-    **Write access** をオンにする予定がある場合はこのステップをスキップしてください。このプロファイルは `READONLY` を使用するため、ユーザーは解除できず、CloudThinker のスイッチでも上書きできません。
+    このプロファイルで CloudThinker が動かなくなることはありません。読み取りは通常どおり動作し、ClickHouse 自体がすべての書き込みを拒否します。
   </Step>
-  <Step title="システムテーブルへのアクセスを許可する（任意）">
-    テーブルサイズ、パート数、カラムのメタデータは `system` から取得されます：
-    ```sql
-    GRANT SELECT ON system.tables TO cloudthinker;
-    GRANT SELECT ON system.columns TO cloudthinker;
-    GRANT SELECT ON system.parts TO cloudthinker;
-    ```
+  <Step title="ネットワークアクセスを開放する">
+    このドキュメントでは CloudThinker の送信元 IP リストを公開していません。CloudThinker の担当者に問い合わせるか、[お問い合わせ](https://cloudthinker.io/contact)ください。その後、次を行います。
+    - **ClickHouse Cloud**: サービスの **Settings → Security** にある IP アクセスリストに追加します。
+    - **セルフホスト**: ファイアウォールまたはセキュリティグループで、それらの IP からのインバウンド `8443`（または `8123`）を許可します。
   </Step>
-  <Step title="ネットワークアクセスを設定する">
-    CloudThinker に HTTP インターフェースを開放します：
-    - ClickHouse Cloud の場合：サービスの **Settings → Security** にある **IP アクセスリスト**に CloudThinker を追加
-    - セルフホストの場合：ファイアウォールまたはセキュリティグループで CloudThinker からの `8443`（または `8123`）の受信を許可
-  </Step>
-  <Step title="CloudThinker に接続を追加する">
-    **Connections → ClickHouse** に移動し、以下を入力します：
-    - **Host**：ホスト名のみ。スキームとポートは含めません。例：`abc123.ap-southeast-1.aws.clickhouse.cloud`
-    - **Port**：TLS ありは `8443`、なしは `8123`
-    - **Username**：`cloudthinker`
-    - **Password**：上記で設定したパスワード
-    - **Use TLS**：ClickHouse Cloud および公開エンドポイントでは `Yes`
-    - **Verify the TLS certificate**：`Yes` のままにします。自己署名証明書または内部 CA の証明書の場合のみオフにします
-    - **Default database**：任意。空欄にするとサーバーのデフォルトを使用
-    - **Write access**：エージェントがデータを変更する必要がない限り `Read-only` のままにします
-    - **Allow DROP and TRUNCATE**：書き込みアクセスをオンにしたときのみ表示されます。エージェントにオブジェクトを削除させたい場合を除き `Blocked` のままにします
+  <Step title="CloudThinker で接続を追加する">
+    **Settings → Workspace → Connections** に移動して **ClickHouse** を選択し、[接続の詳細](#接続の詳細)のフィールドを入力します。**Write access** は **Read-only (default)** のままにして、**Connect** をクリックします。
 
-    **Connect** をクリックします。CloudThinker はそのユーザーとして `SELECT version()` を 1 回だけ実行して認証情報を確認し、**Connected** のメッセージには到達した ClickHouse のバージョン、使用したユーザー名、そして設定した場合はデフォルトデータベースが示されます。それ以外の場合は具体的な理由が返ります。[トラブルシューティング](#トラブルシューティング)を参照してください。
+    CloudThinker はそのユーザーとして `SELECT version()` を 1 回実行します。
+
+    **成功時の状態:** ClickHouse に **Connected** ステータスが表示され、メッセージは `ClickHouse <version> reachable as cloudthinker` となります。
   </Step>
 </Steps>
 
-## 接続詳細
+---
 
-| フィールド | 説明 | デフォルト |
-|-------|-------------|---------|
-| **Host** | ホスト名または IP。スキームとポートは含めません | — |
-| **Port** | HTTP インターフェースのポート | `8443` |
-| **Username** | 専用ユーザー（例：`cloudthinker`） | — |
-| **Password** | ユーザーパスワード | — |
-| **Use TLS** | プレーン HTTP ではなく HTTPS を使用 | `Yes` |
-| **Verify the TLS certificate** | 自己署名証明書または内部 CA の証明書の場合のみオフにします。TLS がオフのときは非表示 | `Yes` |
-| **Default database** | クエリがテーブルを修飾しない場合に使用されるデータベース | サーバーのデフォルト |
-| **Write access** | エージェントがデータを変更できるかどうか | `Read-only` |
-| **Allow DROP and TRUNCATE** | エージェントがオブジェクトを削除できるかどうか。読み取り専用の間は非表示 | `Blocked` |
+## 接続の詳細
+
+| フィールド | 必須 | 説明 | デフォルト |
+|-------|----------|-------------|---------|
+| **Host** | はい | ホスト名のみ。`https://` もポートも含めません。ClickHouse Cloud では `abc123.ap-southeast-1.aws.clickhouse.cloud` のような形式です | |
+| **Port** | はい | HTTP インターフェースのポート: TLS ありは `8443`、TLS なしは `8123` | `8443` |
+| **Username** | はい | 専用ユーザー（例: `cloudthinker`） | |
+| **Password** | はい | そのユーザーのパスワード | |
+| **Use TLS** | いいえ | プレーンな HTTP ではなく HTTPS を使います。選択肢: **Yes**、**No** | **Yes** |
+| **Verify the TLS certificate** | いいえ | 自己署名証明書または社内 CA の証明書の場合のみ **No** に設定します。TLS がオンの場合のみ表示されます。選択肢: **Yes (default)**、**No** | **Yes (default)** |
+| **Default database** | いいえ | クエリでデータベースを指定しない場合に使うデータベース。空欄の場合はサーバーのデフォルトを使います | 空欄 |
+| **Write access** | いいえ | CloudThinker に書き込みを許可するかどうか。選択肢: **Read-only (default)**、**Full access** | **Read-only (default)** |
+| **Allow DROP and TRUNCATE** | いいえ | **Full access** の場合のみ表示されます。選択肢: **Blocked (default)**、**Allowed** | **Blocked (default)** |
 
 <Tip>
-`8443` と TLS は ClickHouse Cloud の組み合わせです。TLS を無効にしたセルフホストサーバーは `8123` で応答します。**Use TLS** を `No`、ポートを `8123` に揃えて設定してください。組み合わせが一致しないと接続時に失敗します。
+**Port** と **Use TLS** はセットで変更してください。`8443` は TLS オン、`8123` は TLS オフに対応します。組み合わせが合わないと接続時に失敗します。
 </Tip>
+
+---
 
 ## 必要な権限
 
-### 最小権限
+セットアップの権限で読み取り専用の操作はすべてカバーされます。書き込み権限は、**Write access** を **Full access** に設定する場合にのみ、エージェントに変更させるデータベースに限って追加してください。
 
 ```sql
-GRANT SELECT ON your_database.* TO cloudthinker;
-GRANT SHOW DATABASES, SHOW TABLES, SHOW COLUMNS ON *.* TO cloudthinker;
-```
-
-### 推奨（フル分析）
-
-```sql
--- 上記すべてに加えて：
-GRANT SELECT ON system.tables TO cloudthinker;
-GRANT SELECT ON system.columns TO cloudthinker;
-GRANT SELECT ON system.parts TO cloudthinker;
-GRANT SELECT ON system.query_log TO cloudthinker;
-```
-
-`system.query_log` は「このダッシュボードが遅い」という状態を、原因となっているクエリのランキングに変えるものです。
-
-### 書き込みアクセス（有効にする場合のみ）
-
-```sql
+-- ALTER includes ALTER ... DELETE, DROP PARTITION, and DROP COLUMN, which remove data.
+-- See "Blocked protects the table, not the rows" under Write access.
 GRANT INSERT, ALTER, CREATE TABLE, CREATE VIEW ON your_database.* TO cloudthinker;
--- エージェントにオブジェクトを削除させる場合のみ：
+-- Only if the agent should remove tables:
 GRANT DROP TABLE, TRUNCATE ON your_database.* TO cloudthinker;
 ```
 
-これらはエージェントに変更させたい特定のデータベースに対して付与し、`*.*` に対しては決して付与しないでください。ユーザーが保持していない権限は、**Write access** スイッチが越えられない境界です。
+<Tip>
+`*.*` に書き込み権限を付与しないでください。実際の境界は ClickHouse の権限です。**Write access** フィールドは CloudThinker が `readonly=1` を送信するかどうかを決めるだけで、ClickHouse が付与していない権限をユーザーに与えることはできません。
+</Tip>
+
+---
 
 ## エージェントの機能
 
-接続後、CloudThinker は以下を実行できます：
-
 | 機能 | 説明 |
 |------------|-------------|
-| **スキーマ探索** | データベースとテーブルを、エンジン・ソーティングキー・行数・カラム型とともに一覧表示 |
-| **分析クエリ** | 集計・結合・ウィンドウ関数を含む SQL の実行 |
-| **テーブルの健全性** | パート数・圧縮サイズと非圧縮サイズ・インデックス粒度の確認 |
-| **クエリ調査** | `system.query_log` から低速または高コストなクエリをランキング |
+| **Schema discovery** | データベースとテーブルを、エンジン、ソートキー、行数、列の型とともに一覧表示する |
+| **Analytical queries** | 集計、結合、ウィンドウ関数を使った SQL を実行する |
+| **Table health** | `system.parts` からパーツ数、圧縮後と圧縮前のサイズ、インデックスの粒度を確認する |
+| **Query investigation** | `system.query_log` から遅いクエリや高コストのクエリをランク付けする |
+| **Changes** | **Full access** の場合のみ: 行の挿入、テーブルの変更、テーブルとビューの作成 |
 
-### 接続を確認する
+`system.query_log` と `system.parts` はノードごとに保持されます。複数のレプリカを持つクラスターでは、回答はクエリを受けたノードの分だけになります。すべてのノードを対象にするには、プロンプトで次のように指定してください。
+
+- **セルフホスト**: "use `clusterAllReplicas('<cluster>', system.query_log)`"
+- **ClickHouse Cloud**: "use `clusterAllReplicas('default', system.query_log)`"
+
+### 接続の確認
 
 ```text
-list the ClickHouse databases and the tables in each one
+List the ClickHouse databases and the tables in each one
 ```
+
+**成功時の状態:** CloudThinker がデータベースを、そのテーブル、エンジン、行数とともに返します。
 
 ### プロンプト例
 
 ```text
-which ClickHouse tables grew the most in the last week
-show per-service p95 latency from the events table
-suggest a better sorting key for our largest MergeTree table
+Which ClickHouse tables are the largest by compressed size, and how many parts does each have?
+Show the 10 slowest queries from system.query_log in the last 24 hours, with the user and table for each
+Suggest a better sorting key for our largest MergeTree table, based on the queries that hit it
 ```
+
+---
 
 ## 書き込みアクセス
 
-接続は読み取り専用の状態で提供され、2 つのスイッチが段階的に制限を開放します。
-
 | Write access | Allow DROP and TRUNCATE | エージェントができること |
 |--------------|-------------------------|------------------------|
-| `Read-only`（デフォルト） | 非表示 | `SELECT` のみ。それ以外はすべて ClickHouse がエラー `164 READONLY` で拒否します。 |
-| `Full access` | `Blocked`（デフォルト） | `INSERT`・`ALTER`・`CREATE`・マテリアライズドビュー。`DROP TABLE` と `TRUNCATE` は拒否されるため、テーブルは残ります。 |
-| `Full access` | `Allowed` | 上記すべてに加えて、テーブルとデータベースの削除および TRUNCATE。 |
+| **Read-only (default)** | 非表示 | `SELECT` のみ。それ以外は ClickHouse がエラー `164`（`READONLY`）で拒否します |
+| **Full access** | **Blocked (default)** | 承認ステップなしで `INSERT`、`ALTER`、`CREATE`。`DROP TABLE` と `TRUNCATE` は拒否されます |
+| **Full access** | **Allowed** | 上記のすべてに加えて `DROP TABLE` と `TRUNCATE`。ユーザーがその権限を持っていれば `DROP DATABASE` も実行されます（必要な権限では付与していません） |
 
-書き込みアクセスをオンにする前に検討すべき 3 点：
+**Full access** を選ぶ前に:
 
-- **`Blocked` が保護するのはテーブルであり、行ではありません。** これは `DROP TABLE` と `TRUNCATE` のステートメントを拒否します。`ALTER TABLE ... DELETE`、`DROP PARTITION`、`DROP COLUMN` は拒否しません。これらはいずれもテーブルを残したままデータを削除します。2 つ目のスイッチの状態にかかわらず、`Full access` は「エージェントがデータを破壊できる」と考えてください。
-- **ClickHouse にはトランザクションがありません。** `ALTER TABLE ... DELETE` は非同期のミューテーションであり、`DROP` は即時に実行されます。どちらもロールバックできないため、復旧手段はバックアップからのリストアになります。
-- **より強い制御は権限（GRANT）です。** これらのスイッチは CloudThinker が `readonly=1` を送信するかどうかを決めるだけであり、ClickHouse ユーザーがまだ持っていない権限を付与することは決してありません。CloudThinker ユーザーには、到達可能にしたいデータベースにのみ書き込み権限を与えてください。スイッチはその範囲を超えられません。
+- **Blocked が守るのはテーブルであり、行ではありません。** `ALTER TABLE ... DELETE`、`DROP PARTITION`、`DROP COLUMN` は引き続き実行され、データを削除します。**Full access** は「エージェントがデータを破壊できる」ものとして扱ってください。
+- **ロールバックはできません。** ClickHouse にはトランザクションがないため、復旧はバックアップからの復元になります。
 
-既存の接続で書き込みアクセスをオンにするには、**Connections → ClickHouse → Edit** を開き、**Write access** を変更して再接続します。
+**Write access** は接続後にロックされます。**Edit Instance** で **Replace…** を押すと保存済みのフィールドを編集できますが、**Write access** と **Use TLS** は「Reconnect to change.」と表示されてグレーアウトしたままです。変更するには、ClickHouse 接続を[切断](/ja/guide/connections/overview#接続を切断する)してから、新しい **Write access** で再度追加してください。
 
-<Warning>
-書き込みアクセスを持つエージェントは、クエリごとの確認プロンプトなしに動作します。ダッシュボードが参照しているクラスタに向ける前に、分析用またはステージング用のクラスタに向けてください。
-</Warning>
+**Full access** がオンの場合、**Allow DROP and TRUNCATE** はその場で切り替えられます。**Settings → Workspace → Connections** を開いて **ClickHouse** を選択し、インスタンスの行の鉛筆アイコンをクリックします。**Edit Instance** で **Replace…** をクリックし、オプションを選び、保存済みのパスワードを維持するために **Password** を空欄のままにして、**Save and test** をクリックします。テストが失敗した場合、接続は以前の設定を維持します。
+
+セットアップのステップ 2 で `READONLY` プロファイルを適用した場合は、先にそれを解除してください。解除しないと ClickHouse が書き込みを拒否し続けます。
+
+```sql
+ALTER USER cloudthinker SETTINGS PROFILE default;
+DROP SETTINGS PROFILE cloudthinker_readonly;
+```
+
+承認が適用されない理由: ClickHouse はすべてのクエリを 1 つのツールで実行するため、CloudThinker は書き込みを読み取りと区別して確認できません。Rules と Approval mode が ClickHouse の書き込みを検知することはありません。ダッシュボードが読み取っているクラスターより先に、ステージングクラスターで **Full access** を試してください。
+
+---
+
+## パスワードのローテーション
+
+1. ClickHouse ユーザーに新しいパスワードを設定します。
+   ```sql
+   ALTER USER cloudthinker IDENTIFIED BY 'new-secure-password';
+   ```
+   古いパスワードはすぐに使えなくなるため、ステップ 2 を完了するまで CloudThinker のクエリは失敗します。両方のステップを続けて行ってください。
+2. **Settings → Workspace → Connections** を開いて **ClickHouse** を選択し、インスタンスの行の鉛筆アイコンをクリックし、**Edit Instance** で **Replace…** をクリックします。新しい **Password** を入力し、**Save and test** をクリックします。
+
+**成功時の状態:** テストが成功し、接続は **Connected** のままです。テストが失敗した場合、CloudThinker は以前の設定を維持してエラーを表示します。
+
+---
 
 ## トラブルシューティング
 
+最初の 4 つのタイトルは接続テストのメッセージと一致しているため、表示されたメッセージでこのページを検索できます。5 つ目は ClickHouse 自身のエラーテキスト、6 つ目はチャットで見られる症状です。
+
 <Accordion title="ClickHouse rejected the username or password">
-ClickHouse は応答した上で認証情報を拒否しました。
-- ユーザーが存在するか確認してください：`SHOW USERS;`
-- パスワードは貼り付けずに入力し直してください。改行を含む値は、CloudThinker がサーバーに接続する前の段階で拒否されます。
-- ClickHouse Cloud は一部の SSO でプロビジョニングされたユーザーのパスワード認証を無効にします。コンソールのログインを再利用せず、専用のデータベースユーザーを作成してください。
+`SHOW USERS;` でユーザーが存在することを確認し、パスワードは貼り付けではなく入力し直してください。改行を含む値は、CloudThinker がサーバーに接続する前に拒否されます。ClickHouse Cloud では、コンソールのサインインを流用せず、データベースユーザーを作成してください。
 </Accordion>
 
-<Accordion title="ClickHouse has no database named …">
-**Default database** に入力した名前は、ClickHouse が見つけられませんでした。データベース名は大文字と小文字を区別します。綴りを確認するか、このフィールドを空にしてサーバーの既定値を使用してください。
-</Accordion>
-
-<Accordion title="ClickHouse rejected the request path. Check the port.">
-何かが応答しましたが、それは ClickHouse の HTTP インターフェースではありませんでした。
-- **Port** と **Use TLS** が一致しているか確認してください：TLS ありは `8443`、なしは `8123`。
-- ネイティブ TCP ポート `9000` は HTTP インターフェースではありません。接続をそこに向けると失敗します。
-</Accordion>
-
-<Accordion title="ClickHouse is unreachable">
-その host と port では何も応答しませんでした。
-- **Host** に `https://` プレフィックスや `:port` サフィックスが含まれていないか確認してください。どちらも専用のフィールドに入力します。
-- ClickHouse Cloud の場合：サービスの IP アクセスリストに CloudThinker を追加してください。
-- セルフホストの場合：`<listen_host>` に公開したインターフェースが含まれているか、およびファイアウォールが `8443` または `8123` を許可しているか確認してください。
-- TLS の不一致も同じように見えます。平文 HTTP のポートに対して **Use TLS** をオンにした場合や、HTTPS 専用のポートに対してオフにした場合です。
+<Accordion title="ClickHouse is unreachable, or rejected the request path">
+- **Port** と **Use TLS** を一致させる必要があります: TLS ありは `8443`、TLS なしは `8123`。`9000` はネイティブ TCP ポートであり、HTTP インターフェースではありません。
+- **Host** には `https://` プレフィックスも `:port` サフィックスも付けないでください。
+- ClickHouse Cloud では、CloudThinker の送信元 IP をサービスの IP アクセスリストに追加してください。セルフホストでは、ファイアウォールと、`<listen_host>` が公開しているインターフェースをカバーしていることを確認してください。
 </Accordion>
 
 <Accordion title="ClickHouse did not answer in time">
-アドレスには到達できましたが、チェックがタイムアウトするまで応答がありませんでした。ClickHouse Cloud では通常、自動アイドリングが原因です。使われていないサービスは一時停止し、再起動するまで接続はタイムアウトします。サービスを起動してから接続し直してください。
+ClickHouse Cloud では、アイドル状態のサービスは一時停止し、起動するまで接続がタイムアウトします。ClickHouse Cloud コンソールでサービスを起動してから、もう一度接続してください。
 </Accordion>
 
-<Accordion title="ClickHouse is temporarily unavailable">
-サーバーが 5xx ステータスを返しました。稼働はしていますが、クエリを処理できない状態です。クラスタ自体の健全性を確認してから接続し直してください。
+<Accordion title="ClickHouse has no database named ...">
+**Default database** が存在しません。名前は大文字と小文字を区別します。スペルを修正するか、フィールドを空欄にしてください。
 </Accordion>
 
-<Accordion title="readonly モードではクエリを実行できない">
-接続は読み取り専用であり、これがデフォルトです。エージェントが書き込みできるようにするには、**Write access** を `Full access` に設定して再接続してください。
-
-それでも失敗する場合、制限はサーバー側にあります。ユーザーに `readonly` の設定プロファイルが付いていないか（`SHOW CREATE USER cloudthinker;`）、およびクエリに必要な書き込み権限を保持しているかを確認してください。
-</Accordion>
-
-<Accordion title="書き込みアクセスをオンにしても DROP が拒否される">
-`DROP` と `TRUNCATE` は専用のスイッチの背後にあります。**Allow DROP and TRUNCATE** を `Allowed` に設定してください。これは **Write access** が `Full access` のときのみ表示されます。
+<Accordion title="Cannot execute query in readonly mode">
+接続が読み取り専用（デフォルト）です。エージェントに書き込ませる場合は、**Write access** を **Full access** にして再接続してください（[書き込みアクセス](#書き込みアクセス)を参照）。それでも失敗する場合、制限はサーバー側にあります。`SHOW CREATE USER cloudthinker;` を実行し、`readonly` 設定プロファイルや不足している書き込み権限がないか確認してください。
 </Accordion>
 
 <Accordion title="テーブル一覧が空">
-- ユーザーには個別のテーブルだけでなく、データベースに対する `SHOW TABLES` と `SELECT` が必要です。
-- メタデータクエリが行を返すよう `SELECT ON system.tables` を付与してください。
+ユーザーには、個々のテーブルだけでなくデータベースに対する `SHOW TABLES` と `SELECT`、さらに `system.tables` に対する `SELECT` が必要です。
 </Accordion>
+
+---
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **公開エンドポイントでは TLS** — ClickHouse Cloud およびプライベートネットワーク外のエンドポイントでは **Use TLS** をオンのままにしてください。
-- **専用ユーザー** — 管理者アカウントを再利用しないでください。ユーザーを分けることで監査証跡が読みやすくなります。
-- **スイッチより権限** — ClickHouse ユーザーに付与された権限が永続的な境界です。**Write access** スイッチは CloudThinker が書き込みを要求するかどうかを決め、権限は ClickHouse がそれを許可するかどうかを決めます。
-- **サーバー側の読み取り専用** — 決して書き込みをさせない接続には、ステップ 3 の設定プロファイルを追加してください。`READONLY` によりクライアント側から解除できなくなります。
+- **スイッチより権限**: 何ができるかを決めるのは ClickHouse ユーザーの権限です。**Write access** は CloudThinker が何を要求するかを決めるだけです。
+- **サーバー側の読み取り専用**: 書き込みを絶対に行ってはならない接続では、セットアップのステップ 2 の `READONLY` 設定プロファイルを維持してください。どのクライアントも解除できません。
 
-## 関連
+---
+
+## 関連情報
 
 <CardGroup cols={2}>
-  <Card title="エージェント" icon="database" href="/ja/guide/agents/overview">
-    CloudThinker と、その作業の仕組み
-  </Card>
   <Card title="PostgreSQL 接続" icon="/images/icons/postgresql.svg" href="/ja/guide/connections/postgresql">
-    PostgreSQL データベースの同様のセットアップ
+    同じ方法で PostgreSQL データベースを接続します
+  </Card>
+  <Card title="接続の概要" icon="plug" href="/ja/guide/connections/overview">
+    接続全体で認証情報と書き込み制御がどう機能するか
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    承認に対応した接続で承認がどう機能するか
   </Card>
 </CardGroup>

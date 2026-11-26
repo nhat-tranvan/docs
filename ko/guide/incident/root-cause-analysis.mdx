@@ -1,249 +1,227 @@
 ---
-title: "근본 원인 분석(Root Cause Analysis)"
-description: "CloudThinker 에이전트가 가설 추적, 증거 체인, 신뢰도 점수를 활용하여 인시던트를 조사하는 방식을 이해합니다"
+title: 조사와 RCA
+description: "인시던트에 대한 근본 원인 조사를 시작하고, 판정과 그 증거를 읽고, 다음에 할 일을 결정합니다."
 icon: magnifying-glass
 ---
 
-근본 원인 분석(RCA)은 [Resolve](/ko/guide/incident/overview)의 조사 엔진입니다. 전문 에이전트가 가설 기반 조사를 실행하고, 구조화된 증거 체인을 구축하며, 모든 추론 단계에 대한 완전한 가시성과 함께 수정 방안을 제안합니다.
+근본 원인 분석(RCA)은 CloudThinker가 인시던트가 왜 일어났는지 밝히는 단계입니다. 인시던트, 그 뒤의 알림, 연결된 시스템을 읽고 가능한 설명을 검증한 뒤, 서면 판정, 장애가 어떻게 전개되었는지 보여주는 다이어그램, 제안된 수정 목록을 전달합니다. 사용자는 이를 검토하고 다음에 할 일을 결정합니다.
 
-## 조사 진행 방식
+RCA는 [Resolve](/ko/guide/incident/overview)의 Investigate 단계입니다. 이미 설정한 [연결](/ko/guide/connections/overview)을 통해 로그, 지표, 트레이스, 최근 변경, 의존성을 읽으며, 그 연결이 닿는 곳까지만 접근할 수 있습니다. 조사는 읽기만 합니다. 모든 변경은 [runbook](/ko/guide/incident/runbooks)과 [Approvals](/guide/approvals/overview) 설정을 거칩니다. 모델이 보는 것과 시크릿 처리 방식은 [Data protection](/guide/security/data-protection)을 참고하세요.
 
-1. **트리거** — [Pulse](/ko/guide/pulse/overview) 클러스터가 에스컬레이션되거나 인시던트 상세 페이지에서 수동으로 인시던트가 생성되면 조사가 시작됩니다. 클러스터 에스컬레이션은 클러스터 요약과 모든 멤버 신호를 에이전트의 컨텍스트에 주입하므로, 조사는 전체 신호 기록이 로드된 상태에서 시작됩니다. CloudThinker는 백그라운드에서 RCA 작업을 큐에 추가하고 전용 AI 대화를 엽니다.
-2. **에이전트 활성화** — [CloudThinker](/ko/guide/agents/overview)가 조사를 이끕니다. 필요하면 각 도메인에 서브에이전트를 생성합니다.
-3. **컨텍스트 수집** — 에이전트가 인프라 토폴로지를 탐색하고, 기준 메트릭을 수집하며, 영향받은 서비스를 식별하고, 최근 배포 및 구성 변경 사항을 검토합니다.
-4. **분석** — 에이전트가 경쟁 가설을 수립하고 로그, 트레이스, 의존성에 대해 각 가설을 검증합니다.
-5. **해결** — 확인된 가설이 근본 원인이 됩니다. 증거가 정리되고, 수정 제안이 생성되며, 신뢰도 점수와 함께 처분이 설정됩니다.
+## 시작하기 전에
 
-| 영역 | 조사 내용 |
-|-------|--------------|
-| 클라우드 인프라 | 클라우드 인프라 — EC2, 로드 밸런서, VPC 네트워킹 |
-| 데이터베이스 | RDS Aurora 및 DocumentDB 성능, 슬로우 쿼리, 연결 풀 고갈 |
-| Kubernetes | 파드 상태, 컨테이너 재시작, 리소스 제한, EKS의 서비스 메시 구성 |
-| 보안 | 보안 그룹, 네트워크 정책, IAM 권한, 보안 관련 장애 유형 |
+- 클라우드 계정, Kubernetes 클러스터, 모니터링 도구처럼 관련 시스템에 대한 [연결](/ko/guide/connections/overview) 하나 이상. RCA는 읽을 수 있는 것만 확인할 수 있습니다.
+- 조사를 시작하고, 제안을 정리하고, 인시던트 상태를 변경(종료 포함)하려면 워크스페이스 **Admin** 역할. Developer와 Viewer는 결과를 읽을 수 있습니다. [Roles](/guide/security/roles)를 참고하세요.
+- 크레딧. 자동으로 시작되는 것을 포함해 각 조사는 에이전트 작업이며, 다른 실행과 마찬가지로 크레딧이 청구됩니다. [Usage](/ko/guide/billing/usage)에서 지출을 확인하고, [Credit limits](/guide/billing/credit-limits)로 워크스페이스 상한을 설정하세요. 자동 실행을 멈추려면 웹훅의 **Auto-investigate**를 끄거나 **AI auto-investigate**를 끄세요. [What starts an investigation](/guide/incident/settings#what-starts-an-investigation)을 참고하세요.
 
-CloudThinker는 이러한 도메인 전반에서 병렬로 조사하고 실시간으로 발견 사항을 상관합니다. 증상이 근본 문제와 멀리 나타나는 경우에도 근본 원인을 파악합니다.
+## 조사가 시작되는 방식
 
-## 조사 단계
+| 인시던트 출처 | RCA 시작 시점 |
+|---|---|
+| [Signals](/ko/guide/pulse/overview)(알림 소스) | **AI auto-investigate**가 켜져 있고 웹훅 옵션이 허용할 때, triage가 인시던트를 열거나 다시 열면 자동으로. 전체 규칙은 [What starts an investigation](/guide/incident/settings#what-starts-an-investigation)에 있습니다. |
+| [Log Incident](/ko/guide/incident/manual-logging)(사람) | **AI auto-investigate**가 꺼져 있어도 양식을 제출하는 즉시. |
+| 아직 조사가 없는 인시던트. **Not started**에서 대기합니다. | **Investigate**를 클릭할 때. |
+| 조사가 한 번도 없었는데 **Investigating**으로 설정된 인시던트(예: 누군가 상태 배지에서 **Investigating**을 선택한 경우). **Not started**에서 대기합니다. | **Investigate**를 클릭할 때. |
 
-RCA는 구조화된 3단계 워크플로를 따릅니다. 에이전트가 새 단계로 이동하면 이전 단계가 아직 진행 중이면 자동으로 완료됩니다.
-
-| 단계 | 목표 | 활동 |
-|-------|------|------------|
-| 1. 컨텍스트 수집 | 기준 조건 설정 | 토폴로지를 통해 영향받은 서비스 및 의존성 매핑; CloudWatch, Prometheus, Datadog에서 메트릭 수집; 인시던트 메트릭을 역사적 기준선과 비교; 최근 배포 및 구성 변경 식별 |
-| 2. 분석 및 가설 검증 | 근본 원인 범위 좁히기 | 증상에서 경쟁 이론 생성; 로그, 트레이스, 의존성, 리소스 증거 수집; 증거가 모순되는 가설 배제; 증거가 쌓임에 따라 신뢰도 추적 |
-| 3. 해결 | 증거와 함께 근본 원인 확정 | 나머지 모든 가설 해결; 승자를 근본 원인으로 확인; 가장 강력한 증거 정리; 수정 단계 생성; 처분 및 신뢰도 점수 설정 |
-
-에이전트는 어떤 가설을 확인하기 전에 지지 증거를 수집하고 충분한 시간 동안 조사해야 합니다.
-
-<Note>
-처분 설정은 조사를 종료하기 위해 필수입니다. 처분이 없으면 인시던트는 **Investigating** 상태로 남습니다.
-</Note>
-
-## 증거 체인
-
-RCA는 자동 계산과 함께 구조화된 증거 체인을 구축합니다. 각 항목은 특정 가설에 연결하여 어떤 발견이 각 이론을 지지하는지 표시할 수 있습니다.
-
-| 증거 유형 | 포착 내용 | 필드 |
-|---------------|------------------|--------|
-| 메트릭 | 자동 계산된 편차 백분율과 함께 인시던트 대 기준선 비교 — 예: "CPU 95% 대 기준선 25% = 280% 편차" | `incident_value`, `baseline_value`, `baseline_period`, `threshold`, `unit` |
-| 배포 및 변경 | 인시던트 시작으로부터 자동 계산된 시간 델타가 있는 최근 변경; 양의 델타 = 인시던트 이전(원인 가능성) | `type`, `description`, `timestamp`, `correlation`, `service` |
-| 로그 | CloudWatch, Splunk, Datadog 등 로그 콘솔로의 딥 링크가 포함된 관련 로그 항목 | `source`, `description`, `deep_link`, `timestamp`, `severity` |
-| 트레이스 | 요청 흐름 및 지연 시간 분석을 보여주는 분산 트레이스 데이터 | `source`, `description`, `raw_data` |
-| 구성 | 정확한 매개변수 수정이 포함된 구성 변경 | `source`, `description`, `timestamp` |
-| 알림 | 인시던트 기간 동안 모니터링 시스템의 관련 알림 | `source`, `severity`, `description` |
-
-증거는 심각도 순으로 정렬됩니다: **Critical**(직접 원인) → **High**(강력한 지지) → **Medium**(맥락) → **Low**(배경).
-
-## 신뢰도 점수
-
-식별된 모든 근본 원인은 0.0에서 1.0 사이의 신뢰도 점수를 가집니다.
-
-| 점수 범위 | 카테고리 | 의미 | 조치 |
-|-------------|----------|---------|--------|
-| 0.9 – 1.0 | 매우 높음 | 압도적인 증거로 근본 원인 식별 | 즉시 수정 조치 시행 |
-| 0.7 – 0.9 | 높음 | 강력한 증거로 근본 원인 식별 | 일반 우선순위로 수정 조치 시행 |
-| 0.5 – 0.7 | 중간 | 가능성 높은 근본 원인이나 갭 존재 | 수정 조치 시행; 대안 모니터링 |
-| 0.3 – 0.5 | 낮음 | 가능한 근본 원인이나 증거가 정황적 | 조치 전 수동으로 발견 사항 검증 |
-| 0.0 – 0.3 | 불확실 | 근본 원인 특정에 충분한 증거 없음 | 판단 불가; `NOT_FOUND` 고려 |
-
-신뢰도는 시간적 상관관계, 50% 편차를 초과하는 메트릭 이상, 일치하는 오류 패턴, 배제된 대안, 여러 corroborating 데이터 소스로 높아집니다. 대안적 설명, 약한 시간적 상관관계, 검증 누락, 상충하는 증거로 낮아집니다.
-
-## 가설 추적
-
-RCA는 "5 Whys" 및 Fishbone 방법론에서 영감을 받은 가설 기반 조사를 실행합니다.
-
-```mermaid
-stateDiagram-v2
-    direction LR
-    [*] --> Investigating : hypothesis created
-    Investigating --> Confirmed : evidence supports
-    Investigating --> RuledOut : evidence contradicts
-    Confirmed --> [*]
-    RuledOut --> [*]
-```
-
-| 상태 | 의미 |
-|-------|---------|
-| Investigating | 이론을 검증하기 위한 증거 활발히 수집 중 |
-| Confirmed | 충분한 증거가 이것을 근본 원인으로 지지 |
-| Ruled out | 증거가 가설을 모순하거나 반증 |
-
-에이전트는 근본 원인을 설정하기 전에 최소 하나의 가설을 확인하고, 조사를 종료하기 전에 확인되거나 배제된 모든 가설을 해결합니다.
-
-지연 시간 인시던트의 가설 체인 예시:
-
-```text
-Timeline Entry 1: hypothesis_created
-├── Hypothesis 1: "Database connection pool exhaustion"
-├── Confidence: 0.75
-└── Message: "Pool exhaustion likely given 500s response times"
-
-Timeline Entry 3: hypothesis_ruled_out
-├── Hypothesis 1: Ruled Out
-├── Reason: "DB metrics show 45/100 connections—well within limits"
-└── Evidence: Max concurrent connections remained stable
-
-Timeline Entry 6: hypothesis_created
-├── Hypothesis 2: "Lambda cold start latency after memory reduction"
-├── Confidence: 0.85
-
-Timeline Entry 8: hypothesis_confirmed
-├── Hypothesis 2: Confirmed
-├── Updated Confidence: 0.92
-└── Evidence: CloudWatch init duration spike, deployment timing match
-```
-
-## 조사 타임라인
-
-RCA는 모든 조사 단계의 실시간 타임라인을 스트리밍하며, 타임스탬프와 함께 단계 진행, 가설 검증, 증거 수집을 표시합니다. 각 조사는 최대 100개의 항목을 보유합니다(데이터베이스 수준에서 적용).
-
-| 항목 유형 | 의미 |
-|------------|---------|
-| `info` | 일반 조사 메모 |
-| `finding` | 분석에 영향을 미치는 특정 발견 |
-| `warning` | 검증이 필요한 잠재적 문제 |
-| `error` | 실패한 조사 시도 |
-| `success` | 확인된 발견 |
-| `hypothesis_created` | 새로운 이론 제안 |
-| `hypothesis_ruled_out` | 이론 반증 |
-| `hypothesis_confirmed` | 가설이 근본 원인으로 검증됨 |
-
-## 처분(Disposition)
-
-모든 조사는 인시던트 상태를 업데이트하는 처분으로 종료됩니다.
-
-| 처분 | 의미 | 재개 가능? |
-|-------------|---------|------------|
-| `IDENTIFIED` | 지지 증거와 함께 근본 원인 발견 | 아니오 (최종) |
-| `NOT_FOUND` | 조사 완료, 명확한 근본 원인 없음 | 아니오 (최종) |
-| `FALSE_ALARM` | 실제 인시던트가 아니었음 | 아니오 (최종) |
-| `ON_HOLD` | 외부 입력 또는 추가 데이터 대기 중 | 예 — 새 정보 도착 시 재개 |
-
-처분이 설정된 후, 팀이 후속 조치를 완료함에 따라 인시던트는 추가 라이프사이클 상태(Resolved, Post-Mortem, Closed)로 진행할 수 있습니다.
-
-## 조사 시작
-
-### 자동으로
-
-[웹훅 통합](/ko/guide/incident/webhook-integrations/overview)을 구성하여 RCA를 자동 트리거하세요. 인시던트가 심각도 임계값을 충족하면 조사가 백그라운드에서 시작됩니다:
-
-```json
-{
-  "auto_trigger_rca": true,
-  "auto_trigger_rca_min_severity": "medium"
-}
-```
-
-### 수동으로
+## 조사 실행
 
 <Steps>
-  <Step title="인시던트 상세 페이지 열기">
-    조사할 인시던트를 선택합니다.
+  <Step title="인시던트 열기">
+    **Resolve → Issues**로 이동해 대기열에서 인시던트를 선택합니다.
   </Step>
-  <Step title="Start RCA Analysis 클릭">
-    CloudThinker는 중복 RCA가 실행 중이지 않은지 확인한 다음, 1~3초 내에 조사를 시작합니다. 에이전트가 발견 사항을 발견함에 따라 타임라인 항목이 실시간으로 나타납니다.
+  <Step title="시작되지 않았다면 RCA 시작">
+    인시던트가 한 번도 조사되지 않았다면 인시던트 헤더에서 **Investigate**를 클릭합니다.
+
+    **성공 상태:** 인시던트가 **AI is handling**으로 이동하고, 인시던트 페이지에 **Watch live** 버튼과 함께 **CloudThinker is investigating**이 표시됩니다.
+  </Step>
+  <Step title="따라가기 (선택 사항)">
+    **Watch live**를 클릭하면 CloudThinker가 작업 중인 대화가 열립니다. 실행되는 각 검사를 실시간으로 볼 수 있습니다. 결과는 저장되는 대로 인시던트 페이지에도 나타납니다.
+  </Step>
+  <Step title="판정 읽기">
+    분석이 끝나면 인시던트가 **Needs you**로 이동합니다. 상태가 **Identified**인 인시던트는 결과의 제목이 **Root cause**로 표시됩니다. [조사 결과](#조사-결과)에 모든 상태와 각 상태가 놓이는 위치가 나와 있습니다. [결과 읽기](#결과-읽기)에서 페이지의 각 섹션을 설명합니다.
+
+    새 결과가 나타나지 않고 **Watch live**에 활동이 없다면 [Investigation stuck](/guide/incident/troubleshooting#investigation-stuck)을 참고하세요.
+  </Step>
+  <Step title="각 제안 정리">
+    **Actions** 아래의 각 항목을 완료 또는 무시로 표시합니다. [각 개선 제안 정리](#각-개선-제안-정리)를 참고하세요.
+  </Step>
+  <Step title="인시던트 종료">
+    인시던트 헤더의 상태 배지를 클릭하고 **Resolved** 또는 **False alarm**을 선택한 뒤 **Change Status**로 확인합니다. 워크스페이스 Admin만 상태를 변경할 수 있습니다. 다른 역할에는 메뉴 없이 배지만 보입니다.
+
+    | 현재 상태 | 메뉴의 종료 옵션 |
+    |---|---|
+    | **Open**, **Acknowledged**, **Investigating**, **Identified** | **Resolved** 또는 **False alarm** |
+    | **On hold** | **Resolved**만. **False alarm**으로 표시하려면 먼저 **Investigating**으로 옮기세요. |
+    | **Not found** | 둘 다 없음. 메뉴에는 **Investigating**만 있습니다. 종료하려면 **Investigating**을 선택한 뒤, 배지를 다시 열고 **Resolved** 또는 **False alarm**을 선택하세요. |
+
+    **성공 상태:** 인시던트가 **Resolved** 또는 **Dismissed** 그룹으로 이동합니다.
   </Step>
 </Steps>
 
+## 조사 대기열
+
+**Resolve → Issues**는 사용자에게 필요한 것에 따라 인시던트를 그룹화합니다.
+
+| 그룹 | 포함되는 것 |
+|---|---|
+| **AI is handling** | 조사가 실행 중 |
+| **Needs you** | 판정이 준비되었거나, 조사가 입력을 기다리며 일시 중지되었거나, 검사 결과가 결론에 이르지 못함 |
+| **Not started** | 아직 조사가 실행되지 않았거나 대기 중. **Investigate**를 클릭해 시작합니다. |
+| **Resolved** | **Resolved** 또는 **Auto-resolved**로 종료됨 |
+| **Dismissed** | **False alarm**으로 종료됨 |
+| **Triaged** | triage가 알림을 확인했지만 대응이 시작되지 않음. 예: 알림에 조치가 필요 없다고 판단한 경우 |
+
 ## 결과 읽기
 
-| 섹션 | 표시 내용 |
-|---------|---------------|
-| 근본 원인 요약 | 신뢰도 점수 및 식별 타임스탬프와 함께 근본 원인의 명확한 설명 |
-| 가설 추적 | 생성 → 검증 → 확인 또는 배제 라이프사이클과 추론이 있는 모든 가설 |
-| 증거 체인 | 유형별로 정리된 증거, 심각도 랭킹, 소스 귀속, 딥 링크 |
-| 조사 타임라인 | 조사 단계 및 단계 전환의 시간순 로그 |
-| 수정 조치 | 우선순위 수준(critical, high, medium, low)이 있는 제안된 수정 방법 |
-| 영향받은 서비스 | 인시던트 중 영향받은 서비스, 토폴로지가 연결된 경우 피해 반경 시각화 |
+인시던트 페이지는 답을 먼저, 뒷받침 자료를 그 아래에 둡니다.
 
-동일한 인시던트에 대해 버전 추적(v1, v2, v3…)으로 여러 조사를 실행할 수 있습니다. 새로운 정보가 제공되거나 첫 번째 실행이 결론에 이르지 못했을 때 RCA를 재실행하고 히스토리 드롭다운에서 결과를 비교하세요.
+답의 제목은 조사가 어디까지 왔는지 나타냅니다: **Triage**, **Working theory**, **Root cause**, **On hold**, **No root cause found**, **False alarm**, **Resolution**. 그 옆에는 증거가 얼마나 강한지 나타내는 증거 라벨(아래 참고)이 있고, 세션이 실행 중이면 **Running**이 표시됩니다. 판정 아래에는 **Impact**, **Cause**, **Fix**, **Risk and undo**, **Confidence** 같은 짧은 행이 요약을 제공하며, 근본 원인을 찾는 데 걸린 시간도 표시됩니다.
 
-## 예시: EC2 종료 및 EKS 네트워크 장애
+답 아래의 각 섹션은 클릭하면 열립니다.
 
-지속적인 모니터링을 통해 하나의 워크스페이스에서 두 가지 상호 연결된 발견 사항이 나타났습니다: 빈번한 EC2 인스턴스 종료와 EKS의 `CreateNetworkInterface` 실패. 에이전트가 이를 함께 조사하는 방법입니다.
+| 섹션 | 알려주는 것 |
+|---|---|
+| **How it happened** | 첫 장애부터 눈에 보이는 영향까지의 인과 그래프 |
+| **Actions** | 각각 우선순위(**Critical**, **High**, **Medium**, **Low**)가 있는 제안된 수정. **Critical**부터 처리하세요. |
+| **What happened** | 인시던트의 타임라인 |
+| **Evidence** | 판정의 근거가 되는 결과 |
+| **Full analysis** | 나열할 결과가 없을 때의 전체 서면 분석 |
+| **Investigation trail** | 나열할 결과가 없을 때 CloudThinker가 거친 모든 단계 |
+| **Affected services** | 관련된 서비스와 의존성 |
+| **Duplicate webhooks** | 같은 알림이 반복 전달된 경우 그 내역. 중복이 많다면 재시도하는 소스를 의미합니다. 도구의 재시도 설정이나, Pulse가 중복을 찾는 데 사용하는 필드를 [Limits and responses](/ko/guide/incident/webhook-integrations/overview#제한과-응답)에서 확인하세요. |
+| **Was Resolve's diagnosis right?** | 판정에 대한 좋아요 또는 싫어요. 이 응답은 **Accuracy and trust** 탭에 반영됩니다. [Mark a diagnosis right or wrong](/guide/incident/insights#mark-a-diagnosis-right-or-wrong)을 참고하세요. |
 
-먼저, CloudThinker가 종료 패턴을 분석합니다:
+CloudThinker가 심각도가 잘못되었다고 판단하면, 인시던트의 **More actions** 메뉴에 제안 수준과 함께 **AI suggests**가 표시됩니다. 클릭하면 현재 수준과 제안 수준이 보이며, 제안 수준을 **Apply**하거나 현재 수준을 **Keep**할 수 있습니다.
 
-```text
-Investigate EC2 termination patterns for the past 60 days.
-Break down by Auto Scaling group, termination reason, instance type, and
-availability zone — and explain the 17:15 UTC daily terminations.
-```
-
-<Frame>
-  <img src="/images/use-cases/incident-root-cause-analysis/01-ec2-termination-analysis.jpg" alt="AutoScaling 이벤트와 타임라인을 보여주는 EC2 종료 패턴 분석" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>AutoScaling 이벤트를 보여주는 EC2 종료 패턴 분석</p>
-
-다음으로, CloudThinker가 네트워크 장애와 종료를 교차 상관합니다:
+짧은 결과는 다음과 같을 수 있습니다.
 
 ```text
-Correlate CreateNetworkInterface failures with EC2
-termination events over the last 60 days. Determine whether aggressive
-scale-downs cause IP address fragmentation and whether lifecycle hooks
-allow proper ENI cleanup.
+Root cause                                     Strong evidence
+checkout-api pods ran out of memory after payment-client v2.3 doubled
+its connection pool. Restarts cleared it for minutes at a time.
+
+Actions
+High    Roll back payment-client to v2.2 on prod-eu
+Medium  Set a pool size limit in the payment-client config
 ```
 
-<Frame>
-  <img src="/images/use-cases/incident-root-cause-analysis/02-network-failure-correlation.jpg" alt="CreateNetworkInterface 오류 및 IP 고갈이 있는 네트워크 장애 상관 분석" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>CreateNetworkInterface 오류 및 IP 고갈과의 네트워크 장애 상관 분석</p>
+### 증거 라벨
 
-마지막으로, CloudThinker가 인프라 및 비용, EKS 네트워킹, 보안 발견 사항을 하나의 문서로 종합합니다:
+제목 옆의 라벨은 CloudThinker가 자신의 증거를 얼마나 강하게 평가하는지 나타냅니다.
 
-```text
-Write a comprehensive RCA for the EC2 termination and EKS network
-interface failures. Include an executive summary, the 60-day timeline,
-remediation steps with owners and due dates, and preventive measures.
-```
+| 라벨 | 의미 | 다루는 방법 |
+|---|---|---|
+| **Strong evidence** | 시스템의 데이터로 확인되었으며 **Evidence** 아래에 표시됨 | 근거가 되는 결과를 검토한 뒤 조치하세요. 모든 변경은 여전히 runbook과 Approvals 설정을 거칩니다. |
+| **Probable** | 증거로부터 추론했지만 직접 확인되지 않음 | 조치 전에 증거를 확인하세요 |
+| **Possible** | 판정이 가정에 기반함 | 단서로 다루세요. 접근 권한이나 컨텍스트를 추가하고 [다시 조사](#재조사)하세요. |
 
-<Frame>
-  <img src="/images/use-cases/incident-root-cause-analysis/03-comprehensive-rca-report.jpg" alt="발견 사항, 수정 단계, 예방 조치가 있는 종합 RCA 보고서" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>발견 사항 및 수정 단계가 있는 종합 RCA 보고서</p>
+**Possible**은 근거가 약한 판정입니다. **Not found**는 판정이 전혀 없다는 뜻의 상태입니다.
 
-## 모범 사례
+### 각 개선 제안 정리
 
-- 인시던트 발생 전에 토폴로지를 연결하세요 — 피해 반경 분석과 서비스 상관 관계가 여기에 의존합니다.
-- Medium 이상 심각도의 인시던트에 대해 RCA를 자동 트리거하도록 [웹훅](/ko/guide/incident/webhook-integrations/overview)을 구성하세요.
-- 인시던트 설명에 컨텍스트를 추가하세요; 에이전트가 어디를 먼저 볼지 안내합니다.
-- 조사 중에 타임라인을 확인하여 어떤 가설이 검증되고 배제되었는지 추적하고, 증거 타임스탬프가 인시던트 시작과 상관관계가 있는지 확인하세요.
-- 신뢰도가 0.7 미만일 때는 수정하기 전에 근본 원인을 수동으로 검증하고, critical 우선순위 수정 조치부터 시작하세요.
-- [Runbooks](/ko/guide/incident/runbooks)를 연결하여 에이전트가 향후 조사 중에 수정 절차를 찾아 실행할 수 있도록 하세요.
+**Actions**에서 제안 위로 마우스를 올리고 **More remediation actions** 메뉴를 열어 선택합니다.
 
-## 관련 문서
+| 작업 | 사용 시점 | 메모할 내용 |
+|---|---|---|
+| **Mark as Done** | 팀이 작업을 완료함 | 실제로 한 일 |
+| **Dismiss** | 해당되지 않거나 할 가치가 없음 | 이유 |
+
+메모는 선택 사항이며, 인시던트를 검토하는 사람을 위해 제안에 남습니다. 정리는 최종적입니다. 제안이 표시되면 메뉴가 사라지고 되돌릴 수 없습니다. 이후 조사 세션도 이를 덮어쓰지 않습니다.
+
+## 조사 결과
+
+각 상태는 대기열 그룹에 대응합니다.
+
+| 상태 | 의미 | 대기열 그룹 |
+|---|---|---|
+| **Open**, **Acknowledged** | 아직 결과 없음. **Acknowledged**는 대응자가 맡았다는 뜻입니다. | 조사 전에는 **Not started**, 조사가 끝난 후에는 **Needs you** |
+| **Identified** | 근본 원인을 찾음 | **Needs you** |
+| **On hold** | 사람의 정보, 접근 권한, 결정을 기다리는 중 | **Needs you** |
+| **Not found** | 사용 가능한 증거가 근본 원인을 뒷받침하지 못함 | 없음. 대기열에 표시되지 않습니다. |
+| **False alarm** | 알림이 실제 문제가 아니었음 | **Dismissed** |
+| **Resolved** | 사람이 관여해 수정하고 종료함 | **Resolved** |
+| **Auto-resolved** | 아무도 관여하지 않고 에이전트가 수정하고 종료함 | **Resolved** |
+
+인시던트는 다음 이유 중 하나로 **Needs you**에 있을 수도 있습니다.
+
+| 보이는 것 | 의미 | 할 일 |
+|---|---|---|
+| 결과가 있지만 상태가 여전히 **Open**, **Acknowledged**, **Investigating** | 조사가 상태를 바꾸지 않고 끝남 | 결과를 읽은 뒤 직접 상태를 설정하세요 |
+| 행에 **Failed**가 표시되고 인시던트 페이지에 조사가 멈췄다고 나옴 | 세션이 실패했거나 취소됨 | **Retry investigation**을 클릭하세요 |
+| triage 메모는 있지만 판정이 없음 | triage가 알림에 조치가 필요한지 판단하지 못함 | **View origin**으로 소스 알림을 읽은 뒤 직접 상태를 설정하세요 |
+
+<Warning>
+알려진 제한 사항: **Not found** 인시던트는 대기열에서 빠집니다. 어떤 대기열 그룹이나 필터에도 표시되지 않습니다. 페이지를 떠나기 전에 다음 단계로 옮기거나 URL을 복사하세요.
+
+- 계속 작업하려면 빠진 [연결](/ko/guide/connections/overview)을 추가하고 상태 배지를 클릭해 **Investigating**을 선택하세요. 이전에 조사된 인시던트는 **Not started**가 아니라 **Needs you**로 돌아가며, 그곳에서 [다시 조사](#재조사)할 수 있습니다.
+- 버리려면 **Investigating**을 선택한 뒤, 배지를 다시 열고 **Resolved** 또는 **False alarm**을 선택하세요.
+- 나중에 돌아오려면 인시던트 URL을 북마크하세요. 그것이 돌아오는 유일한 방법입니다.
+</Warning>
+
+## 재조사
+
+인시던트에는 조사 기록이 하나 있습니다. 세션은 하나의 조사 대화입니다. 그 대화에서 다시 질문하면 같은 세션에 머뭅니다. triage가 새 알림을 인시던트에 매칭하면 이후 세션이 시작될 수 있습니다.
+
+**Investigate** 버튼은 첫 조사 전에만 나타납니다. 새 접근 권한이나 컨텍스트로 다시 조사하려면:
+
+<Steps>
+  <Step title="빠진 것 추가">
+    빠진 [연결](/ko/guide/connections/overview)을 추가하거나, CloudThinker가 사용할 컨텍스트를 메모합니다.
+  </Step>
+  <Step title="대화 열기">
+    인시던트 헤더에서 **More actions → Open AI Conversation**을 엽니다.
+  </Step>
+  <Step title="다시 살펴보도록 요청">
+    무엇이 바뀌었는지 말합니다. 예: `I've connected the prod-eu Datadog account. Re-check the root cause.`
+
+    **성공 상태:** 기록한 결과가 인시던트 페이지에 나타나고, 근본 원인이 바뀌면 상단의 답이 업데이트됩니다. 아무것도 바뀌지 않으면 답변이 인시던트를 바꾸지 않은 것입니다.
+  </Step>
+</Steps>
+
+세션이 실패했다면(대기열 행에 **Failed** 표시) 인시던트 페이지에 조사가 멈췄다고 나옵니다. 그곳에서 **Retry investigation**을 클릭하세요. Admin 전용입니다.
+
+## 연관 인시던트
+
+여러 알림이 같은 원인을 공유할 가능성이 있으면, Resolve는 이를 하나의 상위 인시던트 아래로 묶고 그곳에서 RCA를 한 번 실행합니다. 묶인 알림을 열면 **Part of a Correlated Group** 카드가 표시됩니다.
+
+| 옵션 | 동작 |
+|---|---|
+| **View Parent Analysis** | 조사를 소유한 상위 인시던트를 엽니다 |
+| **Promote to Standalone** | 알림을 독립된 인시던트로 분리합니다. 확인 후 지금 RCA를 시작할지 나중으로 미룰지 선택합니다. Admin 전용입니다. |
+
+그룹화는 Pulse에서 시작됩니다. 관련 알림이 올바르게 묶이도록 각 웹훅에서 **Resource ID Path**를 매핑해 한 장애의 반복이 묶이게 하고, **Service Path**를 단일 서비스 이름에 매핑해 한 서비스에 대한 서로 다른 알림이 합쳐지게 하세요. [How signals join a cluster](/ko/guide/pulse/clusters#신호가-클러스터에-합류하는-방식)를 참고하세요.
+
+## 결과 공유 또는 내보내기
+
+인시던트의 **More actions** 메뉴에서:
+
+- **Download analysis PDF**는 분석을 PDF로 저장합니다.
+- **Open AI Conversation**은 후속 질문을 할 수 있는 전체 조사 대화를 엽니다.
+- **View origin**은 인시던트의 출처가 된 알림과 Pulse 데이터를 보여줍니다.
+
+## 문제 해결
+
+| 문제 | 해결 |
+|---|---|
+| **Investigate** 버튼이 없음 | 인시던트에 이미 조사가 있거나([재조사](#재조사) 참고), 세션이 실행 중이거나, 연관 그룹의 일부입니다(**View Parent Analysis** 사용). Admin 역할도 필요합니다. |
+| 알림이 조사된 인시던트가 되지 않음 | **AI auto-investigate**, 웹훅의 **Auto-investigate**와 최소 심각도를 [What starts an investigation](/guide/incident/settings#what-starts-an-investigation)과 대조해 확인하세요. 지금 시작하려면 **Resolve → Signals**에서 해당 클러스터의 **Open incident**와 **Send to triage**를 클릭하세요. |
+| 인시던트가 **Not started**에 머무름 | **Investigate**를 클릭하세요. |
+| 판정이 **Possible**이거나 상태가 **Not found** | RCA가 충분히 읽지 못했습니다. 빠진 [연결](/ko/guide/connections/overview)을 추가한 뒤 대화에서 다시 요청하세요. **Not found** 인시던트는 먼저 **Investigating**으로 되돌려야 합니다. [Not found 경고](#조사-결과)와 [재조사](#재조사)를 참고하세요. |
+| **On hold**에 머무름 | **Open AI Conversation**으로 대화를 열고 CloudThinker가 요청한 것에 답하세요. |
+
+## 다음 단계
 
 <CardGroup cols={2}>
-  <Card title="Pulse" icon="wave-pulse" href="/ko/guide/pulse/overview">
-    노이즈를 억제하고 실행 가능한 클러스터를 인시던트로 에스컬레이션하는 업스트림 신호 인텔리전스
+  <Card title="인시던트 기록하기" icon="plus" href="/ko/guide/incident/manual-logging">
+    사람의 보고로 조사를 시작합니다.
   </Card>
-  <Card title="웹훅 통합" icon="webhook" href="/ko/guide/incident/webhook-integrations/overview">
-    PagerDuty, Datadog, Prometheus 등에서 RCA 자동 트리거
+  <Card title="Runbook 사용" icon="book" href="/ko/guide/incident/runbooks">
+    판정을 범위가 정해지고 승인된 수정으로 바꿉니다.
   </Card>
-  <Card title="인시던트 메모리" icon="brain" href="/ko/guide/incident/incident-memory">
-    에이전트가 기록한 교훈을 후속 조사에서 재사용하는 방법 확인
+  <Card title="자동 RCA 제어" icon="sliders" href="/guide/incident/settings">
+    AI auto-investigate와 다른 모든 Resolve 제어를 찾습니다.
   </Card>
-  <Card title="Runbooks" icon="book" href="/ko/guide/incident/runbooks">
-    에이전트가 수정 단계를 실행할 수 있도록 운영 Runbook 연결
+  <Card title="Incident memory" icon="brain" href="/ko/guide/incident/incident-memory">
+    교훈이 이후 조사로 이어지는 방식을 확인합니다.
   </Card>
 </CardGroup>

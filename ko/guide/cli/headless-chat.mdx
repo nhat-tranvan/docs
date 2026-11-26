@@ -1,116 +1,227 @@
 ---
-title: Headless Chat
-description: "스크립트에서 CloudThinker에게 프롬프트 하나를 보내고 stdout으로 답변을 받은 뒤, 긴 실행은 나중에 또는 CI에서 회수하세요"
+title: 헤드리스 채팅
+sidebarTitle: Headless Chat
+description: "스크립트나 CI 작업에서 CloudThinker에게 프롬프트를 보내고, 답변을 파이프로 넘기고, 긴 실행은 나중에 실행 ID로 회수하세요."
 icon: message-code
 ---
 
-`cloudthinker chat -p`는 CloudThinker에게 프롬프트를 보내고 답변을 기다립니다. stdout에는 CloudThinker의 답변만 나오므로 그대로 파이프에 넣을 수 있습니다.
+`cloudthinker chat -p`는 클라우드의 CloudThinker에게 프롬프트 하나를 보내고 답변을 출력합니다. stdout에는 답변만 나오므로 파이프, 파일, CI 단계에 바로 넣을 수 있으며, 터미널 연결이 끊겨도 실행은 서버에서 계속됩니다.
+
+## 사전 요구 사항
+
+- CloudThinker CLI가 설치되어 있고 로그인되어 있어야 합니다. CI에서는 서비스 계정 토큰을 사용하세요. [CI/CD에서 CloudThinker 사용](/guide/api/ci-cd)을 참고하세요.
+- 이 페이지의 스크립트 예시에는 [`jq`](https://jqlang.org)가 필요합니다.
+- AWS 계정이나 Kubernetes 클러스터처럼 CloudThinker가 살펴보길 원하는 대상에 대한 [연결](/ko/guide/connections/overview).
 
 ## 프롬프트 보내기
 
+<Steps>
+  <Step title="질문하기">
+    ```bash
+    cloudthinker chat -p "List EC2 instances in us-east-1 with average CPU under 5% this week"
+    ```
+
+    기다리는 동안 stderr의 스피너가 실행 상태를 보여줍니다.
+
+    **성공 상태:** stderr에 한 줄이 표시된 다음 stdout에 답변이 출력됩니다:
+
+    ```text
+    continue_with=0f9e364e-9c34-406e-be7d-52a143fede85 web_url=<link to the conversation>
+    <CloudThinker's answer, as plain text>
+    ```
+
+    각 실행은 채팅 턴과 마찬가지로 워크스페이스 크레딧을 사용합니다. 야간 CI 작업도 크레딧을 쓰므로 [사용량](/ko/guide/billing/usage)을 계속 확인하세요.
+  </Step>
+  <Step title="답변을 파이프로 넘기거나 저장하기">
+    stdout에는 답변만 들어 있으므로 다른 명령처럼 리디렉션하세요:
+
+    ```bash
+    cloudthinker chat -p "Summarize yesterday's incidents" > summary.md
+    cloudthinker chat -p "List unattached EBS volumes, one ID per line" | grep vol-
+    ```
+  </Step>
+  <Step title="같은 대화에서 후속 질문하기">
+    `continue_with` ID 또는 실행 ID를 `--continue`에 전달하세요. 스크립트에서는 `--json`과 `jq`로 받아 두세요:
+
+    ```bash
+    conv=$(cloudthinker chat -p "Draft a rollout plan for the api service" --json < /dev/null | jq -r .conversation_id)
+    cloudthinker chat -p "Remove the risky step" --continue "$conv"
+    ```
+
+    `web_url`을 열면 같은 대화를 브라우저에서 볼 수 있습니다. 한 대화에서는 한 번에 하나의 턴만 실행되므로 먼저 이전 실행이 끝날 때까지 기다리세요.
+  </Step>
+</Steps>
+
+## 다른 명령의 입력 보내기
+
+파이프로 넘긴 stdin은 프롬프트에 합쳐지므로 CloudThinker에게 로그, diff, 파일을 넘길 수 있습니다:
+
 ```bash
-cloudthinker chat -p "Name the three biggest cost drivers in a typical AWS account, one line each."
+kubectl logs deploy/api --tail 200 | cloudthinker chat -p "Why does this crash?"
+cloudthinker chat -p - < prompt.md
 ```
 
+| 입력 | CloudThinker가 받는 내용 |
+|---|---|
+| 파이프 입력 없이 `-p "text"` | 입력한 텍스트 |
+| 파이프 stdin과 함께 `-p "text"` | 입력한 텍스트, 그다음 `<stdin>` 태그 안의 파이프 데이터 |
+| `-p -` | stdin에서 읽은 전체 프롬프트 |
 
-진행 상황, 실행 ID, 이어 하기 힌트는 stderr로 갑니다. 이 분리 덕분에 명령을 파이프할 수 있습니다.
+프롬프트와 파이프 데이터를 합쳐 최대 50,000자까지 보낼 수 있습니다. stdin이 열려 있지만 아무것도 보내지 않으면 CLI는 3초 기다린 뒤 프롬프트만 보냅니다. 파이프할 것이 없는 스크립트에서는 `< /dev/null`을 추가해 대기를 건너뛰세요.
+
+[커스텀 에이전트](/ko/guide/agents/customize)가 답하게 하려면 UUID 또는 별칭을 전달하세요: `--agent <uuid-or-alias>`.
+
+## 지금 제출하고 나중에 회수하기
+
+긴 조사가 터미널을 붙잡고 있을 필요는 없습니다. `--no-wait`는 실행이 대기열에 들어가자마자 반환합니다:
 
 ```bash
-cloudthinker chat -p "Summarize yesterday's incidents" > summary.md
-cloudthinker chat -p "List unused EBS volumes" | grep vol-
+run=$(cloudthinker chat -p "Which S3 buckets have no lifecycle policy?" --no-wait --json < /dev/null | jq -r .run_id)
 ```
 
-## 대화 이어 하기
+명령은 JSON 객체 하나를 출력합니다:
 
-종료된 실행은 모두 `continue_with=<conversation_id>`를 stderr에 출력합니다. 그 ID나 실행 ID를 넘기면 같은 스레드를 이어갑니다.
-
-```bash
-cloudthinker chat -p "Draft the rollout plan"
-cloudthinker chat -p "Remove the risky step" --continue 0f9e364e-9c34-406e-be7d-52a143fede85
+```json
+{
+  "run_id": "7d5fae84-be6f-45fa-802f-5041f0ff5d42",
+  "conversation_id": "0f9e364e-9c34-406e-be7d-52a143fede85",
+  "status": "pending",
+  "web_url": "<link to the conversation>"
+}
 ```
 
-같은 대화는 힌트 옆에 출력되는 `web_url`로 웹 앱에서도 볼 수 있습니다.
-
-## 먼저 제출하고 나중에 회수
-
-긴 조사를 위해 터미널을 붙잡고 있을 필요는 없습니다. `--no-wait`는 실행이 큐에 들어가는 즉시 반환합니다.
+같은 워크스페이스에 로그인한 어느 머신에서든 나중에 답변을 회수하세요:
 
 ```bash
-cloudthinker chat -p "Which S3 buckets have no lifecycle policy?" --no-wait --json
-```
-
-<Frame>
-  <img src="/images/cli/json-envelope.png" alt="chat --no-wait가 반환하는 JSON 봉투" />
-</Frame>
-
-답변은 나중에 어느 컴퓨터에서든 회수할 수 있습니다.
-
-```bash
-cloudthinker chat status 7d5fae84-be6f-45fa-802f-5041f0ff5d42 --wait
+cloudthinker chat status "$run" --wait
 cloudthinker chat ls --limit 10
 cloudthinker chat ls --conversation 0f9e364e-9c34-406e-be7d-52a143fede85 --json
 ```
 
-클라이언트 쪽 시간 초과는 실행을 취소하지 않습니다. `--timeout`은 CLI가 기다리는 시간만 제한하며, 실행은 서버에서 계속되고 CLI는 이어받을 `chat status` 명령을 출력합니다.
+일반 `chat ls`는 실행마다 탭으로 구분된 행 하나를 출력합니다:
 
-## 기계가 읽는 출력
+```text
+RUN ID  CONVERSATION ID  STATUS  PROMPT  CREATED AT  WEB URL
+```
 
-`--json`은 평문 답변 대신 봉투 하나를 stdout에 씁니다.
+대기를 멈춰도 실행은 취소되지 않으며, CLI에는 실행을 취소하는 명령이 없습니다. `--timeout`(기본 2400초)과 Ctrl-C는 CLI의 대기만 멈추며, CLI는 실행을 다시 이어받는 `chat status` 명령을 출력합니다. 작업이 두 번 실행되지 않도록 프롬프트를 다시 보내지 말고 같은 실행 ID를 따라가세요.
+
+## JSON 출력 읽기
+
+`--json`은 일반 답변 대신 stdout에 JSON 객체 하나를 씁니다.
 
 | 필드 | 의미 |
-| --- | --- |
-| `run_id` | `chat status`로 조회할 실행 |
-| `conversation_id` | `--continue`에 넘길 스레드 |
-| `status` | `pending`, `running`, `succeeded`, `failed`, `approval required` |
-| `answer` | CloudThinker의 최종 답변. 실행이 끝나기 전에는 `null` |
-| `web_url` | 웹 앱의 동일한 대화 |
+|---|---|
+| `run_id` | `chat status`로 따라갈 실행 |
+| `conversation_id` | `--continue`에 전달할 대화 |
+| `status` | 아래 상태 중 하나 |
+| `answer` | CloudThinker의 답변. 실행이 끝나지 않았으면 `null` |
+| `web_url` | 브라우저의 대화 |
+| `message` | 서버가 보내는 추가 세부 정보(있을 때) |
+| `failure_kind` | 실패한 실행의 짧은 이유 코드(알려진 경우). 분기 기준 값이 아니라 사람이 읽을 세부 정보로 취급하세요 |
 
-`--no-wait --json`의 즉시 응답에는 `answer` 필드가 없습니다. 나중에 `chat status`로 확인하세요.
+`--no-wait --json`에서는 아직 답변이 없으므로 `run_id`, `conversation_id`, `status`, `web_url`만 반환됩니다.
+
+| JSON의 `status` | 일반 `chat status` 표시 | 의미 |
+|---|---|---|
+| `pending` | `pending` | 대기열에 있음 |
+| `running` | `running` | CloudThinker가 작업 중 |
+| `succeeded` | `succeeded` | 완료됨. `answer`가 설정됨 |
+| `failed` | `failed` | 답변 없이 완료됨 |
+| `required_approval` | `approval required` | 누군가 브라우저에서 작업을 승인할 때까지 일시 중지됨 |
+| `cancelled` | `cancelled` | 완료되기 전에 중지됨 |
+
+승인이 필요한 실행은 누군가 브라우저에서 결정할 때까지 `required_approval` 상태로 남습니다. CLI는 `Approval required. Approve in your browser: <link>`를 출력하고 5로 종료합니다. `succeeded` 이외에는 `answer`가 `null`이므로 답변이 아니라 종료 코드로 분기하세요:
 
 ```bash
-cloudthinker chat -p "Check the error budget" --json | jq -r '.answer'
+out=$(cloudthinker chat -p "Check the error budget for checkout" --json < /dev/null) && echo "$out" | jq -r .answer
 ```
 
 ## 종료 코드
 
-파이프라인은 텍스트를 파싱하지 않고 결과에 따라 분기할 수 있습니다.
+텍스트를 파싱하지 말고 종료 코드로 분기하세요.
 
-| 코드 | 의미 |
-| --- | --- |
-| 0 | 실행이 끝났고 답변이 출력됨 |
-| 1 | 실행 실패, 또는 존재하지 않는 실행 ID |
-| 2 | 잘못된 사용, 또는 워크스페이스 정책에 의한 거부 |
-| 3 | 로그인되지 않았거나 자격 증명 만료 |
-| 4 | CLI가 대기를 중단함. 실행은 서버에서 계속됨 |
-| 5 | 브라우저 승인 대기로 실행이 일시 중지됨 |
+| 코드 | 의미 | 할 일 |
+|---|---|---|
+| 0 | 실행이 끝나고 답변이 출력됨 | 답변을 사용하세요 |
+| 1 | 실행이 실패했거나 취소됨, 실행 ID를 알 수 없음, 또는 서버가 요청을 거부함(예: 대화에서 다른 실행이 진행 중이거나 속도 제한에 걸린 경우) | stderr의 오류를 읽으세요 |
+| 2 | 잘못된 사용법, 또는 서버가 요청을 잘못된 것으로 거부함(HTTP 422) | 명령을 고치세요. 그대로 다시 보내지 마세요 |
+| 3 | 로그인하지 않았거나, 자격 증명이 만료되었거나, 접근이 거부됨 | `cloudthinker login`을 실행하거나 `CLOUDTHINKER_TOKEN`을 교체하세요 |
+| 4 | CLI가 대기를 멈춤. 실행은 계속됨 | `chat status <run_id> --wait`를 실행하세요 |
+| 5 | 실행이 브라우저 승인을 위해 일시 중지됨 | `web_url`을 열어 결정하거나 [승인자](/guide/approvals/approvers)에게 요청하세요 |
+| 130 | Ctrl-C를 누름. 실행은 계속됨 | `chat status <run_id> --wait`를 실행하세요 |
 
-`chat ls`와 `--wait`가 없는 `chat status`는 조회에 성공하면 0으로 종료합니다. `chat status --wait`는 실행 결과에 따른 코드를 반환합니다.
+`--wait` 없는 `chat ls`와 `chat status`는 읽기에 성공하면 실행이 아직 진행 중이어도 0으로 종료합니다. `chat status --wait`는 실행 자체의 코드를 반환합니다.
 
 ## CI에서 사용하기
 
-작업에 토큰을 주고, stdout은 답변용으로 비워 두고, 결과는 종료 코드로 판단하세요.
+작업에 `CLOUDTHINKER_TOKEN`으로 서비스 계정 토큰을 제공하거나([CI/CD에서 CloudThinker 사용](/guide/api/ci-cd) 참고), 직접 관리하는 러너에서 `cloudthinker login --device-auth`로 한 번 로그인하세요. 그다음 실행 ID를 저장하고 종료 코드로 결정하세요:
 
 ```bash
-export CLOUDTHINKER_TOKEN="$CLOUDTHINKER_CI_TOKEN"
+# Once, on the runner: install the CLI, then set CLOUDTHINKER_TOKEN or log in.
+#   curl -fsSL https://cloudthinker.io/install.sh | sh
+#   cloudthinker login --device-auth
+export PATH="$HOME/.local/bin:$PATH"
 
-if cloudthinker chat -p "Review last night's failed deployments" --timeout 900 > report.md; then
-  echo "report ready"
-else
-  case $? in
-    4) echo "still running, collect it in the next job" ;;
-    5) echo "waiting for an approval in the browser" ;;
-    *) exit 1 ;;
-  esac
-fi
+# Submit first, so the run ID exists even if the wait below times out.
+run=$(cloudthinker chat -p "Review last night's failed deployments and list the likely cause of each" \
+  --no-wait --json < /dev/null | jq -r .run_id)
+echo "$run" > run_id.txt    # upload as a job artifact
+
+# Most CI shells run with `set -e`, which would end the job on a non-zero
+# exit before the case below runs. `|| code=$?` keeps the job alive.
+code=0
+cloudthinker chat status "$run" --wait --timeout 900 > report.md || code=$?
+
+case $code in
+  0) echo "report ready" ;;
+  4) echo "still running, collect it in the next job with: cloudthinker chat status $run --wait" ;;
+  5) echo "waiting for an approval in the browser"; exit 5 ;;
+  *) exit 1 ;;
+esac
 ```
 
-## 관련 문서
+코드 4는 이후 작업이 리포트를 회수할 수 있도록 의도적으로 이 작업을 성공으로 끝냅니다. 그때까지 `report.md`는 비어 있습니다. 코드 5는 사람이 결정하기 전까지 아무 일도 일어나지 않으므로 여기서 작업을 실패시킵니다. 파이프라인에 맞게 두 줄 중 어느 것이든 바꾸세요.
+
+버전을 고정하려면 `install.sh` 대신 해당 릴리스의 설치 프로그램을 다운로드하세요: `https://github.com/cloudthinker-ai/cloudthinker-cli/releases/download/v<VERSION>/cloudthinker-cli-installer.sh`. [릴리스 페이지](https://github.com/cloudthinker-ai/cloudthinker-cli/releases)의 각 릴리스에는 아카이브별 SHA-256 체크섬이 나열되어 있습니다.
+
+헤드리스 실행은 채팅과 마찬가지로 워크스페이스 [Approval mode](/guide/approvals/approval-mode)를 따릅니다. 프롬프트가 승인이 필요한 변경을 요청하면, 실행은 작업하는 대신 종료 코드 5로 일시 중지됩니다.
+
+<Warning>
+Auto에서는 규칙이나 AI 검사가 허용한 쓰기가 사람의 개입 없이 즉시 실행됩니다. 실행은 작업의 로그인 또는 토큰 소유자로서 작동하며, CloudThinker도 그 사람을 실행자로 기록합니다. [API 실행의 승인](/guide/api/approvals)을 참고하세요.
+</Warning>
+
+## 헤드리스 채팅과 헤드리스 에이전트 중 무엇을 쓸까?
+
+| 원하는 것 | 사용할 것 |
+|---|---|
+| CloudThinker가 워크스페이스 연결로 클라우드를 조사하고, 연결이 끊겨도 계속 실행 | `cloudthinker chat -p` |
+| 이 머신의 이 폴더에 있는 파일에 대한 답변 | `cloudthinker agent -p`. [Agent CLI](/ko/guide/cli/agent#화면-없이-에이전트-실행) 참고 |
+
+## 문제 해결
+
+<AccordionGroup>
+  <Accordion title="명령이 시작하기 전에 몇 초 동안 멈춥니다">
+    stdin이 데이터 없이 열려 있어 CLI가 입력을 3초 기다립니다. 파이프할 것이 없으면 `< /dev/null`을 추가하세요.
+  </Accordion>
+  <Accordion title="프롬프트가 너무 길다는 이유로 거부됩니다">
+    프롬프트와 파이프 입력을 합쳐 50,000자를 넘었습니다. 입력을 줄이세요(예: 로그에 `--tail` 사용).
+  </Accordion>
+  <Accordion title="스트림이 이미 활성 상태라서 --continue가 실패합니다">
+    해당 대화에서 다른 실행이 아직 작업 중입니다. `chat status <run_id> --wait`로 기다린 다음 이어가세요.
+  </Accordion>
+  <Accordion title="실행이 코드 5로 종료됩니다">
+    CloudThinker가 워크스페이스에서 사람의 승인이 필요한 변경을 하려고 합니다. `web_url`을 열어 결정한 다음 `chat status <run_id> --wait`로 같은 실행을 확인하세요. 승인을 우회하려고 새 실행을 제출하지 마세요.
+  </Accordion>
+</AccordionGroup>
+
+## 다음 단계
 
 <CardGroup cols={2}>
-  <Card title="인증" icon="key" href="/ko/guide/cli/authentication">
-    파이프라인에 전용 자격 증명 주기
+  <Card title="CLI 인증" icon="key" href="/ko/guide/cli/authentication">
+    작업에 서비스 계정 토큰을 제공하거나 러너에 로그인하세요.
   </Card>
-  <Card title="레퍼런스" icon="book" href="/ko/guide/cli/reference">
-    모든 명령, 플래그, 변수, 종료 코드
+  <Card title="CLI 참조" icon="book" href="/ko/guide/cli/reference">
+    모든 명령, 플래그, 변수, 종료 코드.
   </Card>
 </CardGroup>

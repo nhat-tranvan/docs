@@ -1,151 +1,147 @@
 ---
 title: CircleCI
-description: "CloudThinker と CircleCI を接続して、パイプライン状態の監視、ワークフローとジョブの分析、ビルドログのトリアージ、承認ゲートのパイプライン制御を実現する"
+description: "CircleCI を接続し、エージェントが失敗したパイプラインのトリアージ、不安定なテストの特定、設定の検証、Approvals を経たワークフローの再実行を行えるようにします"
 icon: "/images/icons/circleci.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+import ApprovalDefault from '/snippets/approval-default.mdx';
 
-CircleCI アカウントを接続することで、CloudThinker エージェントがパイプライン状態の監視、ワークフローとジョブの調査、失敗したビルドとテストのログトリアージ、ワークフローの再実行・パイプラインのトリガー・デプロイのロールバックなど承認ゲートが必要なコントロールの実行を行えるようになります。
-
-CircleCI は**個人 API トークン**で認証します。トークンはそれを作成したユーザーの権限を継承するため、エージェントがアクセスできる範囲はそのユーザーのプロジェクトアクセスに一致します。
-
----
+CircleCI を接続すると、CloudThinker のエージェントがパイプラインのステータスを読み、ビルドとテストのログを取得して実行が失敗した理由を突き止め、不安定なテストを見つけ、`.circleci/config.yml` を検証できるようになります。接続には CircleCI の個人 API トークンを使うため、エージェントはトークンのユーザーが見られるプロジェクトに限って到達します。
 
 ## 前提条件
 
-- 調査したい組織とプロジェクトへのアクセスがある **CircleCI アカウント**。
-- **個人 API トークン**。
-- 承認ゲートコントロールを使用する場合は、トークンのユーザーが対象プロジェクトで**トリガー/パイプライン権限**を持っている必要があります。
-
-<Info>
-読み取り専用分析は標準の個人 API トークンで機能します。承認ゲートコントロールには、トークンのユーザーが対象プロジェクトでトリガー権限を持っていることも必要です。
-</Info>
-
----
+- エージェントに調査させたい組織とプロジェクトを閲覧できる CircleCI アカウント。
+- そのアカウントがフォローしているプロジェクトが少なくとも 1 つ。エージェントはフォロー中の一覧からプロジェクトを見つけます。フォローするには、トークンのユーザーとして CircleCI にサインインし、**Projects** を開いて、各リポジトリの横の **Follow Project** をクリックします。
+- 不安定なテストとジョブのテスト結果の場合: ジョブが `store_test_results` で JUnit の結果をアップロードしている必要があります。これがないと、CircleCI は返すテストデータを持ちません。
+- エージェントにパイプラインの開始や再実行をさせる場合: 同じアカウントに、それらのプロジェクトでパイプラインをトリガーする権限が必要です。
+- セルフホストの CircleCI Server の場合: CloudThinker から HTTPS でサーバーに到達できる必要があります。[Reaching private services](/ja/guide/connections/overview#プライベートサービスへの到達) を参照してください。
 
 ## セットアップ
 
 <Steps>
   <Step title="個人 API トークンを作成する">
-    CircleCI で**ユーザーアバター → User Settings → Personal API Tokens**（[app.circleci.com/settings/user/tokens](https://app.circleci.com/settings/user/tokens)）に移動し、**Create New Token** をクリックします。
-    - **Token name**: `cloudthinker`
-    - **Expiry date**: 有効期間を選択し、ローテーションを計画する
+    CircleCI で **User Settings → Personal API Tokens**（[app.circleci.com/settings/user/tokens](https://app.circleci.com/settings/user/tokens)）を開き、**Create New Token** をクリックします。名前は `cloudthinker` にします。
 
-    トークンを直ちにコピーしてください。CircleCI は一度しか表示しません。
+    トークンはすぐにコピーしてください。CircleCI は一度しか表示しません。
   </Step>
-  <Step title="CloudThinker で接続を追加する">
-    **Connections → CircleCI** に移動して以下を入力します。
-    - **Token**: 作成した個人 API トークン
-    - **Base URL**: CircleCI クラウドの場合は `https://circleci.com`、セルフホスト Server または Standalone の場合はインストール URL
+  <Step title="接続を追加する">
+    **Settings → Workspace → Connections** を開き、**Discover** タブを開いて **CircleCI** を選びます。次を入力します。
+    - **CIRCLECI_TOKEN**: 作成したトークン。
+    - **CIRCLECI_BASE_URL**: CircleCI クラウドでは `https://circleci.com` のままにします。セルフホストの CircleCI Server の場合にのみ変更します。
 
-    **Connect** をクリックします。CloudThinker が認証情報を検証し、**Connected** ステータスを表示します。
+    **Connect** をクリックします。
+
+    **成功時の状態:** ダイアログが閉じ、接続に **Connected** と表示されます。
+  </Step>
+  <Step title="トークンが機能することを確認する">
+    [接続を確認する](#接続を確認する)のプロンプトを実行します。CloudThinker は接続時に CircleCI でトークンを確認しないため、**Connected** のステータスだけではトークンが有効であることは証明されません。
   </Step>
 </Steps>
 
-<Warning>
-個人 API トークンは作成直後にコピーしてください。紛失した場合は新しいトークンを作成する必要があります。
-</Warning>
-
----
-
 ## 接続の詳細
 
-| フィールド | 説明 | 例 |
-|-------|-------------|---------|
-| **CIRCLECI_TOKEN** | 接続の認証に使用する個人 API トークン | — |
-| **CIRCLECI_BASE_URL** | クラウドの場合は `https://circleci.com`、Server または Standalone のインストール URL | `https://circleci.com` |
+| フィールド | 必須 | 説明 | 例 |
+|-------|----------|-------------|---------|
+| **CIRCLECI_TOKEN** | はい | 個人 API トークン。作成したユーザーのアクセス権を持ちます | `CCIPAT_...` |
+| **CIRCLECI_BASE_URL** | いいえ | CircleCI のインストール先のホスト。ホストのみで、末尾のパスは付けません | `https://circleci.com` |
 
-<Note>
-CloudThinker はトークンから組織とフォロー中のプロジェクトを解決するため、CircleCI クラウドでは手動での組織 ID やプロジェクト ID の設定は不要です。
-</Note>
-
----
+組織やプロジェクトの ID を入力する必要はありません。エージェントがトークンのフォロー中のプロジェクトから解決します。
 
 ## 必要な権限
 
-個人 API トークンはそれを作成したユーザーのアクセスを継承します。読み取り操作は対象プロジェクトを参照できるユーザーのトークンであれば機能します。コントロール操作には、トークンのユーザーがプロジェクトで**トリガー/パイプライン権限**を持っていること **および** CloudThinker での明示的な[承認](/guide/approvals/overview)も必要です。
+個人 API トークンは、作成した CircleCI ユーザーと同じアクセス権を持ちます。そのユーザーのプロジェクトへのアクセス権が、エージェントが読み取り・変更できる範囲の上限です。
+
+| エージェントにさせたいこと | トークンのユーザーに必要なもの |
+|----------------------------|-----------------------------|
+| ステータス、ログ、テスト結果、成果物を読む | プロジェクトへの読み取りアクセス |
+| パイプラインの開始、ワークフローの再実行、評価テストの実行 | プロジェクトでパイプラインをトリガーする権限 |
+| デプロイのロールバック | CircleCI の **Deploys** でプロジェクトに設定されたロールバックパイプラインと、それをトリガーする権限 |
+
+**評価テスト**は CircleCI のプロンプトテンプレートのテストで、エージェントは CircleCI 上のパイプラインとして実行します。
 
 <Tip>
-最小権限の原則に従ってください。CloudThinker に必要なプロジェクトアクセスのみを持つユーザー配下でトークンを作成し、ガードレールを外すのではなくコントロール操作を承認ゲートに保ってください。
+トークンは、調査させたいプロジェクトだけに所属する専用の CircleCI ユーザーで作成してください。そのユーザーは GitHub または Bitbucket の組織のメンバーである必要があるため、VCS のマシンユーザーを使うのが一般的です。CircleCI のプランでユーザーとしてカウントされるかを確認してください。書き込み操作は引き続き [Approvals](/guide/approvals/overview) を経由するため、トークンが上限を決め、Approvals が各操作を判断します。
 </Tip>
-
----
 
 ## エージェントの機能
 
-接続後、エージェントは CircleCI のプロジェクト、パイプライン、ログへの読み取りアクセスを持ちます。
+| 機能 | エージェントができること |
+|------------|--------------------|
+| **Project discovery** | フォロー中のプロジェクトとその組織を一覧表示します |
+| **Pipeline status** | プロジェクトとブランチの最新のパイプラインのステータスを読みます |
+| **Failure triage** | ビルドの失敗ログとジョブのテスト結果を取得し、失敗しているステップを見つけます |
+| **Flaky tests** | 同じコードで成功と失敗を繰り返すテストを見つけます |
+| **Config validation** | `.circleci/config.yml` を確認し、エラーを説明します |
+| **Artifacts** | ジョブが生成した成果物を一覧表示します |
+| **Usage review** | 使用量データをダウンロードし、使用率の低いリソースクラスを指摘します（有料プランのみ） |
+| **Pipeline controls** | パイプラインの実行、ワークフローの再実行、評価テストの実行、デプロイのロールバック。**それぞれ Approvals を経由します** |
 
-| 機能 | 説明 |
-|------------|-------------|
-| **プロジェクト検出** | フォロー中のプロジェクトを一覧表示し、アクティブな組織を解決する |
-| **パイプライン状態** | プロジェクトの最新パイプライン状態を調査する |
-| **ワークフローとジョブ** | パイプラインのワークフローとそのジョブをレビューする |
-| **ビルドとテストログ** | 失敗のトリアージのためにビルドとテスト出力を取得する |
-| **パイプラインコントロール** | パイプラインの実行、ワークフローの再実行、評価テストの実行、デプロイのロールバック、プロンプトテンプレートの作成 — **承認が必要** |
+書き込みの前に、エージェントは何が起こるか（例: 「`gh/acme/api` のブランチ `main` でパイプラインを開始します」）を伝え、正確な入力を示します。ロールバックでは現在のバージョンと対象のバージョンも示し、対象の確認を求めます。
 
-### 接続の確認
+<ApprovalDefault />
+
+毎回確認されるようにするには、[Approval mode](/guide/approvals/approval-mode) で **Manual** を選び、すべての変更を人が承認するようにします。**Ask first** の [Rule](/guide/approvals/rules) を使えば、それをこの接続だけに絞り込めます。
+
+### 接続を確認する
 
 ```text
-List my followed CircleCI projects and show the latest pipeline status for one of them
+List my followed CircleCI projects and show the latest pipeline status for each
 ```
 
-### プロンプト例
+フォロー中の各プロジェクトがスラッグ（`gh/acme/api` など）と最新のパイプラインのステータスとともに表示されることを確認します。期待したプロジェクトが表示されない場合、トークンのユーザーはそれをフォローしていません。
+
+### プロンプトの例
 
 ```text
-Check the latest CircleCI pipeline status for my main project and report any failures
-The latest workflow failed — pull the build and test logs, find the error, and recommend a fix
-List my followed CircleCI projects and their most recent pipeline status
+The main branch of gh/acme/api failed on CircleCI. Pull the failure logs and tell me which step broke and why
+Which tests in gh/acme/api are flaky, and how often does each one fail?
 ```
-
-プロジェクトが多い組織では、エージェントが絞り込んだ結果を返せるよう、単一プロジェクトにリクエストを限定してください。
-
----
 
 ## トラブルシューティング
 
-<Accordion title="401 または 403 Unauthorized">
-トークンが欠落、期限切れ、または失効しています。新しい個人 API トークンを作成して CircleCI 接続を再接続してください。
+<Accordion title="すべてのリクエストが 401 Unauthorized を返す">
+トークンがない、期限切れ、または取り消されています。新しい個人 API トークンを作成し、接続の **CIRCLECI_TOKEN** フィールドを更新してください。
 </Accordion>
 
-<Accordion title="接続テストは成功するがプロジェクトが表示されない">
-トークンのユーザーがプロジェクトをフォローしていないか、解決された組織が間違っています。CircleCI で少なくとも 1 つのプロジェクトをフォローしてから、検出を再実行してください。
+<Accordion title="読み取りは機能するが、パイプラインの開始や再実行で権限エラーが返る">
+トークンのユーザーはプロジェクトを読めますが、パイプラインをトリガーできません。そのプロジェクトでトリガー権限を持つユーザーでトークンを作成し、接続を更新してください。
 </Accordion>
 
-<Accordion title="コントロールアクションが権限エラーで失敗する">
-トークンにプロジェクトのトリガー/パイプライン権限がありません。そのプロジェクトでトリガー権限を持つユーザーのトークンを再生成して再接続してください。
+<Accordion title="接続は Connected なのにプロジェクトが表示されない">
+トークンのユーザーがプロジェクトを 1 つもフォローしていません。CircleCI で少なくとも 1 つのプロジェクトをフォローしてから、もう一度質問してください。
 </Accordion>
 
-<Accordion title="使用データやコンポーネントバージョンが返らない">
-使用 API は有料プランのみ、コンポーネントバージョンは Server または Standalone のみです。プランティアを確認してください。これは設定エラーではなく、ティア制限です。
+<Accordion title="不安定なテストやジョブのテスト結果が空で返る">
+ジョブがテスト結果をアップロードしていません。JUnit XML の出力を指す `store_test_results` ステップを追加し、何回かパイプラインを実行してから、もう一度質問してください。
 </Accordion>
 
-<Accordion title="セルフホストサーバーが 404 または認証エラーを返す">
-**CIRCLECI_BASE_URL** がまだ `https://circleci.com` に設定されています。Server または Standalone のインストール URL に変更して再接続してください。
+<Accordion title="プロジェクトが 404 を返す">
+プロジェクトのスラッグには VCS のプレフィックスが必要です。GitHub では `gh/<org>/<repo>`、Bitbucket では `bb/<org>/<repo>` です。フォロー中のプロジェクトを一覧表示するようエージェントに依頼し、その一覧のスラッグを使ってください。
 </Accordion>
 
-<Accordion title="ロールバックアクションが実行されなかった">
-デプロイのロールバックは本番環境に影響する破壊的な操作であり、承認ゲートが必要で、Server または Standalone のみで利用可能です（クラウドのみの組織では利用不可）。プロンプトが表示されたらアクションを承認し、インストールがサポートしていることを確認してください。
+<Accordion title="使用量の分析で組織 ID を求められる">
+使用量データには組織の UUID が必要ですが、それを返す CircleCI API の呼び出しはありません。CircleCI の **Organization Settings → Overview → Organization ID** からコピーし、チャットに貼り付けてください。使用量 API は有料プラン限定で、1 回のリクエストで最大 32 日分をカバーします。
 </Accordion>
 
----
+<Accordion title="セルフホストのインストールが 404 や認証エラーを返す">
+**CIRCLECI_BASE_URL** が `https://circleci.com` のままか、パスが含まれています。`https://circleci.example.com` のように、CircleCI Server のホストだけを設定してください。
+</Accordion>
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **コントロールの承認** — ガードレールを外すのではなく、パイプライン、再実行、ロールバックなどの書き込みアクションを承認ゲートに保ってください。
-- **正しいベース URL** — クラウドの場合は `https://circleci.com`、セルフホストの Server または Standalone の場合はインストール URL を使用してください。
+- **専用ユーザーを使う**: CircleCI の個人トークンには独自のスコープがないため、到達範囲を制限する唯一の方法は、トークンのユーザーのプロジェクトメンバーシップです。
+- **操作は承認付きのままにする**: パイプラインの実行はコンピューティングに課金され、デプロイを行うこともあります。これらの操作は自動承認せず、[Approval mode](/guide/approvals/approval-mode) の背後に置いてください。
 
----
-
-## 関連情報
+## 関連ページ
 
 <CardGroup cols={2}>
-  <Card title="Jenkins 接続" icon="/images/icons/jenkins.svg" href="/ja/guide/connections/jenkins">
-    ビルドパイプライン監視とジョブ分析
+  <Card title="Buildkite" icon="/images/icons/buildkite.svg" href="/ja/guide/connections/buildkite">
+    パイプラインのヘルス、失敗したビルドのトリアージ、承認付きの再試行。
   </Card>
-  <Card title="承認" icon="shield-check" href="/guide/approvals/overview">
-    承認ゲートアクションの仕組み
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    CloudThinker が、どの操作に人の承認が必要かをどう判断するか。
   </Card>
 </CardGroup>

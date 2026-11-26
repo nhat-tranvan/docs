@@ -1,116 +1,226 @@
 ---
 title: Headless Chat
-description: "スクリプトから CloudThinker にプロンプトを 1 つ送り、回答を stdout で受け取り、長時間の実行は後から CI でも回収します"
+description: "スクリプトや CI ジョブから CloudThinker にプロンプトを送り、回答をパイプで渡し、長時間の実行は実行 ID で後から回収します。"
 icon: message-code
 ---
 
-`cloudthinker chat -p` はプロンプトを CloudThinker に送り、回答を待ちます。stdout には CloudThinker の回答だけが出るため、そのままパイプに流し込めます。
+`cloudthinker chat -p` は、クラウドの CloudThinker にプロンプトを 1 つ送信し、回答を表示します。stdout には回答だけが出力されるため、そのままパイプ、ファイル、CI ステップに渡せます。ターミナルが切断されても、実行はサーバー上で続きます。
 
-## プロンプトを送る
+## 前提条件
+
+- CloudThinker CLI がインストールされ、ログイン済みであること。CI ではサービスアカウントトークンを使います。[Use CloudThinker in CI/CD](/guide/api/ci-cd) を参照してください。
+- このページのスクリプト例には [`jq`](https://jqlang.org) が必要です。
+- AWS アカウントや Kubernetes クラスターなど、CloudThinker に調べさせたい対象の[接続](/ja/guide/connections/overview)。
+
+## プロンプトを送信する
+
+<Steps>
+  <Step title="質問する">
+    ```bash
+    cloudthinker chat -p "List EC2 instances in us-east-1 with average CPU under 5% this week"
+    ```
+
+    待っている間、stderr のスピナーが実行状態を表示します。
+
+    **成功時の状態:** stderr に 1 行が表示され、その後 stdout に回答が出力されます。
+
+    ```text
+    continue_with=0f9e364e-9c34-406e-be7d-52a143fede85 web_url=<link to the conversation>
+    <CloudThinker's answer, as plain text>
+    ```
+
+    各実行は、チャットのターンと同様にワークスペースのクレジットを使います。夜間の CI ジョブもクレジットを消費するため、[使用量](/ja/guide/billing/usage)に注意してください。
+  </Step>
+  <Step title="回答をパイプで渡す、または保存する">
+    stdout には回答だけが入るため、他のコマンドと同じようにリダイレクトできます。
+
+    ```bash
+    cloudthinker chat -p "Summarize yesterday's incidents" > summary.md
+    cloudthinker chat -p "List unattached EBS volumes, one ID per line" | grep vol-
+    ```
+  </Step>
+  <Step title="同じ会話でフォローアップする">
+    `continue_with` の ID または実行 ID を `--continue` に渡します。スクリプトでは `--json` と `jq` で取得します。
+
+    ```bash
+    conv=$(cloudthinker chat -p "Draft a rollout plan for the api service" --json < /dev/null | jq -r .conversation_id)
+    cloudthinker chat -p "Remove the risky step" --continue "$conv"
+    ```
+
+    `web_url` を開くと、同じ会話をブラウザで確認できます。1 つの会話で同時に実行できるターンは 1 つだけなので、前の実行が終わるのを待ってください。
+  </Step>
+</Steps>
+
+## 別のコマンドから入力を渡す
+
+パイプされた stdin はプロンプトに追加されるため、ログ、diff、ファイルを CloudThinker に渡せます。
 
 ```bash
-cloudthinker chat -p "Name the three biggest cost drivers in a typical AWS account, one line each."
+kubectl logs deploy/api --tail 200 | cloudthinker chat -p "Why does this crash?"
+cloudthinker chat -p - < prompt.md
 ```
 
+| 入力 | CloudThinker が受け取るもの |
+|---|---|
+| パイプなしの `-p "text"` | あなたのテキスト |
+| stdin をパイプした `-p "text"` | あなたのテキストと、その後に `<stdin>` タグで囲まれたパイプのデータ |
+| `-p -` | stdin から読み込んだプロンプト全体 |
 
-進捗、実行 ID、継続用のヒントは stderr に出ます。この分離があるからこそ、コマンドをパイプできます。
+プロンプトとパイプのデータは合わせて最大 50,000 文字です。stdin が開いているのに何も送られない場合、CLI は 3 秒待ってからプロンプトだけを送信します。パイプするものがないスクリプトでは、`< /dev/null` を付けて待ち時間をなくします。
+
+[カスタムエージェント](/ja/guide/agents/customize)に回答させるには、その UUID またはエイリアスを `--agent <uuid-or-alias>` で渡します。
+
+## 今送信して、後で回収する
+
+長い調査のためにターミナルを占有する必要はありません。`--no-wait` は実行がキューに入るとすぐに戻ります。
 
 ```bash
-cloudthinker chat -p "Summarize yesterday's incidents" > summary.md
-cloudthinker chat -p "List unused EBS volumes" | grep vol-
+run=$(cloudthinker chat -p "Which S3 buckets have no lifecycle policy?" --no-wait --json < /dev/null | jq -r .run_id)
 ```
 
-## 会話を継続する
+コマンドは JSON オブジェクトを 1 つ出力します。
 
-終了した実行はいずれも `continue_with=<conversation_id>` を stderr に出力します。その ID か実行 ID を渡すと、同じスレッドを続けられます。
-
-```bash
-cloudthinker chat -p "Draft the rollout plan"
-cloudthinker chat -p "Remove the risky step" --continue 0f9e364e-9c34-406e-be7d-52a143fede85
+```json
+{
+  "run_id": "7d5fae84-be6f-45fa-802f-5041f0ff5d42",
+  "conversation_id": "0f9e364e-9c34-406e-be7d-52a143fede85",
+  "status": "pending",
+  "web_url": "<link to the conversation>"
+}
 ```
 
-同じ会話は、ヒントと並んで出力される `web_url` から Web アプリでも開けます。
-
-## 送信だけして後で回収する
-
-長い調査のためにターミナルを占有する必要はありません。`--no-wait` は実行がキューに入った時点で戻ります。
+後で、同じワークスペースにログインしている任意のマシンから回答を回収します。
 
 ```bash
-cloudthinker chat -p "Which S3 buckets have no lifecycle policy?" --no-wait --json
-```
-
-<Frame>
-  <img src="/images/cli/json-envelope.png" alt="chat --no-wait が返す JSON エンベロープ" />
-</Frame>
-
-回答は後から、どのマシンからでも回収できます。
-
-```bash
-cloudthinker chat status 7d5fae84-be6f-45fa-802f-5041f0ff5d42 --wait
+cloudthinker chat status "$run" --wait
 cloudthinker chat ls --limit 10
 cloudthinker chat ls --conversation 0f9e364e-9c34-406e-be7d-52a143fede85 --json
 ```
 
-クライアント側のタイムアウトで実行が取り消されることはありません。`--timeout` は CLI が待つ時間だけを区切り、実行はサーバー側で続きます。CLI は再開用の `chat status` コマンドを表示します。
+オプションなしの `chat ls` は、実行ごとにタブ区切りの行を 1 つ出力します。
 
-## 機械可読な出力
+```text
+RUN ID  CONVERSATION ID  STATUS  PROMPT  CREATED AT  WEB URL
+```
 
-`--json` は、平文の回答の代わりにエンベロープを 1 つ stdout に書き出します。
+待機を止めても実行はキャンセルされず、CLI には実行をキャンセルするコマンドもありません。`--timeout`（デフォルト 2400 秒）と Ctrl-C は CLI の待機を止めるだけで、CLI は実行を再開する `chat status` コマンドを表示します。作業が二重に実行されないよう、プロンプトを再送信せず、同じ実行 ID を追跡してください。
+
+## JSON 出力を読む
+
+`--json` は、プレーンな回答の代わりに JSON オブジェクトを 1 つ stdout に書き出します。
 
 | フィールド | 意味 |
-| --- | --- |
-| `run_id` | `chat status` で確認する実行 |
-| `conversation_id` | `--continue` に渡すスレッド |
-| `status` | `pending`、`running`、`succeeded`、`failed`、`approval required` |
-| `answer` | CloudThinker の最終回答。未完了の間は `null` |
-| `web_url` | Web アプリ上の同じ会話 |
+|---|---|
+| `run_id` | `chat status` で追跡する実行 |
+| `conversation_id` | `--continue` に渡す会話 |
+| `status` | 下表のステータスのいずれか |
+| `answer` | CloudThinker の回答。実行が未完了の間は `null` |
+| `web_url` | ブラウザでの会話 |
+| `message` | サーバーからの追加情報（ある場合） |
+| `failure_kind` | 失敗した実行の短い理由コード（分かる場合）。分岐に使う値ではなく、人が読むための詳細として扱ってください |
 
-`--no-wait --json` の即時応答には `answer` フィールドがありません。後で `chat status` から取得してください。
+`--no-wait --json` では、まだ回答が存在しないため、`run_id`、`conversation_id`、`status`、`web_url` だけが返されます。
+
+| JSON の `status` | オプションなしの `chat status` の表示 | 意味 |
+|---|---|---|
+| `pending` | `pending` | キュー待ち |
+| `running` | `running` | CloudThinker が作業中 |
+| `succeeded` | `succeeded` | 完了。`answer` が設定されています |
+| `failed` | `failed` | 回答なしで終了 |
+| `required_approval` | `approval required` | 誰かがブラウザで操作を承認するまで一時停止 |
+| `cancelled` | `cancelled` | 完了前に停止 |
+
+承認が必要な実行は、誰かがブラウザで判断するまで `required_approval` のままです。CLI は `Approval required. Approve in your browser: <link>` を表示して終了コード 5 で終了します。`answer` は `succeeded` 以外では `null` になるため、回答ではなく終了コードで分岐してください。
 
 ```bash
-cloudthinker chat -p "Check the error budget" --json | jq -r '.answer'
+out=$(cloudthinker chat -p "Check the error budget for checkout" --json < /dev/null) && echo "$out" | jq -r .answer
 ```
 
 ## 終了コード
 
-パイプラインはテキストを解析せずに結果で分岐できます。
+テキストを解析する代わりに、終了コードで分岐します。
 
-| コード | 意味 |
-| --- | --- |
-| 0 | 実行が完了し、回答を出力した |
-| 1 | 実行が失敗した、または実行 ID が存在しない |
-| 2 | 使用方法の誤り、またはワークスペースのポリシーによる拒否 |
-| 3 | 未ログイン、または認証情報の期限切れ |
-| 4 | CLI が待機をやめた。実行はサーバー側で継続中 |
-| 5 | ブラウザーでの承認待ちで実行が一時停止した |
+| コード | 意味 | 対応 |
+|---|---|---|
+| 0 | 実行が完了し、回答が出力された | 回答を使います |
+| 1 | 実行が失敗またはキャンセルされた、実行 ID が不明、またはサーバーがリクエストを拒否した（会話で別の実行が処理中の場合やレート制限に達した場合など） | stderr のエラーを読みます |
+| 2 | 使い方の誤り、またはサーバーがリクエストを無効として拒否した（HTTP 422） | コマンドを修正します。変更せずに再送信しないでください |
+| 3 | 未ログイン、認証情報の期限切れ、またはアクセス拒否 | `cloudthinker login` を実行するか、`CLOUDTHINKER_TOKEN` を置き換えます |
+| 4 | CLI が待機を止めた。実行は継続中 | `chat status <run_id> --wait` を実行します |
+| 5 | 実行がブラウザでの承認待ちで一時停止した | `web_url` を開いて判断するか、[承認者](/guide/approvals/approvers)に依頼します |
+| 130 | Ctrl-C を押した。実行は継続中 | `chat status <run_id> --wait` を実行します |
 
-`chat ls` と `--wait` を付けない `chat status` は取得に成功すると終了コード 0 を返します。`chat status --wait` は実行結果に応じたコードを返します。
+`--wait` なしの `chat ls` と `chat status` は、読み取りが成功すれば、実行がまだ続いていても終了コード 0 で終了します。`chat status --wait` は実行自体のコードを返します。
 
 ## CI で使う
 
-ジョブにトークンを渡し、stdout は回答のために空けておき、結果は終了コードで判断します。
+ジョブには `CLOUDTHINKER_TOKEN` にサービスアカウントトークンを渡すか（[Use CloudThinker in CI/CD](/guide/api/ci-cd) を参照）、管理下のランナーで `cloudthinker login --device-auth` により一度ログインします。その後、実行 ID を保存し、終了コードで判断させます。
 
 ```bash
-export CLOUDTHINKER_TOKEN="$CLOUDTHINKER_CI_TOKEN"
+# Once, on the runner: install the CLI, then set CLOUDTHINKER_TOKEN or log in.
+#   curl -fsSL https://cloudthinker.io/install.sh | sh
+#   cloudthinker login --device-auth
+export PATH="$HOME/.local/bin:$PATH"
 
-if cloudthinker chat -p "Review last night's failed deployments" --timeout 900 > report.md; then
-  echo "report ready"
-else
-  case $? in
-    4) echo "still running, collect it in the next job" ;;
-    5) echo "waiting for an approval in the browser" ;;
-    *) exit 1 ;;
-  esac
-fi
+# Submit first, so the run ID exists even if the wait below times out.
+run=$(cloudthinker chat -p "Review last night's failed deployments and list the likely cause of each" \
+  --no-wait --json < /dev/null | jq -r .run_id)
+echo "$run" > run_id.txt    # upload as a job artifact
+
+# Most CI shells run with `set -e`, which would end the job on a non-zero
+# exit before the case below runs. `|| code=$?` keeps the job alive.
+code=0
+cloudthinker chat status "$run" --wait --timeout 900 > report.md || code=$?
+
+case $code in
+  0) echo "report ready" ;;
+  4) echo "still running, collect it in the next job with: cloudthinker chat status $run --wait" ;;
+  5) echo "waiting for an approval in the browser"; exit 5 ;;
+  *) exit 1 ;;
+esac
 ```
 
-## 関連
+コード 4 は、後のジョブがレポートを回収できるよう、意図的にこのジョブを成功で終わらせます。それまで `report.md` は空です。コード 5 は、人が判断するまで何も起こらないため、ここでジョブを失敗させます。パイプラインに合わせて、どちらの行も変更してください。
+
+バージョンを固定するには、`install.sh` の代わりにそのリリースのインストーラーをダウンロードします: `https://github.com/cloudthinker-ai/cloudthinker-cli/releases/download/v<VERSION>/cloudthinker-cli-installer.sh`。[リリースページ](https://github.com/cloudthinker-ai/cloudthinker-cli/releases)の各リリースには、アーカイブごとの SHA-256 チェックサムが記載されています。
+
+ヘッドレスの実行は、チャットと同様にワークスペースの [Approval mode](/guide/approvals/approval-mode) に従います。プロンプトが承認の必要な変更を求めた場合、実行は操作せずに終了コード 5 で一時停止します。
+
+<Warning>
+Auto では、ルールまたは AI チェックが許可した書き込みは、人を介さずにすぐ実行されます。実行は、ジョブのログインまたはトークンの所有者として動作し、CloudThinker はその人を実行者として記録します。[Approvals for API runs](/guide/api/approvals) を参照してください。
+</Warning>
+
+## ヘッドレスチャットとヘッドレスエージェントのどちらを使うか
+
+| やりたいこと | 使うもの |
+|---|---|
+| CloudThinker にワークスペース接続を通じてクラウドを調査させ、切断しても実行を続けさせる | `cloudthinker chat -p` |
+| このマシンのこのフォルダーにあるファイルについての回答 | `cloudthinker agent -p`。[Agent CLI](/ja/guide/cli/agent#画面なしでエージェントを実行する) を参照 |
+
+## トラブルシューティング
+
+<AccordionGroup>
+  <Accordion title="コマンドが開始前に数秒止まる">
+    stdin がデータなしで開いているため、CLI が入力を 3 秒待っています。何もパイプしない場合は `< /dev/null` を付けてください。
+  </Accordion>
+  <Accordion title="プロンプトが長すぎるとして拒否される">
+    プロンプトとパイプの入力が 50,000 文字を超えています。ログに `--tail` を付けるなどして入力を減らしてください。
+  </Accordion>
+  <Accordion title="ストリームがすでにアクティブなため --continue が失敗する">
+    その会話で別の実行がまだ作業中です。`chat status <run_id> --wait` で終了を待ってから続行してください。
+  </Accordion>
+  <Accordion title="実行が終了コード 5 で終了する">
+    CloudThinker が、ワークスペースで人の承認が必要な変更を行おうとしています。`web_url` を開いて判断し、`chat status <run_id> --wait` で同じ実行を確認してください。承認を回避するために新しい実行を送信しないでください。
+  </Accordion>
+</AccordionGroup>
+
+## 次のステップ
 
 <CardGroup cols={2}>
-  <Card title="認証" icon="key" href="/ja/guide/cli/authentication">
-    パイプラインに専用の認証情報を渡す
+  <Card title="CLI 認証" icon="key" href="/ja/guide/cli/authentication">
+    ジョブにサービスアカウントトークンを渡すか、ランナーでログインします。
   </Card>
-  <Card title="リファレンス" icon="book" href="/ja/guide/cli/reference">
-    すべてのコマンド、フラグ、変数、終了コード
+  <Card title="CLI リファレンス" icon="book" href="/ja/guide/cli/reference">
+    すべてのコマンド、フラグ、変数、終了コード。
   </Card>
 </CardGroup>

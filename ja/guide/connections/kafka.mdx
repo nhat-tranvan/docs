@@ -1,376 +1,238 @@
 ---
-title: Kafka
-description: "スコープベースの認証情報を使用してConfluent Cloud上のApache KafkaをCloudThinkerに接続し、ストリーム監視と管理を行います"
+title: Apache Kafka
+description: "Confluent Cloud またはセルフホストの Kafka を接続し、エージェントがトピックの調査、メッセージの読み取り、スループットの確認、Flink SQL のデバッグを行えるようにします"
 icon: "/images/icons/kafka.svg"
 ---
 
+import ApprovalDefault from '/snippets/approval-default.mdx';
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
-Apache Kafkaクラスターを接続することで、[CloudThinker](/ja/guide/agents/overview)がトピックの健全性を監視し、コンシューマーラグを分析し、ストリーミングパフォーマンスを最適化できるようになります。
-
-Kafka接続は、スコープごとに別々のAPIキーペアを持つJSON認証情報ファイル（Confluent Cloud）またはブートストラップアドレス（セルフホスト）として送信します。
-
----
-
-## 対応プラットフォーム
-
-| プラットフォーム | サポート |
-|----------|---------|
-| **Confluent Cloud** | 全プラン |
-| **セルフホスト Kafka** | 2.8+（KRaftモード）、3.x |
-
----
+Confluent Cloud またはセルフホストの Apache Kafka クラスターを接続すると、CloudThinker のエージェントがトピックとその設定を一覧表示し、メッセージをサンプリングし、スループットのメトリクスをクエリし、スキーマとコネクターを監査し、Flink SQL のステートメントを診断できるようになります。接続には **JSON の認証情報ファイル** を 1 つアップロードします。内容は、ブートストラップアドレスと、オンにしたいスコープごとに 1 組の Confluent API キーです。
 
 ## 前提条件
 
-- 少なくとも1つのKafka環境とクラスターを持つ **Confluent Cloud** アカウント、または CloudThinkerから到達可能なセルフホスト **Kafka 2.8+**（KRaftモード）もしくは **3.x** クラスター。
-- Confluent Cloudの場合: **confluent.cloud/settings/api-keys** でAPIキーを作成するための管理者アクセス。
-- CloudThinkerからKafkaクラスターのブートストラップサーバーおよびRESTエンドポイントへのネットワークアクセス。
+- **Confluent Cloud**: Kafka クラスターが少なくとも 1 つある環境と、API キー（できればサービスアカウント用）を作成する権限。
+- **セルフホストの Kafka**: CloudThinker がネットワーク経由でブートストラップアドレス（デフォルトはポート `9092`）に到達できるブローカー。ファイルには SASL/SCRAM、mTLS、クライアント証明書、カスタム CA の設定がないため、ブローカーはそれらなしで CloudThinker の接続を受け入れる必要があります。そのようなブローカーをインターネットに公開せず、CloudThinker の送信元 IP に制限してください。このドキュメントでは CloudThinker の送信元 IP の一覧を公開していません。CloudThinker の担当者に問い合わせるか、[お問い合わせ](https://cloudthinker.io/contact)ください。その他の選択肢は [Reaching private services](/ja/guide/connections/overview#プライベートサービスへの到達) を参照してください。
+- JSON ファイルを書くためのテキストエディター。
+- 接続を追加・編集できる、CloudThinker ワークスペースの **Admin** ロール。[Roles](/guide/security/roles) を参照してください。
 
----
+## スコープを選ぶ
+
+Confluent Cloud では、API キーの各組が 1 つのスコープを利用可能にします。まず Kafka クラスターのスコープから始め、後で[更新したファイルをアップロード](#後でファイルを変更する)して他を追加します。セルフホストの Kafka では `BOOTSTRAP_SERVERS` と任意の `SCHEMA_REGISTRY_ENDPOINT` だけが適用され、他のスコープはすべて Confluent Cloud 専用です。
+
+| スコープ | エージェントができること | フィールド |
+|-------|----------------------------|--------|
+| **Kafka cluster**（必須） | トピックの一覧表示、トピック設定の読み取り、メッセージのサンプリングと送信、トピックの作成・削除 | `BOOTSTRAP_SERVERS`（両方のプラットフォーム）。Confluent Cloud のみ: `KAFKA_API_KEY`、`KAFKA_API_SECRET`、`KAFKA_REST_ENDPOINT`、`KAFKA_CLUSTER_ID`、`KAFKA_ENV_ID` |
+| **Cloud resource management** | 環境とクラスターの一覧表示、受信バイト数などのメトリクスのクエリ、請求コストの一覧表示、コネクターとトピックタグの管理 | `CONFLUENT_CLOUD_API_KEY`、`CONFLUENT_CLOUD_API_SECRET` |
+| **Schema Registry** | スキーマのサブジェクトとバージョンの一覧表示、スキーマの削除 | `SCHEMA_REGISTRY_ENDPOINT`、`SCHEMA_REGISTRY_API_KEY`、`SCHEMA_REGISTRY_API_SECRET` |
+| **Flink** | Flink SQL ステートメントの実行と調査、カタログとテーブルの閲覧、ステートメントのヘルスチェック | `FLINK_API_KEY`、`FLINK_API_SECRET`、`FLINK_REST_ENDPOINT`、`FLINK_COMPUTE_POOL_ID`、`FLINK_ENV_ID`、`FLINK_ORG_ID`、任意の `FLINK_ENV_NAME`、`FLINK_DATABASE_NAME` |
+| **Tableflow** | Tableflow のトピックとカタログ連携の一覧表示と管理 | `TABLEFLOW_API_KEY`、`TABLEFLOW_API_SECRET` |
 
 ## セットアップ
-
-Kafkaプラットフォームを選択して、接続手順を確認してください:
 
 <Tabs>
   <Tab title="Confluent Cloud">
     <Steps>
-      <Step title="Confluent Cloudを開いて環境を選択">
-        [confluent.cloud/home](https://confluent.cloud/home) にアクセスし、**Environments** を開きます。
-
-        接続したい環境をクリックします。
-
-        環境IDは選択後のURLに表示されます（例: `env-xxxxx`）。
-
-        ナビゲーション例:
-        - 環境一覧: `https://confluent.cloud/environments`
-        - 選択した環境のURLパターン: `https://confluent.cloud/environments/<env-id>/overview`
+      <Step title="クラスターのフィールドを集める">
+        [Confluent Cloud](https://confluent.cloud/home) で **Environments** を開き、環境を選びます。その ID（`env-...`）が `KAFKA_ENV_ID` です。クラスターを開き、ブートストラップサーバー、REST エンドポイント、クラスター ID（`lkc-...`）をコピーします。
       </Step>
+      <Step title="スコープごとに API キーの組を作成する">
+        **Settings → API keys** に移動し、**Add API key** をクリックします。本番環境では **Service account** を選びます。まず Kafka クラスターのキーを作成し、次に選んだ任意のスコープごとにキーを 1 つずつ作成します。作成するたびに各キーとシークレットを保存してください。各スコープに対応するリソースを選びます。
 
-      <Step title="Kafkaクラスターのフィールドを取得">
-        選択した環境内で **Clusters** を開き、対象クラスター（例: `<cluster-name>`）をクリックします。
-
-        以下を収集します:
-        - `BOOTSTRAP_SERVERS`
-        - `KAFKA_REST_ENDPOINT`
-        - `KAFKA_CLUSTER_ID`
-
-        `KAFKA_ENV_ID` はステップ1で取得した環境IDを使用します。
+        | スコープ | ウィザードで選ぶもの | 次に選ぶもの |
+        |-------|----------------------|-------------|
+        | Kafka cluster | **Kafka cluster** | ステップ 1 のクラスター |
+        | Cloud resource management | **Cloud resource management** | なし。組織全体が対象です |
+        | Schema Registry | **Schema Registry** | ステップ 1 の環境 |
+        | Flink | **Flink region** | コンピュートプールの環境、クラウド、リージョン |
+        | Tableflow | **Tableflow** | なし |
       </Step>
-
-      <Step title="スコープ別APIキーとシークレットを作成">
-        [confluent.cloud/settings/api-keys](https://confluent.cloud/settings/api-keys) にアクセスし、**+ Add API Key** をクリックします。
-
-        本番ワークロードには **Service Account**、開発・テストには **My Account** を選択します。
-
-        Confluentのオンボーディングで目的のスコープを選択し、生成されたAPIキーとAPIシークレットのペアを保存します。
-
-        作成できるスコープ:
-        - Kafkaクラスター
-        - Schema Registry
-        - ksqlDBクラスター
-        - Flinkリージョン
-        - クラウドリソース管理
-        - Tableflow
+      <Step title="任意のスコープのフィールドを集める">
+        - **Schema Registry**: 環境で **Stream Governance → Schema Registry** を開き、エンドポイントをコピーします。
+        - **Flink**: **Flink → Compute pools** を開き、プールを選んでその ID（`lfcp-...`）をコピーします。REST エンドポイントは `https://flink.<region>.<provider>.confluent.cloud` のパターンに従います（例: `https://flink.us-east-1.aws.confluent.cloud`）。`FLINK_ENV_ID` はプールを含む環境の `env-...` の ID で、通常は `KAFKA_ENV_ID` と同じ値です。組織 ID は **Settings → Organizations** にあります。
+        - **任意の Flink のデフォルト**: `FLINK_ENV_NAME` は環境の表示名で、デフォルトのカタログとして使われます。`FLINK_DATABASE_NAME` は Kafka クラスターの表示名で、デフォルトのデータベースとして使われます。これらを設定すると、エージェントは `catalog.database.table` の完全なパスなしでテーブルを指定できます。
       </Step>
+      <Step title="JSON ファイルを書く">
+        `kafka.json` などのファイルを保存します。キーを作成したスコープだけを残し、他の行は完全に削除してください。
 
-      <Step title="Schema Registryエンドポイントを取得（オプション）">
-        選択した環境で **Stream Governance -> Schema Registry** を開きます。
+        ```json
+        {
+          "BOOTSTRAP_SERVERS": "pkc-xxxxx.us-east-1.aws.confluent.cloud:9092",
+          "KAFKA_API_KEY": "<kafka-api-key>",
+          "KAFKA_API_SECRET": "<kafka-api-secret>",
+          "KAFKA_REST_ENDPOINT": "https://pkc-xxxxx.us-east-1.aws.confluent.cloud:443",
+          "KAFKA_CLUSTER_ID": "lkc-xxxxx",
+          "KAFKA_ENV_ID": "env-xxxxx",
 
-        以下を収集します:
-        - `SCHEMA_REGISTRY_ENDPOINT`
+          "CONFLUENT_CLOUD_API_KEY": "<cloud-api-key>",
+          "CONFLUENT_CLOUD_API_SECRET": "<cloud-api-secret>",
 
-        URLパターン例:
-        `https://confluent.cloud/environments/<env-id>/stream-governance/schema-registry/overview`
+          "SCHEMA_REGISTRY_ENDPOINT": "https://psrc-xxxxx.us-east-1.aws.confluent.cloud",
+          "SCHEMA_REGISTRY_API_KEY": "<schema-registry-api-key>",
+          "SCHEMA_REGISTRY_API_SECRET": "<schema-registry-api-secret>",
+
+          "FLINK_API_KEY": "<flink-api-key>",
+          "FLINK_API_SECRET": "<flink-api-secret>",
+          "FLINK_REST_ENDPOINT": "https://flink.us-east-1.aws.confluent.cloud",
+          "FLINK_COMPUTE_POOL_ID": "lfcp-xxxxx",
+          "FLINK_ENV_ID": "env-xxxxx",
+          "FLINK_ORG_ID": "<org-id>",
+
+          "TABLEFLOW_API_KEY": "<tableflow-api-key>",
+          "TABLEFLOW_API_SECRET": "<tableflow-api-secret>"
+        }
+        ```
       </Step>
+      <Step title="CloudThinker でファイルをアップロードする">
+        **Settings → Workspace → Connections** を開き、**Apache Kafka** を選びます。ファイルをアップロード領域にドラッグするか、**choose a JSON file** をクリックします。**Connect** をクリックします。
 
-      <Step title="Flinkフィールドを取得（オプション）">
-        選択した環境で **Flink** を開きます。
-
-        **Compute pools** を開き、必要であれば **+ Add compute pool** でプールを作成します。
-
-        対象のコンピュートプールをクリックして以下を収集します:
-        - `FLINK_COMPUTE_POOL_ID`
-        - `FLINK_ENV_ID`（URLから取得した環境ID）
-
-        URLパターン例:
-        `https://confluent.cloud/environments/<env-id>/flink/pools/<compute-pool-id>/overview`
-
-        `FLINK_REST_ENDPOINT` はクラウドプロバイダーとリージョン（AWS、Azure、またはGCP。例: `<region-code>`）から設定します。
-      </Step>
-
-      <Step title="組織IDを取得（オプション）">
-        [confluent.cloud/settings/organizations/edit](https://confluent.cloud/settings/organizations/edit) にアクセスして以下を収集します:
-        - `FLINK_ORG_ID`
-      </Step>
-
-      <Step title="CloudThinkerで接続を追加">
-        CloudThinkerで **Connections → Kafka** に移動します。
-
-        有効にしたスコープのフィールドを含むJSONファイルを作成します（下記の[接続フィールドテンプレート](#接続フィールドテンプレート)を参照）。接続フォームにこのJSONファイルをアップロードします。
-
-        必須フィールドはプロファイルによって異なります。詳細は[プロファイル](#プロファイル)を参照してください。
-
-        **Connect** をクリックします。CloudThinkerが認証情報を検証し、**Connected** ステータスを表示します。
+        **成功時の状態:** 接続に **Connected** のステータスが表示されます。下の確認用プロンプトを実行して、エージェントがトピックを見られることを確認してください。
       </Step>
     </Steps>
-
-    ### スコープベースの認証情報モデル
-
-    Confluent CloudはスコープベースのAPI認証情報を使用します。各APIキーとシークレットのペアは、特定のリソーススコープへのアクセスを付与します。
-
-    Kafkaのみのフィールドから始めて、後でSchema Registry、Flink、Cloud API、またはTableflowのフィールドを追加できます。
-
-    | スコープ | アンロックされる機能 | 主なフィールド |
-    |-------|------------------|----------------|
-    | **Kafkaクラスター** | トピックの管理（一覧表示・作成・削除・設定）、メッセージのプロデュース/コンシューム、クラスターメタデータの表示 | `BOOTSTRAP_SERVERS`, `KAFKA_API_KEY`, `KAFKA_API_SECRET`, `KAFKA_CLUSTER_ID`, `KAFKA_ENV_ID`, `KAFKA_REST_ENDPOINT` |
-    | **Schema Registry** | データスキーマの一覧表示・検査・削除 | `SCHEMA_REGISTRY_ENDPOINT`, `SCHEMA_REGISTRY_API_KEY`, `SCHEMA_REGISTRY_API_SECRET` |
-    | **Flinkリージョン** | Flink SQLステートメントの作成と管理、カタログ/データベース/テーブルの探索、ヘルスチェックと診断 | `FLINK_REST_ENDPOINT`, `FLINK_API_KEY`, `FLINK_API_SECRET`, `FLINK_COMPUTE_POOL_ID`, `FLINK_ENV_ID` |
-    | **クラウドリソース管理** | 環境とクラスターの探索、運用メトリクスと課金コストのクエリ | `CONFLUENT_CLOUD_API_KEY`, `CONFLUENT_CLOUD_API_SECRET` |
-    | **Tableflow** | Tableflow対応トピックとカタログ統合の管理（例: AWS Glue） | `TABLEFLOW_API_KEY`, `TABLEFLOW_API_SECRET` |
-    | **組織メタデータ** | Flinkリソース管理のための組織レベルのコンテキスト | `FLINK_ORG_ID` |
-
-    ### プロファイル
-
-    #### 最小構成（Kafkaのみ）
-
-    必須:
-    - `BOOTSTRAP_SERVERS`
-    - `KAFKA_API_KEY`
-    - `KAFKA_API_SECRET`
-    - `KAFKA_CLUSTER_ID`
-    - `KAFKA_ENV_ID`
-
-    **できること:** トピックの管理（一覧表示・作成・削除・設定）、メッセージのプロデュース/コンシューム、クラスターメタデータとトピック設定の表示。
-
-    #### 標準構成（Kafka + Schema Registry + クラウド管理）
-
-    追加:
-    - `SCHEMA_REGISTRY_ENDPOINT`
-    - `SCHEMA_REGISTRY_API_KEY`
-    - `SCHEMA_REGISTRY_API_SECRET`
-    - `CONFLUENT_CLOUD_API_KEY`
-    - `CONFLUENT_CLOUD_API_SECRET`
-
-    **できること:** 最小構成のすべてに加え、データスキーマの一覧表示と検査、環境とクラスターの探索、運用メトリクスのクエリ、課金コストの表示。
-
-    #### 高度な構成（Flink / Tableflow）
-
-    必要に応じて1つ以上のオプションスコープグループを追加:
-    - **Flink:** `FLINK_REST_ENDPOINT`, `FLINK_API_KEY`, `FLINK_API_SECRET`, `FLINK_COMPUTE_POOL_ID`, `FLINK_ENV_ID`
-    - **Tableflow:** `TABLEFLOW_API_KEY`, `TABLEFLOW_API_SECRET`
-
-    **できること:** 標準構成のすべてに加え、Flink SQLステートメントの作成と管理、FlinkカタログとデータベースSlice探索、ストリーミングクエリのヘルスチェック、カタログ統合（例: AWS Glue）を含むTableflow対応トピックの管理。
-
-    ### 接続フィールドテンプレート
-
-    このテンプレートを使用して、有効にしたスコープの値を入力してください:
-
-    ```json
-    {
-      "BOOTSTRAP_SERVERS": "pkc-xxxxx.<region>.<provider>.confluent.cloud:9092",
-      "KAFKA_API_KEY": "<kafka-api-key>",
-      "KAFKA_API_SECRET": "<kafka-api-secret>",
-      "KAFKA_REST_ENDPOINT": "https://pkc-xxxxx.<region>.<provider>.confluent.cloud:443",
-      "KAFKA_CLUSTER_ID": "lkc-xxxxx",
-      "KAFKA_ENV_ID": "env-xxxxx",
-
-      "SCHEMA_REGISTRY_ENDPOINT": "https://psrc-xxxxx.<region>.<provider>.confluent.cloud",
-      "SCHEMA_REGISTRY_API_KEY": "<schema-registry-api-key>",
-      "SCHEMA_REGISTRY_API_SECRET": "<schema-registry-api-secret>",
-
-      "FLINK_API_KEY": "<flink-api-key>",
-      "FLINK_API_SECRET": "<flink-api-secret>",
-      "FLINK_COMPUTE_POOL_ID": "lfcp-xxxxx",
-      "FLINK_ENV_ID": "env-xxxxx",
-      "FLINK_REST_ENDPOINT": "https://flink.<region>.<provider>.confluent.cloud",
-      "FLINK_ORG_ID": "<org-id>",
-
-      "CONFLUENT_CLOUD_API_KEY": "<cloud-api-key>",
-      "CONFLUENT_CLOUD_API_SECRET": "<cloud-api-secret>",
-
-      "TABLEFLOW_API_KEY": "<tableflow-api-key>",
-      "TABLEFLOW_API_SECRET": "<tableflow-api-secret>"
-    }
-    ```
   </Tab>
-  <Tab title="セルフホスト Kafka">
+  <Tab title="Self-hosted Kafka">
     <Steps>
-      <Step title="ネットワークアクセスを確認">
-        CloudThinkerアプリケーションが `<broker-name>.<your-domain>:9092` でKafkaブローカーに到達できることを確認します。
+      <Step title="ネットワークアクセスを開く">
+        CloudThinker がブローカーのブートストラップアドレス（デフォルトはポート `9092`）に到達できるようにします。`127.0.0.1` にのみバインドされたブローカーには到達できません。
       </Step>
-      <Step title="CloudThinkerで接続を追加">
-        CloudThinkerで **Connections → Kafka** に移動します。
+      <Step title="JSON ファイルを書く">
+        ブートストラップアドレスと、Schema Registry を運用している場合はそのエンドポイント（多くの場合ポート `8081`）を含む、`kafka.json` などのファイルを保存します。
 
-        有効にしたスコープのフィールドを含むJSONファイルを作成します（下記の[接続フィールドテンプレート](#接続フィールドテンプレート-2)を参照）。接続フォームにこのJSONファイルをアップロードします。
+        ```json
+        {
+          "BOOTSTRAP_SERVERS": "kafka-1.example.com:9092",
+          "SCHEMA_REGISTRY_ENDPOINT": "https://schema-registry.example.com:8081"
+        }
+        ```
+      </Step>
+      <Step title="CloudThinker でファイルをアップロードする">
+        **Settings → Workspace → Connections** を開き、**Apache Kafka** を選びます。ファイルをアップロードし、**Connect** をクリックします。
 
-        必須フィールドはプロファイルによって異なります。詳細は下記の[プロファイル](#プロファイル-2)を参照してください。
-
-        **Connect** をクリックします。CloudThinkerが認証情報を検証し、**Connected** ステータスを表示します。
+        **成功時の状態:** 接続に **Connected** のステータスが表示されます。
       </Step>
     </Steps>
 
-    ### スコープベースの認証情報モデル
-
-    セルフホストKafkaはスコープベースの設定を使用します。Kafkaのみのフィールドから始めて、後でSchema Registryのフィールドを追加できます。
-
-    | スコープ | アンロックされる機能 | 主なフィールド |
-    |-------|-----------------|----------------|
-    | **Kafkaクラスター** | トピックの管理（一覧表示・作成・削除）、メッセージのプロデュース/コンシューム | `BOOTSTRAP_SERVERS` |
-    | **Schema Registry** | データスキーマの一覧表示・検査・削除 | `SCHEMA_REGISTRY_ENDPOINT` |
-
-    ### プロファイル
-
-    #### 最小構成（Kafkaのみ）
-
-    必須:
-    - `BOOTSTRAP_SERVERS`
-
-    **できること:** トピックの管理（一覧表示・作成・削除）、メッセージのプロデュース/コンシューム。
-
-    #### 標準構成（Schema Registry付き）
-
-    追加:
-    - `SCHEMA_REGISTRY_ENDPOINT`（通常ポート8081）
-
-    **できること:** 最小構成のすべてに加え、データスキーマの一覧表示・検査・削除。
-
-    ### 接続フィールドテンプレート
-
-    このテンプレートを使用して、有効にしたスコープの値を入力してください:
-
-    ```json
-    {
-      "BOOTSTRAP_SERVERS": "<broker-name>.<your-domain>:9092",
-      "SCHEMA_REGISTRY_ENDPOINT": "http://<schema-registry-host>:8081"
-    }
-    ```
+    セルフホストの Kafka では、エージェントはブローカー自体を通じて作業します。トピックの一覧表示とメッセージのサンプリング・送信、さらに Schema Registry のエンドポイントを設定した場合はスキーマも扱えます。メトリクス、請求、コネクター、Flink、Tableflow は Confluent Cloud の API のため、利用できません。
   </Tab>
 </Tabs>
 
----
-
 ## 接続の詳細
 
-接続フィールドはJSON認証情報ファイルとして送信します。フィールドはプラットフォームと有効なスコープによって異なります。詳細は[セットアップ](#セットアップ)セクションの全テンプレートを参照してください。
+フォームにはアップロードのフィールドが 1 つあります。ファイルは文字列の値を持つ 1 つの JSON オブジェクトでなければならず、[スコープを選ぶ](#スコープを選ぶ)に記載されたキーだけを使えます。それ以外のキーがあるファイルや、文字列でない値を持つファイルは拒否されます。
 
-<Note>
-CloudThinkerは部分的なスコープのオンボーディングをサポートしています。Kafkaのみのフィールドから始めて、後でSchema Registry、Flink、Cloud API、またはTableflowの認証情報を追加できます。
-</Note>
-
-| フィールド | プラットフォーム | 説明 |
+| フィールド | 必須 | 説明 |
 |-------|----------|-------------|
-| `BOOTSTRAP_SERVERS` | 両方 | Kafkaクラスターのブートストラップアドレス（必須） |
-| `KAFKA_API_KEY` / `KAFKA_API_SECRET` | Confluent Cloud | Kafkaスコープの認証情報 |
-| `SCHEMA_REGISTRY_ENDPOINT` | 両方 | Schema Registry URL |
-| `SCHEMA_REGISTRY_API_KEY` / `SCHEMA_REGISTRY_API_SECRET` | Confluent Cloud | Schema Registry認証情報 |
-| `FLINK_REST_ENDPOINT` | Confluent Cloud | Flinkリージョンエンドポイント |
-| `CONFLUENT_CLOUD_API_KEY` / `CONFLUENT_CLOUD_API_SECRET` | Confluent Cloud | クラウド管理認証情報 |
-| `TABLEFLOW_API_KEY` / `TABLEFLOW_API_SECRET` | Confluent Cloud | Tableflow認証情報 |
-
----
+| `BOOTSTRAP_SERVERS` | はい | ブローカーのブートストラップアドレス（`host:port`） |
+| `KAFKA_API_KEY` / `KAFKA_API_SECRET` | Confluent Cloud | Kafka クラスターのキーの組 |
+| `KAFKA_REST_ENDPOINT`、`KAFKA_CLUSTER_ID`、`KAFKA_ENV_ID` | Confluent Cloud | クラスターの REST エンドポイント、クラスター ID、環境 ID |
+| `SCHEMA_REGISTRY_ENDPOINT` | いいえ | Schema Registry の URL（どちらのプラットフォームでも） |
+| その他のスコープのキー | いいえ | [スコープを選ぶ](#スコープを選ぶ)を参照 |
 
 ## 必要な権限
 
+**Confluent Cloud:** サービスアカウント用のキーを作成し、そのアカウントにはエージェントが必要とするものだけを付与します。
+
+- **Kafka cluster**: ACL をエージェントに読ませるトピックに制限します。メッセージのサンプリングはコンシューマーグループを通じて読み取るため、アカウントにはコンシューマーグループへの `READ` も必要です。
+
+  ```bash
+  confluent kafka acl create --allow --service-account sa-xxxxx \
+    --operations read,describe,describe-configs --topic orders --cluster lkc-xxxxx
+  confluent kafka acl create --allow --service-account sa-xxxxx \
+    --operations read --consumer-group "*" --cluster lkc-xxxxx
+  ```
+
+- **Cloud resource management**: メトリクスには少なくとも **MetricsViewer**。
+- **Schema Registry**: エージェントに一覧表示させるサブジェクトへの **DeveloperRead**。
+- **Flink**: コンピュートプールを含む環境での **FlinkDeveloper**。
+
+**セルフホストの Kafka:** 接続にはブートストラップアドレスだけが必要です。
+
 <Tip>
-Confluent Cloudでは、**Service Account** を使用し、各APIキーに必要なスコープのみを付与してください。Kafkaのみの認証情報から始めて、追加スコープを段階的に追加してください。
+Kafka クラスターのスコープと読み取り専用の ACL から始めてください。エージェントにメッセージの送信やトピックの作成をさせたい場合を除き、サービスアカウントの書き込み ACL はオフのままにしてください。
 </Tip>
 
-**Confluent Cloud:** スコープごとに別々のAPIキーとシークレットのペアを作成します。Kafka ACLをCloudThinkerが必要とする特定のトピックに制限します。クラウド管理認証情報には最低限MetricsViewerロールが必要です。
+## エージェントの機能
 
-**セルフホスト Kafka:** APIキーは不要です。ブローカーのブートストラップアドレスがCloudThinkerからポート9092でネットワーク到達可能であることを確認してください。
+| 機能 | エージェントができること | Approvals を経由するか |
+|------------|--------------------|------------------------|
+| **Topic inventory** | パーティション数付きでトピックを一覧表示し、トピック設定を読み、名前やタグでトピックを検索します | いいえ |
+| **Message sampling** | 最近のメッセージを件数を限って読み、設定されていれば Schema Registry でデコードします | いいえ |
+| **Metrics and billing** | 受信バイト数などの Confluent Cloud のメトリクスをクエリし、請求コストを一覧表示します | いいえ |
+| **Schemas and connectors** | スキーマのサブジェクトとバージョンを一覧表示し、コネクターを一覧表示・読み取ります | いいえ |
+| **Flink SQL reads** | カタログとテーブルを閲覧し、ステートメントとその例外を読み、ヘルスチェックを実行します | いいえ |
+| **Flink SQL statements** | Flink SQL ステートメントを実行します | はい |
+| **Produce and create** | メッセージを送信し、トピックを作成します | はい |
+| **Changes and deletions** | トピック、スキーマ、コネクター、Flink ステートメントの削除。トピック設定の変更。コネクターの作成。タグの削除。Tableflow の変更 | はい |
 
----
+**はい** の呼び出しは、まずワークスペースの [Approvals](/guide/approvals/overview) を経由します。
 
-## エージェント機能
+<ApprovalDefault />
 
-接続後、CloudThinker は次のことができます:
+<Warning>
+Flink のステートメントは読み取り以上のことができます。`INSERT INTO` はトピックに書き込み、継続的なステートメントは誰かが削除するまで、あなたが料金を支払うコンピュートプールの容量を使って実行され続けます。承認する前にステートメントを読んでください。
+</Warning>
 
-| 機能 | 説明 |
-|------------|-------------|
-| **コンシューマーラグ監視** | コンシューマーグループごとのラグを追跡し、遅いコンシューマーを特定 |
-| **トピックヘルス分析** | パーティション分散、レプリケーションファクター、レプリカ不足パーティションを確認 |
-| **スループットメトリクス** | トピックごとのバイト入出力とメッセージレートを監視 |
-| **ブローカーヘルス** | ブローカーの可用性とISR（In-Sync Replicas）ステータスを追跡 |
+パーティション数はトピック設定では変更できません。Confluent Cloud の UI を使うか、トピックを削除して再作成してください。
 
-### 接続を確認
+### 接続を確認する
 
 ```text
-List all Kafka topics and check consumer group lag for the active consumer groups
+List my Kafka topics with partition counts and replication factor
 ```
 
-### プロンプト例
+クラスター内のすべてのトピックが、パーティション数とレプリケーション係数とともに返されることを確認します。Confluent Cloud でクラウドのスコープがある場合、エージェントは環境とクラスターの名前も示せます。
+
+### プロンプトの例
 
 ```text
-Check consumer lag for the orders-service group
-Analyze message throughput trends for the events topic
-Identify under-replicated partitions and report the affected topics
+Show the last 10 messages on the orders topic, decoded with Schema Registry
+Chart received bytes per 5 minutes for my Kafka cluster over the last 6 hours
+Why is my Flink statement order-enrichment failing?
 ```
 
----
+## 後でファイルを変更する
+
+スコープを追加したりキーをローテーションしたりするには、残したいすべてのスコープを含む完全なファイルを書きます。接続を開き、行の鉛筆アイコンをクリックし、**Edit Instance** で **Replace…** をクリックします。ファイルをアップロードし、**Save and test** をクリックします。テストが失敗した場合、CloudThinker は以前の認証情報を保持します。[Rotate a credential](/ja/guide/connections/overview#認証情報をローテーションする) を参照してください。
 
 ## トラブルシューティング
 
-<Accordion title="接続が拒否またはタイムアウト">
-- Kafkaブローカープロセスが `<broker-name>.<your-domain>` で実行中であることを確認してください。
-- ブローカーポート（デフォルト9092）が開放されており、ファイアウォールでブロックされていないことを確認してください。
-- ブートストラップサーバーアドレス `<broker-name>.<your-domain>:9092` が正しく、CloudThinkerから到達可能であることを確認してください。
-- ローカル開発の場合、KafkaがアクセスしやすいIP（`127.0.0.1` だけでなく）にバインドされていることを確認してください。
+<Accordion title="Connection refused またはタイムアウト">
+CloudThinker からブローカーに到達できません。ブローカーが稼働していること、ファイアウォールで `9092` が開いていること、`BOOTSTRAP_SERVERS` が正しいことを確認してください。`127.0.0.1` にのみバインドされたブローカーには、そのホストの外から到達できません。
 </Accordion>
 
-<Accordion title="Confluent Cloudの部分スコープフィールド">
-部分的なスコープのオンボーディングを使用する場合、未使用スコープの**キーと値のペア全体を削除**してください。空文字列は残さないでください。
-
-**正しい形式**（Kafkaのみ、Schema Registryを完全に削除）:
-```json
-{
-  "BOOTSTRAP_SERVERS": "pkc-xxxxx.<region>.<provider>.confluent.cloud:9092",
-  "KAFKA_API_KEY": "<kafka-api-key>",
-  "KAFKA_API_SECRET": "<kafka-api-secret>",
-  "KAFKA_REST_ENDPOINT": "https://pkc-xxxxx.<region>.<provider>.confluent.cloud:443",
-  "KAFKA_CLUSTER_ID": "lkc-xxxxx",
-  "KAFKA_ENV_ID": "env-xxxxx"
-}
-```
-
-**誤った形式**（空文字列の値はバリデーションエラーを引き起こします）:
-```json
-{
-  "BOOTSTRAP_SERVERS": "pkc-xxxxx.<region>.<provider>.confluent.cloud:9092",
-  "KAFKA_API_KEY": "<kafka-api-key>",
-  "KAFKA_API_SECRET": "<kafka-api-secret>",
-  "KAFKA_REST_ENDPOINT": "https://pkc-xxxxx.<region>.<provider>.confluent.cloud:443",
-  "KAFKA_CLUSTER_ID": "lkc-xxxxx",
-  "KAFKA_ENV_ID": "env-xxxxx",
-  "SCHEMA_REGISTRY_ENDPOINT": "",
-  "SCHEMA_REGISTRY_API_KEY": ""
-}
-```
+<Accordion title="一部だけのファイルをアップロードした後に検証エラーが出る">
+スコープのキーが空の値で存在しています。使わないスコープは、キーと値を丸ごと削除してください。`"SCHEMA_REGISTRY_ENDPOINT": ""` は失敗しますが、キーを省けば機能します。
 </Accordion>
 
-<Accordion title="Schema Registry接続の失敗">
-`SCHEMA_REGISTRY_ENDPOINT` URLが正しく、CloudThinkerから到達可能であることを確認してください。セルフホストの場合、ポート8081が開放されていることを確認してください。Confluent Cloudの場合、Schema Registry APIキーがお使いの環境に対して正しい権限を持っていることを確認してください。
+<Accordion title="401 Unauthorized">
+キーの組が誤っている、期限切れ、または誤ったスコープに使われています。各スコープには専用の組が必要で、Kafka クラスターのキーは Schema Registry や Flink では機能しません。そのスコープ用の新しい組を作成し、[更新したファイルをアップロード](#後でファイルを変更する)してください。
 </Accordion>
 
----
+<Accordion title="メトリクスや請求の質問が失敗する">
+ファイルに `CONFLUENT_CLOUD_API_KEY` の組がないか、そのアカウントに **MetricsViewer** がありません。クラウドのスコープを追加し、[ファイルを再アップロード](#後でファイルを変更する)してください。セルフホストのクラスターでは、これらの API は利用できません。
+</Accordion>
+
+<Accordion title="Schema Registry が失敗する">
+`SCHEMA_REGISTRY_ENDPOINT` に CloudThinker から到達できることを確認してください。セルフホストの場合はポート `8081` を開きます。Confluent Cloud の場合は、Schema Registry のキーが同じ環境に属していることを確認します。
+</Accordion>
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **スコープ限定APIキー** — CloudThinkerが必要とするスコープのみを付与し、Kafkaのみから始めてSchema Registry、Flink、またはクラウド管理スコープを段階的に追加してください
-- **ネットワーク制限** — セキュリティグループまたはファイアウォールルールで、ブートストラップおよびRESTエンドポイントをCloudThinkerのエグレスIPに制限してください
+- **セルフホストの Kafka は認証情報を受け取らない**: 上記の読み取り専用のアドバイスは Confluent Cloud のキーにのみ適用されます。セルフホストのブローカーは自身の設定が許可するものを何でも受け入れるため、下記のとおりネットワークアクセスを制限してください。また、送信や作成の呼び出しは引き続き Approvals を経由することを覚えておいてください。
+- **スコープごとに 1 組のキー**: 各スコープにサービスアカウントの専用キーを与えれば、Kafka クラスターのキーに触れずに Flink や Tableflow のアクセスを取り消せます。
+- **ネットワークアクセスを制限する**: 特に認証情報のないセルフホストのブローカーでは、ファイアウォールのルールでブートストラップと REST のエンドポイントを CloudThinker のトラフィックに限定してください。
+- **ローカルのファイルを削除する**: JSON ファイルにはすべてのシークレットが平文で含まれています。アップロード後に削除するか、シークレットマネージャーにだけ保管してください。
+- **メッセージは機密として扱う**: サンプリングされたメッセージには、プロデューサーが書き込んだ個人データやトークンが含まれていることがあります。トピックの `READ` は、エージェントに見せるべき場所にだけ付与してください。
 
----
-
-## 関連情報
+## 関連ページ
 
 <CardGroup cols={2}>
-  <Card title="エージェント" icon="server" href="/ja/guide/agents/overview">
-    CloudThinker と、その作業の仕組み
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    どの Kafka の変更を実行し、人の判断待ちにし、拒否するかを決めます。
   </Card>
-  <Card title="AWS 接続" icon="/images/icons/aws.svg" href="/ja/guide/connections/aws">
-    AWSクラウドリソースのセットアップ手順
+  <Card title="RabbitMQ 接続" icon="/images/icons/rabbitmq.svg" href="/ja/guide/connections/rabbitmq">
+    別のメッセージブローカーを接続します。
   </Card>
 </CardGroup>

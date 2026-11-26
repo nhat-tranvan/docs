@@ -1,235 +1,219 @@
 ---
-title: 인시던트 웹훅 통합
-description: "알림 플랫폼을 Resolve에 연결하여 수신 이벤트에서 AI 조사와 근거를 포함한 인시던트를 자동으로 생성합니다"
+title: Webhook Signals
+description: "웹훅으로 모니터링 도구의 알림을 Resolve로 보내고, 필드를 매핑하고, CloudThinker가 언제 스스로 조사할지 선택합니다."
 icon: webhook
 ---
 
-CloudThinker는 PagerDuty, Datadog, Grafana 등 알림 및 모니터링 플랫폼과 통합됩니다. 각 통합에는 플랫폼별 필드 매핑, 유연한 인증, 자동 AI 조사 트리거가 포함됩니다.
+웹훅은 알림이 발생할 때마다 모니터링 도구가 호출하는 URL로, Resolve가 몇 초 안에 알림을 볼 수 있게 합니다. 도구마다 웹훅을 하나씩 만들고, 도구의 JSON 필드를 제목, 심각도, 서비스에 매핑하고, CloudThinker가 스스로 근본 원인 분석(RCA)을 시작할지 결정합니다.
 
----
+## 알림의 흐름
 
-## 지원 플랫폼
+웹훅에 도달한 알림은 바로 인시던트가 되지 않습니다. 먼저 [Pulse](/ko/guide/pulse/overview)를 거칩니다.
 
-### 인시던트 관리
+<Frame caption="Pulse drops noise and groups signals into clusters; only a cluster with an actionable signal reaches triage.">
+  <img src="/images/pulse/diagram-pulse-flow-light.svg" alt="A raw event passes suppression, joins a cluster, and is classified; a cluster with an actionable signal goes to Resolve triage and becomes an incident." className="block dark:hidden" style={{width: '100%'}} />
+  <img src="/images/pulse/diagram-pulse-flow-dark.svg" alt="A raw event passes suppression, joins a cluster, and is classified; a cluster with an actionable signal goes to Resolve triage and becomes an incident." className="hidden dark:block" style={{width: '100%'}} />
+</Frame>
 
-<CardGroup cols={2}>
-  <Card title="PagerDuty" icon="/images/icons/integrations/pagerduty-icon.svg" href="/ko/guide/connections/pagerduty">
-    인증: HMAC-SHA256
+**signal**은 노이즈 억제를 통과한 이벤트입니다. **cluster**는 Pulse가 하나의 문제로 취급하는 관련 신호 묶음입니다. 조치 가능한 신호를 담은 클러스터만 분류(triage)로 넘어가며, 분류 단계에서 인시던트가 될지 결정합니다.
 
-    triggered, acknowledged, resolved 이벤트를 위한 네이티브 이벤트 매핑이 있는 온콜 관리 및 인시던트 대응.
-  </Card>
-  <Card title="ServiceNow" icon="/images/icons/integrations/service-now.svg" href="/ko/guide/connections/servicenow">
-    인증: API Key
+웹훅은 알림이 Resolve에 도달하는 세 가지 방법 중 하나입니다. 소스가 폴링되거나 채팅 채널로 들어온다면 [Connect alert sources](/guide/incident/connect-alert-sources)를 참조하세요.
 
-    인프라 컨텍스트를 위한 CMDB CI 매핑이 있는 엔터프라이즈 IT 서비스 관리.
-  </Card>
-</CardGroup>
+## 시작하기 전에
 
-| 플랫폼 | 비고 |
-|---|---|
-| **Opsgenie** | 인증: API Key. 우선순위 매핑 및 팀 할당 데이터가 있는 Atlassian의 알림 관리. |
-| **BigPanda** | 인증: Bearer Token. 지능형 알림 그룹화가 있는 AIOps 이벤트 상관 및 알림 관리. |
+- 워크스페이스 **Admin** 역할.
+- 웹훅을 추가할 수 있는 모니터링 도구의 관리자 접근 권한.
+- 필요할 때 발생시킬 수 있는 실제 알림 페이로드 하나 또는 그 JSON 샘플.
 
-### 모니터링 & 관측 가능성
-
-<CardGroup cols={2}>
-  <Card title="Datadog" icon="/images/icons/integrations/datadog-icon.svg" href="/ko/guide/connections/datadog">
-    인증: Bearer Token
-
-    메트릭, 알림, 태그 기반 서비스 상관이 있는 풀스택 모니터링.
-  </Card>
-  <Card title="Grafana" icon="/images/icons/integrations/grafana-logo.svg" href="/ko/guide/connections/grafana">
-    인증: Bearer Token
-
-    대시보드 링크, 패널 컨텍스트, 공통 레이블 추출이 있는 알림 알림.
-  </Card>
-  <Card title="Prometheus / Alertmanager" icon="/images/icons/integrations/prometheus-logo.svg" href="/ko/guide/connections/prometheus">
-    인증: Bearer Token
-
-    레이블 추출, 그룹화 지원, Kubernetes 메타데이터가 있는 네이티브 Alertmanager 웹훅 수신기.
-  </Card>
-</CardGroup>
-
-| 플랫폼 | 비고 |
-|---|---|
-| **Splunk** | 인증: Bearer Token. 결과 컨텍스트 및 검색 링크가 있는 저장된 검색 알림. |
-
-### 클라우드 프로바이더 알림
-
-<CardGroup cols={2}>
-  <Card title="AWS CloudWatch" icon="/images/icons/integrations/aws-cloudwatch.svg" href="/ko/guide/incident/webhook-integrations/cloudwatch">
-    인증: API Key
-
-    알람 상태, 메트릭 데이터, 네임스페이스 컨텍스트가 있는 EventBridge 기반 알림.
-  </Card>
-</CardGroup>
-
-| 플랫폼 | 비고 |
-|---|---|
-| **Azure Monitor** | 인증: 없음. 리소스 컨텍스트 및 심각도 매핑이 있는 Common Alert Schema 지원. |
-| **GCP Monitoring** | 인증: Bearer Token. 정책 세부 정보 및 리소스 표시 이름이 있는 인시던트 알림. |
-
-### APM & 오류 추적
-
-<CardGroup cols={2}>
-  <Card title="New Relic" icon="/images/icons/integrations/new-relic.svg" href="/ko/guide/connections/newrelic">
-    인증: API Key
-
-    이슈 우선순위 및 엔티티 컨텍스트가 있는 풀스택 관측 가능성.
-  </Card>
-  <Card title="Dynatrace" icon="/images/icons/integrations/dynatrace.svg" href="/ko/guide/connections/dynatrace">
-    인증: API Key
-
-    문제 영향 분석 및 AI 감지 근본 원인이 있는 소프트웨어 인텔리전스.
-  </Card>
-</CardGroup>
-
-| 플랫폼 | 비고 |
-|---|---|
-| **Sentry** | 인증: HMAC-SHA256. 이슈 세부 정보, 스택 트레이스, 프로젝트 컨텍스트가 있는 애플리케이션 오류 추적. |
-
-### 커스텀 통합
-
-| 플랫폼 | 비고 |
-|---|---|
-| **Generic Webhook** | 인증: Bearer Token (구성 가능). 모든 플랫폼을 위한 완전히 커스터마이징 가능한 웹훅. JSONPath 표현식을 사용하여 자체 필드 매핑을 정의합니다. |
-
-> **플랫폼 로드맵:** 원하는 플랫폼이 목록에 없나요? 즉시 통합을 위해 Generic Webhook을 사용하거나, 모니터링 도구의 네이티브 커넥터를 요청하려면 지원팀에 문의하세요.
-
----
-
-## 웹훅 통합 설정
-
-설정 마법사가 플랫폼 선택, 웹훅 구성, 자동 근본 원인 분석 설정을 안내합니다.
+## 웹훅 만들기
 
 <Steps>
-  <Step title="통합으로 이동">
-    **Resolve** → **Settings** → **Integrations** 탭으로 이동하여 웹훅 관리에 접근합니다.
+  <Step title="플랫폼 열기">
+    **Resolve → Triggers & Outcomes**로 이동하여 Datadog, Grafana, PagerDuty 같은 도구를 선택합니다.
   </Step>
-  <Step title="웹훅 생성">
-    플랫폼 카드에서 **Connect**를 클릭합니다. 생성 마법사가 플랫폼별 기본값이 미리 구성된 상태로 열립니다.
-
+  <Step title="신호 추가">
+    **Signals to Resolve** 아래에서 **Add signal**(또는 **Add another signal**)을 클릭합니다. 세 단계로 된 **Create Webhook** 대화 상자가 열립니다.
   </Step>
-  <Step title="기본 정보 구성">
-    웹훅의 이름과 선택적 설명을 입력합니다. 필요한 경우 전송률 제한을 설정합니다(기본값: 시간당 100 요청).
+  <Step title="Basic Info">
+    **Webhook Name**(기본값은 `<Tool> Webhook`)을 그대로 두거나 바꾸고, 선택적으로 **Description**을 추가합니다. **Next**를 클릭합니다.
   </Step>
-  <Step title="필드 매핑 검토">
-    각 플랫폼에는 웹훅 페이로드에서 인시던트 필드를 추출하는 미리 구성된 JSONPath 매핑이 있습니다. 필요한 경우 커스터마이징하세요:
-
-    | 인시던트 필드 | JSONPath 예시 | 설명 |
-    |----------------|------------------|-------------|
-    | Title | `event.data.title` | 인시던트 헤드라인 |
-    | Description | `event.data.description` | 상세 정보 |
-    | Severity | `event.data.priority` | Critical, High, Medium, Low, Info |
-    | Service | `event.data.service.name` | 영향받은 서비스 이름 |
-
-    플랫폼의 심각도 값(예: `warning` → `medium`, `P1` → `critical`)을 CloudThinker의 심각도 수준으로 변환하는 **심각도 매핑**도 구성할 수 있습니다.
-
+  <Step title="Configure">
+    **Field Mapping**과 **Severity Mapping**을 확인합니다. 둘 다 선택한 도구에 맞게 미리 채워져 있습니다. **Send directly to CloudThinker**는 꺼 둡니다([이유](#rca-시작-시점-결정)). **Next**를 클릭합니다.
   </Step>
-  <Step title="자동 트리거 설정 구성">
-    인시던트가 [근본 원인 분석](/ko/guide/incident/root-cause-analysis)을 트리거하는 방식을 제어합니다:
-
-    - **Auto-trigger RCA:** 인시던트가 생성될 때 자동으로 AI 조사 시작
-    - **Minimum severity:** 이 심각도 수준 이상의 인시던트에만 RCA 트리거 (기본값: Medium)
-    - **Send all fields to agent:** RCA 에이전트에 완전한 웹훅 페이로드를 전달하여 더 풍부한 분석 가능
-
-  </Step>
-  <Step title="웹훅 URL 및 인증 정보 복사">
-    **Setup** 탭에 웹훅 URL과 인증 세부 정보가 표시됩니다. 이 자격 증명을 복사하여 알림 플랫폼에 구성합니다.
-
+  <Step title="Advanced">
+    **Auth Method**를 고르고 **Auto-investigate**를 설정합니다(둘 다 아래에서 설명). **Create**를 클릭합니다.
   </Step>
 </Steps>
 
----
+**성공 상태:** 대화 상자에 **Webhook URL**, **Authentication Setup** 아래의 **Secret Key**, 그리고 **cURL**, **JavaScript**, **Python**, **Node.js** 탭이 있는 **Integration Examples**가 표시됩니다. URL과 **Secret Key**를 지금 복사하세요. 키는 한 번만 표시됩니다. 같은 대화 상자에 도구별 **Setup Guide**가 표시되므로, 이를 따라 붙여 넣으세요. **cURL** 탭이 테스트를 보내는 가장 빠른 방법입니다.
 
-## 인증 방법
+<Tip>
+**Done**을 클릭하기 전에 **Secret Key**를 복사하세요. 잃어버렸다면 **Resolve → Triggers & Outcomes**로 이동하여 도구를 열고, **Signals to Resolve** 아래에서 웹훅 행의 **Manage** 메뉴(**⋯**) → **Regenerate credentials**를 여세요. 이렇게 하면 **Webhook URL**과 **Secret Key**가 모두 교체되며, 이전 쌍은 즉시 작동을 멈춥니다. 웹훅을 사용하는 모든 도구에 새 URL과 키가 필요합니다.
+</Tip>
 
-CloudThinker는 플랫폼 요구 사항에 맞는 네 가지 인증 방법을 지원합니다. 올바른 방법은 플랫폼 선택 시 미리 선택되지만, 커스텀 통합을 위해 변경할 수 있습니다.
+## 필드 매핑
 
-| 방법 | 작동 방식 | 사용 플랫폼 |
-|--------|-------------|---------|
-| **Bearer Token** | `Authorization` 헤더를 통한 표준 토큰 기반 인증 | Datadog, Grafana, Prometheus, Splunk, GCP Monitoring, BigPanda |
-| **HMAC-SHA256** | 암호화 서명 검증 — CloudThinker가 공유 비밀을 사용하여 요청 본문 서명을 검증 | PagerDuty, Sentry |
-| **API Key** | 선택적 접두사가 있는 커스텀 헤더 (예: `GenieKey`, `Api-Token`) | Opsgenie, New Relic, Dynatrace, ServiceNow, AWS CloudWatch |
-| **No Authentication** | 다른 메커니즘으로 신원을 확인하는 플랫폼용 | Azure Monitor |
+각 매핑 필드는 알림 JSON 안의 경로를 받습니다. **Title Path**만 필수입니다.
+
+- `event.data.title`처럼 점으로 구분된 키를, 목록 항목에는 `alerts[0].labels.severity`처럼 `[n]`을 사용합니다. 앞의 `$.`는 허용되며 제거됩니다.
+- 경로는 최대 8개 세그먼트까지 가질 수 있습니다. 점이 포함된 키는 지정할 수 없으며, 대체 경로도 없습니다.
+- 경로는 하나의 텍스트 또는 숫자 값에서 끝나야 합니다. 목록이나 객체에서 끝나는 경로는 아무것에도 매핑되지 않습니다.
+
+| 필드 | 채우는 내용 |
+|---|---|
+| **Title Path** | 인시던트 제목. 필수입니다. |
+| **Severity Path** | **Severity Mapping**으로 변환되는 심각도 수준. |
+| **Description Path** | 인시던트 설명. |
+| **Service Path** | 영향받는 서비스. 같은 서비스를 가리키는 신호는 한 클러스터에 합쳐질 수 있으므로 `prod` 같은 넓은 값이 아닌 서비스 이름 하나를 사용하세요. |
+| **Resource ID Path** | 영향받는 리소스의 식별자. 같은 리소스 ID로 반복되는 신호는 한 클러스터에 합쳐집니다. 비워 두면 CloudThinker가 최상위 `resource_id` 키를 읽습니다. [How signals join a cluster](/ko/guide/pulse/clusters#신호가-클러스터에-합류하는-방식)를 참조하세요. |
+| **Resource Name Path** | 영향받는 리소스의 이름. |
+| **Timestamp Path** | 이벤트가 시작된 시점(ISO 8601 시간). 비워 두면 CloudThinker가 최상위 `timestamp` 키를 읽습니다. 둘 다 없거나 구문 분석할 수 없는 값이면 전송이 도착한 시간을 사용합니다. |
+
+페이로드 형태는 도구가 정합니다. 예를 들어 Datadog에서는 Datadog의 템플릿 변수를 사용하여 웹훅의 **Payload** 필드에 JSON을 직접 작성합니다. Datadog 프리셋은 `title`, `body`, `alert_type`을 읽습니다. 프리셋의 기본 **Service Path**(`tags`)는 목록을 가리켜 아무것에도 매핑되지 않으므로, 서비스 이름 하나를 담은 `service` 키를 추가하세요.
+
+```json
+{
+  "title": "$EVENT_TITLE",
+  "body": "$EVENT_MSG",
+  "alert_type": "$ALERT_TYPE",
+  "service": "web-api"
+}
+```
+
+| 필드 | 경로 | 예시 값 |
+|---|---|---|
+| **Title Path** | `title` | High CPU on web-server-01 |
+| **Description Path** | `body` | CPU usage exceeded 90% for 5 minutes |
+| **Severity Path** | `alert_type` | error |
+| **Service Path** | `service`(`tags`에서 변경) | web-api |
+
+고정된 `service` 값은 이 웹훅에 알리는 모든 모니터에 적용됩니다. Datadog의 `$ALERT_TYPE`은 `error`, `warning`, `info`, `success`를 보내지만, Datadog 프리셋의 **Severity Mapping**은 `alert`, `warn`, `ok`, `no data`를 다룹니다. **Severity Mapping** 아래에서 **Customize**를 클릭한 다음, 다음 각 행에 대해 **Add Mapping**을 클릭하세요(수준은 팀에 맞게 바꾸세요). 나중에 웹훅 행의 **Manage** 메뉴(**⋯**) → **Edit**에서 추가할 수도 있습니다.
+
+| 소스 값 | 심각도 |
+|---|---|
+| `error` | high |
+| `warning` | medium |
+| `info` | info |
+| `success` | info |
+
+`success`(복구) 이벤트는 아무것도 닫지 않습니다. 일반 신호로 도착하며, 클러스터는 여전히 12시간 동안 조용하거나 사람이 해결할 때 닫힙니다. CloudThinker의 분류기는 복구나 정상 상태를 조치 불필요로 취급하므로, 그 클러스터는 스스로 분류로 넘어가지 않습니다. 이 확인은 모델의 판단이므로 복구가 여전히 통과할 수 있습니다. 사람은 언제든지 **Open incident**(또는 클러스터 **⋯** 메뉴의 **Escalate**)로 클러스터를 분류로 보낼 수 있습니다.
+
+**Severity Mapping**은 도구 자체의 용어를 CloudThinker의 다섯 수준인 critical, high, medium, low, info로 변환합니다. 예를 들어 일반 프리셋은 `warning`을 medium으로, `error`를 high로 매핑합니다. 일치 여부는 대소문자와 앞뒤 공백을 무시하므로 `ERROR`와 `error`는 같은 행에 해당합니다.
+
+| **Severity Path**의 값 | 결과 |
+|---|---|
+| 다섯 수준 중 하나 | 그대로 사용됩니다. 행이 필요 없습니다. |
+| 매핑 행이 있음 | 해당 행의 수준 |
+| 그 밖의 값 | **medium** |
+| **Severity Path**가 비어 있거나 아무것도 찾지 못함 | CloudThinker가 대신 최상위 `severity` 또는 `priority` 키를 읽음 |
+| `severity`나 `priority` 키도 없음 | **medium** |
+
+도구가 목록에 없으면 대신 [Custom source](/guide/incident/webhook-integrations/custom-source)를 사용하세요. 실제 페이로드 하나를 캡처하여 매핑할 필드를 클릭으로 지정할 수 있습니다.
+
+## 인증 선택
+
+| Auth Method | 도구가 보내는 내용 | 사용하는 경우 |
+|---|---|---|
+| **Bearer Token** | `Authorization: Bearer <secret>` | 도구가 사용자 지정 헤더를 추가할 수 있을 때. 대부분의 도구의 기본값입니다. Datadog에서는 웹훅의 **Custom Headers** 필드에 JSON을 입력합니다: `{"Authorization": "Bearer <secret>"}`. |
+| **HMAC Signature** | 원시 요청 본문의 HMAC-SHA256을 16진수로 인코딩하여 지정한 헤더에 `sha256=<hex digest>`로 보냄. PagerDuty의 `X-PagerDuty-Signature`(`v1=<hex digest>`)도 허용됩니다. | PagerDuty처럼 도구가 웹훅에 서명할 때. **HMAC Signature Header**에 헤더 이름을 설정합니다. 도구가 자체 서명 시크릿을 생성한다면 **Provider signing secret**에 붙여 넣습니다. |
+| **API Key** | 지정한 헤더에 담긴 키 | EventBridge를 통한 CloudWatch처럼 도구가 API 키 헤더만 지원할 때. **API Key Header**와 선택적으로 **Key Prefix**를 설정합니다. |
+| **No Authentication** | 없음 | 빠른 테스트용으로만. URL을 가진 누구나 알림을 보낼 수 있습니다. |
+
+대화 상자는 선택한 방법에 따라 자격 증명의 이름을 붙입니다. **Bearer Token**은 **Secret Key**, **HMAC Signature**는 **HMAC Secret**, **API Key**는 **API Secret**입니다. 어느 경우든 같은 자격 증명이며 한 번만 표시됩니다.
+
+## RCA 시작 시점 결정
+
+**Auto-investigate**는 기본적으로 켜져 있습니다. 이 웹훅의 조치 가능한 클러스터는 분류로 넘어가 인시던트를 열고 조사합니다. 끄면 누군가 클러스터에서 **Open incident**와 **Send to triage**를 클릭할 때까지 알림이 Signals에 남습니다. **Only from a minimum severity**를 사용하면 하한을 고릅니다: **Info and above**, **Low and above**, **Medium and above**, **High and above**, **Critical only**. 하한보다 낮은 알림은 여전히 관련 알림과 묶이지만, 스스로 분류를 시작하지 않습니다.
+
+[What starts an investigation](/guide/incident/settings#what-starts-an-investigation)에서 이 옵션들이 **AI auto-investigate** 및 수동 시작과 어떻게 결합되는지 보여 줍니다.
 
 <Note>
-  기존 웹훅에서 인증 방법을 변경하면, 이전 방법을 사용하는 기존 통합이 즉시 작동을 중지합니다. 인증 방법 변경 후 자격 증명을 재생성하세요.
+각 자동 조사는 크레딧으로 청구됩니다. 노이즈가 많은 도구를 연결하기 전에 최소 심각도나 [Credit limit](/guide/billing/credit-limits)을 설정하세요.
 </Note>
 
----
+**Send directly to CloudThinker**(**Configure** 단계에 있으며 기본적으로 꺼져 있음)는 Pulse의 필터링과 그룹화를 건너뜁니다. 그러면 CloudThinker가 각 이벤트를 개별적으로 판단합니다. 도구가 이미 알림의 중복을 제거하지 않는 한 꺼 두세요.
 
-## 알림 상관
+## 전체 경로 테스트
 
-짧은 시간 내에 여러 알림이 도착하면, CloudThinker는 자동으로 이를 중복을 생성하는 대신 단일 인시던트로 상관합니다. 이는 연쇄 실패로 인한 알림 피로를 줄입니다.
+<Steps>
+  <Step title="실제 알림 하나 발생시키기">
+    도구에서 대표적인 알림을 발생시키거나, **Integration Examples**의 **cURL** 탭에서 요청을 보냅니다. **Bearer Token**의 경우 테스트는 다음과 같습니다.
 
-### 시간 창 상관
+    ```bash
+    curl -X POST "https://YOUR_WEBHOOK_URL" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer YOUR_SECRET_KEY" \
+      -d '{"title": "Test: high CPU on web-01", "alert_type": "error", "service": "web-api"}'
+    ```
 
-구성 가능한 창(기본값: 5분) 내에 수신된 알림을 그룹화합니다. 새 알림이 기존 열린 인시던트와 일치하면, 새 인시던트를 생성하는 대신 상관된 알림으로 첨부됩니다.
+    전송에 성공하면 `"success": true`와 `request_id`가 포함된 본문과 함께 `200`이 반환됩니다. 아직 Datadog 행을 추가하지 않았다면 `error`는 medium으로 매핑됩니다.
+  </Step>
+  <Step title="Pulse 확인">
+    **Resolve → Signals**를 열고 매핑한 제목의 신호를 찾습니다.
+  </Step>
+  <Step title="인시던트 확인">
+    **Resolve → Signals**에서 분류로 넘어간 클러스터는 인시던트에 연결되면 **Handled** 레인으로 이동합니다. 그런 다음 **Resolve → Issues**를 엽니다. **Auto-investigate**와 **AI auto-investigate**가 모두 켜져 있으면 인시던트에 **AI is handling**이 표시됩니다. 클러스터가 **Handled**에 도달하지 않는다면 분류 단계에서 조치 불필요로 판단했을 수 있습니다. [Clusters troubleshooting](/ko/guide/pulse/clusters#문제-해결)을 참조하세요.
+  </Step>
+</Steps>
 
-### 규칙 기반 상관
+**성공 상태:** 신호가 올바른 제목, 심각도, 서비스와 함께 Pulse에 나타나고, 해당하는 인시던트에 **AI is handling**이 표시됩니다. `200`만으로는 전송만 증명됩니다.
 
-공유 속성을 기반으로 기존 인시던트에 들어오는 알림을 매핑하는 커스텀 규칙을 정의합니다. 규칙은 웹훅 카드 메뉴의 **Correlation Rules** 아래에서 구성합니다.
+의존하는 심각도 행마다 알림을 하나씩 테스트하세요. 위 Datadog 예시라면 `error`(high로 매핑) 하나와 `warning`(medium으로 매핑) 하나를 보내세요.
 
-각 규칙은 다음을 지정합니다:
-- AND/OR 로직을 사용한 매핑을 위한 **조건**
-- 평가 순서를 제어하는 **우선순위** (0-1000)
-- 매칭 신뢰도를 나타내는 **가중치** (0.0-1.0)
-- 상관 허용을 위한 **최소 매칭 가중치** 임계값
+## 제한과 응답
 
-**사용 가능한 연산자:**
+| 응답 | 시점 |
+|---|---|
+| `200`과 `"success": true` | 전송이 수락되었습니다. |
+| `400` | 웹훅이 일시 중지되었거나 비활성화되었습니다. **Signals to Resolve** 아래의 해당 행에 **Paused**가 표시됩니다. 이를 재개하는 Resolve 화면은 없습니다. 소스 이름과 워크스페이스를 적어 [support@cloudthinker.io](mailto:support@cloudthinker.io)로 이메일을 보내 다시 활성화를 요청하세요. |
+| `401` | 인증 헤더가 없거나, URL이 현재 **Webhook URL**이 아닙니다(오타이거나 **Regenerate credentials**로 교체됨). |
+| `403` | 시크릿이나 서명이 잘못되었습니다. |
+| `413` | 본문이 1 MB보다 큽니다. |
+| `422` | 본문이 JSON 객체가 아닙니다. 배열이나 일반 텍스트가 아닌 `{...}`를 보내세요. |
+| `429` | 요청이 너무 많거나 인증 실패가 너무 많습니다. 15분 안에 10번 실패하면 그 15분 창이 끝날 때까지 웹훅이 요청을 거부합니다. `Retry-After` 헤더가 있으면 그 시간이 지난 후 다시 시도하세요. |
 
-| 연산자 | 설명 |
-|----------|-------------|
-| `equals` / `not_equals` | 정확한 일치 또는 불일치 |
-| `contains` / `not_contains` | 부분 문자열 일치 |
-| `starts_with` / `ends_with` | 접두사 또는 접미사 일치 |
-| `regex` | 정규 표현식 일치 |
-| `in` / `not_in` | 목록에 있거나 없는 값 |
-| `intersects` | 배열 겹침 (예: 공유 태그) |
-| `exists` | 필드가 존재함 |
+<Warning>
+각 웹훅은 기본적으로 시간당 최대 1,000건의 전송을 받습니다. 제한은 응답 후에 확인되므로 이를 넘는 전송도 `"success": true`와 함께 `200`을 받지만, 조용히 버려집니다. 이 전송은 신호가 되지 않으며 [Pulse analytics](/ko/guide/pulse/analytics)의 **Signals ingested**에도 집계되지 않습니다. Resolve는 버려진 개수를 표시하지 않으므로, 유일한 징후는 급증 시 **Resolve → Signals**에서 누락된 알림입니다.
 
----
+이를 피하려면 다음을 하세요.
 
-## 보안 & 제한
+- 제한 높이기: 웹훅 행의 **Manage** 메뉴(**⋯**) → **Edit**을 열고 **Rate limit (requests per hour)**를 변경합니다. 최대 10,000까지 올릴 수 있으며, `0`은 제한 없음을 뜻합니다.
+- 대량 모니터를 여러 웹훅으로 나누기.
+- 알림을 보내기 전에 도구에서 중복을 제거하거나 그룹화하기.
+</Warning>
 
-### 페이로드 제한
+Pulse는 전송의 소스, 리소스, 제목, 심각도, 이벤트 시간(분 단위, 출처는 **Timestamp Path** 참조)이 지난 1시간 내의 신호와 일치하면 중복으로 취급합니다. 중복은 새 신호를 만들지 않고 해당 신호의 개수를 늘립니다. 클러스터는 새 신호 없이 12시간이 지나거나 사람이 해결하면 닫힙니다. [Cluster lifecycle](/ko/guide/pulse/clusters#클러스터-라이프사이클)을 참조하세요.
 
-| 제한 | 값 |
-|-------|-------|
-| 최대 HTTP 본문 크기 | 1 MB |
-| 최대 저장 페이로드 크기 | 100 KB |
-| 최대 필드 길이 | 10,000자 |
-| 최대 배열 항목 수 | 100개 |
-| 최대 중첩 깊이 | 10단계 |
+## 문제 해결
 
-### 전송률 제한
+<AccordionGroup>
+  <Accordion title="도구가 401 또는 403을 보고함">
+    **원인:** 인증 헤더가 **Auth Method**와 일치하지 않거나, (`401`의 경우) 도구가 여전히 이전 **Webhook URL**로 보내고 있습니다. **확인:** 도구의 URL, 헤더 이름, 시크릿을 **Authentication Setup**과 비교하세요. **해결:** 시크릿을 다시 붙여 넣거나, **Resolve → Triggers & Outcomes**에서 웹훅 행의 **Manage** 메뉴에 있는 **Regenerate credentials**를 사용하세요.
+  </Accordion>
+  <Accordion title="전송은 성공했지만 Pulse에 아무것도 나타나지 않음">
+    **원인:** Pulse가 알림을 노이즈로 억제했거나, 이전 신호의 중복으로 집계했거나, 시간 창 때문에 보이지 않습니다. **확인:** **Resolve → Signals**에서 창을 넓힌 다음, 상단의 퍼널에 마우스를 올려 억제된 이벤트 수를 확인하세요. 같은 알림을 1분 안에 두 번 보냈다면 이전 신호를 찾아보세요. 대신 그 개수가 올라갔을 것입니다([제한과 응답](#제한과-응답) 참조). **해결:** 각 확인 항목은 [Noise suppression](/ko/guide/pulse/clusters#노이즈-억제)을 참조하세요.
+  </Accordion>
+  <Accordion title="신호의 제목이 비어 있거나 심각도가 잘못됨">
+    **원인:** 경로가 페이로드와 일치하지 않거나, 도구의 심각도 값에 매핑 행이 없습니다. **해결:** 경로를 실제 페이로드와 비교한 다음, 누락된 값을 **Severity Mapping**에 추가하세요.
+  </Accordion>
+  <Accordion title="알림이 Pulse에 도달했지만 RCA가 시작되지 않음">
+    **원인:** **Auto-investigate**가 꺼져 있거나, 심각도가 하한보다 낮거나, **AI auto-investigate**가 꺼져 있습니다. **해결:** 세 가지 모두를 [What starts an investigation](/guide/incident/settings#what-starts-an-investigation)과 대조하거나, 클러스터에서 **Open incident**와 **Send to triage**를 클릭하세요. 인시던트가 이미 열려 있다면 그 인시던트에서 **Investigate**를 클릭하세요.
+  </Accordion>
+</AccordionGroup>
 
-| 제한 | 값 |
-|-------|-------|
-| 기본 전송률 제한 | 웹훅당 시간당 100 요청 |
-| 인증 실패 제한 | 15분 창당 10회 실패 |
-| 초과 시 응답 | HTTP 429 |
-
-전송률 제한은 웹훅별로 구성 가능합니다. 무제한은 0으로 설정합니다.
-
-### 보안 기능
-
-- **타이밍 공격 방지 서명 검증** — HMAC 검증의 타이밍 공격 방지
-- **암호화된 비밀 저장** — 웹훅 비밀은 저장 시 암호화
-- **자격 증명 교체** — 웹훅을 재생성하지 않고 웹훅 토큰 및 비밀 재생성
-- **페이로드 정화** — 크기 초과 필드는 자동으로 잘림
-- **민감한 헤더 필터링** — 인증 헤더는 감사 로그에서 제외
-
----
-
-## 관련 문서
+## 다음 단계
 
 <CardGroup cols={2}>
-  <Card title="AWS CloudWatch" icon="/images/icons/integrations/aws-cloudwatch.svg" href="/ko/guide/incident/webhook-integrations/cloudwatch">
-    Amazon EventBridge를 통해 CloudWatch 알람을 라우팅하는 단계별 가이드.
+  <Card title="CloudWatch 연결" icon="aws" href="/ko/guide/incident/webhook-integrations/cloudwatch">
+    EventBridge를 통해 CloudWatch 알람을 보냅니다.
   </Card>
-  <Card title="근본 원인 분석" icon="magnifying-glass" href="/ko/guide/incident/root-cause-analysis">
-    들어오는 웹훅으로 트리거되는 자동 AI 기반 조사를 구성합니다.
+  <Card title="사용자 지정 소스 추가" icon="plug" href="/guide/incident/webhook-integrations/custom-source">
+    페이로드 필드를 클릭하여 프리셋이 없는 시스템을 연결합니다.
+  </Card>
+  <Card title="Pulse 이해하기" icon="wave-pulse" href="/ko/guide/pulse/overview">
+    신호가 어떻게 필터링, 그룹화, 라우팅되는지 확인합니다.
+  </Card>
+  <Card title="트리거 관리" icon="tower-broadcast" href="/guide/incident/triggers-and-outcomes#triggers">
+    준비 상태를 확인하고 플랫폼별로 결과(outcome)를 켭니다.
   </Card>
 </CardGroup>
