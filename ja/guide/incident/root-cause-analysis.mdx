@@ -1,250 +1,227 @@
 ---
-title: "根本原因分析"
-description: "CloudThinker エージェントが仮説追跡・エビデンスチェーン・信頼度スコアリングでインシデントを調査する仕組みを理解する"
+title: 調査と RCA
+description: "インシデントで根本原因の調査を開始し、判定とその証拠を読み、次に何をするかを決めます。"
 icon: magnifying-glass
 ---
 
-根本原因分析（RCA）は [Resolve](/ja/guide/incident/overview) の調査エンジンです。CloudThinker が仮説駆動型の調査を実行し、構造化されたエビデンスチェーンを構築し、修復策を提案します。各ステップの推論過程を完全に可視化できます。
+根本原因分析（RCA）は、CloudThinker がインシデントが起きた理由を突き止めるステップです。インシデント、その背後にあるアラート、接続されたシステムを読み、考えられる説明を検証し、文章の判定、障害がどう展開したかを示す図、修正の提案の一覧を渡します。あなたはそれを確認し、次に何をするかを決めます。
 
-## 調査の流れ
+RCA は [Resolve](/ja/guide/incident/overview) の Investigate の段階です。すでにセットアップした[接続](/ja/guide/connections/overview)を通じて、ログ、メトリクス、トレース、最近の変更、依存関係を読み、それらの接続が到達できるものにしか到達できません。調査は読み取りのみです。変更はすべて [runbook](/ja/guide/incident/runbooks) と [Approvals](/guide/approvals/overview) の設定を経由します。モデルが何を見るか、シークレットがどう扱われるかは、[Data protection](/guide/security/data-protection) を参照してください。
 
-1. **トリガー** — [Pulse](/ja/guide/pulse/overview) クラスターが自動エスカレーションするか、インシデント詳細ページから手動でインシデントが作成されます。クラスターのエスカレーションでは、クラスターの要約とすべてのメンバーシグナルがエージェントのコンテキストに注入されるため、完全なシグナル履歴がロード済みの状態で調査が始まります。CloudThinker はバックグラウンドで RCA タスクをキューに入れ、専用の AI 会話を開きます。
-2. **エージェントの起動** — [CloudThinker](/ja/guide/agents/overview) が調査を行います。必要に応じて、一部の作業をサブエージェントに任せます。
-3. **コンテキストの収集** — エージェントがインフラトポロジーを探索し、ベースラインメトリクスを収集し、影響を受けたサービスを特定し、最近のデプロイや設定変更を調査します。
-4. **分析** — エージェントが競合する仮説を立て、ログ・トレース・依存関係に対してそれぞれを検証します。
-5. **解決** — 確認された仮説が根本原因になります。エビデンスがキュレーションされ、修復提案が生成され、信頼度スコアとともにディスポジションが設定されます。
+## 始める前に
 
-| 分野 | CloudThinker の調査対象 |
-|-------|--------------|
-| クラウドインフラ | EC2、ロードバランサー、VPC ネットワーキング |
-| データベース | RDS Aurora および DocumentDB のパフォーマンス、スロークエリ、接続プールの枯渇 |
-| Kubernetes | EKS のポッドヘルス、コンテナの再起動、リソース制限、サービスメッシュ設定 |
-| セキュリティ | セキュリティグループ、ネットワークポリシー、IAM 権限、セキュリティ関連の障害モード |
-| 複数ドメイン | 統括とクロスドメインの統合 |
+- クラウドアカウント、Kubernetes クラスター、モニタリングツールなど、関係するシステムへの[接続](/ja/guide/connections/overview)が少なくとも 1 つ。RCA は読めるものしか確認できません。
+- 調査の開始、提案の決着、インシデントのステータスの変更（クローズを含む）には、ワークスペースの **Admin** ロール。Developer と Viewer は結果を読めます。[Roles](/guide/security/roles) を参照してください。
+- クレジット。各調査はエージェントの作業で、自動で開始されるものも含め、他の実行と同様にクレジットで課金されます。[使用量](/ja/guide/billing/usage)で支出を確認し、[クレジット上限](/guide/billing/credit-limits)でワークスペースに上限を設定してください。自動の実行を止めるには、Webhook の **Auto-investigate** をオフにするか、**AI auto-investigate** をオフにします。[What starts an investigation](/guide/incident/settings#what-starts-an-investigation) を参照してください。
 
-CloudThinker はこれらのドメインを並行して調査し、リアルタイムで所見を相関付けます。症状が根本的な問題から遠く離れて現れる場合でも根本原因を特定します。
+## 調査が開始される方法
 
-## 調査フェーズ
+| インシデントの出所 | RCA が開始されるタイミング |
+|---|---|
+| [Signals](/ja/guide/pulse/overview)（アラートのソース） | **AI auto-investigate** がオンで、Webhook のオプションが許可している間、トリアージがインシデントを開いたり再オープンしたりしたときに自動で。完全なルールは [What starts an investigation](/guide/incident/settings#what-starts-an-investigation) にあります。 |
+| [Log Incident](/ja/guide/incident/manual-logging)（人） | フォームを送信した直後。**AI auto-investigate** がオフでも開始されます。 |
+| まだ調査のないインシデント。**Not started** で待機します。 | **Investigate** をクリックしたとき。 |
+| 一度も調査されていないのに **Investigating** に設定されたインシデント（誰かがステータスバッジから **Investigating** を選んだ場合など）。**Not started** で待機します。 | **Investigate** をクリックしたとき。 |
 
-RCA は構造化された 3 フェーズのワークフローに従います。エージェントが新しいフェーズに移行すると、前のフェーズがまだ進行中であれば自動的に完了します。
-
-| フェーズ | 目標 | 活動内容 |
-|-------|------|------------|
-| 1. コンテキスト収集 | ベースライン条件の確立 | トポロジーで影響を受けたサービスと依存関係をマッピング。CloudWatch・Prometheus・Datadog からメトリクスを収集。インシデントメトリクスを過去ベースラインと比較。最近のデプロイと設定変更を特定 |
-| 2. 分析と仮説検証 | 根本原因の絞り込み | 症状から競合する仮説を生成。ログ・トレース・依存関係・リソースのエビデンスを収集。エビデンスが否定する仮説を除外。エビデンスの蓄積に応じて信頼度を追跡 |
-| 3. 解決 | エビデンスとともに根本原因を確定 | 残存する仮説をすべて解決。勝者を根本原因として確認。最強のエビデンスをキュレーション。修復ステップを生成。ディスポジションと信頼度スコアを設定 |
-
-エージェントは仮説を確認する前に、十分な支持エビデンスを収集し、十分な時間をかけて調査する必要があります。
-
-<Note>
-ディスポジションの設定は調査を終了するために必須です。設定しない場合、インシデントは **Investigating** ステータスのままになります。
-</Note>
-
-## エビデンスチェーン
-
-RCA は自動計算付きの構造化エビデンスチェーンを構築します。各アイテムは特定の仮説にリンクでき、どの所見がどの仮説を支持するかを示します。
-
-| エビデンスタイプ | 記録内容 | フィールド |
-|---------------|------------------|--------|
-| メトリクス | インシデント値とベースラインの比較（自動計算された偏差率付き）— 例：「CPU 95% vs ベースライン 25% = 偏差 280%」 | `incident_value`、`baseline_value`、`baseline_period`、`threshold`、`unit` |
-| デプロイと変更 | インシデント開始からの時間差を自動計算した最近の変更。正のデルタ = インシデント前（原因の可能性あり） | `type`、`description`、`timestamp`、`correlation`、`service` |
-| ログ | CloudWatch・Splunk・Datadog などのログコンソールへのディープリンク付き関連ログエントリ | `source`、`description`、`deep_link`、`timestamp`、`severity` |
-| トレース | リクエストフローとレイテンシの内訳を示す分散トレースデータ | `source`、`description`、`raw_data` |
-| 設定 | 正確なパラメーター変更内容を持つ設定変更 | `source`、`description`、`timestamp` |
-| アラート | インシデントウィンドウ中のモニタリングシステムからの関連アラート | `source`、`severity`、`description` |
-
-エビデンスは重要度でランク付けされます：**Critical**（直接的な原因）→ **High**（強い支持）→ **Medium**（コンテキスト）→ **Low**（背景情報）。
-
-## 信頼度スコアリング
-
-特定されたすべての根本原因は 0.0〜1.0 の信頼度スコアを持ちます。
-
-| スコア範囲 | カテゴリー | 意味 | 推奨アクション |
-|-------------|----------|---------|--------|
-| 0.9 – 1.0 | 非常に高い | 圧倒的なエビデンスにより根本原因を特定 | 直ちに修復を実施 |
-| 0.7 – 0.9 | 高い | 強いエビデンスにより根本原因を特定 | 通常の優先度で修復を実施 |
-| 0.5 – 0.7 | 中程度 | 根本原因として有力だが、ギャップが残る | 修復を実施し、代替案を監視 |
-| 0.3 – 0.5 | 低い | 根本原因の可能性があるが、エビデンスは状況証拠 | アクション前に手動で所見を検証 |
-| 0.0 – 0.3 | 不確定 | 根本原因を確立するエビデンスが不十分 | 判断不能。`NOT_FOUND` を検討 |
-
-信頼度は、時間的相関・50% 超のメトリクス異常・一致するエラーパターン・除外された代替案・複数の裏付けデータソースにより上昇します。代替説明・弱い時間的相関・検証の欠如・相反するエビデンスにより低下します。
-
-## 仮説追跡
-
-RCA は「5 つのなぜ」とフィッシュボーン手法にインスパイアされた仮説駆動型調査を実行します。
-
-```mermaid
-stateDiagram-v2
-    direction LR
-    [*] --> Investigating : hypothesis created
-    Investigating --> Confirmed : evidence supports
-    Investigating --> RuledOut : evidence contradicts
-    Confirmed --> [*]
-    RuledOut --> [*]
-```
-
-| 状態 | 意味 |
-|-------|---------|
-| Investigating | 仮説を検証するためにエビデンスを積極的に収集中 |
-| Confirmed | 十分なエビデンスにより根本原因として支持されている |
-| Ruled out | エビデンスが仮説を否定または反証 |
-
-エージェントは根本原因を設定する前に少なくとも 1 つの仮説を確認し、調査を終了する前にすべての仮説を（確認または否定として）解決します。
-
-レイテンシインシデントの仮説チェーンの例：
-
-```text
-Timeline Entry 1: hypothesis_created
-├── Hypothesis 1: "Database connection pool exhaustion"
-├── Confidence: 0.75
-└── Message: "Pool exhaustion likely given 500s response times"
-
-Timeline Entry 3: hypothesis_ruled_out
-├── Hypothesis 1: Ruled Out
-├── Reason: "DB metrics show 45/100 connections—well within limits"
-└── Evidence: Max concurrent connections remained stable
-
-Timeline Entry 6: hypothesis_created
-├── Hypothesis 2: "Lambda cold start latency after memory reduction"
-├── Confidence: 0.85
-
-Timeline Entry 8: hypothesis_confirmed
-├── Hypothesis 2: Confirmed
-├── Updated Confidence: 0.92
-└── Evidence: CloudWatch init duration spike, deployment timing match
-```
-
-## 調査タイムライン
-
-RCA はすべての調査ステップのリアルタイムタイムラインをストリーミングします。フェーズの進捗、仮説のテスト、タイムスタンプ付きのエビデンス収集が表示されます。各調査は最大 100 エントリーを保持します（データベースレベルで適用）。
-
-| エントリータイプ | 意味 |
-|------------|---------|
-| `info` | 一般的な調査ノート |
-| `finding` | 分析に影響する特定の発見 |
-| `warning` | 検証が必要な潜在的問題 |
-| `error` | 失敗した調査の試み |
-| `success` | 確認された所見 |
-| `hypothesis_created` | 新しい仮説の提案 |
-| `hypothesis_ruled_out` | 仮説の否定 |
-| `hypothesis_confirmed` | 仮説の根本原因としての検証 |
-
-## ディスポジション
-
-すべての調査はディスポジションで終了し、インシデントのステータスを更新します。
-
-| ディスポジション | 意味 | 再開可能？ |
-|-------------|---------|------------|
-| `IDENTIFIED` | 支持エビデンスとともに根本原因を発見 | 不可（終端） |
-| `NOT_FOUND` | 調査を尽くしたが明確な根本原因なし | 不可（終端） |
-| `FALSE_ALARM` | 実際のインシデントではなかった | 不可（終端） |
-| `ON_HOLD` | 外部入力または追加データを待機中 | 可能 — 新しい情報が届くと再開 |
-
-ディスポジション設定後、チームがフォローアップアクションを完了するにつれて、インシデントは追加のライフサイクルステータス（Resolved・Post-Mortem・Closed）に進むことができます。
-
-## 調査を開始する
-
-### 自動で
-
-[Webhook インテグレーション](/ja/guide/incident/webhook-integrations/overview)を設定して RCA を自動トリガーします。インシデントが重要度のしきい値を満たすと、バックグラウンドで調査が開始されます。
-
-```json
-{
-  "auto_trigger_rca": true,
-  "auto_trigger_rca_min_severity": "medium"
-}
-```
-
-### 手動で
+## 調査を実行する
 
 <Steps>
-  <Step title="インシデント詳細ページを開く">
-    調査したいインシデントを選択します。
+  <Step title="インシデントを開く">
+    **Resolve → Issues** に移動し、キューからインシデントを選びます。
   </Step>
-  <Step title="「RCA 分析を開始」をクリックする">
-    CloudThinker が重複する RCA が実行されていないことを検証し、1〜3 秒以内に調査を開始します。エージェントが所見を発見するにつれ、タイムラインエントリーがリアルタイムで表示されます。
+  <Step title="開始していなければ RCA を開始する">
+    インシデントが一度も調査されていない場合は、インシデントのヘッダーの **Investigate** をクリックします。
+
+    **成功時の状態:** インシデントが **AI is handling** に移り、インシデントのページに **CloudThinker is investigating** と **Watch live** ボタンが表示されます。
+  </Step>
+  <Step title="経過を追う（任意）">
+    **Watch live** をクリックすると、CloudThinker が作業している会話が開きます。実行される各チェックをその場で確認できます。検出事項は保存されるたびにインシデントのページにも表示されます。
+  </Step>
+  <Step title="判定を読む">
+    分析が完了すると、インシデントは **Needs you** に移ります。ステータスが **Identified** のインシデントでは、結果の見出しが **Root cause** になります。すべてのステータスとその行き先は[調査の結果](#調査の結果)に一覧があります。ページの各セクションは[結果を読む](#結果を読む)で説明しています。
+
+    新しい検出事項が表示されず、**Watch live** に動きがない場合は、[Investigation stuck](/guide/incident/troubleshooting#investigation-stuck) を参照してください。
+  </Step>
+  <Step title="各提案を決着させる">
+    **Actions** の各項目を、完了または却下としてマークします。[修復の各提案を決着させる](#修復の各提案を決着させる)を参照してください。
+  </Step>
+  <Step title="インシデントをクローズする">
+    インシデントのヘッダーのステータスバッジをクリックし、**Resolved** または **False alarm** を選んで、**Change Status** で確定します。ステータスを変更できるのはワークスペースの Admin だけです。他のロールにはメニューのないバッジが表示されます。
+
+    | 現在のステータス | メニューのクローズの選択肢 |
+    |---|---|
+    | **Open**、**Acknowledged**、**Investigating**、**Identified** | **Resolved** または **False alarm** |
+    | **On hold** | **Resolved** のみ。**False alarm** にするには、まず **Investigating** に移します。 |
+    | **Not found** | どちらもありません。メニューには **Investigating** しかありません。クローズするには、**Investigating** を選んでから再度バッジを開き、**Resolved** または **False alarm** を選びます。 |
+
+    **成功時の状態:** インシデントが **Resolved** または **Dismissed** のグループに移ります。
   </Step>
 </Steps>
 
-## 結果の読み取り方
+## 調査のキュー
 
-| セクション | 表示内容 |
-|---------|---------------|
-| 根本原因サマリー | 信頼度スコアと特定タイムスタンプ付きの根本原因の明確な説明 |
-| 仮説追跡 | 各仮説のライフサイクル：作成 → 検証 → 確認または否定（理由付き） |
-| エビデンスチェーン | タイプ別に整理されたエビデンス（重要度ランキング、ソース帰属、ディープリンク付き） |
-| 調査タイムライン | 調査ステップとフェーズ遷移の時系列ログ |
-| 修復アクション | 優先度レベル（critical・high・medium・low）付きの推奨修正手順 |
-| 影響サービス | インシデント中に影響を受けたサービス。トポロジーが接続されている場合はブラストラジウスの可視化も表示 |
+**Resolve → Issues** は、インシデントをあなたに求めることでグループ化します。
 
-バージョン追跡（v1・v2・v3…）付きで同一インシデントに対して複数回の調査を実行できます。新しい情報が入手可能になった場合や最初の実行が決定的でなかった場合は RCA を再実行し、履歴ドロップダウンで結果を比較します。
+| グループ | 含まれるもの |
+|---|---|
+| **AI is handling** | 調査が実行中 |
+| **Needs you** | 判定ができている、調査が入力待ちで一時停止している、またはチェックの結果が決定的でない |
+| **Not started** | まだ調査が実行されていないか、キューに入っている。**Investigate** をクリックして開始します。 |
+| **Resolved** | **Resolved** または **Auto-resolved** としてクローズ済み |
+| **Dismissed** | **False alarm** としてクローズ済み |
+| **Triaged** | トリアージがアラートを確認し、対応は開始されなかった（アラートに対応が不要と判断した場合など） |
 
-## 例：EC2 の終了と EKS ネットワーク障害
+## 結果を読む
 
-あるワークスペースで継続的モニタリングにより、2 つの相互に関連する所見が浮上しました。頻繁な EC2 インスタンスの終了と EKS の `CreateNetworkInterface` 障害です。エージェントがこれらをどのように一緒に調査したかを紹介します。
+インシデントのページは、答えを最初に、裏付けとなる資料をその下に置きます。
 
-まず、CloudThinker が終了パターンを分析します。
+答えの見出しは、調査がどの段階にあるかを示します: **Triage**、**Working theory**、**Root cause**、**On hold**、**No root cause found**、**False alarm**、**Resolution**。その横の証拠のラベル（下記）が証拠の強さを示し、セッションの実行中は **Running** が表示されます。判定の下にある **Impact**、**Cause**、**Fix**、**Risk and undo**、**Confidence** などの短い行がそれを要約し、根本原因を見つけるまでにかかった時間も示します。
 
-```text
-Investigate EC2 termination patterns for the past 60 days.
-Break down by Auto Scaling group, termination reason, instance type, and
-availability zone — and explain the 17:15 UTC daily terminations.
-```
+答えの下の各セクションは、クリックすると開きます。
 
-<Frame>
-  <img src="/images/use-cases/incident-root-cause-analysis/01-ec2-termination-analysis.jpg" alt="EC2 終了パターン分析：AutoScaling イベントとタイムラインを表示" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>EC2 終了パターン分析：AutoScaling イベントを表示</p>
+| セクション | 示す内容 |
+|---|---|
+| **How it happened** | 最初の障害から目に見える影響までの因果グラフ |
+| **Actions** | 修正の提案。それぞれに優先度があります: **Critical**、**High**、**Medium**、**Low**。**Critical** から順に取り組んでください。 |
+| **What happened** | インシデントのタイムライン |
+| **Evidence** | 判定の根拠となる検出事項 |
+| **Full analysis** | 一覧にする検出事項がない場合の、完全な文章の分析 |
+| **Investigation trail** | 一覧にする検出事項がない場合の、CloudThinker が行ったすべてのステップ |
+| **Affected services** | 関係するサービスと依存関係 |
+| **Duplicate webhooks** | 同じアラートの重複した配信（ある場合）。重複が多い場合は、再試行するソースを示しています。ツールの再試行の設定、または [Limits and responses](/ja/guide/incident/webhook-integrations/overview#制限とレスポンス) で Pulse が重複の検出に使うフィールドを確認してください。 |
+| **Was Resolve's diagnosis right?** | 判定へのサムズアップまたはダウン。これらの回答は **Accuracy and trust** タブに反映されます。[Mark a diagnosis right or wrong](/guide/incident/insights#mark-a-diagnosis-right-or-wrong) を参照してください。 |
 
-次に、CloudThinker がネットワーク障害と終了を相互関連付けします。
+CloudThinker が重大度が誤っていると考える場合、インシデントの **More actions** メニューに、提案されたレベルとともに **AI suggests** が表示されます。クリックすると現在のレベルと提案されたレベルが表示されるので、提案されたレベルを **Apply** するか、現在のレベルを **Keep** します。
 
-```text
-Correlate CreateNetworkInterface failures with EC2
-termination events over the last 60 days. Determine whether aggressive
-scale-downs cause IP address fragmentation and whether lifecycle hooks
-allow proper ENI cleanup.
-```
-
-<Frame>
-  <img src="/images/use-cases/incident-root-cause-analysis/02-network-failure-correlation.jpg" alt="ネットワーク障害の相関：CreateNetworkInterface エラーと IP 枯渇" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>ネットワーク障害の相関：CreateNetworkInterface エラーと IP 枯渇</p>
-
-最後に、CloudThinker がインフラとコスト、EKS ネットワーキング、セキュリティの所見を 1 つのドキュメントに統合します。
+短い結果は、たとえば次のようになります。
 
 ```text
-Write a comprehensive RCA for the EC2 termination and EKS network
-interface failures. Include an executive summary, the 60-day timeline,
-remediation steps with owners and due dates, and preventive measures.
+Root cause                                     Strong evidence
+checkout-api pods ran out of memory after payment-client v2.3 doubled
+its connection pool. Restarts cleared it for minutes at a time.
+
+Actions
+High    Roll back payment-client to v2.2 on prod-eu
+Medium  Set a pool size limit in the payment-client config
 ```
 
-<Frame>
-  <img src="/images/use-cases/incident-root-cause-analysis/03-comprehensive-rca-report.jpg" alt="包括的 RCA レポート：所見、修復ステップ、予防措置" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>包括的 RCA レポート：所見と修復ステップ</p>
+### 証拠のラベル
 
-## ベストプラクティス
+見出しの横のラベルは、CloudThinker が自身の証拠をどれだけ強いと評価しているかを示します。
 
-- インシデントが発生する前にトポロジーを接続する — ブラストラジウス分析とサービス相関はトポロジーに依存します。
-- Medium 以上の重要度のインシデントに対して RCA を自動トリガーするよう[Webhook](/ja/guide/incident/webhook-integrations/overview)を設定する。
-- インシデントの説明にコンテキストを追加する。エージェントが最初にどこを調査するかの指針になります。
-- 調査中はタイムラインを監視して、どの仮説がテストされ否定されたかを確認し、エビデンスのタイムスタンプがインシデント開始と相関しているか検証する。
-- 信頼度が 0.7 未満の場合は根本原因を手動で検証してから修復し、Critical 優先度の修復アクションから着手する。
-- 将来の調査中にエージェントが修復手順を検索・実行できるよう[Runbooks](/ja/guide/incident/runbooks)を接続する。
+| ラベル | 意味 | 扱い方 |
+|---|---|---|
+| **Strong evidence** | システムのデータと照合して確認済みで、**Evidence** に示されています | 根拠となる検出事項を確認してから対応します。変更は引き続き runbook と Approvals の設定を経由します。 |
+| **Probable** | 証拠から推論したもので、直接は確認されていません | 対応する前に証拠を確認します |
+| **Possible** | 判定が仮定に基づいています | 手がかりとして扱います。アクセスやコンテキストを追加し、[再調査](#再調査)します。 |
 
-## 関連
+**Possible** は裏付けの弱い判定です。**Not found** は、判定がまったくないことを意味するステータスです。
+
+### 修復の各提案を決着させる
+
+**Actions** の提案にカーソルを合わせ、その **More remediation actions** メニューを開いて選びます。
+
+| 操作 | 使う場面 | メモに書く内容 |
+|---|---|---|
+| **Mark as Done** | チームが作業を行った | 実際に行ったこと |
+| **Dismiss** | 当てはまらない、または行う価値がない | その理由 |
+
+メモは任意で、インシデントを確認する人のために提案に残ります。決着は最終的です。提案をマークするとメニューが消え、元に戻すことはできません。後の調査のセッションで上書きされることもありません。
+
+## 調査の結果
+
+各ステータスはキューのグループに対応します。
+
+| ステータス | 意味 | キューのグループ |
+|---|---|---|
+| **Open**、**Acknowledged** | まだ結果がない。**Acknowledged** は対応者が担当していることを意味します。 | 調査の前は **Not started**、調査の完了後は **Needs you** |
+| **Identified** | 根本原因が見つかった | **Needs you** |
+| **On hold** | 人からの情報、アクセス、判断を待っている | **Needs you** |
+| **Not found** | 利用できる証拠では根本原因を裏付けられなかった | なし。キューには表示されません。 |
+| **False alarm** | アラートは実際の問題ではなかった | **Dismissed** |
+| **Resolved** | 人が関与して修正・クローズされた | **Resolved** |
+| **Auto-resolved** | 誰も関与せず、エージェントが修正・クローズした | **Resolved** |
+
+インシデントは、次のいずれかの理由で **Needs you** にとどまることもあります。
+
+| 表示 | 意味 | 対応 |
+|---|---|---|
+| 結果はあるが、ステータスが **Open**、**Acknowledged**、**Investigating** のまま | 調査がステータスを動かさずに完了した | 結果を読み、自分でステータスを設定します |
+| 行に **Failed** と表示され、インシデントのページに調査が停止したと表示される | セッションが失敗したか、キャンセルされた | **Retry investigation** をクリックします |
+| トリアージのメモはあるが、判定がない | トリアージがアラートに対応が必要かを判断できなかった | **View origin** で元のアラートを読み、自分でステータスを設定します |
+
+<Warning>
+既知の制限: **Not found** のインシデントはキューから外れます。どのキューのグループやフィルターにも表示されません。そのページを離れる前に、先に進めるか URL をコピーしてください。
+
+- 作業を続けるには、不足している[接続](/ja/guide/connections/overview)を追加し、ステータスバッジをクリックして **Investigating** を選びます。以前に調査されたインシデントは **Not started** ではなく **Needs you** に戻り、そこで[再調査](#再調査)できます。
+- 取り下げるには、**Investigating** を選んでから再度バッジを開き、**Resolved** または **False alarm** を選びます。
+- 後で戻るには、インシデントの URL をブックマークします。それが戻る唯一の方法です。
+</Warning>
+
+## 再調査
+
+インシデントには 1 つの調査記録があります。セッションとは 1 つの調査の会話です。その会話で再度依頼しても、同じセッションのままです。トリアージが新しいアラートをインシデントに対応付けると、後のセッションが開始されることがあります。
+
+**Investigate** ボタンは最初の調査の前にしか表示されません。新しいアクセスやコンテキストで再調査するには:
+
+<Steps>
+  <Step title="不足していたものを追加する">
+    不足している[接続](/ja/guide/connections/overview)を追加するか、CloudThinker に使わせたいコンテキストを書き留めます。
+  </Step>
+  <Step title="会話を開く">
+    インシデントのヘッダーで、**More actions → Open AI Conversation** を開きます。
+  </Step>
+  <Step title="もう一度調べるよう依頼する">
+    何が変わったかを伝えます。例: `I've connected the prod-eu Datadog account. Re-check the root cause.`
+
+    **成功時の状態:** 記録された検出事項がインシデントのページに表示され、根本原因が変われば上部の答えが更新されます。何も変わらない場合、その返信でインシデントは変わっていません。
+  </Step>
+</Steps>
+
+セッションが失敗した場合（キューの行に **Failed** と表示されます）、インシデントのページに調査が停止したと表示されます。そこで **Retry investigation** をクリックします。Admin のみです。
+
+## 相関するインシデント
+
+複数のアラートが同じ原因を持つ可能性が高い場合、Resolve はそれらを 1 つの親インシデントの下にまとめ、そこで 1 つの RCA を実行します。まとめられたアラートを開くと、**Part of a Correlated Group** カードが表示されます。
+
+| 選択肢 | 動作 |
+|---|---|
+| **View Parent Analysis** | 調査を持つ親インシデントを開きます |
+| **Promote to Standalone** | アラートを切り離して独立したインシデントにします。確定後、今すぐ RCA を開始するか、後に残すかを選びます。Admin のみです。 |
+
+グループ化は Pulse で始まります。関連するアラートが正しくまとまるよう、各 Webhook で **Resource ID Path** を対応付けて 1 つの障害の繰り返しがまとまるようにし、**Service Path** を 1 つのサービス名に対応付けて 1 つのサービスに関する異なるアラートが合流できるようにしてください。[How signals join a cluster](/ja/guide/pulse/clusters#シグナルがクラスターに合流する仕組み) を参照してください。
+
+## 結果を共有・エクスポートする
+
+インシデントの **More actions** メニューから:
+
+- **Download analysis PDF** は分析を PDF として保存します。
+- **Open AI Conversation** は調査の会話全体を開き、そこでフォローアップの質問ができます。
+- **View origin** はインシデントの元になったアラートと Pulse のデータを表示します。
+
+## トラブルシューティング
+
+| 問題 | 対処 |
+|---|---|
+| **Investigate** ボタンがない | インシデントにすでに調査がある（[再調査](#再調査)を参照）、セッションが実行中、または相関するグループの一部です（**View Parent Analysis** を使います）。Admin ロールも必要です。 |
+| アラートが調査されたインシデントにならなかった | **AI auto-investigate**、Webhook の **Auto-investigate** と最低の重大度を、[What starts an investigation](/guide/incident/settings#what-starts-an-investigation) と照合してください。今すぐ開始するには、**Resolve → Signals** でそのクラスターの **Open incident** と **Send to triage** をクリックします。 |
+| インシデントが **Not started** のまま | **Investigate** をクリックします。 |
+| 判定が **Possible**、またはステータスが **Not found** | RCA が十分に読めませんでした。不足している[接続](/ja/guide/connections/overview)を追加してから、会話で再度依頼してください。**Not found** のインシデントは、まず **Investigating** に戻す必要があります。[Not found の警告](#調査の結果)と[再調査](#再調査)を参照してください。 |
+| **On hold** のまま進まない | **Open AI Conversation** で会話を開き、CloudThinker が求めたことに答えてください。 |
+
+## 次のステップ
 
 <CardGroup cols={2}>
-  <Card title="Pulse" icon="wave-pulse" href="/ja/guide/pulse/overview">
-    ノイズを抑制し、アクショナブルなクラスターをインシデントにエスカレーションするアップストリームのシグナルインテリジェンス
+  <Card title="インシデントを記録する" icon="plus" href="/ja/guide/incident/manual-logging">
+    人からの報告で調査を開始します。
   </Card>
-  <Card title="Webhook インテグレーション" icon="webhook" href="/ja/guide/incident/webhook-integrations/overview">
-    PagerDuty・Datadog・Prometheus などから RCA を自動トリガー
+  <Card title="runbook を使う" icon="book" href="/ja/guide/incident/runbooks">
+    判定を、範囲が限定され承認された修正につなげます。
   </Card>
-  <Card title="インシデントメモリ" icon="brain" href="/ja/guide/incident/incident-memory">
-    エージェントが記録した教訓を後続の調査で再利用する方法を確認
+  <Card title="自動の RCA を制御する" icon="sliders" href="/guide/incident/settings">
+    AI auto-investigate とその他すべての Resolve の制御を見つけます。
   </Card>
-  <Card title="Runbooks" icon="book" href="/ja/guide/incident/runbooks">
-    エージェントが修復ステップを実行できるよう運用 Runbook を接続
+  <Card title="インシデントのメモリ" icon="brain" href="/ja/guide/incident/incident-memory">
+    教訓が後の調査にどう引き継がれるかを確認します。
   </Card>
 </CardGroup>

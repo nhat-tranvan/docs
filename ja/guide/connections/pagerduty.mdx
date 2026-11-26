@@ -1,157 +1,162 @@
 ---
 title: PagerDuty
-description: "PagerDuty を CloudThinker に接続してオンコール管理、インシデントアラート、エスカレーションポリシーの連携を行う"
+description: "署名付き Webhook で PagerDuty のインシデントイベントを Resolve に送り、CloudThinker がインシデントを開いて根本原因分析を始められるようにします"
 icon: "/images/icons/pagerduty.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
-PagerDuty アカウントを接続して、CloudThinker エージェントがインシデントの管理、オンコールスケジュールの確認、サービスの監視、エスカレーションポリシーの処理を行えるようにします。PagerDuty は作成ユーザーの権限にスコープされた **User API Token** で認証します。
+PagerDuty は Webhook を通じて CloudThinker に接続します。PagerDuty は各インシデントイベントを [Resolve](/ja/guide/incident/overview) に送り、Resolve はインシデントを開いて根本原因分析（RCA）を始めることができます。Webhook は PagerDuty が生成するシークレットで署名されるため、Resolve は各イベントがあなたのアカウントから届いたことを確認できます。
 
----
-
-## 対応プラットフォーム
-
-| プラットフォーム | サポート |
-|----------|---------|
-| **PagerDuty** | すべてのプラン（Free、Professional、Business、Digital Operations） |
-
----
+<Note>
+これは一方向のフィードです。現在、PagerDuty API による接続はありません。これによってできないことは[エージェントの機能](#エージェントの機能)を参照してください。
+</Note>
 
 ## 前提条件
 
-- いずれかのプランの **PagerDuty アカウント**。
-- **My Profile → User Settings → API Access** から生成した **User API Token**。
-
-<Info>
-**General Access REST API Key** ではなく **User API Token** を使用してください。ユーザートークンはそのユーザーが参照できる範囲にアクセスをスコープするため、セキュリティ境界がより明確になります。
-</Info>
-
----
+- CloudThinker ワークスペースでの **Admin** ロール。Webhook を作成・編集できるのはワークスペースの Admin だけです。
+- PagerDuty で **Integrations → Generic Webhooks (v3)** に Webhook を追加する権限。
+- テスト用のインシデントをトリガーできる PagerDuty のサービス。
+- RCA でクエリさせたい場合は、サービスの背後にあるシステム（AWS や Datadog など）への [Connections](/ja/guide/connections/overview)。
 
 ## セットアップ
 
 <Steps>
-  <Step title="PagerDuty を開く">
-    [app.pagerduty.com](https://app.pagerduty.com) で PagerDuty アカウントにサインインします。
-  </Step>
-  <Step title="User API Key を生成する">
-    **ユーザーアイコン → My Profile** をクリックし、**User Settings → API Access** までスクロールして **Create API User Token** をクリックします：
-    - **Description**: `cloudthinker`
-    - **Create Key** をクリック
+  <Step title="CloudThinker で Webhook を作成する">
+    **Resolve → Triggers & Outcomes** を開き、**PagerDuty** を選択します。**Signals to Resolve** の下で **Add signal** をクリックします。PagerDuty のプリセットで **Create Webhook** ダイアログが開きます。
 
-    キーを直ちにコピーします — 再表示されません。
+    **Basic Info** で **Webhook Name** をそのままにするか変更し、**Next** をクリックします。**Configure** で、**Service Path** をプリセットの `event.data.service.name` から `event.data.service.summary` に手動で変更します。PagerDuty v3 のイベントはサービス名を `summary` に持っており、プリセットではこれが設定されません。**Field Mapping** と **Severity Mapping** の残りはそのままにして **Next** をクリックします。
   </Step>
-  <Step title="CloudThinker に接続を追加する">
-    **Connections → PagerDuty** に移動し、以下を入力します：
-    - **User API Key**: 生成したトークン
+  <Step title="PagerDuty の署名設定をそのままにする">
+    **Advanced** では、**Auth Method** がすでに **HMAC Signature** になっており、**HMAC Signature Header** は `X-PagerDuty-Signature` に設定されています。両方そのままにします。**Provider signing secret** は今は空欄のままにします。テストのインシデントで RCA が実行されるよう、最初のテストでは **Auto-investigate** をオンのままにして、**Create** をクリックします。
 
-    **Connect** をクリックします。CloudThinker が認証情報を検証し、**Connected** ステータスを表示します。
+    開いたダイアログから **Webhook URL** をコピーします。PagerDuty は独自のシークレットで署名するため、ダイアログに表示されるシークレットは不要です。
+  </Step>
+  <Step title="PagerDuty で Webhook を追加する">
+    PagerDuty で **Integrations → Generic Webhooks (v3)** を開き、**New Webhook** をクリックします。CloudThinker の **Webhook URL** を貼り付けます。**Scope Type** を **Service**（または **Account**）にし、インシデントを送りたい **Scope** を選びます。続いて次のイベントを選択します。
+
+    - `incident.triggered`
+    - `incident.acknowledged`
+    - `incident.resolved`
+
+    Webhook を保存し、PagerDuty に表示される署名シークレットをコピーします。PagerDuty は一度しか表示しないため、ダイアログを閉じる前にコピーしてください。
+  </Step>
+  <Step title="PagerDuty のシークレットを CloudThinker に貼り付ける">
+    **Resolve → Triggers & Outcomes → PagerDuty** に戻り、**Signals to Resolve** の下で作成した Webhook を見つけます。メニュー（**⋯**）を開いて **Edit** をクリックし、**Provider signing secret** にシークレットを貼り付けて **Save** をクリックします。
+
+    **成功状態:** Webhook が **Signals to Resolve** の下に表示され、Resolve は PagerDuty のシークレットですべての PagerDuty イベントを検証するようになります。
   </Step>
 </Steps>
 
 <Warning>
-API トークンは作成直後にコピーしてください。PagerDuty は再表示しないため、紛失した場合は新しいトークンを作成する必要があります。
+PagerDuty のシークレットを貼り付けるまで、すべての PagerDuty イベントは署名チェックに失敗して拒否されます。後で PagerDuty でシークレットを再生成した場合は、同じ方法で新しいシークレットを貼り付けてください。
 </Warning>
-
----
 
 ## 接続の詳細
 
-| フィールド | 説明 | 例 |
-|-------|-------------|---------|
-| **PAGERDUTY_USER_API_KEY** | PagerDuty User API Token | `u+xxxxx...` |
+PagerDuty のプリセットは、PagerDuty v3 の Webhook ペイロードから次のフィールドをマッピングします。
 
----
+| フィールド | パス | 入る内容 |
+|-------|------|------------------|
+| **Title Path** | `event.data.title` | インシデントのタイトル |
+| **Description Path** | `event.data.html_url` | PagerDuty のインシデントへのリンク |
+| **Severity Path** | `event.data.priority.summary` | **Severity Mapping** で変換される重大度 |
+| **Service Path** | プリセットでは `event.data.service.name`。セットアップで `event.data.service.summary` に変更します。 | 影響を受けたサービス。[Pulse](/ja/guide/pulse/overview) が関連するアラートをまとめるのに使います |
+
+**Severity Mapping** は、PagerDuty が送る値を CloudThinker の 5 段階に変換します。インシデントイベントは、インシデントの優先度（`P1` から `P5`）を `priority.summary` に持っています。`critical`、`error`、`warning`、`info` の行が一致するのは、それらの値を持つフィールドを **Severity Path** に指定した場合だけです。
+
+| PagerDuty の値 | CloudThinker の重大度 |
+|-----------------|-----------------------|
+| `P1`、`critical` | critical |
+| `P2`、`error` | high |
+| `P3`、`warning` | medium |
+| `P4` | low |
+| `P5`、`info` | info |
+
+照合では大文字と小文字を区別しないため、`P1` も `p1` も critical になります。優先度が設定されていないインシデントは **medium** として届きます。優先度の名前は PagerDuty アカウントごとに設定されるため、`P1` から `P5` でない場合は **Severity Mapping** に追加してください。
 
 ## 必要な権限
 
-### 最小（読み取り専用）
+CloudThinker が PagerDuty から必要とするのは署名付きのイベントだけです。保存する API キーはありません。
 
-**Observer** または **Responder** ロールのユーザーが提供するもの：
-- インシデント、サービス、エスカレーションポリシーの閲覧
-- オンコールスケジュールの閲覧
-- チームとユーザーの閲覧
-
-### 推奨（全操作）
-
-**Responder** または **Manager** ロールのユーザーが提供するもの：
-- すべての読み取り権限
-- インシデントの承認と解決
-- インシデントとステータス更新の作成
-- オンコールオーバーライドの管理
+| 設定 | 用途 |
+|---------|-----|
+| `X-PagerDuty-Signature` での **HMAC Signature** | 推奨。Resolve は各イベントを PagerDuty のシークレットで確認します。署名付きの triggered または acknowledged イベントは、PagerDuty がすでに宣言しているため、Resolve では宣言済みのインシデントとして開かれます。 |
+| **No Authentication** | 簡単なテスト専用。URL を知っていれば誰でもイベントを送れます。各イベントは通常のアラートとして届き、Pulse がまとめ、そのグループが対応を要する場合にのみインシデントが開かれます。 |
 
 <Tip>
-最小権限の原則に従い、読み取り専用の監視には Observer ロールを割り当ててください。インシデントへの書き込みアクションが必要な場合のみ Responder または Manager に昇格してください。
+PagerDuty の Webhook は、アカウント全体ではなく、調査させたいサービスに絞ってください。関連するイベントが少ないほど、各 RCA を読むのが早くなります。
 </Tip>
-
----
 
 ## エージェントの機能
 
-接続後、エージェントは PagerDuty データの照会と操作を行えます。
+| 機能 | エージェントが行うこと |
+|------------|----------------|
+| **Incident intake** | PagerDuty のインシデントイベントから Resolve でインシデントを開き、同じインシデントの繰り返しイベントをまとめます |
+| **Root cause analysis** | AWS や Datadog など、他の[接続](/ja/guide/connections/overview)を使ってそのインシデントを調査します |
+| **PagerDuty reads and writes** | なし。フィードは一方向なので、エージェントはオンコールのスケジュール、エスカレーションポリシー、サービスを読めず、PagerDuty のインシデントを acknowledge したり resolve したりすることもできません |
 
-| 機能 | 説明 |
-|------------|-------------|
-| **インシデントのトリアージ** | トリガーされた・承認済みインシデントの一覧表示、パターンの特定 |
-| **オンコールスケジュール** | 現在のオンコール担当者と今後のローテーションを確認する |
-| **サービスのヘルス** | サービスのステータスとアクティブなインシデント数を監視する |
-| **エスカレーションポリシー** | エスカレーションチェーンと通知ルールを確認する |
-| **インシデントのアクション** | インシデントの承認、解決、メモの追加 |
-| **スケジュール管理** | スケジュールを確認し、カバレッジのギャップを特定する |
+イベントから調査までの流れ:
+
+| ステップ | 起きること |
+|------|--------------|
+| **Receive** | Resolve がイベントを受け付け、PagerDuty に `202 Accepted` を返します |
+| **Group** | Pulse がノイズを除き、関連するシグナルをまとめます。1 つのインシデントの繰り返しイベントは一緒にまとまります |
+| **Open** | 対応を要するグループは **Resolve → Issues** のインシデントになります |
+| **Investigate** | Webhook の **Auto-investigate** がオンで、Resolve の **AI auto-investigate** スイッチもオンの場合、CloudThinker が他の接続を使って RCA を始めます。**AI auto-investigate** がオフの場合も、Resolve はインシデントを **Open** として開いて確認できるようにしますが、自動では調査しません |
+
+イベントタイプ別:
+
+| PagerDuty のイベント | Resolve が行うこと |
+|-----------------|-------------------|
+| `incident.triggered` | 宣言済みのインシデントを開き（署名付き Webhook の場合）、RCA を始めることができます |
+| `incident.acknowledged` | triggered イベントと同様に扱われ、それとまとめられるため、同じインシデントが一緒に保たれます |
+| `incident.resolved` | シグナルとして受信され、まとめられます。Resolve のインシデントは閉じないため、Resolve で閉じてください。 |
+
+**Only from a minimum severity** を含む **Auto-investigate** のすべての選択肢については、[Webhook signals](/ja/guide/incident/webhook-integrations/overview) を参照してください。
 
 ### 接続を確認する
 
-```text
-List all triggered PagerDuty incidents and report the current on-call schedule
-```
+本番ではない PagerDuty のサービスでテスト用のインシデントをトリガーし、次の 2 か所を確認します。
 
-### プロンプト例
+1. **Resolve → Signals** に、PagerDuty のインシデントのタイトル、正しい重大度、サービスを持つシグナルが表示されます。
+2. **Resolve → Issues** にインシデントが表示されます。Webhook の **Auto-investigate** と Resolve の **AI auto-investigate** の両方がオンの場合は、**AI is handling** と表示されます。
 
-```text
-List all triggered and acknowledged incidents and report any patterns by service
-Who is currently on-call for the platform-engineering service?
-Show next week's on-call schedule and identify any coverage gaps
-```
-
----
+**成功状態:** 1〜2 分以内に両方が表示されます。終わったら PagerDuty でテスト用のインシデントを resolve してください。
 
 ## トラブルシューティング
 
-<Accordion title="認証に失敗した">
-トークンが正しくないか、期限切れか、または失効しています。User API Token を確認し、**ユーザートークン**（REST API Key ではない）を使用していることを確認し、必要であれば新しいトークンを生成してください。
+<Accordion title="PagerDuty で 401 または 403 による配信失敗が報告される">
+署名チェックに失敗しました。**確認:** **Provider signing secret** に CloudThinker のシークレットではなく PagerDuty の署名シークレットを貼り付けたこと、そして **HMAC Signature Header** が `X-PagerDuty-Signature` であること。**対処:** PagerDuty の Webhook からもう一度シークレットをコピーし、CloudThinker の Webhook を編集して貼り付け、**Save** をクリックします。
 </Accordion>
 
-<Accordion title="権限が拒否された">
-ユーザーのロール権限またはチームレベルのアクセス制限が不十分です。書き込み操作には、ユーザーが Responder または Manager ロールを持っていることを確認してください。
+<Accordion title="すべての PagerDuty インシデントが medium として届く">
+インシデントに優先度がないか、その値が **Severity Mapping** にありません。**対処:** PagerDuty で優先度を設定するか、Webhook を編集して、PagerDuty が送る値のマッピング行を追加してください。
 </Accordion>
 
-<Accordion title="サービスまたはインシデントが表示されない">
-ユーザーが関連するチームへのアクセス権を持っていません。チームのメンバーシップに監視したいサービスが含まれているか確認してください。
+<Accordion title="シグナルがサービスなしで届く">
+**Service Path** がまだプリセットの値 `event.data.service.name` のままです。PagerDuty v3 のイベントはこれを持たないため、Resolve はサービスを `unknown` として記録し、Pulse はサービスでまとめられません。**対処:** Webhook を編集し、**Service Path** を `event.data.service.summary` に設定してください。
 </Accordion>
 
-<Accordion title="トークンが失効した">
-PagerDuty の **My Profile → User Settings** に移動し、新しい API User Token を作成して、CloudThinker の接続設定でトークンを更新してください。
+<Accordion title="シグナルは Pulse にあるが RCA が始まらない">
+Webhook の **Auto-investigate** がオフ、重大度が **Only from a minimum severity** の下限を下回っている、または Resolve の **AI auto-investigate** スイッチがオフです。**対処:** 3 つすべてを確認するか、手動で調査を始めてください。[Resolve settings](/guide/incident/settings) を参照してください。
 </Accordion>
-
----
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **ユーザートークン** — General Access REST API Key ではなく、専用の PagerDuty ユーザーにスコープされた User API Token を使用してください。
-- **チームのスコープ** — 専用ユーザーのチームメンバーシップを、CloudThinker が監視すべきサービスのみに制限してください。
-
----
+- **署名付きイベントのみ。** **HMAC Signature** をオンのままにし、PagerDuty のシークレットで署名されていないイベントを Resolve が拒否するようにしてください。
+- **両側でローテーションする。** PagerDuty で署名シークレットを再生成したら、すぐに新しい値を **Provider signing secret** に貼り付けてください。貼り付けるまでイベントは失敗します。
+- **使い終わったら削除する。** 使わなくなったら、PagerDuty と **Resolve → Triggers & Outcomes** の両方で Webhook を削除してください。CloudThinker 側だけを削除すると、PagerDuty は失敗するイベントを送り続けます。
 
 ## 関連
 
 <CardGroup cols={2}>
-  <Card title="ServiceNow 接続" icon="/images/icons/servicenow.svg" href="/ja/guide/connections/servicenow">
-    ITSM インシデント管理
+  <Card title="Webhook signals" icon="webhook" href="/ja/guide/incident/webhook-integrations/overview">
+    フィールドのマッピング、認証、Auto-investigate の選択肢
   </Card>
-  <Card title="Datadog 接続" icon="/images/icons/datadog.svg" href="/ja/guide/connections/datadog">
-    オブザーバビリティと監視
+  <Card title="FireHydrant Connection" icon="/images/icons/firehydrant.svg" href="/guide/connections/firehydrant">
+    インシデント、重大度、アラート、サービスカタログを確認します
   </Card>
 </CardGroup>

@@ -1,147 +1,203 @@
 ---
 title: Firebase
-description: "プロジェクト・アプリの一覧、SDK設定の参照、Firestore/Storageセキュリティルール監査のためにFirebaseをCloudThinkerに接続します"
+description: "サービスアカウントキーで Firebase を接続して、CloudThinker がアプリの棚卸し、セキュリティルールの監査、デプロイ状態の確認を行えるようにします。"
 icon: "/images/icons/firebase.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
-Firebaseプロジェクトを接続して、CloudThinkerエージェントがプロジェクトとアプリの一覧表示、SDK設定の読み取り、Firestore・Storage・Realtime Databaseのセキュリティルール監査、デプロイ状態の確認、Firebaseドキュメントの検索を実行できるようにします。また、アプリの作成やデプロイなど承認が必要な制御操作も行えます。
+Firebase を接続すると、CloudThinker がプロジェクトとアプリを一覧表示し、SDK 設定を読み、Firestore、Storage、Realtime Database のセキュリティルールを監査し、デプロイ状態を確認できるようになります。Firebase は **Google Cloud サービスアカウントキー**（JSON ファイル）で認証し、サービスアカウントの IAM ロールによって CloudThinker がアクセスできる範囲が決まります。
 
-Firebaseの認証は**Google Cloudサービスアカウントキー**（JSONファイル）で行います。サービスアカウントの**IAMロール**がエージェントのアクセス範囲を決定します。監査用には読み取り専用のFirebaseロールを付与し、書き込みやデプロイが必要な場合にのみより広いロールを付与してください。
+## Firebase と Google Cloud のどちらを選ぶか
 
----
+| 接続 | カバーする範囲 | 接続するタイミング |
+|---|---|---|
+| Firebase | `firebase-tools` を通じたプロジェクト、アプリ、SDK 設定、セキュリティルール、デプロイ | Firebase アプリを監査またはデプロイしたい場合 |
+| [Google Cloud](/ja/guide/connections/gcp) | Google Cloud CLI を通じた Compute、GKE、BigQuery、IAM、コスト | インフラ、アイデンティティ、コストについての回答が欲しい場合 |
+
+2 つは別々の接続です。同じプロジェクトに両方を接続でき、それぞれに専用のサービスアカウントを使います。
 
 ## 前提条件
 
-- CloudThinkerで検査したい**Firebaseプロジェクト**。
-- そのプロジェクトの**サービスアカウントキー（JSON）**。
-- プロジェクトのGoogle CloudでサービスアカウントキーとIAMロールを作成・割り当てる権限。
-
-<Info>
-サービスアカウントJSONは完全な認証情報です。IAMロールを最小権限にスコープしてください。読み取り専用のFirebaseロールで一覧表示とルール監査が可能です。
-</Info>
-
----
+- CloudThinker に調べさせたい Firebase プロジェクト。
+- そのプロジェクトの Google Cloud で、サービスアカウントとキーを作成し、IAM ロールを割り当てる権限。
+- サービスアカウントキーの作成が許可されていること。組織が `constraints/iam.disableServiceAccountKeyCreation` を適用している場合（2024 年 5 月以降に作成された組織のデフォルト）は、先に組織のポリシー管理者にこのプロジェクトの例外を依頼してください。
 
 ## セットアップ
 
-<Steps>
-  <Step title="サービスアカウントキーを生成">
-    [Firebase Console](https://console.firebase.google.com)でプロジェクトを選択し、サイドバーの**設定**（歯車）アイコンをクリックして**プロジェクトの設定**を開きます。上部バーの**サービス アカウント**タブを開き、**新しい秘密鍵の生成**をクリックし、**キーを生成**で確認してJSONキーファイルをダウンロードします。
-  </Step>
-  <Step title="IAMロールを付与（オプション、最小権限用）">
-    **Google Cloud Console → IAM** で、サービスアカウントにCloudThinkerが必要とするロールのみを付与します。読み取り専用監査には**Viewer** / **Firebase Viewer**ロール、承認ゲートの書き込みやデプロイが必要な場合はFirebase管理者ロールを使用します。
-  </Step>
-  <Step title="CloudThinkerに接続を追加">
-    **Connections → Firebase** に移動して認証情報を追加します：
-    - **サービスアカウントキー（JSON）**：ダウンロードした `.json` キーファイルをアップロードエリアにドラッグするか、クリックしてファイルを選択します
+まず、複数のプロジェクトをどうカバーするかを決めます。ほとんどのチームはプロジェクトごとに 1 つの接続を使います。
 
-    **Connect** をクリックします。CloudThinkerがキーを読み取り、そこからアクティブプロジェクトを設定して **Connected** ステータスに変わります。
+| オプション | 仕組み | 適している場合 |
+|---|---|---|
+| プロジェクトごとに 1 つの接続 | 各プロジェクトに専用のサービスアカウント、キー、エイリアス、**Environment** を持たせます。切り替えは不要です。 | 頻繁に複数のプロジェクトをまたいで作業する場合や、プロジェクトごとに異なる承認ルールを使いたい場合 |
+| 1 つのサービスアカウントで複数のプロジェクト | 1 つの接続でサービスアカウントが参照できるすべてのプロジェクトにアクセスできますが、一度に操作できるアクティブなプロジェクトは 1 つです。切り替えのたびに承認を経由します。 | 主に 1 つのプロジェクトで作業し、ときどき他のプロジェクトを見る場合 |
+
+<Warning>
+Firebase の **Project settings** にある **Generate new private key** は使わないでください。これは、広範な管理者権限を持ち、自社のアプリが依存している可能性があるデフォルトの `firebase-adminsdk-…@<project-id>.iam.gserviceaccount.com` アカウントのキーを作成します。また、そのアカウントからロールを削除しないでください。
+</Warning>
+
+<Tabs>
+  <Tab title="Google Cloud console">
+    <Steps>
+      <Step title="専用のサービスアカウントを作成する">
+        [Google Cloud コンソール](https://console.cloud.google.com/)で Firebase プロジェクトを選択し、**IAM & Admin → Service Accounts** に移動します。**Create service account** をクリックし、`cloudthinker-firebase` という名前を付けて **Create and continue** をクリックします。
+      </Step>
+      <Step title="読み取り専用の Firebase ロールを付与する">
+        **Firebase Viewer**（`roles/firebase.viewer`）を追加し、**Done** をクリックします。書き込みロールは、CloudThinker に承認を経てアプリの作成やデプロイをさせたい場合にのみ追加してください。[必要な権限](#必要な権限)を参照してください。
+      </Step>
+      <Step title="JSON キーを作成する">
+        サービスアカウントを開き、**Keys** タブで **Add key → Create new key** をクリックします。**JSON** を選んで **Create** をクリックします。
+
+        **成功時の状態:** ブラウザが `.json` のキーファイルをダウンロードします。
+      </Step>
+    </Steps>
+  </Tab>
+  <Tab title="gcloud CLI">
+    [Cloud Shell](https://shell.cloud.google.com/) または Google Cloud にサインインした任意のターミナルで、次を実行します。
+
+    ```bash
+    PROJECT_ID=your-firebase-project-id
+    SA=cloudthinker-firebase@$PROJECT_ID.iam.gserviceaccount.com
+
+    gcloud iam service-accounts create cloudthinker-firebase \
+      --project="$PROJECT_ID" --display-name="CloudThinker Firebase"
+
+    gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+      --member="serviceAccount:$SA" --role="roles/firebase.viewer"
+
+    gcloud iam service-accounts keys create cloudthinker-firebase-key.json --iam-account="$SA"
+    ```
+
+    最後のコマンドでキーが `cloudthinker-firebase-key.json` に書き出されます。Cloud Shell では `cloudshell download cloudthinker-firebase-key.json` でダウンロードし、CloudThinker にアップロードしたら `rm cloudthinker-firebase-key.json` で Cloud Shell 上のコピーを削除してください。書き込みロールもバインドするのは、CloudThinker に承認を経てアプリの作成やデプロイをさせたい場合のみにしてください。[必要な権限](#必要な権限)を参照してください。
+  </Tab>
+</Tabs>
+
+次に、CloudThinker で接続します。
+
+<Steps>
+  <Step title="接続ダイアログを開く">
+    **Settings → Workspace → Connections** を開き、**Firebase** を選択して **Connect** をクリックします。
+  </Step>
+  <Step title="接続に名前を付ける">
+    **Alias**（例: `prod-firebase`）と **Description**（例: `Production Firebase project, mobile app`）を入力します。接続が複数ある場合、エージェントは説明を読んで正しい接続を選びます。
+  </Step>
+  <Step title="キーをアップロードする">
+    `.json` ファイルをアップロード領域にドラッグするか、**choose a JSON file** をクリックして参照します。**Connect** をクリックします。
+
+    **成功時の状態:** 接続に **Connected** と表示され、キーの `project_id` がアクティブなプロジェクトになります。続いて CloudThinker が[詳細調査](/ja/guide/connections/overview#接続した後に起こること)のチャットを開き、エージェントがプロジェクトを探索します。
+  </Step>
+  <Step title="環境を設定する">
+    **Settings → Workspace → Connections** で **Firebase** を開き、接続の行の鉛筆アイコンをクリックして、**Edit Instance** で **Environment** を設定します。これは人とエージェントのための接続のラベルになります。
   </Step>
 </Steps>
 
-<Warning>
-ダウンロードしたJSONはパスワードと同様に扱ってください。シークレットマネージャーに保管し、CloudThinkerへのアップロード後はローカルのコピーを削除してください。
-</Warning>
+## 接続の詳細
 
----
+| フィールド | 入力内容 | 例 |
+|-------|---------------|---------|
+| **Alias** | この接続の短い名前。空欄の場合は自動で決まります。 | `prod-firebase` |
+| **Description** | プロジェクトの内容。エージェントは接続を選ぶ際にこれを使います。 | `Production Firebase project` |
+| **GOOGLE_SERVICE_ACCOUNT_KEY** | アップロードしたサービスアカウントの JSON キーファイル。その `project_id` がアクティブな Firebase プロジェクトになります。 | `cloudthinker-firebase-key.json` |
 
-## 接続詳細
-
-| フィールド | 説明 | 例 |
-|-------|-------------|---------|
-| **GOOGLE_SERVICE_ACCOUNT_KEY** | Google Cloudサービスアカウントキー全体のJSON。CloudThinkerはその `project_id` からアクティブなFirebaseプロジェクトを自動的に設定します。 | `{ "type": "service_account", "project_id": "my-app", ... }` |
-
-<Note>
-CloudThinkerはキーの `project_id` からアクティブプロジェクトを解決するため、プロジェクトIDや設定ファイルを別途指定する必要はありません。
-</Note>
-
----
+別途プロジェクト ID や Firebase の設定ファイルを用意する必要はありません。複数のプロジェクトをカバーする方法は、[セットアップ](#セットアップ)のオプションを参照してください。
 
 ## 必要な権限
 
-読み取り操作（プロジェクト、アプリ、SDK設定、セキュリティルールの検査）は**ビューアーレベル**のFirebase/GCPロールで機能します。制御操作（プロジェクトやアプリの作成、機能の初期化、アクティブプロジェクトの切り替え、デプロイ）には、それを許可するロールと、CloudThinkerでの明示的な[承認](/guide/approvals/overview)の両方が必要です。
+| 目的 | サービスアカウントの IAM ロール | CloudThinker での承認 |
+|---------------|---------------------------------|--------------------------|
+| プロジェクトとアプリの棚卸し、SDK 設定の読み取り、セキュリティルールの監査 | Firebase Viewer（`roles/firebase.viewer`） | 不要 |
+| アクティブなプロジェクトの切り替え | 対象プロジェクトへのアクセス権（例: そのプロジェクトでの Firebase Viewer） | Approvals を経由 |
+| デプロイ状態の確認 | Firebase Viewer（`roles/firebase.viewer`） | Approvals を経由 |
+| プロジェクト、アプリ、Android SHA キーの作成、機能の初期化、デプロイ | Firebase Admin（`roles/firebase.admin`）、または 1 つのプロダクト向けのより狭いロール（例: Firebase Hosting Admin（`roles/firebasehosting.admin`）、Firebase Rules Admin（`roles/firebaserules.admin`）） | Approvals を経由 |
+
+一部のデプロイでは、Google がさらにロールを要求します。たとえば Cloud Functions のデプロイには、Cloud Functions Developer（`roles/cloudfunctions.developer`）と Service Account User（`roles/iam.serviceAccountUser`）も必要です。
 
 <Tip>
-最小権限を守ってください。監査には読み取り専用のFirebaseロールを付与し、実際に必要になるまで書き込み可能なロールは保留してください。ガードレールを外すのではなく、制御操作は承認ゲートのままにしておいてください。
+Firebase には **Allow writes** スイッチがありません。すべての変更は [Approvals](/guide/approvals/overview) を経由し、IAM ロールでも許可されている場合にのみ実行されます。監査には Firebase Viewer を付与してください。
 </Tip>
-
----
 
 ## エージェントの機能
 
-接続後、エージェントはFirebaseプロジェクト、アプリ、ルールへの読み取りアクセスを持ちます。
+CloudThinker はこの接続を通じて、公式の Firebase CLI（`firebase-tools`）のツールセットを使います。
 
-| 機能 | 説明 |
-|------------|-------------|
-| **プロジェクトとアプリ** | アクセス可能なプロジェクトの一覧、アクティブプロジェクトの検査、iOS・Android・Webアプリの一覧表示 |
-| **SDK設定** | プラットフォームまたはアプリのFirebase SDK設定を読み取り |
-| **セキュリティルール** | アクセス監査のためFirestore・Storage・Realtime Databaseのルールを読み取り |
-| **デプロイ状態** | デプロイ状態の確認 |
-| **Firebaseドキュメント** | 公式FirebaseおよびGoogle開発者ドキュメントを検索 |
-| **プロジェクトとアプリの制御** | プロジェクト・アプリ・Android SHA鍵の作成、機能の初期化、アクティブプロジェクトの切り替え、デプロイ — **承認が必要** |
+| 機能 | CloudThinker が行うこと | 承認 |
+|------------|------------------------|----------|
+| **Projects and apps** | アクセス可能なプロジェクトを一覧表示し、アクティブなプロジェクトを確認し、iOS、Android、Web アプリを一覧表示する | 不要 |
+| **SDK configuration** | アプリの Firebase SDK 設定を読む | 不要 |
+| **Security rules audit** | Firestore、Storage、Realtime Database のルールを読み、開放されているように見えるルールを指摘する | 不要 |
+| **Firebase docs** | Firebase と Google のデベロッパードキュメントを検索する | 不要 |
+| **Project and app controls** | アクティブなプロジェクトの切り替え、プロジェクト、アプリ、Android SHA キーの作成、機能の初期化、デプロイ、デプロイ状態の確認 | Approvals を経由 |
 
-<Info>
-作成・初期化・デプロイ・プロジェクト切り替えのアクションは承認ゲートされています。CloudThinkerは実行前に確認を求めます。読み取り専用操作は承認なしで実行されます。
-</Info>
+この接続がカバーするのは `firebase-tools` が公開している範囲です。Firestore のドキュメント、Authentication のユーザー、Crashlytics、Remote Config は読みません。
 
-### 接続を確認する
+### 接続の確認
 
 ```text
-Show my Firebase environment and list the projects I can access
+Show my Firebase environment and list the projects you can access
 ```
+
+回答では、実際の `project_id` がアクティブなプロジェクトとして示されます。
 
 ### プロンプト例
 
 ```text
-Review the current Firestore and Storage security rules, flag any that allow unauthenticated writes, and recommend tighter definitions
-List all Firebase projects and the apps registered in the active project and report as a table
+Audit the Firestore and Storage security rules and flag anything that allows unauthenticated writes
+List the apps registered in the active Firebase project as a table
 Show the Firebase SDK config for my web app
 ```
 
-<Note>
-複数のプロジェクトにアクセス可能でアクティブなものがない場合は、エージェントが適切なプロジェクトにスコープできるよう、プロンプトにプロジェクト名を指定してください。
-</Note>
-
----
-
 ## トラブルシューティング
 
-<Accordion title="認証失敗 / 認証情報が利用できない">
-サービスアカウントJSONが無効、不完全、または文字が欠けた状態で貼り付けられています。Firebase Consoleで新しい秘密鍵を生成して再接続してください。
+<Accordion title="認証に失敗する、または認証情報を利用できない">
+**原因:** キーの JSON が無効、不完全、または削除されたサービスアカウントのものです。
+
+**対処:** サービスアカウントの新しい JSON キーを作成します。**Settings → Workspace → Connections** で **Firebase** を開き、接続の行の鉛筆アイコンをクリックして、**Edit Instance** の **Replace…** でアップロードしてください。
 </Accordion>
 
-<Accordion title="エージェントがアクティブプロジェクトが選択されていないと言う">
-CloudThinkerはキーの `project_id` からアクティブプロジェクトを設定します。キーに `project_id` がない場合や複数のプロジェクトにアクセス可能な場合、エージェントはそれらを一覧表示してどれを使用するか尋ねます。続行するにはプロジェクトを指定してください。
+<Accordion title="アクティブなプロジェクトが選択されていないと CloudThinker が言う">
+**原因:** エラーには `PRECONDITION_FAILED` と表示され、アクティブなプロジェクトについて言及されます。CloudThinker は接続が開始されるたびに、キーの `project_id` からアクティブなプロジェクトを設定します。保存されたキーを解析できない場合（たとえば、アップロード前に編集された場合）、プロジェクトは選択されません。リソースが存在しないわけではありません。
+
+**対処:** このプロンプトでは、プロジェクトを指定してください。アクティブなプロジェクトの切り替えは承認を経由します。恒久的に直すには、新しい JSON キーを作成し、ダウンロードしたファイルを変更せずに **Edit Instance** の **Replace…** でアップロードしてください。
 </Accordion>
 
-<Accordion title="プロジェクト、ルール、またはデプロイで権限が拒否された">
-サービスアカウントに該当製品のFirebase/GCP IAMロールがありません。Google Cloud IAMで適切なロールを付与して再接続してください。
+<Accordion title="プロジェクト、ルール、デプロイで権限が拒否される">
+**原因:** サービスアカウントにその Firebase プロダクトの IAM ロールがないか、プロジェクトがサービスアカウントから見えません。
+
+**対処:** **Google Cloud console → IAM** で、読み取りとルールには Firebase Viewer を、作成とデプロイには Firebase Admin（または[必要な権限](#必要な権限)にあるより狭いロール）を付与してから、再試行してください。
 </Accordion>
 
-<Accordion title="制御アクションが実行されなかった">
-作成・初期化・デプロイには、そのアクションを許可するIAMロールとCloudThinkerでの明示的な承認の両方が必要です。プロンプトが表示されたらアクションを承認し、サービスアカウントのロールがそれを許可していることを確認してください。
+<Accordion title="プロジェクト一覧にプロジェクトが表示されない">
+**原因:** サービスアカウントがそのプロジェクトでロールを持っていません。
+
+**対処:** そのプロジェクトの **Google Cloud console → IAM** で、サービスアカウントに Firebase Viewer（`roles/firebase.viewer`）を付与してから、もう一度依頼してください。
 </Accordion>
 
----
+<Accordion title="テストで Timed out と表示される">
+**原因:** テストが時間内に完了しませんでした。Firebase のエンドポイントは公開されているため、お客様のネットワークが原因であることはまれです。
+
+**対処:** もう一度接続してください。タイムアウトが続く場合は、[お問い合わせ](https://cloudthinker.io/contact)ください。
+</Accordion>
+
+<Accordion title="作成やデプロイの操作が実行されなかった">
+**原因:** 書き込みには、それを許可する IAM ロールと CloudThinker での承認の両方が必要です。リクエストを却下した場合、CloudThinker は再試行しません。
+
+**対処:** サービスアカウントのロールを確認してから、もう一度依頼してください。
+</Accordion>
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **制御操作の承認** — 作成・初期化・デプロイのアクションは、ガードレールを外すのではなく承認ゲートのままにしておいてください。
-- **キーを保護** — サービスアカウントJSONは完全な認証情報です。ソースコントロールにコミットしたり、平文で共有したりしないでください。
+- **キーを保護する**: JSON キーはサービスアカウントの完全な認証情報です。アップロードしたらローカルのコピーを削除し、コミットしたりチャットに貼り付けたりしないでください。
+- **少なくとも 90 日ごとにキーをローテーションする**: 新しいキーを作成し、**Edit Instance** の **Replace…** でアップロードしてから、古いキーを削除してください。[Rotate a credential](/ja/guide/connections/overview#認証情報をローテーションする) を参照してください。
 
----
-
-## 関連
+## 関連情報
 
 <CardGroup cols={2}>
-  <Card title="Google Cloud接続" icon="/images/icons/gcp.svg" href="/ja/guide/connections/gcp">
-    Google Cloud Platformを接続
+  <Card title="Google Cloud 接続" icon="/images/icons/gcp.svg" href="/ja/guide/connections/gcp">
+    Google Cloud プロジェクトの残りの部分を接続します。
   </Card>
-  <Card title="承認" icon="shield-check" href="/guide/approvals/overview">
-    承認ゲートアクションの仕組み
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    承認が必要な操作の判断方法を管理します。
   </Card>
 </CardGroup>

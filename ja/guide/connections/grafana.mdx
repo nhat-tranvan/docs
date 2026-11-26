@@ -1,182 +1,167 @@
 ---
 title: Grafana
-description: "ダッシュボード統合・メトリクス分析・統合オブザーバビリティのためにGrafanaをCloudThinkerに接続します"
+description: "Viewerのサービスアカウントで Grafana を接続し、エージェントがダッシュボードの検索、メトリクスとログのクエリ、アラートルールの確認をできるようにします"
 icon: "/images/icons/grafana.svg"
 ---
 
+import ApprovalDefault from '/snippets/approval-default.mdx';
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
-Grafanaインスタンスを接続することで、CloudThinkerエージェントがダッシュボードへのアクセス、メトリクスのクエリ、分析中の可視化の参照を行えるようになります。
-
-GrafanaはViewerロールにスコープされた**サービスアカウントトークン**で認証します。
-
----
+Grafanaインスタンスを接続すると、[CloudThinker](/ja/guide/agents/overview)はチームがすでに持っているダッシュボード、データソース、アラートルールをもとに作業できます。エージェントは適切なダッシュボードを見つけ、Grafana経由でPrometheusやLokiのクエリを実行し、どのアラートが発火しているかを教えてくれます。パネルをチャットにコピーする必要はありません。接続は**サービスアカウントトークン**でサインインします。これは、作成して**Viewer**ロールに絞り込む、人ではないGrafanaのIDです。
 
 ## 対応プラットフォーム
 
-| プラットフォーム | サポート |
-|----------|---------|
-| **Grafana OSS** | 9.x、10.x |
-| **Grafana Enterprise** | 全バージョン |
-| **Grafana Cloud** | 全プラン |
-
----
+| プラットフォーム | 対応 |
+|----------|-----------|
+| **Grafana OSS** | はい、9.1以降（サービスアカウントは9.1で一般提供になりました） |
+| **Grafana Enterprise** | はい |
+| **Grafana Cloud** | はい |
 
 ## 前提条件
 
-- CloudThinkerから到達可能な **Grafanaインスタンス**（OSS、Enterprise、またはCloud）。
-- **Administration → Users and access → Service Accounts** でサービスアカウントを作成するための管理者アクセス。
-- GrafanaインスタンスのURL。
-
----
+- パブリックインターネットからHTTPSで到達できるGrafanaインスタンス。接続はCloudThinker Cloudから実行されるため、プライベートなインスタンスには[Reaching private services](/ja/guide/connections/overview#プライベートサービスへの到達)にあるいずれかの方法が必要です。ファイアウォールで保護している場合は、CloudThinkerの送信元IPを許可してください。このドキュメントではCloudThinkerの送信元IP一覧を公開していません。CloudThinkerの担当者に問い合わせるか、[お問い合わせ](https://cloudthinker.io/contact)ください。
+- 有効で、公的に信頼されたTLS証明書。自己署名証明書では失敗します。
+- サービスアカウントを作成できるGrafanaの管理者アクセス。
+- Grafana組織ごとに1つの接続。サービスアカウントは作成された組織しか見られないため、複数の組織がある場合は、それぞれでサービスアカウントを作成し、それぞれに接続を追加してください。
+- CloudThinkerワークスペースでの**Admin**ロール。接続の追加と編集ができます。[Roles](/guide/security/roles)を参照してください。
 
 ## セットアップ
 
 <Steps>
-  <Step title="Grafanaを開く">
-    Grafanaインスタンスにアクセスし、管理者権限でサインインします。
-  </Step>
-  <Step title="サービスアカウントへ移動">
-    **Administration → Users and access → Service Accounts** へ移動します。
-  </Step>
-  <Step title="サービスアカウントを作成">
-    **Add service account** をクリックし、次の情報を入力します:
-    - **Name**: `cloudthinker-readonly`
-    - **Role**: **Viewer** を選択
+  <Step title="Viewerのサービスアカウントを作成する">
+    Grafanaで**Administration → Users and access → Service accounts**を開き、**Add service account**をクリックします。次のように設定します。
 
-    **Create** をクリックしてサービスアカウントを作成します。
-  </Step>
-  <Step title="トークンを生成">
-    新しいサービスアカウントのページで:
-    1. **Add service account token** をクリック
-    2. トークン名を入力（例: `cloudthinker-token`）
-    3. 必要に応じて有効期限を設定
-    4. **Generate token** をクリック
-    5. **トークンをすぐにコピー** — 再表示されません
-  </Step>
-  <Step title="CloudThinkerで接続を追加">
-    **Connections → Grafana** に移動し、次の情報を入力します:
-    - **Grafana URL**: インスタンスURL（例: `https://grafana.your-domain.com`）
-    - **Service Account Token**: コピーしたトークン
+    - **Display name**: `cloudthinker-readonly`
+    - **Role**: **Viewer**
 
-    **Connect** をクリックします。CloudThinkerが認証情報を検証し、**Connected** ステータスを表示します。
+    **Create**をクリックします。
+  </Step>
+  <Step title="トークンを生成する">
+    新しいサービスアカウントのページで**Add service account token**をクリックし、名前（例: `cloudthinker`）を付け、90日などの有効期限を設定して、**Generate token**をクリックします。トークンの期限が切れると、置き換えるまで接続は401で失敗します。[Token expired](#トラブルシューティング)を参照してください。
+
+    今すぐトークンをコピーしてください。トークンは`glsa_`で始まり、Grafanaは二度と表示しません。
+  </Step>
+  <Step title="CloudThinkerで接続を追加する">
+    **Settings → Workspace → Connections**を開き、**Discover**タブを開いて**Grafana**を選択します。次を入力します。
+
+    - **GRAFANA_URL**: インスタンスのベースURL。例: `https://grafana.example.com`、`https://your-stack.grafana.net`
+    - **GRAFANA_SERVICE_ACCOUNT_TOKEN**: `glsa_`トークン
+    - **Alias**と**Description**: 任意。エージェントは説明を読んで適切なインスタンスを選ぶため、複数追加する場合は組織や環境の名前を書いてください
+
+    **Connect**をクリックします。
+
+    **成功状態:** 接続に**Connecting**、**Verifying**と表示され、その後**Connected**になります。検証に失敗すると**Failed**と表示され、エラーメッセージが出ます。メッセージを[トラブルシューティング](#トラブルシューティング)と照らし合わせてください。
   </Step>
 </Steps>
 
-<Warning>
-サービスアカウントトークンは生成直後にコピーしてください。Grafanaはトークンを再表示しないため、紛失した場合は新しいトークンを作成する必要があります。
-</Warning>
-
----
-
 ## 接続の詳細
 
-| フィールド | 説明 | 例 |
-|-------|-------------|---------|
-| **GRAFANA_URL** | GrafanaインスタンスのURL | `https://your-instance.grafana.net` |
-| **GRAFANA_SERVICE_ACCOUNT_TOKEN** | 生成されたサービスアカウントトークン | `glsa_xxxxx...` |
-
----
+| フィールド | 必須 | 例 | 説明 |
+|-------|----------|---------|-------------|
+| **GRAFANA_URL** | はい | `https://grafana.example.com` | インスタンスのベースURL。ブラウザで開くアドレスです |
+| **GRAFANA_SERVICE_ACCOUNT_TOKEN** | はい | `glsa_...` | エージェントが使うサービスアカウントのトークン |
 
 ## 必要な権限
 
-| ロール | 付与される権限 |
-|------|----------------|
-| **Viewer** | ダッシュボードの表示、データソースのクエリ、アノテーションの表示、フォルダコンテンツへのアクセス |
-| **Editor** | Viewerの権限に加え、アノテーションの作成とダッシュボードスナップショットの保存 |
+| ロール | エージェントができること | 使う場面 |
+|------|-----------------|-------------|
+| **Viewer** | ダッシュボードとフォルダーの検索と閲覧、データソースへのクエリ、アラートルールとアノテーションの閲覧 | 調査。推奨 |
+| **Editor** | Viewerに加え、ダッシュボード、アノテーション、アラートルールの変更。各変更は[Approvals](/guide/approvals/overview)を通ります | エージェントにそうした変更をさせたい場合のみ |
+
+エージェントが見られるのは、サービスアカウントが見られるものだけです。ダッシュボードのフォルダーに制限付きの権限がある場合は、そのフォルダーにサービスアカウントを追加しないと、エージェントはそこのダッシュボードを見つけられません。
 
 <Tip>
-読み取り専用の調査には **Viewer** ロールを割り当ててください。アノテーションの作成やダッシュボードスナップショットが必要な場合のみEditorを使用してください。
+サービスアカウントは**Viewer**のままにしてください。そうすれば、エージェントが何を求めても、Grafana側であらゆる変更を拒否します。
 </Tip>
 
----
+## エージェントの機能
 
-## エージェント機能
+| 機能 | エージェントができること |
+|------------|--------------------|
+| **Dashboards and folders** | 名前やタグで検索し、ダッシュボードのパネルとクエリを読み、パネルのクエリを実行します |
+| **Metrics** | PrometheusデータソースにPromQLを実行します。ラベルとメトリクスの探索も行います |
+| **Logs** | LokiデータソースにLogQLを実行し、対応するデータソース全体でログを検索します |
+| **Other data sources** | Grafanaに設定されたElasticsearch、CloudWatch、ClickHouseのデータソースにクエリします |
+| **Alerting** | アラートルールとその状態を一覧表示し、どれが発火しているかを示します |
+| **Annotations** | 問題が起きた前後の時間のアノテーション（デプロイマーカーなど）を読みます |
+| **Grafana Cloud features** | スタックにある場合: Grafana Incident、OnCallのスケジュール、Siftの調査、Pyroscopeのプロファイル |
 
-接続後、エージェントは次のことができます:
+エージェントはGrafana経由でクエリするため、データソースが使えるのは、Grafanaインスタンスに設定されていて、サービスアカウントがそれを使える場合だけです。
 
-| 機能 | 説明 |
-|------------|-------------|
-| **ダッシュボードアクセス** | 分析で既存のダッシュボードを参照 |
-| **メトリクスクエリ** | Grafana経由でデータソースをクエリ |
-| **アノテーション読み取り** | コンテキスト確認のためのダッシュボードアノテーションにアクセス |
-| **アラートステータス** | Grafanaアラートルールのステータスを確認 |
+Grafanaを接続すると、[Resolve](/ja/guide/incident/overview)もインシデントを調査する際にアラートルールを読み、メトリクスの範囲をクエリできます。GrafanaのアラートをResolveに送るのは別のWebhook設定です。[Webhook integrations](/ja/guide/incident/webhook-integrations/overview)を参照してください。
 
-### 接続を確認
+### 接続を確認する
 
 ```text
-Check Grafana for active alert rules and summarize any that are firing
+List the Grafana alert rules that are firing right now, and the data sources configured in Grafana
 ```
+
+発火中のルールの名前と状態（または発火中のものがないという注記）、続いて各データソースとその種類（PrometheusやLokiなど）が返ってきます。
 
 ### プロンプト例
 
 ```text
-Check the AWS cost dashboard for anomalies
-Reference the Kubernetes cluster dashboard for pod health
-Query database metrics from the Grafana data source
+Find the Grafana dashboard for the checkout service and summarize what its panels show for the last hour
+Using Grafana's Prometheus data source, which pods restarted most in the last 24 hours?
+Search Loki through Grafana for errors from the payments app since 09:00 and group them by message
 ```
 
-### 対応データソース
+## 書き込みアクセス
 
-CloudThinkerはGrafanaの設定済みデータソースを通じてクエリできます:
+この接続は、ダッシュボードの編集、アノテーションの追加、アラートルールの変更など、何かを変更するGrafanaツールを呼び出せます。何かを変更する呼び出しはすべて[Approvals](/guide/approvals/overview)を通り、Grafanaはサービスアカウントのロールが許可する場合にのみそれを許可します。**Viewer**の場合、Grafanaはそのすべてを拒否します。
 
-| データソース | クエリサポート |
-|-------------|---------------|
-| Prometheus | PromQLクエリ |
-| InfluxDB | InfluxQL / Flux |
-| Elasticsearch | Lucene / KQL |
-| CloudWatch | CloudWatchメトリクス |
-| Loki | LogQLクエリ |
+<ApprovalDefault />
 
----
+この接続には**Allow writes**スイッチがないため、CloudThinker側に独自の読み取り専用設定はありません。書き込みを止めるのはサービスアカウントのGrafanaロールです。変更を望まない限り**Viewer**のままにしてください。
 
 ## トラブルシューティング
 
-<Accordion title="接続に失敗した">
-- Grafana URLがCloudThinkerからアクセス可能であることを確認してください。
-- SSL証明書が有効であることを確認してください。
-- プロキシが接続をブロックしていないことを確認してください。
-- Grafanaが実行中で到達可能であることを確認してください。
+<Accordion title="Connection failed">
+- ネットワーク外のブラウザから**GRAFANA_URL**を開き、インターネットから到達できることを確認するか、ファイアウォールでCloudThinkerを許可してください。
+- TLS証明書が有効で、自己署名ではないことを確認してください。
+- ダッシュボードのパスを含めず、ベースURLだけを使ってください。
 </Accordion>
 
-<Accordion title="認証に失敗した">
-- サービスアカウントトークンが正しいことを確認してください。
-- トークンが期限切れになっていないことを確認してください。
-- サービスアカウントがアクティブであることを確認してください。
-- アカウントにIP制限が設定されていないことを確認してください。
+<Accordion title="Authentication failed または 401">
+- トークンを確認し直してください。文字が欠けていた場合は、もう一度コピーしてください。
+- トークンの期限が切れておらず、**Administration → Users and access → Service accounts**でサービスアカウントが有効になっていることを確認してください。
 </Accordion>
 
-<Accordion title="トークンの期限切れ">
-- **Administration → Service Accounts** に移動します。
-- CloudThinkerのサービスアカウントを選択します。
-- 新しいトークンを生成します。
-- CloudThinkerの接続設定でトークンを更新します。
+<Accordion title="Token expired">
+Grafanaでサービスアカウントを開き、新しいトークンを生成して、接続の**GRAFANA_SERVICE_ACCOUNT_TOKEN**に貼り付けます。Grafanaで古いトークンを削除してください。
 </Accordion>
 
-<Accordion title="ダッシュボードにアクセスできない">
-- サービスアカウントにViewerロールが割り当てられていることを確認してください。
-- フォルダ権限にサービスアカウントが含まれていることを確認してください。
-- ダッシュボードが制限付きフォルダに含まれていないことを確認してください。
+<Accordion title="自分には見えるダッシュボードをエージェントが見つけられない">
+ダッシュボードが、サービスアカウントが閲覧できないフォルダーにあります。そのフォルダーでサービスアカウントに**View**を付与してください。
 </Accordion>
 
----
+<Accordion title="データソースへのクエリが失敗する">
+Exploreで自分がアクセスできても、サービスアカウントがアクセスできるとは限りません。次の2点を確認してください。
+
+- Grafana EnterpriseまたはCloudでは、データソースの**Permissions**タブを開き、サービスアカウント（またはそれが持つロール）がクエリできることを確認します。
+- サービスアカウントとしてテストします: `curl -H "Authorization: Bearer glsa_..." https://<grafana>/api/datasources`。レスポンスにデータソースがなければ、サービスアカウントはそれを使えません。
+
+エージェントがクエリできるのは、Grafana自体がクエリできるデータソースだけです。
+</Accordion>
+
+<Accordion title="Incident、OnCall、Siftのリクエストが失敗する">
+これらはGrafana Cloudの機能です。スタックで有効になっている場合にのみ動作します。Grafana Cloudのアプリの中には独自のアクセスロールを持つものがあるため、**Viewer**で足りない場合は、Grafanaでそのアプリのサービスアカウント向けロール設定を確認してください。
+</Accordion>
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **Viewerロールのみ** — CloudThinkerサービスアカウントにEditorまたはAdminロールを付与しないでください
-- **トークンの有効期限** — 有効期限を設定し、90日ごとにサービスアカウントトークンをローテーションしてください
+- **Viewerのみ**: CloudThinkerのサービスアカウントには**Viewer**を付与し、**Admin**は決して付与しないでください。
+- **期限付きトークン**: すべてのトークンに有効期限を設定し、通常のスケジュールでローテーションしてください。
 
----
-
-## 関連情報
+## 関連
 
 <CardGroup cols={2}>
-  <Card title="Elasticsearch 接続" icon="/images/icons/elasticsearch.svg" href="/ja/guide/connections/elasticsearch">
-    ログデータソースの接続
+  <Card title="Prometheus" icon="/images/icons/prometheus.svg" href="/ja/guide/connections/prometheus">
+    PrometheusがGrafanaの背後にない場合は、直接クエリします。
   </Card>
-  <Card title="AWS 接続" icon="/images/icons/aws.svg" href="/ja/guide/connections/aws">
-    CloudWatchメトリクスの接続
+  <Card title="Webhook integrations" icon="bell" href="/ja/guide/incident/webhook-integrations/overview">
+    GrafanaのアラートをResolveに送り、調査が自動で始まるようにします。
   </Card>
 </CardGroup>

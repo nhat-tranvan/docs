@@ -1,365 +1,270 @@
 ---
-title: Webhooks
-description: "設定可能な Webhook を使って CloudThinker のイベントを外部システムに送信します"
+title: 受信 Webhook
+description: "Automation を実行する、または Resolve にアラートを送る Webhook URL を作成し、認証、テスト、デバッグします。"
 icon: webhook
 ---
 
-Webhook を使うと、CloudThinker がリアルタイムで外部システムにイベントをプッシュでき、自動化・連携・カスタムワークフローを実現できます。
+Webhook は、CloudThinker が発行する URL です。別のシステムがその URL に JSON 本文付きの HTTPS POST を送ると、CloudThinker は [Automation](/guide/automation/automations) を実行するか、リクエストを [Resolve](/ja/guide/incident/overview) のアラートに変換します。
 
-## Webhook の仕組み
+<Note>
+このページの Webhook は受信用です。CloudThinker から自分の HTTPS エンドポイントに署名付きイベントを POST させるには、[Public API](/ja/guide/api/overview) でイベントエンドポイントを作成します: `POST /v1/workspaces/{workspace_id}/events/endpoints`、スコープは `events:endpoints:write` です。`incident.opened`、`investigation.completed`、`fix.proposed`、`approval.requested`、`run.finished` から選択します。各配信には `CloudThinker-Signature: t=<unix>,v1=<hex>` が付きます。これは、エンドポイントの `whsec_` シークレットをキーとした `<t>.<body>` の HMAC-SHA256 です。API では、配信の一覧表示、テスト用 `ping` の送信、配信の再試行、シークレットのローテーションもでき、ローテーション後も古いシークレットは 24 時間有効なままです。結果を人に送るには、[通知](/ja/guide/notifications)、[Slack](/ja/guide/slack-integration)、[Microsoft Teams](/ja/guide/teams-integration) を使ってください。
+</Note>
+
+## Webhook の種類を選ぶ
+
+Webhook には 2 種類あります。作成する場所も、リクエストに対して行うことも異なります。
+
+| 種類 | 作成する場所 | 1 回のリクエストで行うこと | 使う場面 |
+|------|--------------|-----------------------|-------------|
+| **Automation webhook trigger** | Automation のトリガー | その Automation の実行を開始します。リクエスト本文はデータとしてエージェントに届きます。 | デプロイの完了やチケットの起票など、何かが起きたときにエージェントに作業させたい場合。 |
+| **Resolve webhook signal** | **Resolve → Triggers & Outcomes** | [Pulse](/ja/guide/pulse/overview) を通じてアラートを送ります。Pulse はインシデントを開き、根本原因分析（RCA）を開始できます。 | Datadog、Grafana、PagerDuty などの監視ツールからのアラートを調査させたい場合。 |
+
+## 前提条件
+
+- JSON 本文とカスタムヘッダー付きの HTTPS POST リクエストを送信できるシステム。
+- どちらの種類でも、**Admin** のワークスペースロール。Developer と Viewer は Webhook を表示できますが、作成はできません。[Workspace users](/ja/guide/workspace-users) を参照してください。
+- Automation トリガーの場合: 既存の Automation。
+- Resolve webhook の場合: Webhook を追加できるよう、監視ツールの管理者アクセス。
+
+## Automation webhook trigger を作成する
 
 <Steps>
-  <Step title="設定">
-    送信先 URL と受信するイベントを選択して Webhook エンドポイントを作成する
+  <Step title="Automation を開く">
+    **Automations** ページから Automation を開き、**Triggers** セクションを見つけます。
   </Step>
-  <Step title="トリガー">
-    購読したイベントが発生すると、CloudThinker が Webhook ペイロードを準備する
+  <Step title="Webhook トリガーを追加する">
+    **Webhook** を選びます。Automation にすでにトリガーがある場合は、先に **Add another trigger** をクリックしてから **Webhook** を選びます。CloudThinker はすぐにトリガーを作成し、URL、シークレット、そのまま貼り付けられる **Test command** を含む **Webhook trigger added** ダイアログを開きます。
   </Step>
-  <Step title="配信">
-    CloudThinker がイベントデータを含む HTTP POST リクエストをエンドポイントに送信する
-  </Step>
-  <Step title="処理">
-    システムが Webhook を受信・処理し、成功レスポンスを返す
+  <Step title="シークレットをコピーする">
+    **Done** を選択する前に、URL とシークレットをコピーしてください。シークレットは一度しか表示されません。
   </Step>
 </Steps>
 
----
+どちらの種類でも、Webhook URL は次の形になります:
 
-## Webhook の作成
+```text
+https://<CloudThinker API host>/api/v1/webhooks/webhook/<token>/trigger
+```
 
-### コンソールから
+**成功した状態:** トリガーカードに Webhook が表示され、送信した各呼び出しが配信リストに表示されます。
 
-1. **設定 > Webhooks** に移動する
-2. **Webhook を作成** をクリックする
-3. Webhook を設定する：
-   - **名前**：識別しやすい名称
-   - **URL**：エンドポイント URL（HTTPS 必須）
-   - **イベント**：購読するイベントを選択
-   - **シークレット**：検証用の署名シークレット（任意）
-4. 保存してテストする
+<Tip>
+シークレットをなくした場合は、トリガーカードの **Rotate webhook secret** を使ってください。URL は変わりませんが、すべての呼び出し元で新しいシークレットが必要になります。
+</Tip>
 
-### Webhook の設定項目
+Automation 自体のオン/オフスイッチがオンになっていないと、トリガーは実行を開始しません。
 
-| フィールド | 説明 | 必須 |
-|-------|-------------|----------|
-| **名前** | 識別用のわかりやすい名前 | はい |
-| **URL** | イベントを受信する HTTPS エンドポイント | はい |
-| **イベント** | 購読するイベントタイプ | はい |
-| **シークレット** | ペイロード署名用の共有シークレット | 推奨 |
-| **ヘッダー** | 追加するカスタムヘッダー | いいえ |
-| **有効** | Webhook の有効・無効の切り替え | はい |
+## Resolve webhook を作成する
 
----
+<Steps>
+  <Step title="プラットフォームを開く">
+    **Resolve → Triggers & Outcomes** に移動し、Datadog、Grafana、PagerDuty などのツールを選択します。
+  </Step>
+  <Step title="シグナルを追加する">
+    **Signals to Resolve** の下で **Add signal** をクリックします。3 つのステップからなる **Create Webhook** ダイアログが開きます。
+  </Step>
+  <Step title="Basic Info">
+    **Webhook Name** をそのままにするか変更し、必要に応じて **Description** を追加します。**Next** をクリックします。
+  </Step>
+  <Step title="Configure">
+    **Field Mapping** と **Severity Mapping** を確認します。どちらも選んだツールに合わせて事前入力されています。**Next** をクリックします。
+  </Step>
+  <Step title="Advanced">
+    **Auth Method** を選び、**Auto-investigate** を設定します。PagerDuty のプリセットでは、すでに **HMAC Signature** が選ばれ、**HMAC Signature Header** が `X-PagerDuty-Signature` に設定されています。このヘッダーはそのままにしてください。変更すると PagerDuty の署名がチェックに通りません。Auto-investigate がオンの場合は、**Only from a minimum severity** もオンにできます（デフォルトはオフで、オンにすると High から始まります）。これにより、低いアラートで RCA が開始されなくなります。**Create** をクリックします。
+  </Step>
+</Steps>
 
-## イベントタイプ
+**成功した状態:** ダイアログに **Webhook URL**、**Authentication Setup** の下のシークレット、**Integration Examples** が表示されます。ここで URL とシークレットをコピーし、監視ツールに貼り付けてください。
 
-CloudThinker 全体のイベントを購読できます。
+フィールドのマッピング、重大度のマッピング、RCA が開始されるタイミングについては、[Webhook signals](/ja/guide/incident/webhook-integrations/overview) で説明しています。ツールにプリセットがない場合は、[Custom source](/guide/incident/webhook-integrations/custom-source) を使ってください。
 
-### 推奨事項イベント
+## リクエストを認証する
 
-| イベント | トリガー |
-|-------|---------|
-| `recommendation.created` | 新しい推奨事項が生成された |
-| `recommendation.updated` | 推奨事項のステータスが変更された |
-| `recommendation.implemented` | 推奨事項が完了としてマークされた |
-| `recommendation.comment` | 推奨事項にコメントが追加された |
+Automation webhook trigger は常に Bearer トークンを使います。呼び出し元は `Authorization: Bearer <secret>` を送ります。Resolve webhook では **Auth Method** を選べます。
 
-### インシデントイベント
+| Auth Method | 送信側が含めるもの | 使う場面 |
+|---|---|---|
+| **Bearer Token** | `Authorization: Bearer <secret>` | ツールでカスタムヘッダーを追加できる場合。ほとんどのツールでのデフォルトです。 |
+| **HMAC Signature** | **HMAC Signature Header**（デフォルトは `X-Webhook-Signature`）に入れた本文の署名 | PagerDuty のように、ツールが自分で Webhook に署名する場合。PagerDuty のプリセットでは、ヘッダーが自動で `X-PagerDuty-Signature` に設定されます。 |
+| **API Key** | **API Key Header**（デフォルトは `X-Api-Key`）に入れたキー。任意の **Key Prefix** の後に続けます | EventBridge 経由の CloudWatch のように、ツールが API キーヘッダーしかサポートしない場合。 |
+| **No Authentication** | なし | 簡単なテスト専用です。URL を知っている人なら誰でもアラートを送れてしまいます。 |
 
-| イベント | トリガー |
-|-------|---------|
-| `incident.created` | 新しいインシデントが作成された |
-| `incident.updated` | インシデントの詳細が変更された |
-| `incident.resolved` | インシデントが解決済みとしてマークされた |
-| `incident.comment` | インシデントにコメントが追加された |
+HMAC Signature と API Key は Resolve webhook にのみ適用されます。どちらのヘッダー名も **Advanced** ステップで設定します。
 
-### セキュリティイベント
+**Resolve webhook、HMAC Signature。** 自分でリクエストに署名する場合は、生の本文に HMAC-SHA256 で署名し、ダイジェストを `sha256=<hex>` として設定したヘッダー（ここではデフォルト）で送ります:
 
-| イベント | トリガー |
-|-------|---------|
-| `finding.created` | 新しいセキュリティ検出事項が発見された |
-| `finding.resolved` | セキュリティ検出事項が解決された |
-| `compliance.changed` | コンプライアンスステータスが変更された |
+```bash
+BODY='{"title": "High CPU on web-server-01", "alert_type": "critical"}'
+SIGNATURE="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex | awk '{print $2}')"
 
-### タスクイベント
+curl -X POST "$WEBHOOK_URL" \
+  -H "Content-Type: application/json" \
+  -H "X-Webhook-Signature: $SIGNATURE" \
+  -d "$BODY"
+```
 
-| イベント | トリガー |
-|-------|---------|
-| `task.started` | スケジュールされたタスクの実行が開始された |
-| `task.completed` | タスクが正常に完了した |
-| `task.failed` | タスクでエラーが発生した |
+**Resolve webhook、API Key。** 設定したヘッダー（ここではデフォルト）でキーを送ります:
 
-### エージェントイベント
+```bash
+curl -X POST "$WEBHOOK_URL" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: $WEBHOOK_SECRET" \
+  -d '{"title": "High CPU on web-server-01"}'
+```
 
-| イベント | トリガー |
-|-------|---------|
-| `conversation.completed` | エージェントとの会話が終了した |
-| `approval.requested` | エージェントがアクションの承認を要求した |
-| `approval.granted` | ユーザーがエージェントのアクションを承認した |
+## 送信する内容
 
-### リソースイベント
+どちらの種類も同じリクエスト形式を使います。最大 1 MB の JSON オブジェクトを Webhook URL に送ります。
 
-| イベント | トリガー |
-|-------|---------|
-| `resource.discovered` | 新しいクラウドリソースが検出された |
-| `resource.changed` | リソースの設定が変更された |
-| `resource.deleted` | リソースが存在しなくなった |
+### リクエスト
 
----
+| 部分 | Automation トリガー | Resolve webhook |
+| --- | --- | --- |
+| メソッド | `POST` | `POST` |
+| URL | `https://<CloudThinker API host>/api/v1/webhooks/webhook/<token>/trigger` | 同じ形で、Resolve webhook のトークンを使います |
+| `Content-Type` | `application/json` | `application/json` |
+| 認証ヘッダー | `Authorization: Bearer <secret>` | **Auth Method** によって異なります |
+| 本文 | 最大 1 MB の JSON オブジェクト | 最大 1 MB の JSON オブジェクト |
 
-## Webhook ペイロード
+[リクエストを認証する](#リクエストを認証する)の内容に加えて、Resolve webhook のヘッダーの詳細:
 
-各 Webhook には標準化されたペイロードが含まれます。
+- **HMAC Signature:** 値は、シークレットをキーとした生の本文の HMAC-SHA256 を小文字の 16 進数で表したものに `sha256=` を付けたものです。ヘッダーが `X-PagerDuty-Signature` に設定されている場合、CloudThinker は代わりに PagerDuty 独自の形式を読み取ります。カンマ区切りの 1 つ以上の `v1=<hex>` 値で、いずれか 1 つが一致すれば通ります。
+- **API Key:** **Key Prefix** が設定されている場合、ヘッダーの値はそのプレフィックスで始まる必要があります。CloudThinker はプレフィックスと前後の空白を取り除き、残りをシークレットと比較します。
+
+JSON オブジェクトではない本文（配列、文字列、JSON ではないテキスト）は `422` で拒否されます。CloudThinker は冪等性キーを読み取らないため、送信側の再試行は新しい呼び出しとして扱われます。
+
+### 本文: Automation トリガー
+
+どんな JSON オブジェクトでも使えます。本文全体が Automation の指示の後にエージェントに届くため、テンプレートの設定は不要です。エージェントが見るのは最大 50,000 文字までで、それを超える部分は切り捨てられます。本文は常にデータとして扱われ、指示としては扱われないため、呼び出し元がエージェントへの指示内容を変えることはできません。
 
 ```json
 {
-  "id": "evt_abc123",
-  "type": "recommendation.created",
-  "timestamp": "2024-01-15T10:30:00Z",
-  "workspace_id": "ws_xyz789",
-  "data": {
-    "id": "rec_def456",
-    "title": "Right-size EC2 instance i-0abc123",
-    "potential_savings": 150.00,
-    "effort": "low",
-    "risk": "low",
-    "status": "pending"
-  }
+  "message": "Deploy of checkout-api finished",
+  "environment": "production",
+  "commit": "a1b2c3d"
 }
 ```
 
-### ペイロードフィールド
+### 本文: Resolve webhook
 
-| フィールド | 説明 |
-|-------|-------------|
-| `id` | 一意のイベント識別子 |
-| `type` | イベントタイプ（例：`recommendation.created`） |
-| `timestamp` | ISO 8601 タイムスタンプ |
-| `workspace_id` | イベントが発生したワークスペース |
-| `data` | イベント固有のペイロード |
+ツール独自のアラートペイロードをそのまま送ります。Webhook の **Field Mapping** が、`event.data.title` のような JSON パスでその中からフィールドを取り出します。パスの先頭の `$` は無視され、パスは最大 8 セグメントまでです。
 
----
+| マッピングするフィールド | 必須 |
+| --- | --- |
+| Title | はい |
+| Description、Severity、Service、Resource ID、Resource name、Timestamp | いいえ |
 
-## セキュリティ
-
-### 署名検証
-
-Webhook シークレットを設定すると、CloudThinker が各ペイロードに署名します。
-
-```
-X-CloudThinker-Signature: sha256=<signature>
-```
-
-エンドポイントで署名を検証します：
-
-```python
-import hmac
-import hashlib
-
-def verify_signature(payload, signature, secret):
-    expected = hmac.new(
-        secret.encode(),
-        payload.encode(),
-        hashlib.sha256
-    ).hexdigest()
-    return hmac.compare_digest(f"sha256={expected}", signature)
-```
-
-### IP 許可リスト
-
-CloudThinker の Webhook は既知の IP アドレス範囲から発信されます。ファイアウォールルールを設定するための最新の IP リストについては、サポートにお問い合わせください。
-
-### HTTPS のみ
-
-Webhook URL は HTTPS を使用する必要があります。本番環境では自己署名証明書はサポートされていません。
-
----
-
-## 再試行ロジック
-
-CloudThinker は失敗した Webhook 配信を再試行します。
-
-### 再試行スケジュール
-
-| 試行回数 | 遅延 |
-|---------|-------|
-| 1 | 即時 |
-| 2 | 1分後 |
-| 3 | 5分後 |
-| 4 | 30分後 |
-| 5 | 2時間後 |
-| 6 | 8時間後 |
-
-### 成功条件
-
-次の場合に配信が成功とみなされます：
-- HTTP 2xx ステータスコード
-- 30秒以内のレスポンス
-
-### 失敗時の処理
-
-すべての再試行が失敗した場合：
-- イベントは失敗としてマークされる
-- 通知が送信される（設定されている場合）
-- Webhook ログでイベントを確認できる
-
----
-
-## Webhook の管理
-
-### Webhook のテスト
-
-本番稼働前に Webhook 配信をテストします：
-
-1. 設定で Webhook を選択する
-2. **テストイベントを送信** をクリックする
-3. イベントタイプを選択する
-4. 配信ステータスとペイロードを確認する
-
-### ログの確認
-
-Webhook のアクティビティを監視します：
-
-1. **設定 > Webhooks > ログ** に移動する
-2. 配信の試行を確認する
-3. リクエスト/レスポンスの詳細を確認する
-4. ステータス、イベントタイプ、日付でフィルタリングする
-
-### Webhook の一時停止
-
-Webhook を一時的に無効にします：
-
-1. Webhook を選択する
-2. **有効** をオフに切り替える
-3. 一時停止中のイベントはキューに蓄積されません
-
----
-
-## Webhook テンプレート
-
-一般的な連携用のテンプレートを使用します。
-
-### Slack
-
-Slack チャンネルにイベントを投稿する：
+重大度のパスにある値は、Webhook の **Severity Mapping** によって変換されます。最小限のカスタムペイロード:
 
 ```json
 {
-  "url": "https://hooks.slack.com/services/...",
-  "events": ["recommendation.created", "incident.created"],
-  "transform": {
-    "text": "New {{type}}: {{data.title}}"
-  }
+  "title": "High CPU on web-server-01",
+  "alert_type": "critical",
+  "service": "checkout-api"
 }
 ```
 
-### Jira
+### Amazon SNS
 
-CloudThinker イベントから Jira チケットを作成する：
+リクエストに `x-amz-sns-message-type` ヘッダーが含まれている場合、CloudThinker はそれを Amazon SNS として扱います。SNS の署名を確認し、`SubscriptionConfirmation` を自動で確認し、`Notification` を展開して内側のメッセージを本文にします。Webhook の認証は、すべての SNS リクエストにも適用されます。
+
+### レスポンス
+
+認証と検証に通った呼び出しには、次の本文とともに HTTP `200` が返ります:
 
 ```json
-{
-  "url": "https://your-org.atlassian.net/...",
-  "events": ["recommendation.created"],
-  "headers": {
-    "Authorization": "Basic <base64_credentials>"
-  }
-}
+{"success": true, "request_id": "req_..."}
 ```
 
-### PagerDuty
+`200` は、CloudThinker が呼び出しをキューに入れたことを意味します。実行やアラートは少し後に起きるため、結果を確認してください（[curl でテストする](#curl-でテストする)を参照）。呼び出しについてサポートに問い合わせる場合に備えて、`request_id` を保管してください。
 
-PagerDuty インシデントをトリガーする：
+その他の結果は以下のとおりです。認証に通った呼び出しでも、`400`、`413`、`422`、`429` が返ることがあります。
 
-```json
-{
-  "url": "https://events.pagerduty.com/v2/enqueue",
-  "events": ["incident.created"],
-  "headers": {
-    "Content-Type": "application/json"
-  }
-}
+| HTTP | 本文の `detail` | 原因 |
+| --- | --- | --- |
+| `400` | `Webhook is not active` | Webhook がオフになっています |
+| `401` | `Missing Authorization header`、または `Missing <header> header` | 認証ヘッダーがありません |
+| `401` | `Invalid webhook token` | URL のトークンが間違っているか、Webhook が削除されています。どの Webhook が存在するかを誰にも探られないよう、間違ったトークンと削除されたトークンには意図的に同じ応答を返します |
+| `403` | `Invalid bearer token`、`Invalid webhook signature`、`Invalid API key` など | ヘッダーはありますが、シークレットまたは署名が一致しません |
+| `413` | `Request body exceeds 1MB limit` | 本文が 1 MB を超えています |
+| `422` | 検証エラー | 本文が JSON オブジェクトではありません |
+| `429` | レート制限のメッセージ | 呼び出しが多すぎるか、認証の失敗が多すぎます。[レート制限と実行中の Automation](#レート制限と実行中の-automation) を参照してください。`Webhook ingress is busy` という `429` には `Retry-After` ヘッダーが付きます。その秒数が経ってから再試行してください。 |
+
+エラーの本文は `{"detail": "..."}` です。
+
+## curl でテストする
+
+Automation のダイアログの **Test command**、または Resolve のダイアログの **Integration Examples** を使います。最小限の Bearer リクエストは次のようになります:
+
+```bash
+curl -X POST "$WEBHOOK_URL" \
+  -H "Authorization: Bearer $WEBHOOK_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "hello"}'
 ```
 
----
+**期待される結果:** CloudThinker が `{"success": true, "request_id": "req_..."}` とともに `200` を返します。これは配信を証明するだけなので、結果も確認してください。
 
-## ベストプラクティス
+| 種類 | 確認する場所 | 表示されるべきもの |
+|---|---|---|
+| Automation トリガー | トリガーカードの配信リストと、**Automations** ページの **Runs** タブ | **Accepted** から **Processed** になった配信と、**Webhook** というラベルの付いた実行 |
+| Resolve webhook | **Resolve → Signals**、次に **Resolve → Issues** | マッピングしたタイトルのシグナル。Pulse がそれを対応が必要なシグナルを含むクラスターにまとめた場合は、インシデント。[How Pulse works](/ja/guide/pulse/overview#仕組み) を参照してください。 |
+
+Resolve webhook では、通常のアラートと重大なアラートを 1 件ずつ送り、両方の重大度マッピングが機能することを確認してください。
+
+Automation トリガーの配信リストでは、各呼び出しにステータスが付きます:
+
+| ステータス | 意味 | 対処 |
+|---|---|---|
+| **Accepted** | CloudThinker が呼び出しを受信し、キューに入れました。 | 少し待ちます。 |
+| **Processed** | 呼び出しが実行を開始したか、実行のために保留されました。保留中に新しい呼び出しに置き換えられた呼び出しや、30 分経っても待機中の呼び出しは **Processed** のままですが、実行されることはありません。 | **Runs** タブを確認します。実行がない場合は、トリガーカードの注記を読んでください。 |
+| **Rate limited** | 呼び出しが Webhook の 1 時間あたりの上限を超えたため、何も開始されませんでした。 | 送信側の速度を落とすか、イベントをまとめます。 |
+| **Failed** | 呼び出しを処理できませんでした。エラーテキストに理由が示されます。 | 原因を修正して、もう一度送信します。 |
+
+## レート制限と実行中の Automation
+
+各 Webhook には 1 時間あたりの上限があります。Automation トリガーは 1 時間あたり 60 回、Resolve webhook はデフォルトで 1 時間あたり 1,000 回です。上限を超えた呼び出しにも `200` が返りますが何も開始されず、Automation トリガーでは **Rate limited** として表示されます。上限を大きく（10 倍）超えた送信側には `429` が返ります。15 分間に 10 回認証に失敗すると、Webhook はしばらくの間 `429` を返します。送信側がバースト的に送る場合は、イベントを 1 つのリクエストにまとめるか、速度を落としてください。
+
+Automation は一度に 1 つの実行しか行いません。実行中に届いた呼び出しは保留され、CloudThinker は最大 30 分間、1 分ごとに再試行します。すでに実行が進行中の場合、保留された呼び出しの実行は **Runs** タブで **Pending** と表示されます。
+
+<Warning>
+保留される呼び出しはトリガーごとに 1 つだけです。新しい呼び出しが保留中の呼び出しを置き換えるため、それ以前に保留されていた呼び出しは実行されません。すべてのイベントが重要な場合は、1 つのリクエストにまとめてください。
+</Warning>
+
+<Warning>
+10 回続けて実行が失敗すると、CloudThinker は Automation をオフにし、**Automation turned off** 通知を送ります。その後は、原因を修正して再びオンにするまで、Webhook の呼び出しで実行は開始されません。
+</Warning>
+
+## トラブルシューティング
 
 <AccordionGroup>
-  <Accordion title="必ず署名を検証する">
-    Webhook シークレットを使用し、リクエストが CloudThinker から発信されたことを確認するために署名を検証してください。
+  <Accordion title="すべてのリクエストで 401 または 403 になる">
+    `401` は、認証ヘッダーがないか、URL のトークンが間違っていることを意味します。`403` は、ヘッダーはあるがシークレットまたは署名が一致しないことを意味します。Automation トリガーが受け付けるのは `Authorization: Bearer <secret>` だけです。Resolve webhook の場合は、ツール側のヘッダー名とシークレットを **Authentication Setup** と比べてください。15 分間に 10 回失敗すると Webhook はしばらくの間 `429` を返すため、再試行する前にヘッダーを修正してください。シークレットをなくした場合は、トリガーカードの **Rotate webhook secret** を使うか（Automation）、**Resolve → Triggers & Outcomes** を開いてツールを選択し、**Signals to Resolve** の下にある Webhook のメニューを開いて **Regenerate credentials** を選びます（Resolve）。その後、すべての送信側を新しい値に更新してください。
   </Accordion>
-
-  <Accordion title="素早くレスポンスを返す">
-    すぐに 2xx レスポンスを返してから、イベントを非同期で処理してください。処理に時間がかかるとタイムアウトが発生します。
+  <Accordion title="HMAC 署名が一致しない">
+    送信する生の本文のバイト列そのものに署名してください。署名後に JSON を整形し直したりシリアライズし直したりすると、バイト列が変わって署名が壊れます。
   </Accordion>
-
-  <Accordion title="重複を処理する">
-    Webhook の配信が重複することがあります。イベントの `id` を使って受信側で重複排除してください。
+  <Accordion title="413 または大きなペイロードが拒否される">
+    本文が 1 MB を超えています。ドキュメント全体ではなく、短い要約と、エージェントが参照できるリンクや ID を送ってください。
   </Accordion>
-
-  <Accordion title="失敗を監視する">
-    Webhook の失敗に対するアラートを設定してください。イベントの欠落を防ぐため、問題を迅速に調査して修正してください。
+  <Accordion title="200 が返るが Automation が実行されない">
+    トリガーカードで配信を確認してください。**Rate limited** は送信側が速すぎることを意味します。**Failed** にはエラーテキストが表示されます。また、Automation のスイッチがオンになっていることを確認し、実行中のものの後ろで待っている **Pending** の実行がないかも確認してください。実行のない **Processed** の呼び出しは、実行中に保留された後、新しい呼び出しに置き換えられたか、30 分後に破棄されたものです。トリガーカードの注記に、最後の呼び出しで実行が開始されなかった理由が示されます。[レート制限と実行中の Automation](#レート制限と実行中の-automation) を参照してください。
   </Accordion>
-
-  <Accordion title="必要なイベントのみ購読する">
-    必要なイベントのみ購読してください。ノイズと処理オーバーヘッドを削減できます。
+  <Accordion title="200 が返るが Resolve に何も表示されない">
+    Pulse がアラートをノイズとして抑制したか、時間範囲によって隠れている可能性があります。**Resolve → Signals** で時間範囲を広げてください。シグナルがあってもタイトルが空、または重大度が間違っている場合は、**Field Mapping** のパスを修正するか、足りない値を **Severity Mapping** に追加してください。
+  </Accordion>
+  <Accordion title="インシデントは開いたが RCA が開始されない">
+    **Auto-investigate** がオフになっているか、アラートが **Only from a minimum severity**（Webhook の **Advanced** ステップで設定）を下回っているか、Resolve の **AI auto-investigate** スイッチがオフになっています。3 つすべてを確認するか、手動で調査を開始してください。
   </Accordion>
 </AccordionGroup>
-
----
-
-## 連携例
-
-### GitHub Actions
-
-CloudThinker イベントからワークフローをトリガーする：
-
-```yaml
-# .github/workflows/cloudthinker.yml
-on:
-  repository_dispatch:
-    types: [recommendation-created]
-
-jobs:
-  process:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Process recommendation
-        run: |
-          echo "New recommendation: ${{ github.event.client_payload.title }}"
-```
-
-### AWS Lambda
-
-サーバーレス関数で Webhook を処理する：
-
-```python
-def lambda_handler(event, context):
-    body = json.loads(event['body'])
-
-    if body['type'] == 'recommendation.created':
-        # Process new recommendation
-        process_recommendation(body['data'])
-
-    return {'statusCode': 200}
-```
-
----
 
 ## 関連
 
 <CardGroup cols={2}>
-  <Card title="インシデント Webhook" icon="siren-on" href="/ja/guide/incident/webhook-integrations/overview">
-    PagerDuty、Datadog、Prometheus などからの受信 Webhook で RCA を自動トリガーする
+  <Card title="Automations" icon="robot" href="/guide/automation/automations">
+    Webhook の呼び出しで実行される指示を書き、すべての実行を確認します。
   </Card>
-  <Card title="Automations" icon="calendar-check" href="/guide/automation/automations">
-    定期操作のスケジュール設定とイベント駆動ワークフローの作成
-  </Card>
-  <Card title="通知" icon="bell" href="/ja/guide/notifications">
-    推奨事項、インシデント、セキュリティ検出事項のアラートルーティングを設定する
-  </Card>
-  <Card title="自律エージェント" icon="robot" href="/ja/guide/automation/autonomous-agents">
-    手動レビューなしに Webhook イベントに基づいてエージェントが自動的に行動する
+  <Card title="Webhook Signals" icon="bell" href="/ja/guide/incident/webhook-integrations/overview">
+    アラートのフィールドをマッピングし、Resolve が自動で調査するタイミングを選びます。
   </Card>
 </CardGroup>

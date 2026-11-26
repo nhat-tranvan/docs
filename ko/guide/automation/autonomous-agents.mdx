@@ -1,67 +1,200 @@
 ---
 title: 자율 운영
-description: "예약 작업과 Pulse가 자율적으로 실행하는 내용과 Manual 및 Auto 모드가 제어권을 유지하는 방법을 알아보세요"
+description: "아무도 키보드 앞에 없을 때 실행되는 에이전트 작업의 한도를 정하고, 실패하거나 대기하거나 스스로 변경할 때 알림을 받습니다."
 icon: robot
 ---
 
 import AutonomyModes from '/snippets/ko/autonomy-modes.mdx';
 
-CloudThinker 에이전트는 단순히 프롬프트에 응답하는 것이 아닙니다. 인프라를 지속적으로 모니터링하고, 분석하며, 조치를 취합니다. 이 페이지는 무엇이 자율적으로 실행되는지, 그리고 두 가지 자율 모드가 모든 조치를 귀하의 통제 하에 유지하는 방법을 설명합니다.
+자율 운영은 누군가 프롬프트를 입력하지 않아도 시작되는 에이전트 실행입니다. 트리거로 실행되는 자동화와, 모니터링 경보를 분류하는 Signals가 여기에 해당합니다. 이를 믿고 맡기기 전에 무인 실행용 Approval mode, 반복적인 쓰기를 위한 Rules, 사람이 필요한 모든 것에 대한 알림, 크레딧 한도를 설정하세요.
 
-## 자율 운영이 필요한 이유
+## 실시간 프롬프트 없이 실행되는 것
 
-- **반복 작업이 알아서 처리됩니다.** 예약 작업은 누군가 기억하지 않아도 일일 비용 점검, 주간 감사, 월간 보고서를 처리합니다.
-- **노이즈가 신호가 됩니다.** Pulse는 중복 모니터링 이벤트를 억제하고 나머지를 순위별로 정렬하여 온콜 엔지니어가 실제로 처리해야 할 클러스터를 볼 수 있게 합니다.
-- **리스크 경계를 직접 설정합니다.** 규칙과 Approval mode가 에이전트가 스스로 할 수 있는 일을 결정합니다. 예약 실행과 실시간 채팅 모두 같습니다.
+| 화면 | 스스로 하는 일 | 설정 위치 |
+|---------|-------------------------|-----------------|
+| **Automations** | 일정, 웹훅 호출, 저장소 이벤트, 또는 에이전트가 작성한 프로브 스크립트에 따라 저장된 지침을 실행합니다 | [Automations](/guide/automation/automations) |
+| **Signals** (Pulse) | 들어오는 경보를 클러스터로 묶고, 노이즈를 버리고, 조치가 필요한 경보를 분류 단계로 넘깁니다. 넘겨진 조사는 [Resolve](/ko/guide/incident/overview)(CloudThinker의 인시던트 조사 제품)로 실행되므로, 그 쓰기는 [Approval mode](/guide/approvals/approval-mode)의 **Resolve** 실행 유형을 따릅니다. | [Signals](/ko/guide/pulse/overview) |
 
-## 자율 모델
+모든 자동화 실행은 대화를 보존하므로, 어떤 실행이든 열어서 에이전트가 무엇을 확인하고 무엇을 했는지 읽을 수 있습니다. 채팅 응답이 자동화 제안으로 끝날 수도 있지만, Admin이 **Enable**을 선택하기 전까지는 아무것도 실행되지 않습니다.
 
-모든 에이전트 쓰기 작업은 정확히 두 가지 모드 중 하나로 실행됩니다:
+## 사전 요구 사항
+
+- 자동화에 필요한 Team 플랜 이상. [가격](/ko/guide/billing/pricing)을 참고하세요.
+- 워크스페이스 Admin 역할. Approval mode, Rules, 자동화는 Admin만 변경할 수 있습니다.
+- 5단계의 워크스페이스 크레딧 한도를 위한 조직 Owner 또는 Admin.
+
+<Note>
+조직이 자동화가 없는 플랜으로 바뀌면, 각 자동화는 다음 실행 시 꺼지고 **Automation turned off**를 보냅니다.
+</Note>
+
+첫 자동화가 무인으로 실행되기 전에, 또는 [Automation quickstart](/guide/automation/quickstart)로 자동화를 만든 직후에 이 한도를 설정하세요.
+
+## 쓰기가 결정되는 방식
+
+읽기는 항상 실행됩니다. 모든 쓰기는 어느 화면에서 시작되었든 [승인](/guide/approvals/overview)을 거칩니다.
+
+| 에이전트가 하려는 일 | 결정하는 것 |
+|--------------------|--------------|
+| 데이터 읽기 | 없음. 실행됩니다. |
+| Rule이 다루는 쓰기 | Rule: **Allow**는 실행하고, **Ask first**는 사람을 기다리며, **Deny**는 거부합니다 |
+| 어떤 Rule도 다루지 않는 쓰기 | 실행의 Approval mode |
+| **Always blocked** 호출 | 없음. 절대 실행되지 않습니다. [Always blocked](/guide/approvals/overview#how-a-write-is-decided)는 어떤 Rule이나 사람도 허용할 수 없는 CloudThinker 내장 호출 목록으로, CloudTrail 로깅 중지, AWS 계정 폐쇄, `kube-system` 네임스페이스 삭제 등이 있습니다. |
+
+여러 Rule이 하나의 쓰기에 일치하면 **Deny**가 **Ask first**보다 우선하고, **Ask first**가 **Allow**보다 우선합니다.
+
+모드는 **Manual**과 **Auto** 두 가지입니다.
 
 <AutonomyModes />
 
-읽기 작업은 승인이 필요하지 않습니다. 각 쓰기는 다음 순서로 결정됩니다:
+자동화가 사용할 수 있는 모든 선택지(Auto 네 가지와 Manual):
 
-- [규칙](/guide/approvals/rules)이 먼저 쓰기를 허용, 확인 요청, 또는 거부합니다.
-- 규칙이 없으면 [Approval mode](/guide/approvals/approval-mode)가 결정합니다. **Manual**은 사람을 기다립니다. Auto 모드에서는 AI 판단이 쓰기를 허용할 수 있고, 그 외에는 묻거나 거부합니다.
-- [승인자](/guide/approvals/approvers)가 대기 중인 쓰기를 결정합니다.
+| 선택지 | 어떤 Rule도 다루지 않는 쓰기 | 사용 시점 |
+|--------|------------------------|----------|
+| **Auto · Rules + AI · Refuse** | AI 판단이 허용할 수 있으며, 그렇지 않으면 거부 | 무인 실행. 자동화의 기본값입니다. 답할 사람이 온라인에 없을 수 있으므로, AI 판단이 허용하지 않는 쓰기는 대기 상태로 남지 않고 거부됩니다. |
+| **Auto · Rules + AI · Ask me** | AI 판단이 허용할 수 있으며, 그렇지 않으면 사람을 기다림 | 누군가 알림을 지켜보며, 쓰기가 실패하기보다 대기하기를 원할 때 |
+| **Auto · Rules · Refuse** | 거부 | Rules가 다루는 좁고 알려진 쓰기 집합만 있는 무인 실행 |
+| **Auto · Rules · Ask me** | 사람을 기다림 | 수락된 Rules만 혼자 쓰기를 실행해야 할 때 |
+| **Manual** | 사람을 기다리며, Rule이 허용하는 모든 쓰기도 마찬가지 | 사람이 모든 쓰기를 확인해야 할 때 |
 
-자동화는 기본으로 **Auto · Rules + AI · Refuse**를 사용합니다. 응답할 사람이 없을 수 있기 때문입니다.
+<Note>
+모든 Auto 선택지에서 일치하는 Rule이 먼저 결정합니다. 위의 선택지는 어떤 Rule과도 일치하지 않는 쓰기만 결정합니다. [Rules](/guide/approvals/rules)를 참고하세요.
+</Note>
 
-규칙은 워크스페이스에 Rule enforcement가 켜져 있을 때만 결정합니다. 기본값은 꺼짐이며 CloudThinker가 워크스페이스별로 켭니다. **Approvals**의 **Rules** 단계에 **In preview**가 표시되는 동안에는 규칙이 내릴 판단만 기록하고, 각 쓰기는 Approval mode가 단독으로 결정합니다. [규칙](/guide/approvals/rules#troubleshooting)을 참조하세요.
+## 무인 실행 알림
 
-<Tip>
-자동화가 자주 하는 쓰기에는 [규칙](/guide/approvals/rules)을 수락하세요. 규칙은 모든 모드에서 같게 결정하므로, 예약 실행이 AI 판단에 의존하지 않습니다.
-</Tip>
+| 알림 | 전송 시점 |
+|--------------|-----------|
+| **Agent approvals** | 쓰기가 사람을 기다릴 때, 그리고 승인되거나 거부될 때 |
+| **Automation run failed** | 성공 후 처음으로 실행이 실패할 때 |
+| **Automation turned off** | 자동화가 10회 연속 실패 후 멈출 때, 또는 자동화가 포함되지 않은 플랜에서 실행을 시도할 때 |
+| **Automation resource missing** | 필요한 것이 삭제되어 실행을 시작할 수 없을 때 |
+| **Watched condition met** | 에이전트의 제안 카드로 만든 자동화가 카드의 감시 조건(눈 아이콘 옆의 줄)을 충족하는 실행을 마칠 때. 에이전트가 아니라 CloudThinker가 보냅니다. |
+| **Agent reduced its monitoring** | 무인 실행이 자신의 트리거를 일시 중지하거나 제거했을 때, 또는 프로브 확인 빈도를 낮췄을 때 |
 
-## 자율적으로 실행되는 항목
+**Agent alerts**는 다른 행으로, 에이전트가 발생시킨 모든 경보를 심각도로 필터링합니다. 지침에 "…하면 경보를 발생시켜라"가 있을 때 사용하세요. **Watched condition met**은 에이전트가 제안한 후속 조치만 다룹니다.
 
-두 가지 서페이스가 귀하의 프롬프트 없이 작업합니다. 각각 별도 페이지에 문서화되어 있으니 해당 페이지에서 구성하세요.
+<Warning>
+**Automation run failed**는 성공 후 첫 실패 시 한 번만 발생합니다. 두 번째부터 아홉 번째 실패까지는 아무것도 보내지 않으며, 열 번째에 **Automation turned off**가 발생합니다. 이를 잡으려면:
 
-| 서페이스 | 자율적으로 수행하는 작업 | 자세히 보기 |
-|---------|----------------------|------------|
-| **Automations** | 일일, 주간, 월간 일정으로 에이전트 프롬프트를 실행 — 비용 분석, 보안 감사, 경영진 보고서 | [Automations](/guide/automation/automations) |
-| **Pulse** | CloudTrail, GuardDuty, Datadog 같은 소스에서 이벤트를 수집하고, 노이즈를 억제하며, [인시던트](/ko/guide/incident/overview)로 에스컬레이션할 수 있는 순위별 클러스터를 표시 | [Pulse 작동 방식](/ko/guide/pulse/overview) |
+- 매일 **Automations**의 **Today** 탭을 확인하고, 자동화 페이지를 열어 실행과 상태를 확인하세요.
+- 지침에 "완료할 수 없으면 이유를 담아 높은 심각도의 경보를 발생시켜라"를 추가하세요. 에이전트가 경보를 발생시킬 수 있을 만큼 진행될 때만 도움이 됩니다.
+</Warning>
 
-어떤 서페이스가 작업을 트리거하든 동일한 규칙이 적용됩니다. 각 쓰기 작업은 자율 설정에 따라 승인을 기다리거나 실행 후 보고합니다.
+## 한도 설정
 
-## 정보 유지
+<Steps>
+  <Step title="모든 자동화의 모드 선택">
+    **Settings → Workspace → Autonomy → Rules**를 열고 **When no Rule matches** 섹션으로 이동합니다. 실행 유형 목록에서 **Automations**를 찾습니다. 기본값을 유지하거나 **Override**를 선택하고 다른 모드를 고르세요. 재정의를 취소하려면 **Reset**을 선택합니다.
 
-모든 자율 실행은 워크스페이스에 기록되며, [알림](/ko/guide/notifications)을 통해 탐지 결과, 오류, 승인 요청이 Slack, Teams 또는 이메일로 전달됩니다. 정기적으로 활동을 검토하고 패턴이 나타나면 자율성을 조정하세요.
+    누군가 알림을 지켜보고 쓰기가 실패하기보다 대기하기를 원한다면 **Auto · Rules + AI · Ask me**를 선택하세요.
 
-## 관련 항목
+    Resolve를 사용한다면 **Resolve** 행도 같은 방식으로 설정하세요. Signals가 넘긴 조사는 이 행을 따릅니다.
+
+    **성공 상태:** **Automations** 행(변경했다면 **Resolve** 행도)에 선택한 모드가 표시됩니다.
+  </Step>
+  <Step title="반복되는 쓰기마다 Rule 수락">
+    자동화가 매 실행마다 하는 모든 쓰기에 대해 **Allow** Rule을 하나씩 수락하세요. Rule이 그 쓰기를 먼저 결정하고, 1단계의 모드는 어떤 Rule과도 일치하지 않는 쓰기만 처리합니다.
+
+    Rule은 두 가지 방법으로 추가합니다.
+
+    - Rules 페이지의 **Needs your review**에서 **제안 수락**. 제안은 **Find rules**(CloudThinker가 연결과 승인 기록을 읽고 Rules를 제안하는 점검 채팅) 또는 Rule을 제안한 에이전트에서 나옵니다.
+    - 채팅에 `/creating-policy`를 입력하고 쓰기를 설명하여 **직접 요청**. 예: "Allow posting pull request comments on the github-acme connection from automations". CloudThinker가 연결의 카탈로그에서 작업 이름을 고릅니다.
+
+    | 필드 | 설정값 |
+    |-------|-----------|
+    | **Effect** | **Allow** |
+    | **Operations** | 자동화가 하는 쓰기 |
+    | **Connections** | 쓰기 대상 연결 |
+    | **Runs from** | **Automations** |
+
+    Rule은 모든 Auto 선택지에서 같은 방식으로 결정하므로, 야간 실행이 더 이상 AI 판단에 의존하지 않습니다. [Rules](/guide/approvals/rules)를 참고하세요.
+
+    **성공 상태:** Rule이 **Allow**와 **Automations**로 설정된 **Runs from**과 함께 **Active** 탭에 있습니다.
+  </Step>
+  <Step title="필요하면 자동화 하나의 모드 설정">
+    자동화를 열고 지침 아래 모델 선택기 옆의 **Approval** 선택기를 사용합니다. **Default**로 표시된 옵션은 **Automations** 실행 유형을 따릅니다. 다른 옵션을 고르면 이 자동화에만 재정의됩니다.
+
+    **성공 상태:** 선택기에 고른 모드가 표시됩니다.
+
+    <Warning>
+    가장 구체적인 모드가 우선합니다. 이 자동화의 모드, 그다음 **Automations** 실행 유형, 그다음 워크스페이스 모드 순입니다. 더 구체적인 모드가 더 느슨해도 마찬가지입니다. Admin만 변경할 수 있으며, 변경은 [감사 로그](/guide/security/audit-logs)에 자동화 업데이트로 기록됩니다.
+    </Warning>
+  </Step>
+  <Step title="사람이 필요한 알림 라우팅">
+    **Settings → Workspace → Notifications**로 이동합니다. 페이지 상단의 이벤트 표에서 **Agents & Tasks**를 열고, 위의 [무인 실행 알림](#무인-실행-알림)에 있는 이벤트에 대해 채널을 켭니다. 에이전트가 발생시키는 경보는 별도 행인 **Alerts** 아래 **Agent alerts**입니다. [알림](/ko/guide/notifications)을 참고하세요.
+
+    **성공 상태:** 각 이벤트에 최소 하나의 채널이 켜져 있습니다.
+  </Step>
+  <Step title="워크스페이스 크레딧 한도 설정">
+    자동화별 크레딧 상한은 없으므로, 워크스페이스 [크레딧 한도](/guide/billing/credit-limits)가 폭주하는 트리거에 대한 안전장치입니다. Scale 또는 Enterprise에서 조직 Owner 또는 Admin이 **Settings → Organization → Billing → Credit limits**에서 설정합니다. 하나를 고르세요.
+
+    - **Throttle**: 한도에 도달하면 워크스페이스는 Light 채팅에만 쓸 수 있는 무료 일일 크레딧만 사용할 수 있습니다. 자동화 실행은 Pro 또는 Ultra를 사용하므로, 주기가 재설정되거나 한도를 올릴 때까지 새 실행을 시작할 수 없습니다. 한도는 실행 시작 시 확인되므로 이미 진행 중인 실행은 끝까지 실행됩니다.
+    - **Notify only**: Owner에게 경보를 보내고 계속 진행합니다.
+
+    Team에는 크레딧 한도가 없습니다. 대신 [사용량](/ko/guide/billing/usage)을 지켜보고, 프로브 간격을 15분 이상으로 유지하고, 저장소 트리거를 브랜치와 액션으로 필터링하세요.
+
+    **성공 상태:** 워크스페이스의 **Usage / limit** 열에 **Unlimited**가 아닌 크레딧 금액이 표시됩니다.
+  </Step>
+</Steps>
+
+## 무인 실행이 스스로 변경할 수 있는 것
+
+자동화를 실행하는 에이전트는 그 자동화의 트리거를 관리할 수 있습니다. 예를 들어 인시던트가 종료되면 프로브를 제거합니다. 한도는 다음과 같습니다.
+
+- **자신의 자동화만.** 무인 실행은 다른 자동화를 편집할 수 없습니다.
+- **완화는 보고됩니다.** 자동화를 끄거나, 트리거를 일시 중지 또는 제거하거나, 프로브 확인 빈도를 낮추면 소유자에게 **Automation turned off** 또는 **Agent reduced its monitoring**이 전송됩니다. 중지되면 "Stopped by the agent: the incident is closed"처럼 자동화에 이유가 표시됩니다.
+- **추가는 보고되지 않습니다.** 에이전트는 알림 없이 프로브나 저장소 트리거를 추가하거나 프로브 확인 빈도를 높일 수 있습니다. 트리거가 늘면 실행과 크레딧도 늘 수 있습니다. 시크릿을 사람에게 보여 줘야 하므로 웹훅 트리거는 추가할 수 없습니다.
+- **모든 변경은 기록됩니다.** 에이전트를 행위자로 하여 [감사 로그](/guide/security/audit-logs)에 기록됩니다. 에이전트가 트리거를 추가하는 것을 막는 설정은 없으므로, 매주 검토하세요. **Actor**를 **Agent**로, **Category**를 **Task**로 필터링합니다. 감사 로그는 Scale과 Enterprise에서 제공됩니다.
+
+자동화별 크레딧 상한이나 일일 실행 상한은 없습니다. 한도는 [Automations](/guide/automation/automations)의 웹훅 및 프로브 한도와 워크스페이스 크레딧 한도(위 5단계)이며, 크레딧 한도는 에이전트가 추가한 트리거가 쓸 수 있는 양도 제한합니다. 기능별 지출은 [사용량](/ko/guide/billing/usage)에서 확인하세요.
+
+## 한 번에 모두 중지
+
+모든 자동화를 일시 중지하는 스위치는 없습니다. 인시던트나 잘못된 배포 중에는:
+
+- **Automations**에서 각 자동화 카드의 스위치로 자동화를 끕니다.
+- 실행이 계속 읽기를 하는 동안 모든 쓰기가 사람을 기다리게 하려면 **Automations** 실행 유형을 **Manual**로 설정합니다. 자체 **Approval** 설정이 있는 자동화는 그 설정을 유지하므로 그것도 확인하세요.
+- 이미 진행 중인 실행은 스위치로 멈추지 않고 끝까지 실행됩니다. **Required Approval**에서 대기 중인 쓰기는 그대로 남으므로, 자동화 페이지에서 실행을 열고 **Decline**을 선택하세요.
+
+## 소유권과 퇴사 처리
+
+소유자는 자동화를 만든 사람입니다. 소유자가 워크스페이스 접근 권한을 잃으면 그 자동화는 꺼지고 "Its owner no longer has access to this workspace."가 표시됩니다. 그러면 워크스페이스 Admin이 자동화 페이지의 해당 안내에서 **Take ownership**을 선택할 수 있습니다. 소유권은 미리 옮길 수 없으며, 소유자가 접근 권한을 잃은 뒤에만 옮길 수 있습니다. 누군가 다시 켤 때까지 자동화는 꺼진 상태로 유지됩니다. Automations 페이지에는 각 자동화의 소유자가 표시되지 않으므로, 누가 무엇을 만들었는지 별도 목록을 유지하고 퇴사 체크리스트에 추가하세요. 그러면 누군가 같은 날 소유권을 가져와 다시 켤 수 있습니다.
+
+## 예시
+
+- **읽기 전용 일일 보고서.** 자동화가 매일 아침 비용을 요약합니다. 읽기만 하므로 승인이 필요 없고 아무도 깨우지 않습니다. 보고서는 실행의 대화에 남아 있습니다.
+- **새 풀 리퀘스트마다 댓글 달기.** 저장소 트리거가 **Opened**에서 발생하고, 실행이 댓글을 게시해야 합니다. `/creating-policy`로 Allow Rule을 요청하고(2단계) 수락하면 매번 댓글이 게시됩니다. Rule이 없으면 AI 판단에 의존하며, AI 판단이 허용하지 않는 것은 거부되므로 매 실행마다 원하는 쓰기에는 이에 의존하지 마세요.
+
+## 문제 해결
+
+<AccordionGroup>
+  <Accordion title="예약 실행이 묻지 않고 쓰기를 거부했습니다">
+    자동화의 기본값은 **Auto · Rules + AI · Refuse**입니다. 해당 쓰기에 대해 **Allow** Rule을 수락하거나, 자동화 또는 **Automations** 실행 유형을 **Ask me** 선택지로 설정하세요.
+  </Accordion>
+  <Accordion title="실행이 Required Approval에 머물러 있습니다">
+    쓰기가 사람을 기다리고 있습니다. 자동화 페이지에서 실행의 대화를 열고 **Approve** 또는 **Decline**을 선택하세요. 다음 요청이 전달되도록 **Agent approvals**를 켜세요.
+  </Accordion>
+  <Accordion title="Allow Rule이 있는데 쓰기가 실행되지 않았습니다">
+    먼저 모드를 확인하세요. **Manual**은 Allow Rule이 다루는 쓰기라도 모든 쓰기 전에 묻습니다. 다음으로 **Runs from**에 **Automations**가 포함되어 있는지, Rule이 올바른 연결을 지정하는지 확인하세요. 마지막으로 같은 쓰기에 일치하는 **Deny** 또는 **Ask first** Rule이 있는지 찾으세요. 그 Rule이 Allow보다 우선합니다.
+  </Accordion>
+  <Accordion title="자동화가 스스로 꺼졌습니다">
+    자동화를 열어 이유를 확인하세요. 10회 연속 실패, 에이전트에 의한 중지, 소유자의 접근 권한 상실이 각각 자동화를 끕니다. 원인을 고치고 **Run now**로 확인한 뒤 다시 켜세요.
+  </Accordion>
+</AccordionGroup>
+
+## 다음 단계
 
 <CardGroup cols={2}>
-  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
-    규칙, 모드, 승인자가 각 쓰기를 결정하는 방식
+  <Card title="Automation 빠른 시작" icon="rocket" href="/guide/automation/quickstart">
+    Slack으로 경보를 보내는 일일 비용 이상 확인을 만듭니다
   </Card>
   <Card title="Approval mode" icon="bolt" href="/guide/approvals/approval-mode">
-    워크스페이스, 실행 유형, 또는 한 자동화의 Manual 또는 Auto 선택
+    모든 Auto 선택지와 실행이 사용하는 모드를 확인합니다
   </Card>
-  <Card title="Automations" icon="calendar-check" href="/guide/automation/automations">
-    에이전트 프롬프트를 일일, 주간, 월간으로 예약
+  <Card title="Approval Rules" icon="list-check" href="/guide/approvals/rules">
+    에이전트가 작업하며 제안하는 Rules를 검토하고 수락합니다
   </Card>
   <Card title="Pulse" icon="wave-pulse" href="/ko/guide/pulse/overview">
-    중복 이벤트를 억제하고 우선순위가 지정된 신호 클러스터 표시
+    경보 폭주를 순위가 매겨진 클러스터로 바꿉니다
   </Card>
 </CardGroup>

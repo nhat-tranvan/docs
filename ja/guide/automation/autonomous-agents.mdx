@@ -1,63 +1,200 @@
 ---
 title: 自律オペレーション
-description: "スケジュールタスクと Pulse が自律実行する内容と、Manual および Auto モードによる制御方法を説明します。"
+description: "誰もキーボードの前にいない状態で動くエージェント作業の上限を設定し、失敗したとき、待機しているとき、自身を変更したときに通知を受け取ります。"
 icon: robot
 ---
 
 import AutonomyModes from '/snippets/ja/autonomy-modes.mdx';
 
-CloudThinker エージェントはプロンプトへの返答にとどまりません — インフラを継続的に監視・分析し、行動します。このページでは自律的に実行される内容と、2 つの自律モードがすべてのアクションをあなたの管理下に置く仕組みを説明します。
+自律オペレーションとは、誰もプロンプトを入力せずに始まるエージェントの実行です。トリガーで起動する Automations と、監視アラートを振り分ける Signals がこれにあたります。これらに頼る前に、無人実行の Approval mode、定型的な書き込みの Rules、人の対応が必要なことの通知、クレジット上限を設定してください。
 
-## 自律オペレーションの理由
+## プロンプトなしで実行されるもの
 
-- **定型作業が自動化されます。** スケジュールタスクが、誰かが覚えておく必要なく、日次コストチェック、週次監査、月次レポートを処理します。
-- **ノイズがシグナルになります。** Pulse は重複した監視イベントを抑制して残りをランク付けするため、オンコールエンジニアは対応する価値のあるクラスターを確認できます。
-- **リスク境界はあなたが設定します。** すべての書き込みアクションはあなたの Manual または Auto 設定に従います — エージェントがあなたの許可なく権限を得ることはありません。
+| サーフェス | 自律的に行うこと | 設定場所 |
+|---------|-------------------------|-----------------|
+| **Automations** | 保存した指示を、スケジュール、Webhook 呼び出し、リポジトリイベント、またはエージェントが書いたプローブスクリプトで実行します | [Automations](/guide/automation/automations) |
+| **Signals**（Pulse） | 受信したアラートをクラスターにまとめ、ノイズを除き、対応が必要なものをトリアージに渡します。引き渡された調査は [Resolve](/ja/guide/incident/overview)（CloudThinker のインシデント調査プロダクト）として実行されるため、その書き込みは [Approval mode](/guide/approvals/approval-mode) の **Resolve** 実行タイプに従います。 | [Signals](/ja/guide/pulse/overview) |
 
-## 自律性モデル
+すべての Automation の実行は会話を保持するため、どの実行を開いても、エージェントが何を確認し何をしたかを読めます。チャットの返答の最後に Automation の提案が付くこともありますが、Admin が **Enable** を選ぶまで何も実行されません。
 
-すべてのエージェント書き込みアクションは、次の 2 つのモードのいずれか 1 つで実行されます：
+## 前提条件
+
+- Team プラン以上（Automations に必要です）。[料金](/ja/guide/billing/pricing)を参照してください。
+- ワークスペースの Admin ロール。Approval mode、Rules、Automations を変更できるのは Admin だけです。
+- 手順 5 のワークスペースのクレジット上限のために、組織の Owner または Admin。
+
+<Note>
+組織が Automations を含まないプランに移行すると、各 Automation は次回の実行時にオフになり、**Automation turned off** を送信します。
+</Note>
+
+これらの上限は、最初の Automation が無人で実行される前、または [Automation クイックスタート](/guide/automation/quickstart)で作成した直後に設定してください。
+
+## 書き込みの判断方法
+
+読み取りは常に実行されます。すべての書き込みは、どのサーフェスから始まったかに関係なく [Approvals](/guide/approvals/overview) を通ります。
+
+| エージェントがしたいこと | 判断するもの |
+|--------------------|--------------|
+| データの読み取り | なし。実行されます。 |
+| Rule の対象となる書き込み | Rule：**Allow** は実行、**Ask first** は人の判断を待ち、**Deny** は拒否します |
+| どの Rule の対象でもない書き込み | 実行の Approval mode |
+| **Always blocked** の呼び出し | なし。決して実行されません。[Always blocked](/guide/approvals/overview#how-a-write-is-decided) は、どの Rule や人も許可できない CloudThinker 組み込みの呼び出しリストで、CloudTrail ログの停止、AWS アカウントの閉鎖、`kube-system` 名前空間の削除などが含まれます。 |
+
+複数の Rule が 1 つの書き込みに一致する場合、**Deny** は **Ask first** に優先し、**Ask first** は **Allow** に優先します。
+
+モードは **Manual** と **Auto** の 2 つです。
 
 <AutonomyModes />
 
-読み取りオペレーションは承認を必要としません。各書き込みは、まず [Rules](/guide/approvals/rules) が判断し、次に [Approval mode](/guide/approvals/approval-mode) が判断します。
+Automation が使えるすべての選択肢（Auto の 4 つと Manual）:
 
-Automations のデフォルトは **Auto · Rules + AI · Refuse** です。応答できる人がいない場合があるためです。すべての Automations、または 1 つの Automation のモードは [Approval mode](/guide/approvals/approval-mode) ページで変更できます。
+| 選択肢 | どの Rule の対象でもない書き込み | 使う場面 |
+|--------|------------------------|----------|
+| **Auto · Rules + AI · Refuse** | AI の判断で許可される場合があり、そうでなければ拒否 | 無人実行。Automations の組み込みデフォルトです。応答できる人がオンラインにいない場合があるため、AI の判断で許可されない書き込みは待機させず拒否します。 |
+| **Auto · Rules + AI · Ask me** | AI の判断で許可される場合があり、そうでなければ人の判断を待つ | 誰かが通知を見ていて、書き込みを失敗させるより待たせたい場合 |
+| **Auto · Rules · Refuse** | 拒否 | Rules でカバーされた、限定的で既知の書き込みだけを行う無人実行 |
+| **Auto · Rules · Ask me** | 人の判断を待つ | 承認済みの Rules だけに書き込みを単独で実行させたい場合 |
+| **Manual** | 人の判断を待つ。Rule が許可する書き込みもすべて同様 | すべての書き込みを人が確認する必要がある場合 |
 
-Rule が判断するのは、ワークスペースで Rule enforcement が有効になっている場合だけです。既定では無効で、CloudThinker がワークスペースごとに有効化します。**Approvals** の **Rules** ステップに **In preview** と表示されている間は、Rule は下すはずの判断を記録するだけで、各書き込みは Approval mode のみが判断します。[Rules](/guide/approvals/rules#troubleshooting) を参照してください。
+<Note>
+どの Auto の選択肢でも、一致する Rule が最初に判断します。上の選択肢が判断するのは、どの Rule にも一致しない書き込みだけです。[Rules](/guide/approvals/rules) を参照してください。
+</Note>
 
-<Tip>
-Automations がよく行う書き込みには [Rules](/guide/approvals/rules) を承認しておきましょう。Rule はどのモードでも同じように判断するため、スケジュール実行が AI の判断に左右されません。
-</Tip>
+## 無人実行の通知
 
-## 自律的に実行されること
+| 通知 | 送信されるタイミング |
+|--------------|-----------|
+| **Agent approvals** | 書き込みが人の判断を待っているとき、およびそれが承認または却下されたとき |
+| **Automation run failed** | 成功のあと、初めて実行が失敗したとき |
+| **Automation turned off** | 10 回連続で実行が失敗して Automation が停止したとき、または Automations を含まないプランで実行しようとしたとき |
+| **Automation resource missing** | 必要なものが削除されていて実行を開始できないとき |
+| **Watched condition met** | エージェントの提案カードから作成された Automation が、カードの監視条件（目のアイコンの横の行）を満たす実行を終えたとき。エージェントではなく CloudThinker が送信します。 |
+| **Agent reduced its monitoring** | 無人実行が自身のトリガーの 1 つを一時停止または削除したとき、またはプローブのチェック頻度を下げたとき |
 
-2 つのサーフェスがプロンプトなしで動作します。それぞれ専用ページにドキュメントがあります — そちらで設定してください。
+**Agent alerts** は別の行で、エージェントが発するあらゆるアラートを重大度でフィルタリングします。指示に「…ならアラートを出す」と書く場合に使います。**Watched condition met** は、エージェントが提案したフォローアップだけを対象とします。
 
-| サーフェス | 自律的に行うこと | 詳細 |
-|---------|------------------------|------------|
-| **Automations** | エージェントプロンプトを日次、週次、月次スケジュールで実行 — コスト分析、セキュリティ監査、エグゼクティブレポート | [Automations](/guide/automation/automations) |
-| **Pulse** | CloudTrail、GuardDuty、Datadog などのソースからイベントを取り込み、ノイズを抑制し、[インシデント](/ja/guide/incident/overview)にエスカレートできるランク付きクラスターを表面化する | [Pulse の仕組み](/ja/guide/pulse/overview) |
+<Warning>
+**Automation run failed** は、成功のあとの最初の失敗で 1 回だけ発火します。2 回目から 9 回目の失敗では何も送信されず、10 回目で **Automation turned off** が送られます。これらを把握するには:
 
-どのサーフェスが作業をトリガーしても、同じルールが適用されます。各書き込みアクションは自律性設定に従って、承認を待つか、実行して報告します。
+- **Automations** の **Today** タブを毎日確認し、Automation のページを開いて実行とそのステータスを確認します。
+- 指示に「完了できない場合は、その理由を書いた重大度の高いアラートを出すこと」を加えます。これは、エージェントがアラートを出せるところまで進んだ場合にのみ役立ちます。
+</Warning>
 
-## 常に把握する
+## 上限を設定する
 
-すべての自律実行はワークスペースに記録され、[通知](/ja/guide/notifications)が Slack、Teams、またはメールに検出結果、エラー、承認リクエストを届けます。定期的にアクティビティをレビューし、パターンが見えてきたら自律性を強化または緩和してください。
+<Steps>
+  <Step title="すべての Automations のモードを選ぶ">
+    **Settings → Workspace → Autonomy → Rules** を開き、**When no Rule matches** セクションに移動します。実行タイプの一覧で **Automations** を探します。組み込みのデフォルトのままにするか、**Override** を選んで別のモードを選びます。上書きを元に戻すには **Reset** を選びます。
 
-## 関連
+    誰かが通知を見ていて、書き込みを失敗させるより待たせたい場合は、**Auto · Rules + AI · Ask me** を選びます。
+
+    Resolve を使っている場合は、**Resolve** の行も同じように設定してください。Signals が引き渡す調査はこれに従います。
+
+    **完了の状態:** **Automations** の行（変更した場合は **Resolve** も）に選んだモードが表示されます。
+  </Step>
+  <Step title="定型的な書き込みごとに Rule を承認する">
+    Automations が毎回行う書き込みごとに、**Allow** の Rule を 1 つ承認します。その書き込みは Rule が最初に判断し、手順 1 のモードはどの Rule にも一致しない書き込みだけを扱います。
+
+    Rule の追加方法は 2 つあります。
+
+    - Rules ページの **Needs your review** で**提案を承認する**。提案は、**Find rules**（CloudThinker が接続と承認履歴を読んで Rules を提案する点検用のチャット）か、Rule を提案したエージェントから届きます。
+    - チャットで `/creating-policy` と入力し、書き込みを説明して**依頼する**。例：「Allow posting pull request comments on the github-acme connection from automations」。CloudThinker が接続のカタログから操作名を選びます。
+
+    | フィールド | 設定値 |
+    |-------|-----------|
+    | **Effect** | **Allow** |
+    | **Operations** | Automation が行う書き込み |
+    | **Connections** | 書き込み先の接続 |
+    | **Runs from** | **Automations** |
+
+    Rule はどの Auto の選択肢でも同じように判断するため、夜間の実行が AI の判断に左右されなくなります。[Rules](/guide/approvals/rules) を参照してください。
+
+    **完了の状態:** Rule が **Active** タブにあり、**Allow** で、**Runs from** が **Automations** に設定されています。
+  </Step>
+  <Step title="必要なら 1 つの Automation のモードを設定する">
+    Automation を開き、指示の下にあるモデルピッカーの横の **Approval** ピッカーを使います。**Default** と表示された選択肢は **Automations** 実行タイプに従います。別の選択肢を選ぶと、この Automation だけを上書きします。
+
+    **完了の状態:** ピッカーに選んだモードが表示されます。
+
+    <Warning>
+    最も具体的なモードが優先されます。この Automation のモード、次に **Automations** 実行タイプ、次にワークスペースのモードの順です。より具体的なモードの方が緩い場合でも同様です。変更できるのは Admin だけで、編集は Automation の更新として [監査ログ](/guide/security/audit-logs) に記録されます。
+    </Warning>
+  </Step>
+  <Step title="人の対応が必要な通知を届ける">
+    **Settings → Workspace → Notifications** に移動します。ページ上部のイベント表で **Agents & Tasks** を開き、上の[無人実行の通知](#無人実行の通知)にあるイベントのチャネルをオンにします。エージェントが発するアラートは別の行で、**Alerts** の下の **Agent alerts** です。[通知](/ja/guide/notifications)を参照してください。
+
+    **完了の状態:** 各イベントで少なくとも 1 つのチャネルがオンになっています。
+  </Step>
+  <Step title="ワークスペースのクレジット上限を設定する">
+    Automation ごとのクレジット上限はないため、トリガーが暴走したときの歯止めはワークスペースの[クレジット上限](/guide/billing/credit-limits)です。Scale または Enterprise で、組織の Owner または Admin が **Settings → Organization → Billing → Credit limits** で設定します。次のどちらかを選びます。
+
+    - **Throttle**: 上限に達すると、ワークスペースは無料の日次クレジットしか使えなくなり、それで支払えるのは Light のチャットだけです。Automation の実行は Pro または Ultra を使うため、サイクルがリセットされるか上限を引き上げるまで、新しい実行は開始できません。上限は実行の開始時にチェックされるため、すでに進行中の実行は最後まで完了します。
+    - **Notify only**: Owner に通知し、そのまま続行します。
+
+    Team にはクレジット上限がありません。代わりに [Usage](/ja/guide/billing/usage) を確認し、プローブの間隔を 15 分以上に保ち、リポジトリトリガーをブランチとアクションでフィルタリングしてください。
+
+    **完了の状態:** ワークスペースの **Usage / limit** 列に、**Unlimited** ではなくクレジット額が表示されます。
+  </Step>
+</Steps>
+
+## 無人実行が自身について変更できること
+
+Automation を実行しているエージェントは、その Automation のトリガーを管理できます。たとえば、インシデントがクローズされたらプローブを削除します。制限は次のとおりです。
+
+- **自身の Automation のみ。** 無人実行は他の Automation を編集できません。
+- **緩める変更は報告されます。** Automation をオフにする、トリガーを一時停止または削除する、プローブのチェック頻度を下げると、オーナーに **Automation turned off** または **Agent reduced its monitoring** が送られます。停止すると、「Stopped by the agent: the incident is closed」のように理由が Automation に表示されます。
+- **追加は報告されません。** エージェントは通知なしで、プローブやリポジトリトリガーを追加したり、プローブのチェック頻度を上げたりできます。トリガーが増えると、実行とクレジットも増える可能性があります。シークレットを人に表示する必要があるため、Webhook トリガーは追加できません。
+- **すべての変更は記録されます。** エージェントを実行者として [監査ログ](/guide/security/audit-logs) に記録されます。エージェントによるトリガーの追加を止める設定はないため、毎週確認してください。**Actor** を **Agent**、**Category** を **Task** でフィルタリングします。監査ログは Scale と Enterprise で利用できます。
+
+Automation ごとのクレジット上限や 1 日の実行回数の上限はありません。上限は、[Automations](/guide/automation/automations) の Webhook とプローブの上限と、ワークスペースのクレジット上限（上の手順 5）です。クレジット上限は、エージェントが追加したトリガーの消費額も制限します。機能ごとの消費は [Usage](/ja/guide/billing/usage) で確認してください。
+
+## すべてを一度に止める
+
+すべての Automation を一時停止するスイッチはありません。インシデントや不具合のあるデプロイの最中は、次のようにします。
+
+- **Automations** で、各 Automation のカードにあるスイッチでオフにします。
+- 実行の読み取りは続けたまま、すべての書き込みを人の判断待ちにするには、**Automations** 実行タイプを **Manual** に設定します。独自の **Approval** 設定を持つ Automation はその設定のままなので、それらも確認してください。
+- すでに進行中の実行はスイッチでは止まらず、最後まで完了します。**Required Approval** で待機中の書き込みはそのまま残ります。Automation のページから実行を開き、**Decline** を選んでください。
+
+## オーナーとオフボーディング
+
+オーナーは Automation を作成した人です。オーナーがワークスペースへのアクセスを失うと、その Automation はオフになり、「Its owner no longer has access to this workspace.」と表示されます。その後、ワークスペースの Admin が Automation のページのその通知で **Take ownership** を選べます。オーナーの変更は事前にはできず、オーナーがアクセスを失ったあとにのみ可能です。誰かがオンに戻すまで、Automation はオフのままです。Automations ページには各 Automation のオーナーが表示されないため、誰がどれを作成したかを自分で一覧にし、オフボーディングのチェックリストに加えてください。そうすれば、誰かが同じ日にオーナーを引き継いでオンに戻せます。
+
+## 例
+
+- **読み取りのみの日次レポート。** Automation が毎朝コストを要約します。読み取りだけなので承認は関わらず、誰も起こされません。レポートは実行の会話に残ります。
+- **新しいプルリクエストごとのコメント。** リポジトリトリガーが **Opened** で発火し、実行がコメントを投稿する必要があります。`/creating-policy`（手順 2）で Allow の Rule を依頼して承認すれば、毎回コメントが投稿されます。Rule がなければ AI の判断に左右され、AI の判断で許可されないものは拒否されるため、毎回行いたい書き込みをそれに頼らないでください。
+
+## トラブルシューティング
+
+<AccordionGroup>
+  <Accordion title="スケジュール実行が確認せずに書き込みを拒否した">
+    Automations のデフォルトは **Auto · Rules + AI · Refuse** です。その書き込みの **Allow** Rule を承認するか、Automation または **Automations** 実行タイプを **Ask me** の選択肢に設定してください。
+  </Accordion>
+  <Accordion title="実行が Required Approval のまま止まっている">
+    書き込みが人の判断を待っています。Automation のページから実行の会話を開き、**Approve** または **Decline** を選びます。次回届くように **Agent approvals** をオンにしてください。
+  </Accordion>
+  <Accordion title="Allow Rule があるのに書き込みが実行されなかった">
+    まずモードを確認します。**Manual** は、Allow Rule の対象となる書き込みも含め、すべての書き込みの前に確認します。次に、**Runs from** に **Automations** が含まれていること、Rule が正しい接続を指定していることを確認します。最後に、同じ書き込みに一致する **Deny** または **Ask first** の Rule がないか探します。それらは Allow に優先します。
+  </Accordion>
+  <Accordion title="Automation が自分でオフになった">
+    開いて理由を読みます。10 回連続の実行失敗、エージェントによる停止、オーナーのアクセス喪失のいずれでもオフになります。原因を直し、**Run now** で確認してから、オンに戻してください。
+  </Accordion>
+</AccordionGroup>
+
+## 次のステップ
 
 <CardGroup cols={2}>
-  <Card title="承認" icon="shield-check" href="/guide/approvals/overview">
-    Rules、モード、承認者が各書き込みをどう判断するかを確認する
+  <Card title="Automation クイックスタート" icon="rocket" href="/guide/automation/quickstart">
+    Slack に通知する日次のコスト異常チェックを作る
   </Card>
   <Card title="Approval mode" icon="bolt" href="/guide/approvals/approval-mode">
-    ワークスペース、実行タイプ、または 1 つの Automation で Manual か Auto を選ぶ
+    すべての Auto の選択肢と、実行が使うモードを確認する
   </Card>
-  <Card title="Automations" icon="calendar-check" href="/guide/automation/automations">
-    エージェントプロンプトを日次・週次・月次でスケジュールする
+  <Card title="Approval Rules" icon="list-check" href="/guide/approvals/rules">
+    エージェントが作業中に提案する Rules を確認して承認する
   </Card>
   <Card title="Pulse" icon="wave-pulse" href="/ja/guide/pulse/overview">
-    重複イベントを抑制し、優先順位付きのシグナルクラスターを表示する
+    大量のアラートを順位付きのクラスターにする
   </Card>
 </CardGroup>

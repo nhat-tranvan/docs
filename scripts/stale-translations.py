@@ -9,12 +9,7 @@ Run last, after the other nav scripts. Remove a page from STALE once retranslate
 import json
 import os
 
-STALE = {
-    "index", "quickstart",
-    "guide/use-cases/kubernetes-health-monitoring", "guide/skills/overview",
-    "guide/knowledge", "guide/artifacts/overview",
-    "guide/connections/cloudflare", "guide/connections/betterstack",
-}
+STALE: set[str] = set()
 
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 d = json.load(open("docs.json"))

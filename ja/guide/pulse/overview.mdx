@@ -1,78 +1,71 @@
 ---
-title: Pulse の仕組み
-description: "Pulse が重複排除、抑制、AI トリアージの 8 ステージパイプラインを通じて生の監視イベントをランク付けされたクラスターに変換する仕組みを学ぶ"
+title: Pulse の概要
+description: "Pulse がアラートのノイズを取り除き、関連するイベントをクラスターにまとめ、対応が必要な問題だけをインシデントのトリアージに渡す仕組みを説明します。"
 icon: wave-pulse
 ---
 
-Pulse は接続されたすべてのソース（CloudTrail、GuardDuty、Datadog など）からイベントを取り込み、ノイズを抑制し、注意に値するクラスターのみを表面化します。各クラスターは深刻度でランク付けされ、ワンクリックでインシデントにエスカレーションできます。
-
-<Frame>
-  <img src="/images/pulse/01-pulse-main-feed.jpg" alt="Pulse メインフィード。13K の生イベントが 510 のシグナルと 40 のクラスターに削減されたパイプラインパネルと、深刻度でランク付けされたアクティブなクラスターリストが表示されている" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Pulse は 13K の生イベントを 40 のアクションに値するクラスターに削減 — リアルタイムで 1 つのビューに</p>
-
-監視スタックはすでに異常を検知しています。問題はその量です：エンジニアはアラートの大量発生のトリアージに、実際の問題を修正するより多くの時間を費やしています。Pulse はすべてのソースの前に配置され、注意を向けるべきものを判断するため、6 つのダッシュボードを開く代わりにクラスターのランク付きリストを見るだけで済みます。
+Pulse は、CloudThinker のインシデント対応モジュールである [Resolve](/ja/guide/incident/overview) の検知レイヤーで、アプリでは **Signals** と表示されます。お使いのツールが送るすべてのアラートを受け取り、ノイズを取り除き、残ったものをクラスターにまとめ、対応が必要なものだけをトリアージに渡します。そのため、1 件の障害は何百件もの呼び出しではなく 1 つの項目として表示されます。
 
 ## 仕組み
 
-Pulse に到達するすべてのイベントは、表示される前に同じ 8 ステージパイプラインを通過します。
+**生のイベント (raw event)** とは、CloudWatch アラームや Datadog モニターなど、ソースからの 1 件の通知です。**シグナル (signal)** とは、ノイズ抑制を通過したイベントです。**クラスター (cluster)** とは、1 つの問題として扱われる、関連するシグナルのグループです。
 
-```mermaid
-flowchart TD
-    A[Raw Event] --> B[Normalize]
-    B --> C[Deduplicate]
-    C --> D{Suppress?}
-    D -- yes --> E[Stored · hidden]
-    D -- no --> F[Persist]
-    F --> G[Correlate into Cluster]
-    G --> H[AI Classify]
-    H --> I{Actionable?}
-    I -- Critical / High --> J[Incident + RCA]
-    I -- no --> K[Notification only]
-```
+<Frame caption="Pulse はノイズを取り除き、シグナルをクラスターにまとめます。トリアージに進むのは、対応が必要なシグナルを含むクラスターだけです。">
+  <img src="/images/pulse/diagram-pulse-flow-light.svg" alt="生のイベントが抑制を通過してクラスターに加わり、分類されます。対応が必要なシグナルを含むクラスターは Resolve のトリアージに進み、インシデントになります。" className="block dark:hidden" style={{width: '100%'}} />
+  <img src="/images/pulse/diagram-pulse-flow-dark.svg" alt="生のイベントが抑制を通過してクラスターに加わり、分類されます。対応が必要なシグナルを含むクラスターは Resolve のトリアージに進み、インシデントになります。" className="hidden dark:block" style={{width: '100%'}} />
+</Frame>
 
-1. **取り込み** — 接続された任意のソースからイベントが届きます：AWS ポーラーが GuardDuty の検出を取得する、アラートチャンネルから Slack メッセージが発火する、Datadog Webhook がアラートをポストするなど。
-2. **正規化** — ソース固有のコレクターが生のイベントを共通のシグナル形式に変換し、発生元に関係なくタイトル、深刻度、カテゴリ、リソース ID、タイムスタンプを抽出します。
-3. **重複排除** — シグナルのソース、タイプ、リソース、タイムスタンプ（分単位）から SHA-256 フィンガープリントが計算されます。過去 1 時間以内に同一のイベントが到着していた場合、新しい行を作成する代わりに既存シグナルの重複排除カウントがインクリメントされます。
-4. **抑制** — シグナルは優先順位の順に抑制レイヤーを通過します。いずれかのレイヤーが発火した場合、シグナルは抑制済みとして保存されフィードから非表示になります。各レイヤーの仕組みについては [Clusters & Suppression](/ja/guide/pulse/clusters) を参照してください。
-5. **永続化** — シグナルは最終的な抑制ステータス、深刻度、抽出フィールドと共に書き込まれます。抑制されたシグナルは 90 日間保持されます — **Show suppressed** をトグルしてフィルタリングされた内容を確認できます。
-6. **相関** — 15 分間のウィンドウ内で、Pulse は同じリソース、サービス、またはタイトルパターンを共有するシグナルをクラスターにグループ化します。9 件の EC2 アラートは、9 つのメンバーを持つ 1 つのクラスターになります。
-7. **分類** — AI モデルがカテゴリ、正規化された深刻度、1 行のサマリー、実行可能性の判定（インシデントの作成が必要かどうか）を割り当てます。
-8. **ルーティング** — Critical と High の深刻度のシグナル、および実行可能とマークされたシグナルは自動的にエスカレーションされます：リンクされたインシデントが作成され、根本原因分析が始まります。それ以外は通知のみで配信されます。
+1. **取り込み (Ingest)。** イベントは、Webhook、ポーリングされる AWS サービス、選んだ Slack または Microsoft Teams のチャンネルから届きます。Webhook は送信されたときに届きます。ポーリングされる AWS サービスはスケジュールに従って届きます。間隔は [Pulse ソースの接続](/ja/guide/pulse/setup) に一覧があります。
+2. **抑制 (Suppress)。** 4 つのチェックが順に実行され、最初に一致したものがイベントを破棄します。[ノイズ抑制](/ja/guide/pulse/clusters#ノイズ抑制) を参照してください。
+3. **クラスター化 (Cluster)。** Pulse は、同じリソース ID またはタイトル、それがなければ同じサービスのシグナルを持つ最近のオープンなクラスターに、シグナルを加えます。完全なルールは [シグナルがクラスターにまとまる仕組み](/ja/guide/pulse/clusters#シグナルがクラスターに合流する仕組み) にあります。
+4. **分類 (Classify)。** シグナルがクラスターに加わったあと、CloudThinker はそのシグナルを分類します。カテゴリー (compute、network、security、deploy、communication、cost、data。カテゴリーフィルターと同じ値)、重大度、そして対応が必要かどうかです。
+5. **トリアージ (Triage)。** 対応が必要なシグナルを含むクラスターはトリアージに進みます。CloudThinker はそれをオープンなインシデントと照合するか、同じ障害が再発した場合はクローズ済みのインシデントを再オープンするか、新しいインシデントをオープンします。
 
-## できること
+Pulse 自体が行うのは、取り込み、抑制、グループ化だけです。トリアージ以降はすべて [Resolve](/ja/guide/incident/overview) の担当です。
 
-| 機能 | 説明 | 詳細 |
+**Resolve → Issues** のタイトル行にある **AI auto-investigate** スイッチがオンでもオフでも、Pulse はアラートの検知とグループ化を続けます。オフの間も、対応が必要なクラスターはステータス **Open** のインシデントとして登録されますが、CloudThinker が自分でトリアージや調査を行うことはありません。人がクリックした場合、**Send to triage** は引き続き実行されます。完全なルールは [調査を開始するもの](/guide/incident/settings#what-starts-an-investigation) にあります。
+
+## Signals ページで作業する
+
+**Resolve → Signals** を開きます。ヘッダーには、生のイベントからクラスターまでのリアルタイムのファネルと、時間枠の選択欄 (**Last 1 hour** から **Last 30 days**) が表示されます。時間枠は **Needs you** を含むすべてのレーンに適用されます。クラスターは時間枠内にシグナルがある場合にのみ表示されるため、誰も対応していない古いクラスターを探すには時間枠を広げてください。3 つのレーンで、表示するクラスターを選びます。
+
+| レーン | 表示内容 | 用途 |
 |---|---|---|
-| シグナルソースの接続 | AWS ポーラー、Slack と Teams チャンネル、サードパーティ Webhook を Pulse に接続する | [Pulse セットアップ](/ja/guide/pulse/setup) |
-| クラスターと抑制の確認 | 関連するシグナルがどのようにグループ化されているかを確認し、何が抑制されたかを監査する | [Clusters & Suppression](/ja/guide/pulse/clusters) |
-| インシデントへのエスカレーション | 任意のクラスターを自動根本原因分析付きのフルインシデントに昇格させる | [Resolve](/ja/guide/incident/overview) |
-| ノイズ削減の測定 | 抑制率、クラスター解決時間、シグナルのコンバージョンを追跡する | [Pulse Analytics](/ja/guide/pulse/analytics) |
+| **Needs you** (既定) | 人を待っている Critical または High のクラスター (下記を参照)。 | シフトの開始時はここから始めます。 |
+| **Handled** | インシデントが保持している、人が確認または引き受けた、またはエージェントが作業中のオープンなクラスター。 | すでに担当がいるものを確認します。 |
+| **History** | 解決済みのものを含む、時間枠内のすべてのクラスター。 | 過去のクラスターを検索します。 |
 
-## キーコンセプト
+Critical または High のクラスターは、次のいずれかに当てはまる場合に **Needs you** に表示されます。
 
-左サイドバーのパイプラインパネルは、4 つのステージをすべてライブのファネルとして表示します：
+- **Forming** または **Active** で、誰も確認も引き受けもしておらず、エージェントも担当しておらず、オープンなインシデントも保持していない。
+- トリアージが失敗し、**Retry triage** を待っている。
 
-| ステージ | カウントの意味 |
-|---|---|
-| **Raw events** | フィルタリング前のすべての取り込まれたイベント |
-| **Signals** | 重複排除・正規化されたイベント。深刻度の内訳がアクティブな状況を示す |
-| **Clusters** | 相関されたグループ。「510 からグループ化 · 189 件が抑制済み」は何が抑制されたかを示す |
-| **Incidents** | エスカレーションされたクラスター — インシデントリストに直接リンク |
+フィルターがあるのは **History** だけです。重大度、ソース、カテゴリー、ステータスのフィルター、または **Search signals...** で絞り込みます。クラスターをクリックすると詳細パネルが開き、**Open incident** や **Take it** をクリックしたり、**⋯** メニューを開いて **Escalate**、**Link to incident**、**Resolve**、**Assign to…**、**Acknowledge**、**Snooze** を実行したりできます。各アクションは [Clusters](/ja/guide/pulse/clusters) で説明しています。
+
+新しいソースが機能するか確認するには、セットアップページの [テストアラートを送る](/ja/guide/pulse/setup#ソースを接続する) に従ってください。
+
+## Signals が空、または静かな場合
+
+| 見えているもの | 意味 | 対応 |
+|---|---|---|
+| **Connect a source** ボタンのある **No signals yet** | このワークスペースにはまだ何も届いていません。 | [Pulse ソースの接続](/ja/guide/pulse/setup) に従ってください。 |
+| **Manage sources** ボタンのある **No signals yet** | Webhook はありますが、イベントがまだ届いていません。 | ソースのツールからテストアラートを発生させてください。 |
+| ソースが停止している可能性を示す、**No new signals in 2h** などのバナー | 1 時間以上何も届いていません。バナーには経過時間が表示されます。 | **Check sources** をクリックし、**Needs attention** と表示されたプラットフォームを探します。 |
+| **Nothing needs you** | 人を待っている Critical または High のクラスターはありません。 | **Go to Handled** をクリックするか、**History** に切り替えます。主に Low や Info のアラートを送るソースで **Needs you** が埋まることはありません。 |
 
 ## 次のステップ
 
 <CardGroup cols={2}>
-  <Card title="Clusters & Suppression" icon="layer-group" href="/ja/guide/pulse/clusters">
-    シグナルがどのようにグループ化されノイズがどのようにフィルタリングされるかを理解する
+  <Card title="Pulse ソースを接続する" icon="plug" href="/ja/guide/pulse/setup">
+    最初のアラートを Signals に送り、届くことを確認します。
   </Card>
-  <Card title="セットアップ" icon="gear" href="/ja/guide/pulse/setup">
-    AWS、Slack、Teams、サードパーティ Webhook ソースを接続する
+  <Card title="クラスターを扱う" icon="layer-group" href="/ja/guide/pulse/clusters">
+    クラスターのライフサイクル、抑制、すべてのクラスターのアクションを学びます。
   </Card>
-  <Card title="Analytics" icon="chart-bar" href="/ja/guide/pulse/analytics">
-    ノイズ削減、クラスター解決時間、コンバージョン率を測定する
+  <Card title="Pulse アナリティクス" icon="chart-line" href="/ja/guide/pulse/analytics">
+    Signals がどれだけのノイズを取り除き、クラスターがどれだけ速くクローズするかを測定します。
   </Card>
-  <Card title="Resolve" icon="arrow-right" href="/ja/guide/incident/overview">
-    Pulse がインシデント、RCA、ランブック、メモリにどのように繋がるかを確認する
+  <Card title="根本原因分析" icon="magnifying-glass" href="/ja/guide/incident/root-cause-analysis">
+    トリアージがインシデントをオープンしたあとに何が起きるかを確認します。
   </Card>
 </CardGroup>

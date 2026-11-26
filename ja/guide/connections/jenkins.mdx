@@ -1,152 +1,140 @@
 ---
 title: Jenkins
-description: "CloudThinker と Jenkins CI/CD サーバーを接続して、ビルドパイプラインの監視、ジョブ分析、デプロイ追跡を実現する"
+description: "Jenkins サーバーを接続し、エージェントがジョブ、ビルド、ログ、テスト結果を読み、Approvals を通じてビルドをトリガーできるようにします"
 icon: "/images/icons/jenkins.svg"
 ---
 
+import ApprovalDefault from '/snippets/approval-default.mdx';
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
-セルフホスト Jenkins サーバーを接続することで、CloudThinker エージェントがビルドの監視、テスト結果の分析、パイプラインログのレビュー、ジョブ操作の管理を行えるようになります。Jenkins は Jenkins MCP Server Plugin を通じて**ユーザー名と API トークン**で認証します。
-
----
+Jenkins を接続すると、CloudThinker のエージェントはジョブの一覧表示、ビルドログとテスト結果の読み取り、ビルドが失敗した理由の説明、ワークスペースの Approvals を通じたビルドのトリガーができます。CloudThinker はサーバー上の **Jenkins MCP Server plugin** と通信し、**Jenkins のユーザー名と API トークン**でサインインします。
 
 ## 前提条件
 
-- バージョン 2.x 以降の**セルフホスト Jenkins** インスタンス（クラウドホスト Jenkins はサポートされていません）。
-- サーバーにインストールされた **[Jenkins MCP Server Plugin](https://github.com/jenkinsci/mcp-server-plugin)**。デフォルト MCP ポートは `9090` です。
-- ルート URL の設定と認証情報の作成に必要な Jenkins の管理者アクセス。
-
-<Info>
-クラウドホスト Jenkins サービスはサポートされていません。この接続には Jenkins MCP Server Plugin が必要です。
-</Info>
-
----
+- CloudThinker がインターネットから到達でき、プラグインをインストールできる管理者アクセスがある Jenkins サーバー。ファイアウォールの内側にあるサーバーの場合は、CloudThinker の送信元 IP を許可リストに追加してください。このドキュメントでは CloudThinker の送信元 IP 一覧を公開していません。CloudThinker の担当者に問い合わせるか、[お問い合わせ](https://cloudthinker.io/contact)ください。その他の方法は [Reaching private services](/ja/guide/connections/overview#プライベートサービスへの到達) を参照してください。
+- [MCP Server plugin](https://plugins.jenkins.io/mcp-server/) がインストールされていること。このプラグインは、CloudThinker が呼び出すエンドポイントを `<your-jenkins-url>/mcp-server/mcp` に追加します。
+- [必要な権限](#必要な権限)にある権限を持つ、CloudThinker 用の Jenkins ユーザー。
+- CloudThinker ワークスペースでの **Admin** ロール。接続の追加と編集ができます。[Roles](/guide/security/roles) を参照してください。
 
 ## セットアップ
 
 <Steps>
-  <Step title="ルート URL を設定する">
-    MCP Server Plugin は Jenkins がルート URL を設定していることを要求し、正しいジョブリンクを返します。Jenkins スクリプトコンソールで以下を実行します。
-
-    ```bash
-    COOKIE_JAR=/tmp/jenkins_cookies
-    CRUMB=$(curl -s -c $COOKIE_JAR -u "admin:<password>" \
-      'http://<host-ip>:9090/crumbIssuer/api/json' | python3 -c "import json,sys; print(json.load(sys.stdin)['crumb'])")
-
-    curl -s -X POST "http://<host-ip>:9090/scriptText" \
-      -b $COOKIE_JAR -u "admin:<password>" -H "Jenkins-Crumb: $CRUMB" \
-      --data-urlencode "script=
-    import jenkins.model.JenkinsLocationConfiguration
-    def loc = JenkinsLocationConfiguration.get()
-    loc.setUrl('http://<host-ip>:9090/')
-    loc.save()
-    println('Root URL set to: ' + loc.getUrl())
-    "
-    ```
+  <Step title="MCP Server plugin をインストールする">
+    Jenkins で **Manage Jenkins → Plugins → Available plugins** を開き、**MCP Server** を検索してインストールし、求められたら Jenkins を再起動します。
   </Step>
-  <Step title="MCP エンドポイントを確認する">
-    接続前にプラグインが稼働しているか確認します。
+  <Step title="Jenkins URL を設定する">
+    **Manage Jenkins → System** を開き、**Jenkins Location** の下の **Jenkins URL** に、利用者が Jenkins にアクセスするアドレス（例: `https://jenkins.acme.com/`）を入力します。**Save** をクリックします。
 
-    ```bash
-    curl -s http://<host-ip>:9090/mcp-health/
-    ```
+    プラグインはこの値からジョブとビルドのリンクを作ります。空欄または `localhost` のままだと、エージェントに壊れたリンクが渡ります。
+  </Step>
+  <Step title="API トークンを作成する">
+    CloudThinker 用のユーザーで Jenkins にサインインし、`<your-jenkins-url>/user/<username>/security`（古い Jenkins では `/user/<username>/configure`）を開きます。**API Token** の下で **Add new Token** をクリックします。名前を `cloudthinker` にして **Generate** をクリックし、トークンをコピーします。Jenkins はトークンを一度しか表示しません。
   </Step>
   <Step title="CloudThinker で接続を追加する">
-    **Connections → Jenkins** に移動して以下を入力します。
-    - **URL**: `http://<host-ip>:9090`
-    - **Username**: `admin`
-    - **API Token**: Jenkins 管理者パスワードまたは API トークン
+    **Settings → Workspace → Connections** を開きます。**Discover** タブで **Jenkins** を検索し、**Connect** をクリックして、[接続の詳細](#接続の詳細)にあるフィールドを入力します。**Connect** をクリックします。
 
-    **Connect** をクリックします。CloudThinker が認証情報を検証し、**Connected** ステータスを表示します。
+    CloudThinker は、ユーザー名とトークンで MCP エンドポイントを呼び出して接続をテストします。URL の誤り、拒否されたトークン、プラグインの未導入の場合は、**Connected** ではなくエラーが表示されます。
+
+    **成功状態:** **Connected** タブで Jenkins に **Connected** と表示されます。
   </Step>
 </Steps>
 
----
+<Note>
+テストではユーザーのジョブ権限は確認しません。下の確認用プロンプトを実行し、エージェントがジョブを見られることを確かめてください。
+</Note>
 
 ## 接続の詳細
 
+ダイアログには、次の名前のとおりにフィールドが表示されます。
+
 | フィールド | 説明 | 例 |
 |-------|-------------|---------|
-| **URL** | Jenkins インスタンスのベース URL | `http://192.168.1.100:9090` |
-| **Username** | Jenkins ユーザー名 | `admin` |
-| **API Token** | Jenkins 管理者パスワードまたは API トークン | — |
+| `JENKINS_URL` | Jenkins サーバーのベース URL。`/mcp-server/mcp` は含めません。このパスは CloudThinker が追加します | `https://jenkins.acme.com` |
+| `JENKINS_USER` | トークンが属する Jenkins のユーザー名 | `cloudthinker` |
+| `JENKINS_API_TOKEN` | そのユーザーのために生成した API トークン | `<your-api-token>` |
 
----
+スキームを省略すると、CloudThinker は `https://` を使います。公開アドレスでは、`http://` と入力しても CloudThinker は常に HTTPS で接続するため、サーバーにはそのアドレスで有効な TLS 証明書が必要です。
 
 ## 必要な権限
 
-Jenkins ユーザーに以下の権限を付与してください。
+Jenkins の認可方式（例: **Manage Jenkins → Security** の **Matrix-based security**）で、CloudThinker 用のユーザーに次の権限を付与します。
 
-- **Overall**: Read
-- **Job**: Read, Discover
-- **View**: Read
+| 権限 | 用途 |
+|------------|------------|
+| **Overall / Read** | サインインとジョブの一覧表示 |
+| **Job / Read** | ビルド、ログ、テスト結果、変更の読み取り |
+| **Job / Discover** | フォルダーやビュー内のジョブの表示 |
+| **View / Read** | ビューの読み取り |
+| **Job / Build** | 任意: ビルドのトリガー |
+
+トークンはこのユーザーの権限そのままで動作します。読み取り専用の接続にするには **Job / Build** を付与しないでください。ユーザーに **Overall / Administer** は不要で、Jenkins の認証情報やシークレットを読むエージェントツールはありません。
 
 <Tip>
-CloudThinker 専用の Jenkins ユーザーをこれらの権限のみで作成してください。書き込み操作（ビルドのトリガー、パイプラインの再実行）は承認ゲートに保ってください。
+管理者アカウントではなく、CloudThinker 専用の Jenkins ユーザーを使ってください。フォルダー単位の権限を使っている場合は、エージェントに見せるフォルダーだけにアクセスを付与してください。
 </Tip>
-
----
 
 ## エージェントの機能
 
-接続後、エージェントは Jenkins パイプラインの監視と調査を行えます。
+読み取りは確認なしで実行されます。ビルドのトリガーは書き込みなので、まず Approvals を通ります。
 
-| 機能 | 説明 |
-|------------|-------------|
-| **ビルド監視** | ジョブの一覧表示とビルド状態の確認 |
-| **ログ分析** | ビルドログの取得と検索 |
-| **テスト結果** | テスト結果の確認 |
-| **SCM 統合** | Git の変更とコミットの確認 |
-| **ジョブコントロール** | ビルドのトリガーとパイプラインの再実行 — **承認が必要** |
+<ApprovalDefault />
 
-### 接続の確認
+| 機能 | エージェントができること |
+|------------|--------------------|
+| **Jobs** | ジョブを一覧表示し、それぞれの最後のビルド状態を示します |
+| **Build logs** | ビルドログを読んで検索し、失敗したステップを見つけます |
+| **Test results** | テスト結果を読み、失敗したテストを指摘します |
+| **Changes** | ビルドに含まれたコミットと SCM の変更を示します |
+| **Trigger builds** | Rules と Approval mode に従ってビルドを開始します。エージェントは、依頼内容から取ったビルドパラメーターを渡せます |
+
+### 接続を確認する
 
 ```text
-List all Jenkins jobs and show the last build status for each
+List the Jenkins jobs you can reach and the result of the last build for each
 ```
+
+接続が正常なら、実際のジョブ名と結果が返ります。一覧が空の場合は、たいていユーザーに **Job / Read** または **Job / Discover** がありません。
 
 ### プロンプト例
 
 ```text
-Search Jenkins build logs for errors in the last 10 builds and recommend fixes
-Show test results for the main project's recent builds and report failures
-Check the Jenkins build queue and identify any stuck jobs
+Why did the last build of payments-api fail? Show the failing step and the error from the log
+Which tests failed in the last 5 builds of the main pipeline, and are any of them flaky?
+Which commits went into the latest build of web-frontend?
 ```
-
----
 
 ## トラブルシューティング
 
-<Accordion title="接続タイムアウト">
-Jenkins が稼働しており、CloudThinker からポート 9090 にアクセスできるか確認してください。URL フィールドには `localhost` ではなくホスト IP アドレスを使用してください。
+<Accordion title="This connection did not respond in time. Try connecting again.">
+CloudThinker が Jenkins サーバーに到達できません。URL がネットワークの外から開けること、そしてファイアウォールが CloudThinker の送信元 IP からの HTTPS 受信を許可していることを確認してください。`localhost` や、ネットワーク内でしか解決できないアドレスは使わないでください。
 </Accordion>
 
-<Accordion title="ジョブリストが空">
-ルート URL が設定されていないか、スクリプトコンソールコマンドが失敗しています。セットアップのスクリプトコンソールコマンドを再実行して再接続してください。
+<Accordion title="The provider rejected these credentials. Update them, then connect again.">
+ユーザー名またはトークンが誤っているか、トークンが取り消されています。`JENKINS_USER` がトークンを生成したユーザーであることを確認し、必要なら新しいトークンを生成してください。置き換えるには、**Settings → Workspace → Connections** で **Jenkins** を選択し、鉛筆アイコンをクリックし、**Credentials** の下の **Replace…** をクリックして、**Save and test** をクリックします。
 </Accordion>
 
-<Accordion title="認証が失敗する">
-ユーザー名または API トークンが間違っているか、ユーザーに必要な権限がありません。認証情報を確認し、Jenkins ユーザーが Overall Read、Job Read、View Read アクセスを持っているか確認してください。
+<Accordion title="The provider endpoint was not found. Check the connection settings.">
+MCP Server plugin がインストールまたは有効化されていないか、`JENKINS_URL` が誤ったパスを指しています。プラグインをインストールし、ベース URL だけを入力してください。Jenkins が `/jenkins` などのパスで動いている場合は、それを含めます: `https://ci.acme.com/jenkins`。
 </Accordion>
 
----
+<Accordion title="ジョブの一覧が空、またはリンクが壊れている">
+ユーザーに **Job / Read** または **Job / Discover** がないか、**Jenkins URL** が空欄または `localhost` になっています。権限を修正し、**Manage Jenkins → System** で **Jenkins URL** を設定してから、もう一度質問してください。
+</Accordion>
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **専用ユーザー** — 必要なジョブとビューのみにスコープした CloudThinker 専用の Jenkins ユーザーを作成してください。
-- **ネットワーク分離** — Jenkins ポート 9090 を CloudThinker の IP 範囲に制限するか VPN を使用してください。Jenkins UI を公共インターネットに公開しないようにしてください。
+- **ネットワークへの露出を制限してください。** Jenkins への受信トラフィックは必要な送信元からだけ許可し、Jenkins の UI は通常のアクセス制御の内側に置いてください。
+- **ビルドは承認制にしてください。** エージェントにビルドを開始させる場合にのみ **Job / Build** を付与し、CloudThinker が開始するすべてのビルドを人が確認すべき場合は **Manual** を選んでください。
 
----
-
-## 関連情報
+## 関連
 
 <CardGroup cols={2}>
-  <Card title="MCP 接続" icon="/images/icons/mcp.svg" href="/ja/guide/connections/mcp">
-    Model Context Protocol でカスタムツールを接続する
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    どのエージェントアクションを自動で実行し、どれをあなたの承認待ちにするかを決めます
   </Card>
-  <Card title="Kubernetes 接続" icon="/images/icons/kubernetes.svg" href="/ja/guide/connections/kubernetes">
-    Kubernetes クラスターを接続する
+  <Card title="Connections Overview" icon="plug" href="/ja/guide/connections/overview">
+    CloudThinker が接続するすべてのツールと、接続の仕組みを確認します
   </Card>
 </CardGroup>

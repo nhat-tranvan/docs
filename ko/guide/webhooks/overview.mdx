@@ -1,365 +1,270 @@
 ---
-title: Webhooks
-description: "구성 가능한 웹훅으로 CloudThinker 이벤트를 외부 시스템에 전송하세요"
+title: 인바운드 웹훅
+description: "Automation을 실행하거나 Resolve로 알림을 보내는 웹훅 URL을 만들고, 인증하고, 테스트하고, 디버그합니다."
 icon: webhook
 ---
 
-웹훅을 사용하면 CloudThinker가 이벤트를 실시간으로 외부 시스템에 푸시하여 자동화, 연동, 사용자 정의 워크플로를 구현할 수 있습니다.
+웹훅은 CloudThinker가 발급하는 URL입니다. 다른 시스템이 JSON 본문과 함께 HTTPS POST를 그 URL로 보내면, CloudThinker는 [Automation](/guide/automation/automations)을 실행하거나 요청을 [Resolve](/ko/guide/incident/overview)의 알림으로 바꿉니다.
 
-## 웹훅 작동 방식
+<Note>
+이 페이지의 웹훅은 인바운드입니다. CloudThinker가 서명된 이벤트를 자체 HTTPS 엔드포인트로 POST하게 하려면 [Public API](/ko/guide/api/overview)로 이벤트 엔드포인트를 만드세요: `POST /v1/workspaces/{workspace_id}/events/endpoints`, 스코프 `events:endpoints:write`. `incident.opened`, `investigation.completed`, `fix.proposed`, `approval.requested`, `run.finished` 중에서 고릅니다. 각 전달에는 `CloudThinker-Signature: t=<unix>,v1=<hex>`가 포함되며, 이는 엔드포인트의 `whsec_` 시크릿을 키로 한 `<t>.<body>`의 HMAC-SHA256입니다. API는 전달 목록 조회, 테스트 `ping` 전송, 전달 재시도, 시크릿 교체도 지원하며, 교체 후 이전 시크릿은 24시간 동안 유효합니다. 결과를 사람에게 보내려면 [알림](/ko/guide/notifications), [Slack](/ko/guide/slack-integration) 또는 [Microsoft Teams](/ko/guide/teams-integration)를 사용하세요.
+</Note>
+
+## 웹훅 종류 선택
+
+두 가지 종류가 있습니다. 만드는 위치가 다르고 요청으로 하는 일도 다릅니다.
+
+| 종류 | 만드는 곳 | 요청 하나가 하는 일 | 사용할 때 |
+|------|--------------|-----------------------|-------------|
+| **Automation webhook trigger** | Automation의 트리거 | 해당 Automation의 실행을 시작합니다. 요청 본문은 데이터로 에이전트에 전달됩니다. | 배포 완료나 티켓 등록처럼 무언가 일어날 때 에이전트가 작업을 하게 하려는 경우. |
+| **Resolve webhook signal** | **Resolve → Triggers & Outcomes** | [Pulse](/ko/guide/pulse/overview)를 통해 알림을 보내며, 인시던트를 열고 근본 원인 분석(RCA)을 시작할 수 있습니다. | Datadog, Grafana, PagerDuty 같은 모니터링 도구의 알림을 조사하게 하려는 경우. |
+
+## 사전 요구 사항
+
+- JSON 본문과 사용자 지정 헤더로 HTTPS POST 요청을 보낼 수 있는 시스템.
+- 두 종류 모두 **Admin** 워크스페이스 역할. Developer와 Viewer는 웹훅을 볼 수 있지만 만들 수 없습니다. [워크스페이스 사용자](/ko/guide/workspace-users)를 참조하세요.
+- Automation 트리거의 경우: 기존 Automation.
+- Resolve 웹훅의 경우: 웹훅을 추가할 수 있도록 모니터링 도구에 대한 관리자 액세스.
+
+## Automation 웹훅 트리거 만들기
 
 <Steps>
-  <Step title="구성">
-    대상 URL로 웹훅 엔드포인트를 생성하고 구독할 이벤트를 선택하세요
+  <Step title="Automation 열기">
+    **Automations** 페이지에서 Automation을 열고 **Triggers** 섹션을 찾습니다.
   </Step>
-  <Step title="트리거">
-    구독한 이벤트가 발생하면 CloudThinker가 웹훅 페이로드를 준비합니다
+  <Step title="Webhook 트리거 추가">
+    **Webhook**을 선택합니다. Automation에 이미 트리거가 있으면 먼저 **Add another trigger**를 클릭한 뒤 **Webhook**을 선택합니다. CloudThinker가 즉시 트리거를 만들고 URL, 시크릿, 바로 붙여 넣을 수 있는 **Test command**가 있는 **Webhook trigger added** 대화 상자를 엽니다.
   </Step>
-  <Step title="전달">
-    CloudThinker가 이벤트 데이터를 담아 엔드포인트로 HTTP POST 요청을 전송합니다
-  </Step>
-  <Step title="처리">
-    시스템이 웹훅을 수신하고 처리한 후 성공 응답을 반환합니다
+  <Step title="시크릿 복사">
+    **Done**을 선택하기 전에 URL과 시크릿을 복사하세요. 시크릿은 한 번만 표시됩니다.
   </Step>
 </Steps>
 
----
+두 종류 모두 모든 웹훅 URL은 다음 형태입니다.
 
-## 웹훅 생성
+```text
+https://<CloudThinker API host>/api/v1/webhooks/webhook/<token>/trigger
+```
 
-### 콘솔에서 생성
+**완료 상태:** 트리거 카드에 웹훅이 표시되고, 보내는 각 호출이 전달 목록에 나타납니다.
 
-1. **설정 > Webhooks**로 이동
-2. **웹훅 생성** 클릭
-3. 웹훅 구성:
-   - **이름**: 식별을 위한 설명적 이름
-   - **URL**: 엔드포인트 URL (HTTPS여야 함)
-   - **이벤트**: 구독할 이벤트 선택
-   - **시크릿**: 검증용 선택적 서명 시크릿
-4. 저장 및 테스트
+<Tip>
+시크릿을 잃어버렸나요? 트리거 카드에서 **Rotate webhook secret**을 사용하세요. URL은 그대로이지만 모든 호출자에게 새 시크릿이 필요합니다.
+</Tip>
 
-### 웹훅 구성
+Automation 자체의 켜기/끄기 스위치가 켜져 있어야 트리거가 실행을 시작합니다.
 
-| 필드 | 설명 | 필수 |
-|-------|-------------|----------|
-| **이름** | 식별을 위한 친숙한 이름 | 예 |
-| **URL** | 이벤트를 수신할 HTTPS 엔드포인트 | 예 |
-| **이벤트** | 구독할 이벤트 유형 | 예 |
-| **시크릿** | 페이로드 서명을 위한 공유 시크릿 | 권장 |
-| **헤더** | 포함할 사용자 정의 헤더 | 아니요 |
-| **활성** | 웹훅 활성화/비활성화 | 예 |
+## Resolve 웹훅 만들기
 
----
+<Steps>
+  <Step title="플랫폼 열기">
+    **Resolve → Triggers & Outcomes**로 이동해 Datadog, Grafana, PagerDuty 등 도구를 선택합니다.
+  </Step>
+  <Step title="신호 추가">
+    **Signals to Resolve** 아래에서 **Add signal**을 클릭합니다. 세 단계로 된 **Create Webhook** 대화 상자가 열립니다.
+  </Step>
+  <Step title="Basic Info">
+    **Webhook Name**을 유지하거나 변경하고, 선택적으로 **Description**을 추가합니다. **Next**를 클릭합니다.
+  </Step>
+  <Step title="Configure">
+    **Field Mapping**과 **Severity Mapping**을 확인합니다. 둘 다 선택한 도구에 맞게 미리 채워져 있습니다. **Next**를 클릭합니다.
+  </Step>
+  <Step title="Advanced">
+    **Auth Method**를 고르고 **Auto-investigate**를 설정합니다. PagerDuty 프리셋은 이미 **HMAC Signature**를 고르고 **HMAC Signature Header**를 `X-PagerDuty-Signature`로 설정합니다. 이 헤더를 유지하세요. 그렇지 않으면 PagerDuty의 서명이 검사에 실패합니다. Auto-investigate가 켜져 있으면 **Only from a minimum severity**도 켤 수 있으며(기본값은 꺼짐이고, 켜면 High부터 시작), 낮은 알림은 RCA를 시작하지 않습니다. **Create**를 클릭합니다.
+  </Step>
+</Steps>
 
-## 이벤트 유형
+**완료 상태:** 대화 상자에 **Webhook URL**, **Authentication Setup** 아래의 시크릿, **Integration Examples**가 표시됩니다. 지금 URL과 시크릿을 복사해 모니터링 도구에 붙여 넣으세요.
 
-CloudThinker 전반에 걸쳐 이벤트를 구독할 수 있습니다.
+필드 매핑, 심각도 매핑, RCA 시작 시점은 [웹훅 신호](/ko/guide/incident/webhook-integrations/overview)에서 다룹니다. 도구에 프리셋이 없으면 [Custom source](/guide/incident/webhook-integrations/custom-source)를 사용하세요.
 
-### 권장 사항 이벤트
+## 요청 인증
 
-| 이벤트 | 트리거 |
-|-------|---------|
-| `recommendation.created` | 새 권장 사항 생성됨 |
-| `recommendation.updated` | 권장 사항 상태 변경됨 |
-| `recommendation.implemented` | 권장 사항 완료로 표시됨 |
-| `recommendation.comment` | 권장 사항에 댓글 추가됨 |
+Automation 웹훅 트리거는 항상 Bearer 토큰을 사용합니다. 호출자는 `Authorization: Bearer <secret>`을 보냅니다. Resolve 웹훅에서는 **Auth Method**를 고를 수 있습니다.
 
-### 인시던트 이벤트
+| Auth Method | 보내는 쪽이 포함하는 것 | 사용할 때 |
+|---|---|---|
+| **Bearer Token** | `Authorization: Bearer <secret>` | 도구에서 사용자 지정 헤더를 추가할 수 있을 때. 대부분 도구의 기본값입니다. |
+| **HMAC Signature** | **HMAC Signature Header**(기본값 `X-Webhook-Signature`)에 담긴 본문의 서명 | PagerDuty처럼 도구가 자체 웹훅에 서명할 때. PagerDuty 프리셋은 헤더를 `X-PagerDuty-Signature`로 설정해 줍니다. |
+| **API Key** | **API Key Header**(기본값 `X-Api-Key`)에 선택적 **Key Prefix** 뒤에 오는 키 | EventBridge를 통한 CloudWatch처럼 도구가 API 키 헤더만 지원할 때. |
+| **No Authentication** | 없음 | 빠른 테스트에만 사용하세요. URL을 가진 누구나 알림을 보낼 수 있습니다. |
 
-| 이벤트 | 트리거 |
-|-------|---------|
-| `incident.created` | 새 인시던트 생성됨 |
-| `incident.updated` | 인시던트 세부 정보 변경됨 |
-| `incident.resolved` | 인시던트 해결됨으로 표시됨 |
-| `incident.comment` | 인시던트에 댓글 추가됨 |
+HMAC Signature와 API Key는 Resolve 웹훅에만 적용됩니다. 두 헤더 이름은 **Advanced** 단계에서 설정합니다.
 
-### 보안 이벤트
+**Resolve 웹훅, HMAC Signature.** 직접 요청에 서명한다면, 원시 본문을 HMAC-SHA256으로 서명하고 설정한 헤더(여기서는 기본값)에 다이제스트를 `sha256=<hex>`로 보내세요.
 
-| 이벤트 | 트리거 |
-|-------|---------|
-| `finding.created` | 새 보안 발견 항목 탐지됨 |
-| `finding.resolved` | 보안 발견 항목 해결됨 |
-| `compliance.changed` | 컴플라이언스 상태 변경됨 |
+```bash
+BODY='{"title": "High CPU on web-server-01", "alert_type": "critical"}'
+SIGNATURE="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex | awk '{print $2}')"
 
-### 작업 이벤트
+curl -X POST "$WEBHOOK_URL" \
+  -H "Content-Type: application/json" \
+  -H "X-Webhook-Signature: $SIGNATURE" \
+  -d "$BODY"
+```
 
-| 이벤트 | 트리거 |
-|-------|---------|
-| `task.started` | 예약된 작업 실행 시작됨 |
-| `task.completed` | 작업이 성공적으로 완료됨 |
-| `task.failed` | 작업 실행 중 오류 발생 |
+**Resolve 웹훅, API Key.** 설정한 헤더(여기서는 기본값)에 키를 보내세요.
 
-### 에이전트 이벤트
+```bash
+curl -X POST "$WEBHOOK_URL" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: $WEBHOOK_SECRET" \
+  -d '{"title": "High CPU on web-server-01"}'
+```
 
-| 이벤트 | 트리거 |
-|-------|---------|
-| `conversation.completed` | 에이전트 대화 완료됨 |
-| `approval.requested` | 에이전트가 작업 승인 요청 |
-| `approval.granted` | 사용자가 에이전트 작업 승인 |
+## 보낼 내용
 
-### 리소스 이벤트
+두 종류는 하나의 요청 형식을 공유합니다. 최대 1 MB의 JSON 객체를 웹훅 URL로 보내세요.
 
-| 이벤트 | 트리거 |
-|-------|---------|
-| `resource.discovered` | 새 클라우드 리소스 발견됨 |
-| `resource.changed` | 리소스 구성 변경됨 |
-| `resource.deleted` | 리소스가 더 이상 존재하지 않음 |
+### 요청
 
----
+| 부분 | Automation 트리거 | Resolve 웹훅 |
+| --- | --- | --- |
+| 메서드 | `POST` | `POST` |
+| URL | `https://<CloudThinker API host>/api/v1/webhooks/webhook/<token>/trigger` | 같은 형태, Resolve 웹훅의 토큰 사용 |
+| `Content-Type` | `application/json` | `application/json` |
+| 인증 헤더 | `Authorization: Bearer <secret>` | **Auth Method**에 따라 다름 |
+| 본문 | 최대 1 MB의 JSON 객체 | 최대 1 MB의 JSON 객체 |
 
-## 웹훅 페이로드
+[요청 인증](#요청-인증) 외에 Resolve 웹훅의 헤더 세부 사항:
 
-각 웹훅은 표준화된 페이로드를 포함합니다.
+- **HMAC Signature:** 값은 `sha256=` 뒤에 시크릿을 키로 한 원시 본문의 소문자 16진수 HMAC-SHA256이 붙은 것입니다. 헤더가 `X-PagerDuty-Signature`로 설정되면 CloudThinker는 대신 PagerDuty 자체 형식을 읽습니다. 쉼표로 구분된 하나 이상의 `v1=<hex>` 값이며, 하나라도 일치하면 통과합니다.
+- **API Key:** **Key Prefix**가 설정되어 있으면 헤더 값은 그 접두사로 시작해야 합니다. CloudThinker는 접두사와 주변 공백을 제거한 뒤 나머지를 시크릿과 비교합니다.
+
+JSON 객체가 아닌 본문(배열, 문자열, JSON이 아닌 텍스트)은 `422`로 거부됩니다. CloudThinker는 멱등성 키를 읽지 않으므로, 보내는 쪽의 재시도는 새 호출로 계산됩니다.
+
+### 본문: Automation 트리거
+
+어떤 JSON 객체든 작동합니다. 본문 전체가 Automation의 지침 뒤에 에이전트로 전달되므로 템플릿 설정이 필요 없습니다. 에이전트는 최대 50,000자까지 보며, 그 이후는 잘립니다. 본문은 지침이 아니라 항상 데이터로 취급되므로, 호출자가 에이전트에게 지시된 내용을 바꿀 수 없습니다.
 
 ```json
 {
-  "id": "evt_abc123",
-  "type": "recommendation.created",
-  "timestamp": "2024-01-15T10:30:00Z",
-  "workspace_id": "ws_xyz789",
-  "data": {
-    "id": "rec_def456",
-    "title": "Right-size EC2 instance i-0abc123",
-    "potential_savings": 150.00,
-    "effort": "low",
-    "risk": "low",
-    "status": "pending"
-  }
+  "message": "Deploy of checkout-api finished",
+  "environment": "production",
+  "commit": "a1b2c3d"
 }
 ```
 
-### 페이로드 필드
+### 본문: Resolve 웹훅
 
-| 필드 | 설명 |
-|-------|-------------|
-| `id` | 고유 이벤트 식별자 |
-| `type` | 이벤트 유형 (예: `recommendation.created`) |
-| `timestamp` | ISO 8601 타임스탬프 |
-| `workspace_id` | 이벤트가 발생한 워크스페이스 |
-| `data` | 이벤트 별 페이로드 |
+도구 자체의 알림 페이로드를 그대로 보내세요. 웹훅의 **Field Mapping**이 `event.data.title` 같은 JSON 경로로 필드를 골라냅니다. 경로 앞의 `$`는 제거되며, 경로는 최대 8개 세그먼트를 가질 수 있습니다.
 
----
+| 매핑 필드 | 필수 |
+| --- | --- |
+| Title | 예 |
+| Description, Severity, Service, Resource ID, Resource name, Timestamp | 아니요 |
 
-## 보안
-
-### 서명 검증
-
-웹훅 시크릿을 구성하면 CloudThinker가 각 페이로드에 서명합니다.
-
-```
-X-CloudThinker-Signature: sha256=<signature>
-```
-
-엔드포인트에서 서명을 검증하세요.
-
-```python
-import hmac
-import hashlib
-
-def verify_signature(payload, signature, secret):
-    expected = hmac.new(
-        secret.encode(),
-        payload.encode(),
-        hashlib.sha256
-    ).hexdigest()
-    return hmac.compare_digest(f"sha256={expected}", signature)
-```
-
-### IP 허용 목록
-
-CloudThinker 웹훅은 알려진 IP 범위에서 발송됩니다. 방화벽 규칙 구성을 위한 현재 IP 목록은 지원팀에 문의하세요.
-
-### HTTPS 전용
-
-웹훅 URL은 HTTPS를 사용해야 합니다. 프로덕션 환경에서는 자체 서명 인증서가 지원되지 않습니다.
-
----
-
-## 재시도 로직
-
-CloudThinker는 전달에 실패한 웹훅을 재시도합니다.
-
-### 재시도 일정
-
-| 시도 횟수 | 지연 |
-|---------|-------|
-| 1 | 즉시 |
-| 2 | 1분 |
-| 3 | 5분 |
-| 4 | 30분 |
-| 5 | 2시간 |
-| 6 | 8시간 |
-
-### 성공 기준
-
-엔드포인트가 다음을 반환하면 전달 성공으로 간주합니다.
-- HTTP 2xx 상태 코드
-- 30초 이내 응답
-
-### 실패 처리
-
-모든 재시도 실패 후:
-- 이벤트가 실패로 표시됩니다
-- (구성된 경우) 알림이 전송됩니다
-- 이벤트는 웹훅 로그에서 확인 가능합니다
-
----
-
-## 웹훅 관리
-
-### 웹훅 테스트
-
-실제 사용 전에 웹훅 전달을 테스트하세요.
-
-1. 설정에서 웹훅 선택
-2. **테스트 이벤트 전송** 클릭
-3. 이벤트 유형 선택
-4. 전달 상태 및 페이로드 확인
-
-### 로그 보기
-
-웹훅 활동을 모니터링하세요.
-
-1. **설정 > Webhooks > 로그**로 이동
-2. 전달 시도 확인
-3. 요청/응답 세부 정보 확인
-4. 상태, 이벤트 유형, 날짜로 필터링
-
-### 웹훅 일시 중지
-
-웹훅을 일시적으로 비활성화하려면:
-
-1. 웹훅 선택
-2. **활성** 토글을 끄기로 설정
-3. 일시 중지 기간 동안 발생한 이벤트는 대기열에 저장되지 않습니다
-
----
-
-## 웹훅 템플릿
-
-일반적인 연동에 템플릿을 사용하세요.
-
-### Slack
-
-Slack 채널에 이벤트 게시:
+심각도 경로의 값은 웹훅의 **Severity Mapping**으로 변환됩니다. 최소한의 사용자 지정 페이로드:
 
 ```json
 {
-  "url": "https://hooks.slack.com/services/...",
-  "events": ["recommendation.created", "incident.created"],
-  "transform": {
-    "text": "New {{type}}: {{data.title}}"
-  }
+  "title": "High CPU on web-server-01",
+  "alert_type": "critical",
+  "service": "checkout-api"
 }
 ```
 
-### Jira
+### Amazon SNS
 
-CloudThinker 이벤트로 Jira 티켓 생성:
+요청에 `x-amz-sns-message-type` 헤더가 있으면 CloudThinker는 이를 Amazon SNS로 취급합니다. SNS 서명을 확인하고, `SubscriptionConfirmation`을 자동으로 확인하며, `Notification`을 풀어 내부 메시지를 본문으로 사용합니다. 웹훅의 인증은 모든 SNS 요청에 여전히 적용됩니다.
+
+### 응답
+
+인증과 검증을 통과한 호출은 다음 본문과 함께 HTTP `200`을 받습니다.
 
 ```json
-{
-  "url": "https://your-org.atlassian.net/...",
-  "events": ["recommendation.created"],
-  "headers": {
-    "Authorization": "Basic <base64_credentials>"
-  }
-}
+{"success": true, "request_id": "req_..."}
 ```
 
-### PagerDuty
+`200`은 CloudThinker가 호출을 대기열에 넣었다는 뜻입니다. 실행이나 알림은 잠시 후에 일어나므로 결과를 확인하세요([curl로 테스트](#curl로-테스트) 참조). 호출에 대해 지원팀에 문의할 경우를 위해 `request_id`를 보관하세요.
 
-PagerDuty 인시던트 트리거:
+다른 결과는 아래와 같습니다. 호출이 인증을 통과해도 `400`, `413`, `422`, `429`를 받을 수 있습니다.
 
-```json
-{
-  "url": "https://events.pagerduty.com/v2/enqueue",
-  "events": ["incident.created"],
-  "headers": {
-    "Content-Type": "application/json"
-  }
-}
+| HTTP | 본문 `detail` | 원인 |
+| --- | --- | --- |
+| `400` | `Webhook is not active` | 웹훅이 꺼져 있습니다 |
+| `401` | `Missing Authorization header` 또는 `Missing <header> header` | 인증 헤더가 없습니다 |
+| `401` | `Invalid webhook token` | URL의 토큰이 잘못되었거나 웹훅이 삭제되었습니다. 잘못된 토큰과 삭제된 토큰은 의도적으로 같은 응답을 하므로, 누구도 어떤 웹훅이 존재하는지 알아낼 수 없습니다 |
+| `403` | `Invalid bearer token`, `Invalid webhook signature`, `Invalid API key` 등 | 헤더는 있지만 시크릿이나 서명이 일치하지 않습니다 |
+| `413` | `Request body exceeds 1MB limit` | 본문이 1 MB를 넘습니다 |
+| `422` | 검증 오류 | 본문이 JSON 객체가 아닙니다 |
+| `429` | 속도 제한 메시지 | 호출이 너무 많거나 인증 실패가 너무 많습니다. [속도 제한과 실행 중 상태](#속도-제한과-실행-중-상태)를 참조하세요. `Webhook ingress is busy`라고 하는 `429`에는 `Retry-After` 헤더가 있으므로, 그 초만큼 기다린 뒤 재시도하세요. |
+
+오류는 `{"detail": "..."}` 본문을 사용합니다.
+
+## curl로 테스트
+
+Automation 대화 상자의 **Test command** 또는 Resolve 대화 상자의 **Integration Examples**를 사용하세요. 최소한의 Bearer 요청은 다음과 같습니다.
+
+```bash
+curl -X POST "$WEBHOOK_URL" \
+  -H "Authorization: Bearer $WEBHOOK_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "hello"}'
 ```
 
----
+**예상 결과:** CloudThinker가 `{"success": true, "request_id": "req_..."}`와 함께 `200`으로 응답합니다. 이는 전달만 증명하므로 결과도 확인하세요.
 
-## 모범 사례
+| 종류 | 확인할 곳 | 보여야 하는 것 |
+|---|---|---|
+| Automation 트리거 | 트리거 카드의 전달 목록과 **Automations** 페이지의 **Runs** 탭 | **Accepted** 다음 **Processed**로 표시된 전달, 그리고 **Webhook** 레이블이 붙은 실행 |
+| Resolve 웹훅 | **Resolve → Signals**, 그다음 **Resolve → Issues** | 매핑한 제목의 신호. Pulse가 조치 가능한 신호가 있는 클러스터로 묶으면 인시던트. [Pulse 작동 방식](/ko/guide/pulse/overview#작동-방식)을 참조하세요. |
+
+Resolve 웹훅의 경우 일반 알림 하나와 심각 알림 하나를 보내 두 심각도 매핑이 모두 작동하는지 확인하세요.
+
+Automation 트리거의 전달 목록은 각 호출에 상태를 표시합니다.
+
+| 상태 | 의미 | 할 일 |
+|---|---|---|
+| **Accepted** | CloudThinker가 호출을 받아 대기열에 넣었습니다. | 잠시 기다리세요. |
+| **Processed** | 호출이 실행을 시작했거나 실행을 위해 보류되었습니다. 보류된 호출이 더 새로운 호출로 대체되거나 30분 후에도 대기 중이면 **Processed**로 남지만 실행되지 않습니다. | **Runs** 탭을 확인하세요. 실행이 없으면 트리거 카드의 메모를 읽으세요. |
+| **Rate limited** | 호출이 웹훅의 시간당 한도를 넘어 아무것도 시작하지 않았습니다. | 보내는 속도를 늦추거나 이벤트를 묶어 보내세요. |
+| **Failed** | 호출을 처리할 수 없었습니다. 오류 텍스트가 이유를 알려 줍니다. | 원인을 수정하고 다시 보내세요. |
+
+## 속도 제한과 실행 중 상태
+
+각 웹훅에는 시간당 한도가 있습니다. Automation 트리거는 시간당 60회, Resolve 웹훅은 기본 시간당 1,000회입니다. 한도를 넘은 호출도 `200`을 받지만 아무것도 시작하지 않으며, Automation 트리거는 이를 **Rate limited**로 표시합니다. 한도를 크게(10배) 넘은 보내는 쪽은 `429`를 받습니다. 15분 안에 인증이 10회 실패하면 웹훅은 한동안 `429`로도 응답합니다. 보내는 쪽이 몰아서 보낸다면 이벤트를 하나의 요청으로 묶거나 속도를 늦추세요.
+
+Automation은 한 번에 하나의 실행만 합니다. 실행 중에 도착한 호출은 보류되며, CloudThinker는 최대 30분 동안 매분 재시도합니다. 이미 실행이 진행 중이라면 보류된 호출의 실행이 **Runs** 탭에 **Pending**으로 표시됩니다.
+
+<Warning>
+트리거당 하나의 호출만 보류됩니다. 더 새로운 호출이 보류된 호출을 대체하므로, 이전에 보류된 호출은 실행되지 않습니다. 모든 이벤트가 중요하다면 하나의 요청으로 묶으세요.
+</Warning>
+
+<Warning>
+10회 연속 실행이 실패하면 CloudThinker가 Automation을 끄고 **Automation turned off** 알림을 보냅니다. 그 후에는 원인을 수정하고 다시 켤 때까지 웹훅 호출이 실행을 시작하지 않습니다.
+</Warning>
+
+## 문제 해결
 
 <AccordionGroup>
-  <Accordion title="항상 서명 검증하기">
-    웹훅 시크릿을 사용하고 서명을 검증하여 요청이 CloudThinker에서 발송된 것임을 확인하세요.
+  <Accordion title="모든 요청에서 401 또는 403">
+    `401`은 인증 헤더가 없거나 URL의 토큰이 잘못되었다는 뜻이고, `403`은 헤더는 있지만 시크릿이나 서명이 일치하지 않는다는 뜻입니다. Automation 트리거는 `Authorization: Bearer <secret>`만 받습니다. Resolve 웹훅의 경우 도구의 헤더 이름과 시크릿을 **Authentication Setup**과 비교하세요. 15분 안에 10회 실패하면 웹훅이 한동안 `429`로 응답하므로, 재시도하기 전에 헤더를 수정하세요. 시크릿을 잃어버렸다면 트리거 카드에서 **Rotate webhook secret**을 사용하거나(Automation), **Resolve → Triggers & Outcomes**를 열어 도구를 선택하고 **Signals to Resolve** 아래 웹훅 메뉴를 열어 **Regenerate credentials**를 선택하세요(Resolve). 그런 다음 모든 보내는 쪽을 새 값으로 업데이트하세요.
   </Accordion>
-
-  <Accordion title="빠르게 응답하기">
-    즉시 2xx 응답을 반환하고 이벤트는 비동기적으로 처리하세요. 처리가 오래 걸리면 타임아웃이 발생합니다.
+  <Accordion title="HMAC 서명 불일치">
+    보내는 원시 본문 바이트 그대로 서명하세요. 서명 후 JSON을 다시 포맷하거나 직렬화하면 바이트가 바뀌어 서명이 깨집니다.
   </Accordion>
-
-  <Accordion title="중복 처리하기">
-    웹훅 전달이 간헐적으로 중복될 수 있습니다. 이벤트 `id`를 사용하여 수신 측에서 중복을 제거하세요.
+  <Accordion title="413 또는 큰 페이로드 거부">
+    본문이 1 MB를 넘습니다. 전체 문서 대신 짧은 요약과 에이전트가 조회할 수 있는 링크나 ID를 보내세요.
   </Accordion>
-
-  <Accordion title="실패 모니터링하기">
-    웹훅 실패에 대한 알림을 설정하세요. 이벤트 누락을 방지하기 위해 문제를 신속히 조사하고 해결하세요.
+  <Accordion title="200 응답이지만 Automation 실행 없음">
+    트리거 카드의 전달을 확인하세요. **Rate limited**는 보내는 쪽이 너무 빠르다는 뜻입니다. **Failed**는 오류 텍스트를 보여 줍니다. Automation의 스위치가 켜져 있는지도 확인하고, 실행 중인 실행 뒤에서 대기하는 **Pending** 실행이 있는지 보세요. 실행이 없는 **Processed** 호출은 실행이 진행되는 동안 보류된 뒤 더 새로운 호출로 대체되었거나 30분 후 삭제된 것입니다. 트리거 카드의 메모가 마지막 호출이 실행을 시작하지 않은 이유를 알려 줍니다. [속도 제한과 실행 중 상태](#속도-제한과-실행-중-상태)를 참조하세요.
   </Accordion>
-
-  <Accordion title="특정 구독 사용하기">
-    필요한 이벤트에만 구독하세요. 노이즈와 처리 오버헤드를 줄여줍니다.
+  <Accordion title="200 응답이지만 Resolve에 아무것도 없음">
+    Pulse가 알림을 노이즈로 억제했거나 시간 범위 때문에 숨겨졌을 수 있습니다. **Resolve → Signals**에서 범위를 넓히세요. 신호가 있지만 제목이 비어 있거나 심각도가 틀리다면 **Field Mapping**의 경로를 수정하거나 누락된 값을 **Severity Mapping**에 추가하세요.
+  </Accordion>
+  <Accordion title="인시던트가 열렸지만 RCA가 시작되지 않음">
+    **Auto-investigate**가 꺼져 있거나, 알림이 **Only from a minimum severity**(웹훅의 **Advanced** 단계에서 설정)보다 낮거나, Resolve의 **AI auto-investigate** 스위치가 꺼져 있습니다. 세 가지를 모두 확인하거나 조사를 직접 시작하세요.
   </Accordion>
 </AccordionGroup>
 
----
-
-## 연동 예시
-
-### GitHub Actions
-
-CloudThinker 이벤트에서 워크플로 트리거:
-
-```yaml
-# .github/workflows/cloudthinker.yml
-on:
-  repository_dispatch:
-    types: [recommendation-created]
-
-jobs:
-  process:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Process recommendation
-        run: |
-          echo "New recommendation: ${{ github.event.client_payload.title }}"
-```
-
-### AWS Lambda
-
-서버리스 함수로 웹훅 처리:
-
-```python
-def lambda_handler(event, context):
-    body = json.loads(event['body'])
-
-    if body['type'] == 'recommendation.created':
-        # Process new recommendation
-        process_recommendation(body['data'])
-
-    return {'statusCode': 200}
-```
-
----
-
-## 관련 항목
+## 관련 문서
 
 <CardGroup cols={2}>
-  <Card title="인시던트 웹훅" icon="siren-on" href="/ko/guide/incident/webhook-integrations/overview">
-    PagerDuty, Datadog, Prometheus 등의 인바운드 웹훅으로 RCA 자동 트리거
+  <Card title="Automations" icon="robot" href="/guide/automation/automations">
+    웹훅 호출이 실행하는 지침을 작성하고 모든 실행을 검토합니다.
   </Card>
-  <Card title="Automations" icon="calendar-check" href="/guide/automation/automations">
-    반복 작업 예약 및 이벤트 기반 워크플로 생성
-  </Card>
-  <Card title="알림" icon="bell" href="/ko/guide/notifications">
-    권장 사항, 인시던트, 보안 발견 항목에 대한 알림 라우팅 구성
-  </Card>
-  <Card title="자율 에이전트" icon="robot" href="/ko/guide/automation/autonomous-agents">
-    에이전트가 수동 검토 없이 웹훅 이벤트에 자동으로 대응하도록 설정
+  <Card title="웹훅 신호" icon="bell" href="/ko/guide/incident/webhook-integrations/overview">
+    알림 필드를 매핑하고 Resolve가 스스로 조사할 시점을 선택합니다.
   </Card>
 </CardGroup>

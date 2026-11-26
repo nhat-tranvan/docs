@@ -1,165 +1,157 @@
 ---
 title: Zabbix
-description: "CloudThinker と Zabbix 監視を接続して、インフラ監視、アラート、パフォーマンス分析を実現する"
+description: "Zabbix を接続し、エージェントがアクティブな問題をトリアージし、ホストのメトリクスとログを読み、Approvals を通じてメンテナンスを予約できるようにします"
 icon: "/images/icons/zabbix.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+import ApprovalDefault from '/snippets/approval-default.mdx';
 
-Zabbix 監視プラットフォームを接続することで、CloudThinker エージェントがホストの管理、問題の分析、メンテナンスウィンドウの処理、インフラ監視操作を行えるようになります。
-
-Zabbix は**ユーザー名とパスワード**（Zabbix 4.4 以上）または **API トークン**（Zabbix 5.4 以上）で認証します。本番環境では API トークン認証が推奨されます。
-
----
-
-## サポートされるプラットフォーム
-
-| プラットフォーム | サポート |
-|----------|---------|
-| **Zabbix** | 4.4 以上（ユーザー名/パスワード認証）、5.4 以上（API トークン認証） |
-| **Zabbix Cloud** | 全ティア |
-
----
+Zabbix を接続すると、CloudThinker エージェントはアクティブな問題をトリアージし、ホストのメトリクスとログアイテムを読み、トリガー、テンプレート、ダッシュボードを確認し、許可した場合はイベントの確認応答やメンテナンスの予約も行えます。この接続は API トークンまたはユーザー名とパスワードで Zabbix API にサインインし、エージェントはその Zabbix ユーザーに許可された操作だけを行えます。
 
 ## 前提条件
 
-- CloudThinker からアクセスできる**Zabbix フロントエンド**（バージョン 4.4 以降）。
-- API アクセスが有効な**専用 Zabbix ユーザー**、または **API トークン**（Zabbix 5.4 以上）。
-- **Zabbix フロントエンド URL**。
-
----
+- `https://zabbix.example.com` のように、CloudThinker からインターネット経由で到達できる Zabbix フロントエンド。ファイアウォールで保護されている場合や、プライベートのままにする必要がある場合は、[Reaching private services](/ja/guide/connections/overview#プライベートサービスへの到達) を参照してください。
+- ユーザー、ユーザーグループ、API トークンを作成できる Zabbix の Super admin。
+- API トークンを使う場合は Zabbix 5.4 以降。それより古いバージョンではユーザー名とパスワードを使います。
+- 接続を追加するために必要な、CloudThinker ワークスペースの **Admin** ロール。[Roles](/guide/security/roles) を参照してください。
 
 ## セットアップ
 
 <Steps>
-  <Step title="Zabbix にサインインする">
-    管理者として Zabbix フロントエンドにサインインします。
+  <Step title="API アクセス付きのロールを作成する">
+    **Users → User roles**（Zabbix 6.x では **Administration → User roles**）に移動し、**Create user role** をクリックします。名前を `CloudThinker` にし、**User type** を **User**（書き込みには **Admin**。[必要な権限](#必要な権限)を参照）に設定し、**Access to API** が有効になっていることを確認して **Add** をクリックします。
   </Step>
-  <Step title="専用ユーザーを作成する">
-    **Users → Users** に移動して新しいユーザーを作成します。
-    - **Username**: `cloudthinker`
-    - **Password**: 強力でユニークなパスワード
-    - **Role**: スーパー管理者ロール（完全な API アクセスに必要）または API アクセスが有効なカスタムロール
+  <Step title="ホストグループにアクセスできるユーザーグループを作成する">
+    **Users → User groups**（6.x では **Administration → User groups**）に移動し、**Create user group** をクリックします。名前を `CloudThinker` にします。**Host permissions** タブ（6.x では **Permissions**）で、エージェントに見せたいホストグループを選び、**Read** を選んで **Add** をクリックします。
   </Step>
-  <Step title="API トークンを生成する（Zabbix 5.4 以上推奨）">
-    **Administration → General → API Tokens** に移動して **Create API token** をクリックします。
-    - **Name**: `cloudthinker`
-    - **User**: 上記で作成したユーザーを選択する
-    - **Expires at**: 適切な有効期限を設定する
+  <Step title="ユーザーを作成する">
+    **Users → Users**（6.x では **Administration → Users**）に移動し、`CloudThinker` グループに `cloudthinker` という名前のユーザーを作成します。**Permissions** タブで `CloudThinker` ロールを選び、**Add** をクリックします。
+  </Step>
+  <Step title="API トークンを作成する（Zabbix 5.4 以降）">
+    **Users → API tokens**（Zabbix 5.4 から 6.x では **Administration → General → API tokens**）に移動し、**Create API token** をクリックします。`cloudthinker` ユーザーを選び、ローテーションの予定に合わせて **Expires at** を設定し、**Add** をクリックします。トークンをコピーします。Zabbix がトークンを表示するのは一度だけです。
 
-    トークンをコピーしてください。再表示されません。
-  </Step>
-  <Step title="Zabbix URL を確認する">
-    Zabbix URL は Zabbix フロントエンドのアドレスです（例: `https://zabbix.your-domain.com`）。
+    5.4 より古いバージョンでは、このステップを飛ばして、代わりにユーザーのパスワードを使います。
   </Step>
   <Step title="CloudThinker で接続を追加する">
-    **Connections → Zabbix** に移動して以下を入力します。
-    - **Zabbix URL**: Zabbix フロントエンドの URL
-    - **Auth Type**: **Username & Password** または **API Token** を選択する
-    - **Username / Password** または **API Token**: 上記で作成した認証情報
+    **Settings → Workspace → Connections** を開いて **Zabbix** を選択し、次を入力します:
 
-    **Connect** をクリックします。CloudThinker が認証情報を検証し、**Connected** ステータスを表示します。
+    - **ZABBIX_URL**: Zabbix フロントエンドの URL（例: `https://zabbix.example.com`）。
+    - **ZABBIX_AUTH_TYPE**: **API Token** に切り替えます。デフォルトは **Username & Password** ですが、トークンならパスワードを変えずに期限切れにしたり取り消したりできます。
+    - **ZABBIX_TOKEN**、または **ZABBIX_USERNAME** と **ZABBIX_PASSWORD**: 上のステップで用意したクレデンシャル。CloudThinker は選んだ認証タイプのフィールドだけを表示します。
+
+    **Connect** をクリックします。CloudThinker はサインインしてホストを一覧表示し、クレデンシャルを確認します。
+
+    **成功の状態:** 接続に **Connected** のステータスが表示されます。これはサインインの成功を示すだけなので、新しいチャットで[接続を確認する](#接続を確認する)のプロンプトを実行し、想定したホストが見えることを確認してください。
   </Step>
 </Steps>
 
-<Warning>
-API トークンには Zabbix 5.4 以降が必要です。それより古いバージョンでは、ユーザー名とパスワード認証を使用してください。
-</Warning>
-
----
-
 ## 接続の詳細
+
+フォームには、以下に書かれているとおりのフィールド名が表示されます。
 
 | フィールド | 説明 | 例 |
 |-------|-------------|---------|
-| **ZABBIX_URL** | Zabbix フロントエンドの URL | `https://zabbix.your-domain.com` |
-| **ZABBIX_AUTH_TYPE** | 認証方法 | `credentials` または `token` |
-| **ZABBIX_USERNAME** | Zabbix ユーザー名（認証情報認証） | `cloudthinker` |
-| **ZABBIX_PASSWORD** | Zabbix パスワード（認証情報認証） | — |
-| **ZABBIX_TOKEN** | Zabbix API トークン（トークン認証） | — |
-
----
+| **ZABBIX_URL** | Zabbix フロントエンドの URL | `https://zabbix.example.com` |
+| **ZABBIX_AUTH_TYPE** | **Username & Password**（デフォルト）または **API Token** | **API Token** |
+| **ZABBIX_TOKEN** | Zabbix の API トークン。**API Token** のときに表示されます | **API tokens** から |
+| **ZABBIX_USERNAME** | Zabbix のユーザー名。**Username & Password** のときに表示されます | `cloudthinker` |
+| **ZABBIX_PASSWORD** | そのユーザーのパスワード。**Username & Password** のときに表示されます | |
 
 ## 必要な権限
 
-**最小（読み取り専用監視）:**
-- Zabbix API アクセスが有効なユーザーロール
-- 監視するホストグループへの読み取りアクセス
+Zabbix はアクセスを 2 か所で決めます。ユーザーのロール（どの種類のユーザーか、API を使えるか）と、ユーザーグループ（どのホストグループを読めるか、変更できるか）です。エージェントには、ユーザーグループが読めるホストグループ内のホストだけが見えます。
 
-**推奨（完全な操作）:**
-- スーパー管理者ロール、または API アクセスが有効なカスタムロール。ホスト、テンプレート、トリガー、イベントへの読み取り/書き込みアクセス、メンテナンスウィンドウの作成・変更権限
+| エージェントにさせたいこと | ロール | ホストグループの権限 |
+|--------------------|------|-----------------------|
+| 問題、メトリクス、ログ、トリガー、テンプレート、ダッシュボードの調査 | **User** タイプ、API アクセス有効 | **Read** |
+| さらにイベントの確認応答、ホストとトリガーの有効化と無効化、テンプレートのリンク、メンテナンスウィンドウの作成 | **Admin** タイプ、API アクセス有効 | **Read-write** |
+| さらにホストグループやユーザーの作成 | **Super admin** タイプ | すべて |
+
+<Warning>
+Super admin は避けてください。Super admin はホストグループの権限を無視し、ユーザーを作成・変更できるため、人によるものでも AI の判断によるものでも、1 回の誤った承認ですべてのホストとアカウントに影響が及ぶおそれがあります。どうしても使う場合は、**Manual** を選んですべての変更を人が承認するようにしてください。Zabbix のユーザー作成に対する **Deny** の [Rule](/guide/approvals/rules) を使うと、その 1 つの操作を完全にブロックできます。
+</Warning>
 
 <Tip>
-最小権限の原則に従ってください。ユースケースに応じて CloudThinker に必要なホストグループと権限のみを付与してください。
+まずは User タイプのロールと、関心のあるホストグループでの Read で始めてください。すべての書き込みは引き続き [Approvals](/guide/approvals/overview) を通りますが、読み取り専用の Zabbix ユーザーなら、誤った承認でも自動の承認でも何も変更できません。
 </Tip>
-
----
 
 ## エージェントの機能
 
-接続後、エージェントは Zabbix 環境全体で監視・運用タスクを実行できます。
+| 機能 | エージェントができること |
+|------------|--------------------|
+| **検出** | Zabbix のバージョン、ホスト、ホストグループ、アクティブな問題、テンプレートを報告します |
+| **問題とイベント** | アクティブな問題を重大度、ホスト、ホストグループ別に一覧表示し、イベント履歴を読みます |
+| **メトリクスとログ** | ホストのアイテムを一覧表示し、最近の値を読み、ログアイテムを追跡します |
+| **設定** | トリガー、テンプレート、アクション、メンテナンスウィンドウ、ダッシュボード、ユーザーを読み、ホストやテンプレートの設定をエクスポートします |
+| **書き込み（Approvals 経由）** | イベントの確認応答、ホストの作成・更新・有効化・無効化・削除、トリガーとアクションの有効化と無効化、テンプレートのリンクとリンク解除、メンテナンスウィンドウの作成と削除、ホストグループとユーザーの作成、設定のインポートを行います |
 
-| 機能 | 説明 |
-|------------|-------------|
-| **ホスト管理** | 監視対象ホストの一覧表示、調査、有効化、無効化 |
-| **問題分析** | アクティブな問題の取得、パターンの分析、イベントの相関付け |
-| **トリガー管理** | アラートトリガー設定の表示・変更 |
-| **メンテナンスウィンドウ** | アラートを抑制するメンテナンス期間の作成・管理 |
-| **テンプレート操作** | ホスト全体の監視テンプレートの調査・適用 |
-| **ダッシュボードアクセス** | Zabbix ダッシュボードとグラフデータの取得 |
+エージェントは Zabbix の重大度スケールを使います: Not classified、Information、Warning、Average、High、Disaster。
 
-### 接続の確認
+<ApprovalDefault />
+
+つまりデフォルトのモードでは、エージェントは人が見ないうちにメンテナンスウィンドウの作成、ホストの削除、ユーザーの作成を行える可能性があります。**Manual** を選んで、すべての変更を人が承認するようにしてください。**Ask first** の [Rule](/guide/approvals/rules) を使うと、承認待ちをそれらの操作だけに絞れます。チャットで `Propose an Ask first Rule for maintenance windows, host deletes and user creation on the Zabbix connection` と依頼し、**Settings → Workspace → Autonomy → Rules** の **Needs review** で承認してください。
+
+<Warning>
+エージェントが作成したメンテナンスウィンドウはすぐに開始され、終了するまでそれらのホストのアラートは抑制されます。開始時刻を未来に指定することはできないので、作業を始めるときに依頼してください。承認する前に、承認リクエストのホスト一覧と期間を確認してください。ホストの削除や、データを伴うテンプレートのリンク解除は元に戻せません。
+</Warning>
+
+### 接続を確認する
+
+新しいチャットで CloudThinker に次のように聞きます:
 
 ```text
-List Zabbix hosts and summarize active problem count by severity
+Run Zabbix discovery and summarize the version, host count, host groups, and active problems by severity
 ```
+
+Zabbix サーバーのバージョン、ホスト数とサンプル、ホストグループ、重大度別にまとめたアクティブな問題が返るはずです。ホストが足りない場合は、ユーザーのグループがそのホストグループを読めません。
 
 ### プロンプト例
 
 ```text
-List all Zabbix hosts with active problems and their severity
-Analyze active Zabbix problems with severity >= High and recommend remediation steps
-Review Zabbix trigger configurations for security-related alerts
+List active Zabbix problems at High or Disaster and tell me which hosts they're on
+Is db-prod-01 running out of disk? Show the trend from its recent disk values
+Schedule a 2-hour Zabbix maintenance window for the hosts in Database servers
 ```
 
----
+最後のプロンプトには、そのホストグループで **Read-write** を持つ Admin タイプのロールが必要で、まず [Approvals](/guide/approvals/overview) を通ります。**Manual** では人を待ち、デフォルトの Auto モードでは AI の判断で確認なしに実行されることがあります。
 
 ## トラブルシューティング
 
-<Accordion title="接続が拒否される">
-CloudThinker から Zabbix URL にアクセスできるか確認してください。ポート 80 または 443 でのインバウンド接続を許可するファイアウォールルールを確認し、Zabbix フロントエンドが稼働しているか確認してください。
+<Accordion title="Failed to connect to Zabbix">
+CloudThinker がサインインまたはホストの一覧表示をできませんでした。**ZABBIX_URL** がフロントエンドのアドレスで CloudThinker から到達できること、**ZABBIX_AUTH_TYPE** が入力したクレデンシャルと一致していること、ユーザーのロールで API アクセスが有効になっていることを確認してください。
 </Accordion>
 
-<Accordion title="認証が失敗する">
-ユーザー名とパスワードが正しく、ユーザーアカウントがロックまたは無効化されていないか確認してください。API トークン認証の場合は、トークンが期限切れでなく、ロールで API アクセスが有効になっているか確認してください。
+<Accordion title="401、またはセッションの期限切れ">
+トークンが期限切れになったか削除されたか、パスワードが変更されました。**API tokens** で新しいトークンを作成して **ZABBIX_TOKEN** を更新するか、パスワードを更新してください。
 </Accordion>
 
-<Accordion title="権限が拒否される">
-リクエストされた操作に対してユーザーが十分な権限を持っているか確認してください。ユーザーにホストグループへのアクセス権が付与されているか確認してください。書き込み操作については、ロールが API 書き込みアクセスを許可しているか確認してください。
+<Accordion title="ホストや問題が表示されない">
+ユーザーのグループにそのホストグループの権限がないため、Zabbix がそれらのホストを除外しています。ユーザーグループの権限で、そのホストグループに **Read** を付与してください。
 </Accordion>
 
-<Accordion title="API トークンが期限切れ">
-Zabbix の **Administration → API Tokens** に移動し、期限切れのトークンを削除して新しいトークンを作成してください。CloudThinker の接続設定でトークンを更新してください。
+<Accordion title="書き込みが権限エラー（403）で失敗する">
+ユーザーが User タイプのロールか、ホストグループで **Read** しか持っていません。エージェントにその変更をさせたい場合は、ロールを Admin タイプに変更して **Read-write** を付与してください。
 </Accordion>
 
----
+<Accordion title="429、500、または 503 エラー">
+Zabbix API がレート制限中か、失敗しているか、メンテナンス中です。1 分待ってから、1 つのホストやホストグループに絞った質問をしてください。
+</Accordion>
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **認証情報よりも API トークン** — 監査性を高めるために、ユーザー名/パスワードではなく API トークン認証（Zabbix 5.4 以上）を使用してください。
-- **トークンの有効期限を設定する** — API トークンに適切な有効期限を設定し、定期的にローテーションしてください。
-
----
+- **API トークンを優先する**: トークンは 1 人のユーザーに属し、独自の有効期限を持ち、パスワードを変えずに取り消せます。
+- **ホストグループで範囲を絞る**: CloudThinker のユーザーグループには、エージェントに必要なホストグループの権限だけを与えてください。
 
 ## 関連情報
 
 <CardGroup cols={2}>
-  <Card title="Grafana 接続" icon="/images/icons/grafana.svg" href="/ja/guide/connections/grafana">
-    Grafana で Zabbix メトリクスを可視化する
+  <Card title="Approval rules" icon="shield-check" href="/guide/approvals/rules">
+    どの Zabbix の書き込みを実行し、人を待ち、拒否するかを決めます。
   </Card>
-  <Card title="Elasticsearch 接続" icon="/images/icons/elasticsearch.svg" href="/ja/guide/connections/elasticsearch">
-    Zabbix ログを Elasticsearch に転送する
+  <Card title="Webhook integrations" icon="webhook" href="/ja/guide/incident/webhook-integrations/overview">
+    Zabbix のアラートを Resolve にインシデントとして送ります。
   </Card>
 </CardGroup>

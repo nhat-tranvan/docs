@@ -1,200 +1,201 @@
 ---
 title: RabbitMQ
-description: "Management HTTP APIを通じてRabbitMQをCloudThinkerに接続し、キュー深度・コンシューマーラグ・DLQ分析・クラスターとノードのヘルス・アラーム監視を行います"
+description: "Management HTTP API を通じて RabbitMQ を接続し、エージェントがキューの深さ、コンシューマーの遅れ、デッドレター、ノードのアラームを確認できるようにします"
 icon: "/images/icons/rabbitmq.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+import ApprovalDefault from '/snippets/approval-default.mdx';
 
-RabbitMQブローカーを接続することで、[CloudThinker](/ja/guide/agents/overview)がキューの深度を監視し、コンシューマーラグを分析し、デッドレターキューを検査し、クラスターとノードの健全性を追跡できるようになります。
-
-RabbitMQはManagement HTTP API（デフォルトポート `15672`）で**ユーザー名とパスワード**を使って認証します。これはRabbitMQ管理UIが使用するものと同じAPIのため、AMQPクライアントのセットアップは不要です。
-
----
+RabbitMQ ブローカーを接続すると、[CloudThinker](/ja/guide/agents/overview) は、どのキューが滞留しているか、どのキューにコンシューマーがいないか、デッドレターキューに何が溜まっているか、アラーム状態のノードがあるかを教えてくれます。この接続は、Management HTTP API 経由でブローカーの**ユーザー名とパスワード**を使ってサインインします。これは RabbitMQ 管理 UI が使うのと同じ API です。コードの変更は必要ありません。
 
 ## 対応プラットフォーム
 
-| プラットフォーム | サポート |
-|----------|---------|
-| **セルフホスト RabbitMQ** | managementプラグイン有効の3.8以降 |
-| **マネージド RabbitMQ** | CloudAMQPおよびManagement HTTP APIを公開するその他のプロバイダー |
-
----
+| プラットフォーム | 対応 | 備考 |
+|----------|-----------|-------|
+| **Self-hosted RabbitMQ** | はい | `rabbitmq_management` プラグインを有効にする必要があります |
+| **Managed RabbitMQ**（例: CloudAMQP） | はい | プロバイダーが Management HTTP API を CloudThinker に公開している必要があります |
+| **Clusters** | はい | クラスターごとに接続を 1 つ追加します。**RABBITMQ_HOST** にはロードバランサーまたは任意のノードを指定します。管理 API はどのノードからでもクラスター全体の状態を返します |
 
 ## 前提条件
 
-- CloudThinkerから管理ポート（デフォルト `15672`、HTTPSは `15671`）で到達可能な **RabbitMQブローカー**。
-- **managementプラグインの有効化**。セルフホストブローカーの場合:
-  ```bash
-  rabbitmq-plugins enable rabbitmq_management
-  ```
-- `monitoring` または `administrator` タグを持つ**ブローカーユーザー**（Management HTTP APIがキュー、ノード、クラスターデータを返すために必要）。
-
-<Info>
-`monitoring` タグは、すべての読み取りとヘルスチェック機能に十分です。書き込み操作（キューのパージ/削除、エクスチェンジの削除、定義の更新）をエージェントに実行させたい場合のみ `administrator` を付与してください。これらは常にアプリ内での承認が必要です。[必要な権限](#必要な権限)を参照してください。
-</Info>
-
----
+- ブローカーで management プラグインが有効になっていること。
+- 管理ポートにインターネットから到達できること: HTTP は `15672`、HTTPS は通常 `15671` です。これは AMQP（`5672`）とは別のポートです。接続は CloudThinker Cloud から実行されるため、プライベートネットワーク上のブローカーには [Reaching private services](/ja/guide/connections/overview#プライベートサービスへの到達) のいずれかの方法が必要です。
+- ユーザーを作成するための、ブローカーへのシェルアクセス（`rabbitmqctl`）またはプロバイダーのコンソール。
 
 ## セットアップ
 
 <Steps>
-  <Step title="managementプラグインを有効化">
-    セルフホストブローカーでmanagementプラグインを有効にし、リスニング中であることを確認します:
+  <Step title="management プラグインを有効にする">
+    セルフホストのブローカーでは、次を実行します:
+
     ```bash
     rabbitmq-plugins enable rabbitmq_management
-    curl -u <user>:<password> http://localhost:15672/api/overview
     ```
-    CloudAMQPなどのマネージドプロバイダーはManagement HTTP APIをデフォルトで公開しています。次のステップへ進んでください。
+
+    マネージドプロバイダーでは通常すでに有効になっています。プロバイダーのコンソールに管理 UI が表示される場合は、このステップを飛ばしてください。
   </Step>
-  <Step title="監視ユーザーを作成">
-    CloudThinker用の専用ユーザーを作成し、`monitoring` タグを付与します:
+  <Step title="CloudThinker 用の監視ユーザーを作成する">
+    専用ユーザーを作成して `monitoring` タグを付け、エージェントに見せたい各仮想ホスト（vhost）で読み取り権限を与えます。vhost は RabbitMQ におけるキューとエクスチェンジの名前空間で、`/` がデフォルトです。
+
     ```bash
-    rabbitmqctl add_user cloudthinker <strong-password>
+    rabbitmqctl add_user cloudthinker '<strong-password>'
     rabbitmqctl set_user_tags cloudthinker monitoring
     rabbitmqctl set_permissions -p / cloudthinker "" "" ".*"
     ```
-    `monitoring` タグにより、すべての仮想ホストのキュー、エクスチェンジ、ノード、クラスターヘルスへの読み取りアクセスが付与されます。
-  </Step>
-  <Step title="ネットワークアクセスを確認">
-    CloudThinkerがブローカーの `<host>:15672`（TLSの場合は `<host>:15671`）に到達できることを確認します。CloudThinkerのエグレスに対してファイアウォールまたはセキュリティグループで管理ポートを開放してください。
-  </Step>
-  <Step title="CloudThinkerで接続を追加">
-    **Connections → RabbitMQ** に移動し、次の情報を入力します:
-    - **Username**: ブローカーユーザー（例: `cloudthinker`）
-    - **Password**: ユーザーのパスワード
-    - **Host**: ブローカーのホスト名またはIP（ホスト名のみ — スキームやポートは含めない）
-    - **Management Port**: 管理APIポート（デフォルト `15672`）
-    - **Use TLS**: HTTPS管理APIとAMQPSの場合は有効にする
-    - **Log Level**: コネクターのログ詳細度（デフォルトは `info`）
 
-    **Connect** をクリックします。CloudThinkerがManagement HTTP APIに対して認証情報を検証し、**Connected** ステータスを表示します。
+    3 つの権限文字列は、configure、write、read の順です。configure と write を空にして read を `.*` にすると、ユーザーは vhost 内のすべてを見られますが、完全な読み取り専用ではありません。RabbitMQ では読み取り権限でキューをパージできるため、このユーザーでもキューを空にできます。キューやエクスチェンジの削除には configure が必要で、このユーザーにはありません。追加の vhost ごとに `set_permissions` を繰り返してください。
+
+    エージェントに何もパージさせたくない場合は、次のステップで **RABBITMQ_ALLOW_MUTATIONS** を **Read-only** に設定します。
+  </Step>
+  <Step title="ネットワーク経路を開く">
+    ファイアウォールまたはセキュリティグループで、CloudThinker の送信元 IP から `<host>:15672`（または TLS 用の管理ポート）への受信トラフィックを許可します。このドキュメントでは CloudThinker の送信元 IP 一覧を公開していません。CloudThinker の担当者に問い合わせるか、[お問い合わせ](https://cloudthinker.io/contact)ください。セルフホストのブローカーでは、管理リスナーが `127.0.0.1` だけにバインドされていないことを確認してください。
+
+    **成功の状態:** ブローカーのネットワーク外のマシンから次を実行します。`rabbitmq_version` と `cluster_name` を含む JSON が返れば、新しいユーザーとネットワーク経路の両方が確認できています:
+
+    ```bash
+    curl -u cloudthinker:'<strong-password>' http://<host>:15672/api/overview
+    ```
+
+    TLS を有効にしている場合は、代わりに `https://<host>:15671` を使います。
+  </Step>
+  <Step title="CloudThinker で接続を追加する">
+    **Settings → Workspace → Connections** を開き、**Discover** タブを開いて **RabbitMQ** を選択します。次を入力します:
+
+    - **RABBITMQ_USERNAME**: `cloudthinker`
+    - **RABBITMQ_PASSWORD**: 設定したパスワード
+    - **RABBITMQ_HOST**: ホスト名または IP のみ（例: `rabbit.internal.example.com`）
+    - **RABBITMQ_MANAGEMENT_PORT**: `15672`、または TLS 用の管理ポート
+    - **RABBITMQ_USE_TLS**: 管理 API が HTTPS を提供している場合は **Enabled**
+    - **RABBITMQ_ALLOW_MUTATIONS**: **Read-only**（推奨）。[書き込みアクセス](#書き込みアクセス)の操作が必要な場合にのみ **Allow writes** を選びます
+    - **LOG_LEVEL**: **Info** のままにします
+
+    <Warning>
+    **RABBITMQ_ALLOW_MUTATIONS** のデフォルトは **Allow writes** です。**Connect** をクリックする前に **Read-only** に切り替えてください。ブローカーユーザーだけではすべての書き込みを止められません。読み取り権限しかないユーザーでもキューをパージでき、パージするとメッセージは完全に削除されます。**Read-only** にすると、パージと削除のツールがエージェントから外れます。
+    </Warning>
+
+    **Connect** をクリックします。
+
+    **成功の状態:** 接続は **Connecting**、**Verifying** を経て **Connected** になります。検証に失敗すると **Failed** と表示され、エラーメッセージが出ます。メッセージを[トラブルシューティング](#トラブルシューティング)と照らし合わせてください。
   </Step>
 </Steps>
 
-<Warning>
-**Host** にはホスト名のみを設定してください。`http://`、`https://`、またはポートは含めないでください。HTTP/HTTPSの切り替えには **Use TLS** トグルを、ポートには **Management Port** を使用してください。
-</Warning>
-
----
-
 ## 接続の詳細
 
-| フィールド | 説明 | デフォルト |
-|-------|-------------|---------|
-| **RABBITMQ_USERNAME** | `monitoring` または `administrator` タグを持つブローカーユーザー | — |
-| **RABBITMQ_PASSWORD** | ブローカーユーザーのパスワード | — |
-| **RABBITMQ_HOST** | ブローカーのホスト名またはIP（スキームなし、ポートなし） | — |
-| **RABBITMQ_MANAGEMENT_PORT** | Management HTTP APIポート | `15672` |
-| **RABBITMQ_USE_TLS** | HTTP + AMQPは `Disabled`、HTTPS + AMQPSは `Enabled` | `Disabled` |
-| **LOG_LEVEL** | コネクターのログ詳細度: `debug`、`info`、`warn`、`error` | `info` |
-
-<Note>
-管理APIはHTTPでは `15672`、HTTPSでは `15671` でリスニングします。**Use TLS** を有効にする場合、**Management Port** をTLS用の管理ポートに設定してください。
-</Note>
-
----
+| フィールド | 必須 | デフォルト | 説明 |
+|-------|----------|---------|-------------|
+| **RABBITMQ_USERNAME** | はい | なし | `monitoring` タグを持つブローカーユーザー |
+| **RABBITMQ_PASSWORD** | はい | なし | そのユーザーのパスワード |
+| **RABBITMQ_HOST** | はい | なし | ホスト名または IP。`http://`、`https://`、ポートは含めません |
+| **RABBITMQ_MANAGEMENT_PORT** | はい | `15672` | Management HTTP API のポート。TLS を有効にする場合は TLS 用のポート（通常 `15671`）を使います |
+| **RABBITMQ_USE_TLS** | いいえ | **Disabled** | **Disabled**: 平文 HTTP の管理 API と AMQP。**Enabled**: HTTPS の管理 API と AMQPS |
+| **RABBITMQ_ALLOW_MUTATIONS** | いいえ | **Allow writes** | **Read-only**（推奨）: 監視とトラブルシューティングのみ。**Allow writes**: パージ、削除、定義の一括更新を有効にし、それぞれを Approvals が 1 件ずつ確認します |
+| **LOG_LEVEL** | いいえ | **Info** | コネクターのログの詳しさ: **Debug**、**Info**、**Warn**、**Error** |
 
 ## 必要な権限
 
-接続ユーザーには、HTTP APIがブローカーデータを返すための管理タグが必要です:
-
-| タグ | アンロックされる機能 |
-|-----|-----------------|
-| `monitoring` | キュー、エクスチェンジ、バインディング、接続、チャンネル、ノード、クラスター、ヘルスチェックへの読み取りアクセス — すべての監視と診断機能をカバー。 |
-| `administrator` | `monitoring` が提供するすべての機能、加えて書き込み操作（キューのパージ/削除、エクスチェンジの削除、定義の更新）。 |
+| 目的 | ユーザータグ | vhost の権限 |
+|------|----------|-------------------|
+| 監視とトラブルシューティング（推奨、**Read-only** 設定時） | `monitoring` | エージェントに見せる各 vhost で read（`"" "" ".*"`）。read でもキューのパージは可能です |
+| 監視と削除 | `monitoring` | エージェントが変更してよい vhost で configure と read |
+| 定義の一括更新 | `administrator` | configure、write、read。RabbitMQ は管理者からの定義インポートしか受け付けず、このタグはブローカー全体のユーザーとポリシーの管理権限も与えます |
 
 <Tip>
-最小権限の原則に従ってください: キューの監視、コンシューマーラグ、DLQ、クラスターヘルスの調査には `monitoring` タグで十分です。下記の書き込み操作を実行する場合にのみ `administrator` を使用してください。
+まずは `monitoring`、read 権限、**RABBITMQ_ALLOW_MUTATIONS** を **Read-only** にした状態で始めてください。これで下記の読み取り機能はすべてカバーできます。エージェントにパージや削除をさせると決めたときだけ **Allow writes** に切り替え、configure 権限はエージェントが削除してよい vhost にだけ追加します。`administrator` は定義の一括更新が必要な場合にのみ使ってください。
 </Tip>
 
-### 書き込み操作には承認が必要
+## エージェントの機能
 
-この接続には4つの変更ツールが有効になっています。これらは常に**アプリ内承認**で制限されており、エージェントは実行前にユーザーの確認を求める必要があります:
+| 機能 | エージェントができること |
+|------------|--------------------|
+| **キューの深さとレート** | キューごとの ready と unacknowledged のメッセージ数を、パブリッシュとデリバーのレートとともに報告します |
+| **コンシューマーの健全性** | コンシューマーがいないキューや、消費より速くメッセージが溜まるキューを見つけます |
+| **デッドレターの確認** | デッドレターキューの中を見て、繰り返される失敗とその原因のメッセージを調べます |
+| **クラスターとノードの健全性** | ノードの状態、メモリとディスクのアラーム、クォーラムを失うおそれのあるクォーラムキューを確認します |
+| **証明書の確認** | 期限切れが近いブローカー証明書を指摘します |
+| **書き込み操作** | キューとエクスチェンジのパージや削除、定義の一括更新を行います。**Allow writes** が有効で、かつ 1 件ずつ承認された場合に限ります |
 
-- `delete_queue` — キューを削除
-- `purge_queue` — キュー内のすべてのメッセージを削除
-- `delete_exchange` — エクスチェンジを削除
-- `update_definition` — ブローカーの定義を変更
-
-その他すべての機能は読み取り専用です。破壊的な操作には、ブローカーユーザーが対象の仮想ホストに対して書き込み権限を持つ `administrator` タグも必要です。
-
----
-
-## エージェント機能
-
-接続後、CloudThinker は次のことができます:
-
-| 機能 | 説明 |
-|------------|-------------|
-| **キュー深度とメッセージレート** | キューの深度、準備完了 vs. 未確認、パブリッシュ/デリバリーレートのスナップショット |
-| **コンシューマーラグ** | コンシューマーラグが高い、またはコンシューマーがゼロのキューを特定 |
-| **デッドレター分析** | デッドレターキューで有害メッセージとエラーパターンを検査 |
-| **クラスターとノードヘルス** | ノードステータス、ローカルおよびグローバルアラーム、クォーラムクリティカルキューを確認 |
-| **アラームと証明書チェック** | アラーム状態のブローカーと期限切れ近い証明書を検出 |
-| **制限付き書き込み操作** | キューのパージまたは削除、エクスチェンジの削除、定義の更新 — それぞれアプリ内承認が必要 |
-
-### 接続を確認
+### 接続を確認する
 
 ```text
-Show RabbitMQ cluster status and list all queues with their current depths
+Show the RabbitMQ cluster status and list every queue with its depth and consumer count
 ```
+
+各ノードとその稼働状態に続き、キューごとの ready と unacknowledged の件数、コンシューマー数の表が返ります。
 
 ### プロンプト例
 
 ```text
-Check all queues for abnormal depth or zero-consumer conditions and alert on any queue growing faster than 500 msg/s
-Identify queues with high consumer lag and inspect their dead-letter queues for poison messages, then recommend remediation steps
-Check cluster node status, alarms, quorum-critical queues, and certificate expiration; flag any node down or in alarm
+Which RabbitMQ queues have messages but zero consumers right now?
+The orders queue keeps growing. Find out why and check its dead-letter queue for poison messages
+Is any RabbitMQ node in a memory or disk alarm, and do any certificates expire in the next 30 days?
 ```
 
----
+## 書き込みアクセス
+
+**RABBITMQ_ALLOW_MUTATIONS** を **Allow writes** にし、ユーザーに適切な vhost 権限がある場合（[必要な権限](#必要な権限)を参照）、エージェントは次のことができます:
+
+- キューをパージする（キュー内のメッセージをすべて削除する）
+- キューまたはエクスチェンジを削除する
+- ブローカー定義の一括更新を適用する（`administrator` が必要）
+
+それぞれが個別に [Approvals](/guide/approvals/overview) を通り、読み取りには承認は不要です。
+
+<ApprovalDefault />
+
+パージに必要なのはキューの読み取り権限だけなので、ブローカーユーザーではパージを防げません。書き込みを有効にする場合は **Manual** を選び、すべての変更を人が承認するようにしてください。**Ask first** の [Rule](/guide/approvals/rules) を使うと、承認待ちをパージだけに絞れます。
+
+<Warning>
+キューをパージまたは削除すると、そのメッセージは完全に失われます。RabbitMQ はコピーを残しません。承認する前に、承認リクエストのキュー名と vhost を確認してください。
+</Warning>
 
 ## トラブルシューティング
 
-<Accordion title="接続が拒否またはタイムアウト">
-- `<host>:15672`（またはTLS管理ポート）でCloudThinkerからブローカーに到達できることを確認してください。
-- AMQPポート `5672` ではなく、管理ポートがファイアウォールまたはセキュリティグループで開放されていることを確認してください。
-- セルフホストブローカーの場合、RabbitMQが `127.0.0.1` だけでなく、アクセス可能なインターフェースにバインドされていることを確認してください。
+<Accordion title="接続が拒否される、またはタイムアウトする">
+- CloudThinker が `<host>:15672`（または TLS 用の管理ポート）に到達できることを確認してください。
+- AMQP ポート `5672` ではなく、管理ポートを開けたことを確認してください。
+- セルフホストのブローカーでは、管理リスナーが `127.0.0.1` だけにバインドされていないことを確認してください。
 </Accordion>
 
-<Accordion title="管理APIで404 Not Found">
-managementプラグインが有効になっていません。`rabbitmq-plugins enable rabbitmq_management` を実行して再試行してください。マネージドプロバイダーの場合、インスタンスでManagement HTTP APIが公開されていることを確認してください。
+<Accordion title="管理 API から 404 Not Found が返る">
+management プラグインが無効です。`rabbitmq-plugins enable rabbitmq_management` を実行して、もう一度接続してください。マネージドブローカーの場合は、プロバイダーがご利用のプランで Management HTTP API を公開しているか確認してください。
 </Accordion>
 
 <Accordion title="401 Unauthorized">
-- ユーザー名とパスワードを確認してください。
-- ユーザーが `monitoring` または `administrator` タグを持っていることを確認してください: `rabbitmqctl set_user_tags <user> monitoring`。
-- 管理タグのないユーザーはAMQPへの認証はできますが、Management HTTP APIには拒否されます。
+- ユーザー名とパスワードを確認し直してください。
+- ユーザーに管理タグがあることを確認してください: `rabbitmqctl set_user_tags cloudthinker monitoring`。タグのないユーザーは AMQP ではサインインできますが、管理 API には拒否されます。
 </Accordion>
 
-<Accordion title="TLSハンドシェイクまたは証明書エラー">
-- **Use TLS** がブローカーの設定と一致していることを確認してください。管理APIがHTTPSを提供している場合（通常ポート `15671`）のみ有効にしてください。
-- **Use TLS** が有効でもポートがプレーンHTTPを提供している場合（またはその逆）、接続は失敗します。トグルと **Management Port** を合わせてください。
+<Accordion title="TLS ハンドシェイクまたは証明書のエラー">
+**RABBITMQ_USE_TLS** と **RABBITMQ_MANAGEMENT_PORT** を一致させる必要があります。**Enabled** には HTTPS を提供するポート（通常 `15671`）、**Disabled** には平文 HTTP のポート（通常 `15672`）が必要です。
 </Accordion>
 
-<Accordion title="結果が空または一部のみ返される">
-- `monitoring` ユーザーが一部の仮想ホストに対して権限を持っていない可能性があります。表示させたいvhostに対して読み取り権限を付与してください: `rabbitmqctl set_permissions -p <vhost> <user> "" "" ".*"`。
+<Accordion title="ホストフィールドのエラー">
+**RABBITMQ_HOST** にはホスト名または IP だけを入力してください。`http://`、`https://`、パス、`:port` は削除します。TLS とポートにはそれぞれ専用のフィールドがあります。
 </Accordion>
 
----
+<Accordion title="一部のキューや vhost が表示されない">
+ユーザーにそれらの vhost の読み取り権限がありません。`rabbitmqctl set_permissions -p <vhost> cloudthinker "" "" ".*"` で付与してから、もう一度質問してください。
+</Accordion>
+
+<Accordion title="パージまたは削除が拒否された">
+**RABBITMQ_ALLOW_MUTATIONS** が **Read-only** になっているか、ブローカーユーザーにその操作に必要な vhost 権限（パージには read、削除には configure）がありません。許可するつもりだった方を変更してください。操作は引き続き Approvals を通ります。
+</Accordion>
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **専用ユーザー** — CloudThinker用に別個の `cloudthinker` ブローカーユーザーを作成し、`guest` や管理者アカウントを再利用しないでください
-- **転送中のTLS** — **Use TLS** を有効にして、CloudThinkerとブローカー間の管理APIトラフィックを暗号化してください
-
----
+- **専用ユーザーを使う**: この接続用に `cloudthinker` を作成してください。`guest` や個人の管理者アカウントは決して再利用しないでください。
+- **TLS を有効にする**: **RABBITMQ_USE_TLS** を **Enabled** にすると、CloudThinker とブローカー間のパスワードとブローカーデータが暗号化されます。
 
 ## 関連情報
 
 <CardGroup cols={2}>
-  <Card title="エージェント" icon="database" href="/ja/guide/agents/overview">
-    CloudThinker と、その作業の仕組み
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    どのパージや削除を実行し、人を待ち、拒否するかを決めます。
   </Card>
-  <Card title="Kafka 接続" icon="/images/icons/kafka.svg" href="/ja/guide/connections/kafka">
-    Apache Kafkaストリーミングのセットアップ手順
+  <Card title="Kafka" icon="/images/icons/kafka.svg" href="/ja/guide/connections/kafka">
+    Kafka を接続し、ストリーミング側のトピックの健全性とコンシューマーの遅れを確認します。
   </Card>
 </CardGroup>

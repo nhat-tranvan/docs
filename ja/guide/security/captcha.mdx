@@ -1,107 +1,150 @@
 ---
-title: CAPTCHA ログインを設定する
-description: "テスト実行でパスワードログインを使えるように CAPTCHA を設定し、チャレンジでアクセスできない場合のテスト範囲を確認します。"
+title: CAPTCHA ログインに対応する
+description: "パスワードのテストユーザーが実行中にサインインできるように CAPTCHA のオプションを設定し、実行がログインの後ろまで本当にテストしたかを確認します。"
 icon: key
+tag: "Beta"
 ---
 
-[テスト実行](/ja/guide/security/security-testing)のテストアカウントがログイン時に CAPTCHA を要求される場合に設定します。アカウントの保存だけでは、保護されたページへのアクセスを証明できません。
+アプリのログインページに CAPTCHA (reCAPTCHA、hCaptcha、Cloudflare Turnstile) が表示される場合、CloudThinker にその突破方法を伝えるまで、[テスト実行](/ja/guide/security/security-testing) は保存したパスワードでサインインできません。テストキー、バイパス、自動フォールバックのいずれもない場合、ログインは失敗し、実行は **Incomplete** で終わります。このページでは、これに対応する 4 つの方法と、ログインが本当に成功したかを確認する方法を説明します。
 
-## 前提条件
+## 方法を選ぶ
 
-- 登録済みの Cyber アプリと、テストユーザーの編集権限。
-- **Password** 認証を使う専用のテストアカウント。
-- テストキーを使う場合は、テスト対象の CAPTCHA 設定へのアクセス。
-- 自動フォールバックを使う場合は、管理者による機能の有効化と必要なソルバーの設定。
+| 方法 | 使う場面 | フォームでの設定 | 必要なもの |
+| --- | --- | --- | --- |
+| **Target test keys** | 自分で管理するステージングまたはテスト環境をテストする場合 | **Customer bypass** = **Target test keys** | ログインウィジェットとサーバー側の検証の両方にインストールした、CAPTCHA プロバイダーのテストキー |
+| **Bypass header** | 特定のヘッダーとシークレットがあるとアプリがすでに CAPTCHA をスキップする場合 | フォームでは **Customer bypass** = **None** にし、ヘッダーはチャットで設定 | ヘッダー名と、シークレットを `CAPTCHA_BYPASS_` 認証情報として保存するワークスペースの Admin |
+| **Automated fallback** (ターゲットの変更なし) | ターゲットを変更できない場合 | **Customer bypass** = **None**、**Automated fallback** = **Allow for this identity** | CloudThinker 全体でオンになっている **CAPTCHA solver enabled**。それでも失敗することがあります |
+| パスワードの代わりの **[Session token](/ja/guide/security/security-testing#テストユーザーを追加する)** | 上記のいずれも機能しない場合、ログインに MFA が必要な場合、またはログインページが別のドメインにある場合 | パスワードのフォームではなく、別の **Session token** テストユーザー | ブラウザの Network パネルから cURL としてコピーした、サインイン済みの `GET` リクエスト |
+
+最も確実なのは Target test keys です。Automated fallback はベストエフォートで、テストユーザーごとに設定するため、予備としてバイパスと併せて許可できます。
+
+### Automated fallback で対応できるもの
+
+フォールバックは CAPTCHA 解決サービスを使いません。ログインと同じブラウザセッションの中で、ログインの期限内に収まるソルバーの期限内で動作します。
+
+| プロバイダー | フォールバック |
+| --- | --- |
+| **reCAPTCHA v2**、**hCaptcha** | ベストエフォート。画像タイルやドラッグのチャレンジは、CloudThinker に設定されている AI ビジョンモデルに送られます |
+| **reCAPTCHA v3** | ブラウザ内でのベストエフォート。ページが reCAPTCHA のアクションを提供する場合のみ。それ以外は非対応です |
+| **Cloudflare Turnstile** | ブラウザ内でのベストエフォート。画像は送られません |
+
+フォールバックは **CAPTCHA solver enabled** がオンになるまでオフです。この設定は 1 つのワークスペースや組織ではなく CloudThinker 全体に適用されるため、CloudThinker のサポート、または社内で CloudThinker を運用している担当者に依頼してください。Target test keys と Bypass header は、チャレンジの画像をどこにも送りません。
+
+## 始める前に
+
+- 登録済みの Cyber アプリと、そのテストユーザーを編集する権限。[セキュリティテストを実行する](/ja/guide/security/security-testing) を参照してください。
+- **テストユーザー**: テスト実行がユーザー名とパスワードでサインインする、アプリ内の専用アカウント。テスト用に作成したものを使い、実際のユーザーのアカウントは決して使わないでください。追加するボタンの名前は場所によって異なります。[テストユーザーを追加する](/ja/guide/security/security-testing#テストユーザーを追加する) を参照してください。
+- テストキーまたはバイパスヘッダーの場合: ターゲットアプリの CAPTCHA 設定へのアクセス。
+- バイパスヘッダーの場合: キーが `CAPTCHA_BYPASS_` で始まる [認証情報](/guide/credentials) (たとえば `CAPTCHA_BYPASS_STAGING`) を、バイパスのシークレットを値として追加できるワークスペースの Admin。
 
 ## ログインを設定する
 
 <Steps>
-  <Step title="パスワードアカウントを開く">
-    アプリの **Settings → Test users** で **Add test user** または **Add authentication** を開きます。**Password** を選び、アカウント情報を入力します。
+  <Step title="パスワードのフォームを開く">
+    **Cyber** を開き、**Pentest apps** でアプリを選び、**Settings** タブを開いて、**Test identities** の行で **Add** または **Manage** をクリックします。テスト ID を追加し、**Authentication method** として **Password** を選びます。
 
-    必要に応じて **Login URL (optional)** を入力します。ログインページは保存済みの対象と範囲内にある必要があります。**CAPTCHA options (optional)** を展開します。
-  </Step>
-  <Step title="CAPTCHA オプションを選ぶ">
-    対象側の例外を用意していない場合、**Customer bypass** は **None** にします。テスト環境にテストキーを設定済みの場合は **Target test keys** を選びます。
+    ユーザー名とパスワードを入力します。ログインフォームのあるページがアプリの開始ページでない場合は、**Login URL (optional)** にそのページを設定します。アプリのターゲットと同じオリジンを使い、その [スコープ](/ja/guide/security/security-testing#スコープとコンテキストを設定する) に収まっている必要があります。別の SSO や ID プロバイダーのドメインでホストされているログインは拒否されるため、そのようなアプリには **Session token** を使ってください。たとえばターゲットが `https://staging.shop.com` の場合、`https://staging.shop.com/login` は使えますが、`https://auth.shop.com/login` は拒否されます。
 
-    **CAPTCHA provider** を選び、対象に設定済みの公開 sitekey を **Installed test sitekey** に入力します。検証用の secret はアプリのサーバーに保持します。
-
-    **Automated fallback** で **Allow for this identity** または **Disable for this identity** を選びます。インストール全体で無効な機能は、ここで許可しても有効になりません。
+    **CAPTCHA options (optional)** を展開します。
 
     <Frame>
-      <img src="/images/security/cyber/14-captcha-options.png" alt="パスワードアカウントのバイパスと自動フォールバック設定。" />
+      <img src="/images/security/cyber/14-captcha-options.webp" alt="パスワードのテストユーザーの Customer bypass と Automated fallback のオプション。" />
     </Frame>
-    <p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>パスワードアカウントの CAPTCHA オプション。</p>
   </Step>
-  <Step title="保存して実行結果を確認する">
-    **Save login** をクリックし、オンデマンドのテスト実行を開始します。保護されたページをテスト済みと判断する前に、認証結果を読みます。
+  <Step title="Customer bypass を設定する">
+    **Customer bypass** で値を 1 つ選びます。
 
-    **成功状態:** 実行がログイン後のアクセスを証明し、匿名アクセスの拒否を確認します。アカウント保存や CAPTCHA の完了だけでは不十分です。
+    - **None**: ターゲット側の例外はありません。許可されている場合、実行は Automated fallback に頼ります。
+    - **Target test keys**: **CAPTCHA provider** (reCAPTCHA v2、reCAPTCHA v3、hCaptcha、Cloudflare Turnstile) を選び、ログインウィジェットの公開サイトキーを **Installed test sitekey** に貼り付けます。対応するテストシークレットはサーバーに置いたままにします。CloudThinker がそれを必要とすることはありません。reCAPTCHA v3 には常に成功するテストキーがないため、v3 ではステージングのサイトキーを入力してステージングの検証でスコアのしきい値を下げるか、代わりに **Bypass header** を使ってください。
 
-    CAPTCHA が未解決なら認証後のテストはできません。設定を修正するか、検証済みの **Session token** を追加してから再実行します。
+    <Frame>
+      <img src="/images/security/cyber/15-captcha-test-keys.webp" alt="Target test keys を選択した CAPTCHA のオプション。プロバイダーとインストール済みテストサイトキーの欄が表示されています。" />
+    </Frame>
+
+    - **Bypass header**: フォームには **Header name** と **Bypass secret** の欄が表示されますが、フォームからヘッダーバイパスを保存しようとすると常に拒否されます。代わりに、テストユーザーを **None** で保存し、[始める前に](#始める前に) の `CAPTCHA_BYPASS_` 認証情報が存在することを確認してから、チャットで CloudThinker に設定を依頼します。たとえば「Set a header bypass for the qa-member test user on the Shop staging app, header `X-QA-Bypass`, using credential CAPTCHA_BYPASS_STAGING.」のように依頼します。ワークスペースの Admin である必要があります。CloudThinker は、そのテストユーザーの更新された CAPTCHA ポリシーを返信します。ポリシーにはバイパスの種類が表示されますが、シークレットは決して表示されません。ターゲットがすでにヘッダーを受け付けている必要があり、パスワードでのサインインも引き続き必要です。
+  </Step>
+  <Step title="Automated fallback を設定する">
+    **Automated fallback** で **Allow for this identity** または **Disable for this identity** を選びます。既定値: **Allow for this identity**。
+
+    Allow は、CloudThinker で **CAPTCHA solver enabled** がオンの場合にのみ有効になります。ソルバーをオンにすることはできません。このユーザーのチャレンジ画像を AI モデルに送りたくない場合は、**Disable for this identity** を選んでください。
+  </Step>
+  <Step title="保存して実行する">
+    **Save login** をクリックします。CloudThinker はサインインせずにパスワードのテストユーザーを保存するため、保存してもログインが機能することは証明されません。
+
+    パスワードのテストユーザーには、ログインだけのテストはありません。チェックは Pentest の実行の開始時に行われます。**Run pentest** をクリックして実行を開始してください。ログインのステップには既定で 60 秒の期限があるため、約 1 分以内に成功したかどうかが分かります。CloudThinker のサポート、または社内で CloudThinker を運用している担当者は、この期限を 20 秒から 120 秒の範囲で変更できます。
+
+    **成功時の状態:** 実行は、サインインした状態で保護されたページを読み込めることを証明し、その後 run workbench でテストを続けます。ログインを証明できない場合、実行は早期に停止して **Incomplete** で終わるため、失敗したログインが匿名のみのテストとして通ることはありません。保護されたルートがテストされたとみなすのは、実行がログインを通過した場合だけにしてください。
   </Step>
 </Steps>
 
-## 対象側の例外を選ぶ
+## プロバイダーのテストキー
 
-| Customer bypass | 必要な条件 |
-| --- | --- |
-| **None** | 対象側の例外なし。有効なフォールバックがチャレンジを試行できます |
-| **Bypass header** | 対象が専用ヘッダーと secret を検証して CAPTCHA を省略すること。パスワードは必要です。保護された認証情報の設定を管理者に依頼します |
-| **Target test keys** | ウィジェットとサーバー検証で対応するテストキーを使い、公開 sitekey を CloudThinker に入力すること |
+reCAPTCHA v2、hCaptcha、Turnstile は、常に成功するテストキーを公開しています。サイトキーをログインウィジェットに、対応するテストシークレットをサーバー側の検証にインストールし、サイトキーを **Installed test sitekey** に入力します。
 
-Bypass header のフォームには **Header name** と **Bypass secret** が表示されます。保存が拒否される場合、管理者に保護された設定を依頼するか、検証済みのセッションを使います。
-
-### プロバイダーのテストキー
-
-| プロバイダー | テスト時の注意 |
-| --- | --- |
-| **reCAPTCHA v2** | Google のテストキーペアはチャレンジを省略し、検証に成功します。[reCAPTCHA FAQ](https://developers.google.com/recaptcha/docs/faq) を参照してください |
-| **reCAPTCHA v3** | テスト専用キーを使います。スコアは実際の通信と異なる場合があり、ログイン成功を保証しません。[Google FAQ](https://developers.google.com/recaptcha/docs/faq) を参照してください |
-| **hCaptcha** | テスト sitekey の応答には対応する test secret が必要です。[hCaptcha テストキー](https://docs.hcaptcha.com/#integration-testing-test-keys) を参照してください |
-| **Cloudflare Turnstile** | dummy sitekey と対応する test secret を使います。本番 secret はテスト応答を拒否します。[Turnstile テスト](https://developers.cloudflare.com/turnstile/troubleshooting/testing/) を参照してください |
+| プロバイダー | 知っておくこと | 参考 |
+| --- | --- | --- |
+| **reCAPTCHA v2** | Google のテストキーのペアはチャレンジをスキップし、検証に成功します | [reCAPTCHA FAQ](https://developers.google.com/recaptcha/docs/faq#id-like-to-run-automated-tests-with-recaptcha.-what-should-i-do) |
+| **reCAPTCHA v3** | Google は v3 向けの常に成功するテストキーを公開しておらず、テスト用に別のキーを使うよう推奨しているだけです。スコアは実際のトラフィックと異なる場合があるため、サーバーがログインを拒否することもあります。v3 では **Bypass header** か、ステージングの検証での低いスコアしきい値を優先してください | [reCAPTCHA FAQ](https://developers.google.com/recaptcha/docs/faq) |
+| **hCaptcha** | テストサイトキーは、対応するテストシークレットとの組み合わせでのみ機能します | [hCaptcha test keys](https://docs.hcaptcha.com/#integration-testing-test-keys) |
+| **Cloudflare Turnstile** | ダミーのサイトキーには、対応するダミーのシークレットが必要です。本番のシークレットはダミーのレスポンスを拒否します | [Turnstile testing](https://developers.cloudflare.com/turnstile/troubleshooting/testing/) |
 
 <Warning>
-  テストキーはテスト環境だけで使います。ボット対策を無効にする場合があるため、テストのために本番の保護を置き換えないでください。
+  テストキーはボット対策を無効にします。テスト環境でのみ使い、本番環境では決して使わないでください。
 </Warning>
 
-<Frame>
-  <img src="/images/security/cyber/15-captcha-test-keys.png" alt="CAPTCHA プロバイダーと設定済みの公開 test sitekey。" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>テストキー設定。検証用 secret はアプリのサーバーに保持します。</p>
+## ログインの実行が CAPTCHA をどう処理するか
 
-## 自動フォールバックの動作
+1. 実行はログインページを開き、保存したユーザー名とパスワードを入力します。
+2. Customer bypass を設定している場合は、まずそれを適用します。
+3. それでも CAPTCHA が表示され、CloudThinker とそのテストユーザーの両方でフォールバックが許可されている場合、実行は同じブラウザセッション内で解決を試みます。
+4. 実行は、サインインした状態で保護されたページが読み込まれることを確認します。それを証明できない場合、匿名の訪問者としてテストする代わりに **Incomplete** で終わります。
 
-CloudThinker は設定済みの顧客バイパスを先に試します。フォールバックが有効な場合、対応する reCAPTCHA v2、reCAPTCHA v3、hCaptcha、Turnstile のログインを同じブラウザーセッションで試行できます。
-
-チャレンジやプロバイダーの検証が拒否する場合もあります。プロバイダーの選択は成功を保証しません。設定済みソルバーのクレジットを消費する場合があります。
-
-これらはパスワードログイン用の設定です。他のログイン方法は [セキュリティテストを実行する](/ja/guide/security/security-testing) を参照してください。
+フォールバックは、画像のチャレンジやプロバイダーのチェックで失敗することがあり、プロバイダーを選んでも成功が保証されるわけではありません。ログインにパスワードのあとの MFA や別のステップが必要な場合、CAPTCHA のオプションは役に立ちません。代わりに **Session token** を使ってください。
 
 ## トラブルシューティング
 
+Cyber のすべての問題をまとめて確認するには、[Cyber のトラブルシューティング](/guide/security/cyber-troubleshooting) を参照してください。
+
+パスワードのテストユーザーを保存してもサインインは行われないため、**Save login** をクリックしたときに表示されるのは、フォームの問題 (拒否されたヘッダー名やヘッダーバイパス、ターゲット外の Login URL) だけです。CAPTCHA、タイムアウト、MFA のメッセージは、テスト実行のログインのステップから表示されます。
+
 <AccordionGroup>
-  <Accordion title="CAPTCHA がログインを妨げる">
-    対象のテストキーやバイパス、フォールバックの利用可否を確認します。解決できない場合は検証済みセッションを使います。
+  <Accordion title="CAPTCHA blocked this login">
+    チャレンジが解決されませんでした。テストキーまたはバイパスヘッダーがターゲットにインストールされていることを確認するか、CloudThinker でソルバーがオンの場合は Automated fallback を許可してください。いずれも機能しない場合は、**Session token** を添付してください。
   </Accordion>
-  <Accordion title="フォールバックを利用できない">
-    管理者に機能と必要なソルバーの設定を確認してもらいます。**Allow for this identity** はインストール全体の無効設定を上書きしません。
+  <Accordion title="CAPTCHA fallback is unavailable">
+    CloudThinker で **CAPTCHA solver enabled** がオフになっているか、呼び出せる AI ビジョンモデルがありません。**Allow for this identity** でこれを上書きすることはできません。CloudThinker のサポート、または社内で CloudThinker を運用している担当者にオンにするよう依頼するか、**Target test keys** または **Bypass header** に切り替えてください。
   </Accordion>
-  <Accordion title="Test sitekey が動作しない">
-    ウィジェットとサーバーに、選択したプロバイダーの対応するテストキーが設定されているか確認します。CloudThinker への入力は対象の検証設定を変更しません。
+  <Accordion title="This CAPTCHA flow is not supported">
+    実行が対応できない種類のチャレンジです。ターゲット側のバイパスか **Session token** を使ってください。
   </Accordion>
-  <Accordion title="Bypass header を保存できない">
-    ヘッダーポリシーには保護された認証情報の設定が必要です。管理者に依頼するか、検証済みセッションを追加します。
+  <Accordion title="Login could not stay within its safety boundary">
+    ログインがアプリのターゲットまたはスコープの外にリダイレクトしました。**Login URL (optional)** とアプリのターゲットの設定を確認してください。
+  </Accordion>
+  <Accordion title="The test sitekey does not work">
+    ウィジェットとサーバーは、選んだプロバイダーの対応するテストキーを使う必要があります。CloudThinker にサイトキーを入力しても、サーバーの検証は変わりません。また、テストサイトキーは本番の検証に成功しません。
+  </Accordion>
+  <Accordion title="Use a dedicated CAPTCHA bypass header">
+    ヘッダー名が予約されているか、有効なヘッダー名ではありません。`Authorization`、`Proxy-Authorization`、`Cookie`、`Host`、`Content-Length`、`Transfer-Encoding`、`Connection`、`Upgrade`、`TE`、`Trailer`、`Origin`、`Referer` は、フォームでもチャットでも拒否されます。`X-QA-Bypass` のように、バイパスだけが使う名前を選んでください。
+
+    有効な名前であっても、ログインフォームはヘッダーバイパスを拒否します。**None** で保存し、[ログインを設定する](#ログインを設定する) の **Customer bypass を設定する** のステップのとおり、チャットでヘッダーを設定してください。
+  </Accordion>
+  <Accordion title="Login did not finish in time">
+    CAPTCHA の試行を含むログインが、ログインの期限を過ぎました。再試行するか、CloudThinker のサポート、または社内で CloudThinker を運用している担当者に期限の引き上げを依頼してください。テストキーまたはバイパスヘッダーを使えば、ソルバーの時間はまったくかかりません。
+  </Accordion>
+  <Accordion title="This login requires MFA or another authentication step">
+    パスワードのフォームが最後のステップではありません。サインイン済みのブラウザからコピーした **Session token** を添付してください。
   </Accordion>
 </AccordionGroup>
 
 ## 次のステップ
 
+実行がサインイン状態でのアクセスを証明したら、ログインの後ろで何が見つかったかをレビューします。
+
 <CardGroup cols={2}>
   <Card title="セキュリティテストを実行する" icon="crosshairs" href="/ja/guide/security/security-testing">
-    テスト前に範囲、アクセス、強度を確認
+    スコープを設定し、他のログイン方法を添付し、強度を選びます
   </Card>
-  <Card title="Cyber レポートを作成する" icon="file-lines" href="/ja/guide/security/cyber-reports">
-    証拠とテストの制限を共有
+  <Card title="Issue をトリアージする" icon="list-check" href="/guide/security/cyber-findings">
+    修正の優先順位を付ける前に、証拠とカバレッジの不足を確認します
   </Card>
 </CardGroup>

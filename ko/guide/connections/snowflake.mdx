@@ -1,24 +1,42 @@
 ---
 title: Snowflake
-description: "Snowflake를 CloudThinker에 연결하여 웨어하우스 크레딧 분석, 느린 쿼리 조사, 스토리지 검토, 선택적 웨어하우스 제어를 수행합니다"
+description: "Snowflake를 연결하여 CloudThinker가 웨어하우스 크레딧을 분석하고, 느리거나 실패하는 쿼리의 순위를 매기고, 스토리지 오버헤드를 검토할 수 있게 합니다"
 icon: "/images/icons/snowflake.svg"
 ---
 
+import ApprovalDefault from '/snippets/approval-default.mdx';
 import ConnectionSecurity from '/snippets/ko/connection-security.mdx';
 
-Snowflake 계정을 연결하면 [CloudThinker](/ko/guide/agents/overview)가 웨어하우스 크레딧 소모를 읽고, 느린 쿼리와 실패한 쿼리의 순위를 매기며, 테이블 스토리지 부담을 측정할 수 있습니다. CloudThinker는 프로그래매틱 액세스 토큰으로 SQL REST API를 통해 Snowflake에 접근하며, 새로 만든 연결은 쓰기 도구를 켜기 전까지 읽기 전용입니다.
+Snowflake를 연결하면 CloudThinker가 크레딧을 가장 많이 소모하는 웨어하우스를 보여주고, 느리거나 실패하는 쿼리의 순위를 매기고, time travel 및 failsafe 스토리지를 측정할 수 있습니다. CloudThinker는 서비스 사용자의 **programmatic access token**(PAT)으로 Snowflake SQL REST API를 호출하며, 새 연결은 **Allow writes**를 켜기 전까지 읽기만 합니다.
 
-## 사전 준비
+---
 
-- 역할, 서비스 사용자, 토큰을 만들 `ACCOUNTADMIN` (또는 동등한) 권한.
-- 해당 사용자에게 연결할 네트워크 정책. 네트워크 정책이 없으면 Snowflake는 토큰 인증을 거부합니다.
-- 역할이 사용할 수 있는 웨어하우스. 메타데이터 쿼리는 컴퓨트가 필요 없으므로, 웨어하우스가 없어도 연결 테스트는 통과하고 실제 분석만 실패할 수 있습니다.
+## 사전 요구사항
+
+- 역할, 서비스 사용자, 네트워크 정책, 토큰을 만들 수 있는 `ACCOUNTADMIN` 또는 동등한 역할.
+- 역할이 사용할 수 있는 웨어하우스. 연결 테스트에는 컴퓨팅이 필요 없으므로, 웨어하우스가 없어도 테스트는 통과하지만 실제 분석은 실패합니다. 설정 1단계에서 상한이 있는 웨어하우스를 만듭니다.
+- 계정에 인증 정책이 있다면 `AUTHENTICATION_METHODS`에 `PROGRAMMATIC_ACCESS_TOKEN`이 포함되어야 합니다. 그렇지 않으면 로그인 시 토큰이 거부됩니다.
+- 연결을 추가하는 데 필요한 CloudThinker 워크스페이스의 **Admin** 역할. [Roles](/guide/security/roles)를 참고하세요.
+
+---
 
 ## 설정
 
+리소스 모니터를 만들려면 `ACCOUNTADMIN`이 필요하므로, 아래 SQL은 모두 `ACCOUNTADMIN`으로 실행하세요(`USE ROLE ACCOUNTADMIN;`으로 시작). SQL은 웨어하우스로 `CT_WH`를 사용합니다. 이미 있는 웨어하우스를 사용하려면 모든 곳에서 그 이름으로 바꾸세요.
+
 <Steps>
+  <Step title="상한이 있는 웨어하우스 만들기 (권장)">
+    분석 쿼리는 이 웨어하우스에 크레딧을 청구합니다. auto-suspend가 짧고 리소스 모니터가 있는 전용 X-Small 웨어하우스로 비용 상한을 유지합니다.
+    ```sql
+    USE ROLE ACCOUNTADMIN;
+
+    CREATE WAREHOUSE IF NOT EXISTS CT_WH WAREHOUSE_SIZE = XSMALL AUTO_SUSPEND = 60 AUTO_RESUME = TRUE INITIALLY_SUSPENDED = TRUE;
+    CREATE RESOURCE MONITOR IF NOT EXISTS CT_MONITOR WITH CREDIT_QUOTA = 10 FREQUENCY = MONTHLY START_TIMESTAMP = IMMEDIATELY TRIGGERS ON 100 PERCENT DO SUSPEND;
+    ALTER WAREHOUSE CT_WH SET RESOURCE_MONITOR = CT_MONITOR;
+    ```
+    `CREDIT_QUOTA` 크기 정하기: X-Small 웨어하우스는 실행 1시간당 1크레딧을 사용하며, 초 단위로 청구되고 재개될 때마다 최소 60초가 청구됩니다. 할당량 10은 한 달에 10시간의 실행 시간을 커버합니다. 할당량을 다 쓰면 웨어하우스가 일시 중지되고, 다음 달이 되거나 관리자가 할당량을 올릴 때까지 분석 쿼리가 실패합니다.
+  </Step>
   <Step title="읽기 전용 역할 만들기">
-    `ACCOUNTADMIN`으로 실행하세요. `USAGE_VIEWER`는 미터링과 스토리지를, `OBJECT_VIEWER`는 객체 인벤토리를 담당하며, `GOVERNANCE_VIEWER`가 `QUERY_HISTORY`를 읽을 수 있게 합니다:
     ```sql
     USE ROLE ACCOUNTADMIN;
 
@@ -27,182 +45,280 @@ Snowflake 계정을 연결하면 [CloudThinker](/ko/guide/agents/overview)가 �
     GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER     TO ROLE CT_READONLY;
     GRANT DATABASE ROLE SNOWFLAKE.GOVERNANCE_VIEWER TO ROLE CT_READONLY;
     GRANT MONITOR USAGE ON ACCOUNT                  TO ROLE CT_READONLY;
-    GRANT USAGE ON WAREHOUSE COMPUTE_WH             TO ROLE CT_READONLY;
+    GRANT USAGE ON WAREHOUSE CT_WH                  TO ROLE CT_READONLY;
     ```
   </Step>
   <Step title="서비스 사용자 만들기">
-    `SERVICE` 유형 사용자는 비밀번호, MFA, SSO가 없으므로 토큰으로만 인증합니다:
+    `SERVICE` 사용자에게는 비밀번호, MFA, SSO가 없으므로 토큰이 유일한 접근 수단입니다.
     ```sql
     CREATE USER IF NOT EXISTS SVC_CLOUDTHINKER
       TYPE = SERVICE
       DEFAULT_ROLE = CT_READONLY
-      DEFAULT_WAREHOUSE = COMPUTE_WH
+      DEFAULT_WAREHOUSE = CT_WH
       COMMENT = 'CloudThinker connection';
     GRANT ROLE CT_READONLY TO USER SVC_CLOUDTHINKER;
     ```
   </Step>
-  <Step title="네트워크 정책 연결하기">
-    테스트 계정이 아니라면 `ALLOWED_IP_LIST`를 사용 중인 이그레스 IP 대역으로 좁히세요:
+  <Step title="네트워크 정책 연결">
+    사용자에게 네트워크 정책이 있어야 Snowflake가 토큰 로그인을 허용합니다. 이 문서에는 CloudThinker의 egress IP 목록을 게시하지 않습니다. CloudThinker 담당자에게 문의하거나 [contact us](https://cloudthinker.io/contact)로 연락하세요. 받은 IP를 `ALLOWED_IP_LIST`에 넣습니다.
     ```sql
-    CREATE NETWORK POLICY IF NOT EXISTS CT_POLICY ALLOWED_IP_LIST = ('0.0.0.0/0');
+    CREATE NETWORK POLICY IF NOT EXISTS CT_POLICY ALLOWED_IP_LIST = ('<cloudthinker-egress-ip-1>', '<cloudthinker-egress-ip-2>');
     ALTER USER SVC_CLOUDTHINKER SET NETWORK_POLICY = CT_POLICY;
     ```
-    이 단계를 건너뛰는 것이 가장 흔한 설정 실패이며, 반환되는 오류(`390403`)는 정책을 언급하지 않습니다.
+    버려도 되는 테스트 계정에서만 `('0.0.0.0/0')`로 목록을 받기 전에 연결을 시험해 볼 수 있습니다. 프로덕션 계정에는 절대 남겨두지 마세요.
   </Step>
-  <Step title="프로그래매틱 액세스 토큰 발급하기">
+  <Step title="Programmatic access token 만들기">
     ```sql
-    ALTER USER SVC_CLOUDTHINKER ADD PROGRAMMATIC ACCESS TOKEN CT_DEV
+    ALTER USER SVC_CLOUDTHINKER ADD PROGRAMMATIC ACCESS TOKEN CT_TOKEN
       ROLE_RESTRICTION = 'CT_READONLY'
       DAYS_TO_EXPIRY = 90;
     ```
-    Snowflake는 생성 시 토큰을 한 번만 보여줍니다. `DAYS_TO_EXPIRY`는 엄격한 만료 기한이며, 그날부터 연결이 `390318`로 실패하기 시작하므로 새 토큰을 발급해야 합니다.
+    결과의 `token_secret` 열 값을 복사하세요. Snowflake는 이 값을 한 번만 보여주며, 만료일에 동작을 멈춥니다. 계정에서 더 낮은 한도를 설정하지 않았다면 `DAYS_TO_EXPIRY`는 최대 365입니다. CloudThinker는 토큰 만료 전에 경고하지 않으므로, 만료 일주일 전에 [토큰 교체](#토큰-교체) 알림을 캘린더에 설정하세요. 나중에 만료일을 확인하려면 `SHOW USER PROGRAMMATIC ACCESS TOKENS FOR USER SVC_CLOUDTHINKER;`를 실행하고 `expires_at` 열을 읽으세요.
   </Step>
-  <Step title="CloudThinker에서 연결 추가하기">
-    **Connections → Snowflake**로 이동해 다음을 입력하세요:
-    - **Account identifier**: `MYORG-MYACCOUNT`. **Snowsight → Account details**에서 확인합니다. 전체 URL이 아닙니다.
-    - **Programmatic access token**: 이전 단계에서 발급한 토큰. 계정 비밀번호가 아닙니다.
-    - **Role**: 선택 사항. 비워 두면 사용자의 기본 역할을 사용합니다.
-    - **Warehouse**: 선택 사항. 비워 두면 사용자의 기본 웨어하우스를 사용합니다.
+  <Step title="CloudThinker에서 연결 추가">
+    **Settings → Workspace → Connections**를 클릭하고 **Discover** 탭에서 **Snowflake**를 검색해 **Connect**를 클릭합니다. [연결 세부 정보](#연결-세부-정보)의 필드를 입력하고 **Connect**를 클릭합니다.
 
-    **Connect**를 클릭합니다. CloudThinker가 계정, 리전, 역할, 웨어하우스를 확인하면 상태가 **Connected**로 바뀝니다.
+    **성공 상태:** Snowflake에 **Connected** 상태가 표시되고, 메시지에 토큰이 확인된 대상이 표시됩니다. 예: `Connected to MYORG-MYACCOUNT (AWS_US_WEST_2), role CT_READONLY, warehouse CT_WH`.
   </Step>
 </Steps>
 
+---
+
 ## 연결 세부 정보
 
-| 항목 | 설명 | 기본값 |
-|-------|-------------|---------|
-| **Account identifier** | `ORG-ACCOUNT`. **Snowsight → Account details**에서 확인 | — |
-| **Programmatic access token** | `ALTER USER ... ADD PROGRAMMATIC ACCESS TOKEN`으로 만든 토큰 | — |
-| **Role** | 연결이 사용하는 역할. 토큰의 `ROLE_RESTRICTION` 범위 안에 있어야 합니다 | 사용자의 기본 역할 |
-| **Warehouse** | 이 연결이 소모하는 크레딧이 청구되는 웨어하우스 | 사용자의 기본 웨어하우스 |
+| 필드 | 필수 | 설명 | 기본값 |
+|-------|----------|-------------|---------|
+| **Account identifier** | 예 | `MYORG-MYACCOUNT`. 전체 URL이 아닙니다. 찾는 방법은 아래 참고 | |
+| **Programmatic access token** | 예 | 설정 5단계의 토큰. 계정 비밀번호가 아닙니다 | |
+| **Role** | 아니요 | 연결이 사용하는 역할. 토큰의 `ROLE_RESTRICTION` 안에 있어야 합니다 | 사용자의 기본 역할 |
+| **Warehouse** | 아니요 | 이 연결이 사용하는 크레딧이 청구되는 웨어하우스 | 사용자의 기본 웨어하우스 |
+
+**Account identifier**를 찾으려면 Snowsight 왼쪽 메뉴 하단의 계정 선택기를 열고 **View account details**를 클릭하세요. 또는 다음을 실행합니다.
+
+```sql
+SELECT CURRENT_ORGANIZATION_NAME() || '-' || CURRENT_ACCOUNT_NAME();
+```
+
+밑줄로 쓴 식별자(`MYORG_MYACCOUNT`)도 동작합니다.
+
+---
+
+## 필요 권한
+
+| 권한 | 사용할 수 있게 되는 것 |
+|-------|-----------------|
+| `SNOWFLAKE.USAGE_VIEWER` | 크레딧 미터링과 스토리지 이력 |
+| `SNOWFLAKE.OBJECT_VIEWER` | 데이터베이스, 스키마, 테이블 인벤토리 |
+| `SNOWFLAKE.GOVERNANCE_VIEWER` | 느린 쿼리와 오류 답변에 필요한 `QUERY_HISTORY` |
+| `MONITOR USAGE ON ACCOUNT` | 계정 수준 사용량 뷰 |
+| `USAGE ON WAREHOUSE` | 분석 쿼리를 실행할 컴퓨팅 |
 
 <Tip>
-REST 호스트는 계정 식별자를 소문자로 바꾸고 구분자를 하이픈으로 처리하므로, 밑줄로 작성한 식별자도 정상적으로 해석됩니다.
+`GOVERNANCE_VIEWER`는 흔히 빠뜨리는 권한입니다. 이 권한이 없으면 크레딧과 스토리지 답변은 동작하지만 느린 쿼리와 오류 답변은 모두 실패합니다. 연결이 다른 것에 접근하지 못하도록 토큰의 `ROLE_RESTRICTION`을 이 읽기 전용 역할로 유지하세요.
 </Tip>
 
-## 필요한 권한
-
-### 읽기 전용 (기본값)
-
-```sql
-GRANT DATABASE ROLE SNOWFLAKE.USAGE_VIEWER      TO ROLE CT_READONLY;
-GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER     TO ROLE CT_READONLY;
-GRANT DATABASE ROLE SNOWFLAKE.GOVERNANCE_VIEWER TO ROLE CT_READONLY;
-GRANT MONITOR USAGE ON ACCOUNT                  TO ROLE CT_READONLY;
-GRANT USAGE ON WAREHOUSE COMPUTE_WH             TO ROLE CT_READONLY;
-```
-
-`GOVERNANCE_VIEWER`는 놓치기 쉽습니다. 이것이 없으면 비용과 스토리지 답변은 계속 작동하지만, 느린 쿼리와 오류 답변은 모두 `QUERY_HISTORY`에서 실패합니다.
-
-### 쓰기 접근 (활성화하는 경우에만)
-
-```sql
--- 일시 중단과 재개: 에이전트가 제어해도 되는 웨어하우스를 각각 지정합니다.
-GRANT USAGE, OPERATE, MONITOR ON WAREHOUSE CT_AGENT_WH TO ROLE CT_READWRITE;
-
--- findings 테이블이 저장될 위치.
-GRANT USAGE ON DATABASE MONITORING                    TO ROLE CT_READWRITE;
-GRANT USAGE, CREATE TABLE ON SCHEMA MONITORING.ALERTS TO ROLE CT_READWRITE;
-```
-
-`OPERATE`는 에이전트가 조작해도 되는 웨어하우스에만 부여하고, 공유 프로덕션 웨어하우스에는 절대 부여하지 마세요. 리소스 모니터를 붙인 전용 에이전트 웨어하우스를 두면 어떤 프롬프트로도 올릴 수 없는 컴퓨트 상한이 생깁니다.
+---
 
 ## 에이전트 기능
 
-연결하면 CloudThinker는 다음을 할 수 있습니다:
-
 | 기능 | 설명 |
 |------------|-------------|
-| **계정 탐색** | 자격 정보, 웨어하우스, 데이터베이스, 그리고 역할이 읽을 수 있는 `ACCOUNT_USAGE` 뷰 |
-| **크레딧 분석** | 웨어하우스별·일별 측정 크레딧과 측정 기간 명시 |
-| **쿼리 상태** | 읽을 수 있는 가장 느린 쿼리, 반복되는 오류 유형, 원격 스필 |
-| **스토리지 검토** | 가장 큰 테이블, 타임 트래블 및 페일세이프 부담, 데이터베이스별 증가량 |
-| **인벤토리** | 스키마, 역할, 그리고 이 연결 자신의 권한 |
+| **계정 탐색** | ID, 웨어하우스, 데이터베이스, 그리고 역할이 읽을 수 있는 `ACCOUNT_USAGE` 뷰 |
+| **크레딧 분석** | 지정한 기간(기본 30일) 동안 웨어하우스별, 일별 미터링 크레딧 |
+| **쿼리 상태** | 가장 느린 쿼리, 반복되는 오류 유형, 원격 스토리지로 스필되는 쿼리 |
+| **스토리지 검토** | 가장 큰 테이블, time travel 및 failsafe 오버헤드, 데이터베이스별 증가량 |
+| **인벤토리** | 스키마, 역할, 이 연결 자체의 권한 |
+| **웨어하우스 제어** | **Allow writes**가 켜져 있으면 지정한 웨어하우스 하나를 일시 중지하거나 재개 |
+
+CloudThinker는 Snowflake 지출을 금액이 아니라 항상 크레딧으로 보고합니다. 크레딧당 가격은 이 연결로 읽을 수 없습니다.
 
 ### 연결 확인
 
 ```text
-내 Snowflake 웨어하우스와 이 연결이 읽을 수 있는 ACCOUNT_USAGE 뷰를 나열해줘
+List my Snowflake warehouses and which ACCOUNT_USAGE views this connection can read
 ```
 
-### 프롬프트 예시
+**성공 상태:** CloudThinker가 웨어하우스를 나열하고 각 `ACCOUNT_USAGE` 뷰를 읽기 가능 또는 차단됨으로 표시하며, 차단된 뷰에는 이를 해결하는 `GRANT`를 함께 보여줍니다.
+
+### 예시 프롬프트
 
 ```text
-지난 30일 동안 크레딧을 가장 많이 소모한 Snowflake 웨어하우스는 어디야
-가장 느린 Snowflake 쿼리와 반복되는 오류를 보여줘
-타임 트래블과 페일세이프가 스토리지 부담을 늘리는 곳은 어디야
+Which Snowflake warehouses burned the most credits in the last 30 days?
+Show the slowest Snowflake queries this week and any errors that keep recurring
+Where are time travel and failsafe adding the most storage?
 ```
 
-Snowflake는 통화가 아니라 크레딧을 노출하며, 크레딧당 단가는 이 연결로 읽을 수 없습니다. 에이전트는 크레딧을 크레딧으로 보고합니다.
+---
 
-## 쓰기 접근
+## 쓰기 권한
 
-연결은 읽기 전용으로 제공되며, 접근 권한은 자격 증명을 따르므로 쓰기는 연결마다 결정합니다. 하나의 워크스페이스가 읽기 전용 토큰과 쓰기 가능 토큰을 동시에 가질 수 있습니다.
+새 Snowflake 연결에서는 **Allow writes**가 꺼져 있습니다.
 
-| Allow writes | 자격 증명 | 에이전트가 할 수 있는 일 |
-|--------------|------------|------------------------|
-| 끔 (기본값) | 무관 | 읽기만 가능. 모든 변경이 거부됩니다. |
-| 켬 | 읽기 전용 역할 | 여전히 아무것도 못 합니다. Snowflake가 구문을 거부하고 에이전트는 그 거부를 보고합니다. |
-| 켬 | 쓰기 가능 역할 | 지정한 웨어하우스의 일시 중단·재개, 그리고 측정한 발견 사항을 `CT_FINDINGS` 테이블에 저장. |
+<ApprovalDefault />
 
-**Connections → Snowflake → Settings → Allow writes**에서 켭니다. 먼저 따져볼 두 가지:
+스위치를 켜면 사람이 개입하지 않고 AI가 웨어하우스 일시 중지를 승인할 수 있습니다. 프로덕션 계정이라면 쓰기를 켜기 전에 **Manual**을 선택해 모든 변경을 사람이 승인하도록 하세요. **Ask first** Rule로 대기를 Snowflake 연결에만 한정할 수도 있습니다. 채팅에서 `Propose an Ask first Rule for every write on the Snowflake connection`이라고 요청한 뒤, **Settings → Workspace → Autonomy → Rules**의 **Needs review**에서 수락하세요. 제안을 확인하는 방법은 [Cassandra 가이드](/guide/connections/cassandra#write-access)에 설명되어 있습니다.
 
-- **여기서 쓰기란 정확히 두 가지 작업이며, 임의의 SQL이 아닙니다.** 리소스 모니터 상향, `DATA_RETENTION_TIME_IN_DAYS` 하향, 웨어하우스 크기 변경은 여전히 Snowsight에서 직접 실행할 구문으로 보고됩니다.
-- **권한 부여가 더 강한 통제입니다.** **Allow writes**는 CloudThinker가 쓰기를 요청할 수 있는지를 결정하고, 토큰의 `ROLE_RESTRICTION`과 역할의 권한이 Snowflake가 쓰기를 허용할지를 결정합니다.
+쓰기는 임의의 SQL이 아니라 정확히 두 가지 작업을 뜻합니다.
+
+- 지정한 웨어하우스 하나를 일시 중지하거나 재개합니다.
+- 요청하면 측정한 결과를 `CT_FINDINGS` 테이블에 보관합니다. 처음 저장할 때 역할에 `CREATE TABLE` 권한이 있는 유일한 스키마에 테이블을 만듭니다. 역할이 여러 스키마에 쓸 수 있으면 어느 스키마를 쓸지 묻습니다. 프롬프트에서 `MONITORING.ALERTS`처럼 직접 지정할 수도 있습니다.
+
+`CT_FINDINGS`에는 `RECORDED_AT_UTC`, `CATEGORY`, `SEVERITY`, `SUBJECT`, `DETAIL`, `SOURCE`의 여섯 열이 있습니다. 결과 저장과 오래된 결과 정리는 모두 쓰기이므로 각각 승인을 거칩니다. 자동으로 정리되는 것은 없습니다. CloudThinker에게 일정 일수보다 오래된 행을 제거하라고 요청하거나 직접 삭제할 때까지 행이 남습니다.
+
+웨어하우스 크기 조정, 리소스 모니터 변경, `DATA_RETENTION_TIME_IN_DAYS` 낮추기는 여전히 Snowsight에서 실행할 명령문으로 사용자에게 전달됩니다.
+
+**Allow writes**는 CloudThinker가 요청할 수 있게 할 뿐입니다. 역할에는 여전히 권한이 필요하며, 읽기 전용 토큰이면 Snowflake가 모든 쓰기를 거부합니다. 쓰기를 켜려면 다음을 따르세요.
+
+<Steps>
+  <Step title="쓰기 역할과 토큰 만들기">
+    `DEV_WH`를 에이전트가 일시 중지할 수 있는 웨어하우스로, `MONITORING.ALERTS`를 `CT_FINDINGS`용 스키마로 바꾸세요. `OPERATE`는 에이전트가 일시 중지해도 되는 웨어하우스에만 부여하고, 공유 프로덕션 웨어하우스에는 절대 부여하지 마세요.
+    ```sql
+    USE ROLE ACCOUNTADMIN;
+
+    CREATE ROLE IF NOT EXISTS CT_READWRITE;
+    GRANT DATABASE ROLE SNOWFLAKE.USAGE_VIEWER      TO ROLE CT_READWRITE;
+    GRANT DATABASE ROLE SNOWFLAKE.OBJECT_VIEWER     TO ROLE CT_READWRITE;
+    GRANT DATABASE ROLE SNOWFLAKE.GOVERNANCE_VIEWER TO ROLE CT_READWRITE;
+    GRANT MONITOR USAGE ON ACCOUNT                  TO ROLE CT_READWRITE;
+    GRANT USAGE ON WAREHOUSE CT_WH                  TO ROLE CT_READWRITE;
+
+    GRANT USAGE, OPERATE, MONITOR ON WAREHOUSE DEV_WH     TO ROLE CT_READWRITE;
+    GRANT USAGE ON DATABASE MONITORING                    TO ROLE CT_READWRITE;
+    GRANT USAGE, CREATE TABLE ON SCHEMA MONITORING.ALERTS TO ROLE CT_READWRITE;
+
+    GRANT ROLE CT_READWRITE TO USER SVC_CLOUDTHINKER;
+    ALTER USER SVC_CLOUDTHINKER ADD PROGRAMMATIC ACCESS TOKEN CT_TOKEN_RW
+      ROLE_RESTRICTION = 'CT_READWRITE'
+      DAYS_TO_EXPIRY = 90;
+    ```
+    `token_secret` 열 값을 복사하세요.
+  </Step>
+  <Step title="연결 업데이트">
+    **Settings → Workspace → Connections**를 열고 Snowflake를 선택한 뒤 계정 행의 연필 아이콘을 클릭하고, **Edit Instance**에서 **Replace…**를 클릭합니다. 새 토큰을 **Programmatic access token**에 붙여넣고 **Role**을 `CT_READWRITE`로 설정한 뒤 **Save and test**를 클릭합니다.
+  </Step>
+  <Step title="Allow writes 켜기">
+    **Edit Instance**를 닫습니다. Snowflake 연결의 상세 패널에서 **Allow writes** 스위치를 켭니다.
+  </Step>
+  <Step title="읽기 전용 토큰 제거">
+    **Save and test**가 통과하면 이전 토큰은 사용되지 않습니다. `ALTER USER SVC_CLOUDTHINKER REMOVE PROGRAMMATIC ACCESS TOKEN CT_TOKEN;`을 실행하세요.
+  </Step>
+</Steps>
+
+읽기 전용으로 되돌리려면 다음을 따르세요.
+
+<Steps>
+  <Step title="Allow writes 끄기">
+    Snowflake 연결의 상세 패널에서 **Allow writes** 스위치를 끕니다. CloudThinker가 즉시 쓰기 제안을 멈춥니다.
+  </Step>
+  <Step title="읽기 전용 토큰으로 다시 교체">
+    새 읽기 전용 토큰을 만듭니다.
+    ```sql
+    ALTER USER SVC_CLOUDTHINKER ADD PROGRAMMATIC ACCESS TOKEN CT_TOKEN_RO
+      ROLE_RESTRICTION = 'CT_READONLY'
+      DAYS_TO_EXPIRY = 90;
+    ```
+    **Settings → Workspace → Connections**를 열고 **Snowflake**를 선택한 뒤 계정 행의 연필 아이콘을 클릭하고, **Edit Instance**에서 **Replace…**를 클릭합니다. 토큰을 **Programmatic access token**에 붙여넣고 **Role**을 `CT_READONLY`로 설정한 뒤 **Save and test**를 클릭합니다.
+  </Step>
+  <Step title="쓰기 토큰과 역할 제거">
+    ```sql
+    ALTER USER SVC_CLOUDTHINKER REMOVE PROGRAMMATIC ACCESS TOKEN CT_TOKEN_RW;
+    REVOKE ROLE CT_READWRITE FROM USER SVC_CLOUDTHINKER;
+    DROP ROLE CT_READWRITE;
+    ```
+  </Step>
+</Steps>
 
 <Warning>
-Snowflake에는 조건부 일시 중단이 없습니다. 사용 중 확인과 `ALTER`는 별개의 구문이므로 그 사이에 쿼리가 시작되어 컴퓨트를 잃을 수 있습니다. 에이전트는 상태 변경과 이 한계를 보고할 뿐, 일시 중단이 안전했다고는 결코 말하지 않습니다.
+한 워크스페이스에 Snowflake 연결이 두 개 이상 있으면 모든 연결에서 쓰기가 꺼집니다. 승인된 쓰기가 어느 계정을 대상으로 하는지 지정할 수 없기 때문입니다.
 </Warning>
 
-**Allow writes**가 켜져 있으면 [규칙](/guide/approvals/rules)과 [Approval mode](/guide/approvals/approval-mode)가 각 쓰기를 결정합니다.
+<Warning>
+일시 중지는 조건부로 만들 수 없습니다. CloudThinker가 사용 중인지 확인한 시점과 일시 중지 사이에 쿼리가 시작되면, 그 쿼리는 컴퓨팅을 잃을 수 있습니다.
+</Warning>
+
+---
+
+## 토큰 교체
+
+<Steps>
+  <Step title="새 토큰 만들기">
+    교체가 끝날 때까지 이전 토큰을 유지하세요. 읽기 전용 연결의 경우:
+    ```sql
+    ALTER USER SVC_CLOUDTHINKER ADD PROGRAMMATIC ACCESS TOKEN CT_TOKEN_2
+      ROLE_RESTRICTION = 'CT_READONLY'
+      DAYS_TO_EXPIRY = 90;
+    ```
+    쓰기가 켜져 있는 경우:
+    ```sql
+    ALTER USER SVC_CLOUDTHINKER ADD PROGRAMMATIC ACCESS TOKEN CT_TOKEN_RW_2
+      ROLE_RESTRICTION = 'CT_READWRITE'
+      DAYS_TO_EXPIRY = 90;
+    ```
+    `token_secret` 열 값을 복사하세요.
+  </Step>
+  <Step title="CloudThinker에서 교체">
+    **Settings → Workspace → Connections**를 열고 Snowflake를 선택한 뒤 계정 행의 연필 아이콘을 클릭하고, **Edit Instance**에서 **Replace…**를 클릭합니다. 새 토큰을 붙여넣고 **Save and test**를 클릭합니다.
+
+    **성공 상태:** 테스트가 통과하고 연결이 **Connected** 상태로 유지됩니다. 실패하면 CloudThinker는 이전 토큰을 유지합니다.
+  </Step>
+  <Step title="이전 토큰 제거">
+    `ALTER USER SVC_CLOUDTHINKER REMOVE PROGRAMMATIC ACCESS TOKEN <old_token_name>;`을 실행하세요. 예: `CT_TOKEN` 또는 `CT_TOKEN_RW`.
+  </Step>
+</Steps>
+
+---
 
 ## 문제 해결
 
 <Accordion title="인증이 즉시 실패함 (390403)">
-사용자에게 네트워크 정책이 없습니다. 정책이 연결될 때까지 Snowflake는 토큰 인증을 거부합니다: `ALTER USER SVC_CLOUDTHINKER SET NETWORK_POLICY = CT_POLICY;`
+서비스 사용자에게 네트워크 정책이 없습니다. `ALTER USER SVC_CLOUDTHINKER SET NETWORK_POLICY = CT_POLICY;`를 실행하세요.
 </Accordion>
 
-<Accordion title="어제는 되던 것이 실패함 (390318)">
-토큰이 만료되었거나 취소되었습니다. `DAYS_TO_EXPIRY`는 엄격한 만료 기한입니다. 새 토큰을 발급하고 연결을 업데이트하세요.
+<Accordion title="어제는 동작했는데 오늘 실패함 (390318)">
+토큰이 만료되었거나 취소되었습니다. 새 토큰을 만들고(설정 5단계) 연결에 [교체](#토큰-교체)하세요.
 </Accordion>
 
 <Accordion title="Object does not exist or not authorized (002003)">
-뷰 이름 오타가 아니라 데이터베이스 역할이 누락된 것입니다. 에이전트에게 탐색을 실행시키세요. 역할이 읽을 수 있는 모든 `ACCOUNT_USAGE` 뷰를 나열하고, 읽지 못하는 뷰에는 정확한 `GRANT` 구문을 출력합니다.
+역할에 데이터베이스 역할이 빠져 있습니다. 확인 프롬프트를 실행하세요. CloudThinker가 읽을 수 없는 모든 `ACCOUNT_USAGE` 뷰와 각각에 필요한 정확한 `GRANT`를 나열합니다.
 </Accordion>
 
-<Accordion title="Connected인데 모든 쿼리가 실패함 (090073)">
-리소스 모니터가 할당량을 초과했거나, 웨어하우스가 중단된 채 재개하지 못하고 있습니다. 권한이 아니라 계정 용량 문제이므로 어떤 `GRANT`로도 해결되지 않습니다. 계정 관리자가 리소스 모니터를 올리거나 재설정해야 합니다.
-
-자격 증명이 유효하고 테스트 프로브는 컴퓨트가 필요 없기 때문에 연결 상태는 **Connected**로 유지됩니다.
+<Accordion title="Connected 상태인데 모든 쿼리가 실패함 (090073)">
+리소스 모니터가 할당량을 초과했거나, 웨어하우스가 일시 중지되어 재개할 수 없습니다. `GRANT`로는 해결되지 않습니다. 계정 관리자가 리소스 모니터를 올리거나 재설정해야 합니다. 토큰이 유효하고 테스트에 컴퓨팅이 필요 없으므로 상태는 **Connected**로 유지됩니다.
 </Accordion>
 
 <Accordion title="No active warehouse selected (000606)">
-서비스 사용자에게 `DEFAULT_WAREHOUSE`가 없고 설정된 웨어하우스도 없습니다. 연결의 **Warehouse**를 설정하거나 사용자에게 기본값을 지정하세요.
+서비스 사용자에게 `DEFAULT_WAREHOUSE`가 없고 연결에도 없습니다. **Warehouse**를 설정하거나 사용자에게 기본값을 지정하세요.
 </Accordion>
 
 <Accordion title="Role not authorized (090105)">
-역할이 토큰의 `ROLE_RESTRICTION` 범위 밖에 있습니다. 토큰이 사용할 수 있는 역할을 쓰거나, **Role**을 비워 사용자의 기본값을 사용하세요.
+역할이 토큰의 `ROLE_RESTRICTION` 밖에 있습니다. 토큰이 허용하는 역할을 사용하거나, **Role**을 비워 사용자의 기본 역할을 사용하세요.
 </Accordion>
 
-<Accordion title="섹션이 비어서 반환됨">
-오류가 아닙니다. `ACCOUNT_USAGE`는 최대 몇 시간까지 지연되고 1년치 이력을 보관하므로, 활동이 적은 계정에서 좁은 기간을 조회하면 행이 없습니다.
+<Accordion title="섹션이 비어 있음">
+오류가 아닙니다. `ACCOUNT_USAGE`는 최대 몇 시간 지연되고 365일의 이력을 보관하므로, 활동이 적은 계정에서 짧은 기간을 조회하면 행이 없을 수 있습니다.
 </Accordion>
+
+---
 
 ## 보안
 
 <ConnectionSecurity />
 
-- **전용 서비스 사용자** — `TYPE = SERVICE` 사용자는 비밀번호, MFA, SSO가 없어 토큰이 유일한 진입 경로가 되고 감사 기록이 읽기 쉬워집니다.
-- **토큰을 제한하고 만료시키기** — `ROLE_RESTRICTION`은 연결이 도달할 수 있는 범위를 제한하고, `DAYS_TO_EXPIRY`는 잊기 쉬운 교체 주기를 강제합니다.
+- **전용 서비스 사용자**: `TYPE = SERVICE` 사용자에게는 비밀번호, MFA, SSO가 없으므로 토큰이 유일한 접근 수단이고 활동을 감사하기 쉽습니다.
+- **토큰을 제한하고 만료시키세요**: `ROLE_RESTRICTION`은 연결이 접근할 수 있는 범위를 제한하고, `DAYS_TO_EXPIRY`는 교체를 강제합니다.
+
+---
 
 ## 관련 항목
 
 <CardGroup cols={2}>
-  <Card title="에이전트" icon="database" href="/ko/guide/agents/overview">
-    데이터베이스 중심 최적화 에이전트
+  <Card title="Databricks 연결" icon="layer-group" href="/guide/connections/databricks">
+    작업, 클러스터, 카탈로그 분석을 위해 Databricks를 연결합니다
   </Card>
-  <Card title="ClickHouse 연결" icon="/images/icons/clickhouse.svg" href="/ko/guide/connections/clickhouse">
-    ClickHouse 클러스터를 위한 유사한 설정
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    어떤 쓰기가 자동으로 실행되고 어떤 쓰기가 사용자를 기다릴지 결정합니다
+  </Card>
+  <Card title="연결 개요" icon="plug" href="/ko/guide/connections/overview">
+    연결 전반에서 자격 증명과 쓰기 제어가 동작하는 방식
   </Card>
 </CardGroup>

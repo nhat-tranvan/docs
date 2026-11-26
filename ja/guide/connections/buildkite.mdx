@@ -1,103 +1,84 @@
 ---
 title: Buildkite
-description: "Buildkite を CloudThinker に接続し、パイプラインの健全性監視、ログとアノテーションからの失敗ビルドのトリアージ、承認ゲート付きのビルド操作を実現します"
+description: "Buildkite を接続して、エージェントがパイプラインの健全性を追跡し、ログから失敗したビルドをトリアージし、Approvals を経てジョブの再試行やブロック解除を行えるようにします"
 icon: "/images/icons/buildkite.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+import ApprovalDefault from '/snippets/approval-default.mdx';
 
-Buildkite 組織を接続すると、CloudThinker のエージェントがパイプラインの健全性を追跡し、ログとアノテーションから失敗ビルドをトリアージし、エージェントとクラスターの空き状況を確認し、ジョブの再実行やデプロイゲートの解除といった承認ゲート付きの操作を実行できます。
-
-Buildkite は Buildkite がホストする MCP サーバー経由で **API アクセストークン** による認証を行います。トークンのスコープが成功する操作を決めるため、付与したスコープがエージェントの到達範囲そのものの上限になります。
-
----
+Buildkite を接続すると、CloudThinker エージェントがパイプラインの健全性を測定し、ログとアノテーションからビルドの失敗原因を見つけ、エージェントのキャパシティを確認できるようになります。この接続は Buildkite の API アクセストークンを使い、付与したスコープがエージェントにできることの厳格な上限になります。
 
 ## 前提条件
 
-- 監視対象の組織にアクセスできる **Buildkite アカウント**。
-- 下記「必要な権限」に記載した読み取りスコープを持つ **API アクセストークン**。
-- 承認ゲート付きの操作には、同じトークンに **`write_builds`** スコープが必要です。
-
-<Info>
-監視とトリアージは読み取りスコープだけで動作します。retry、unblock、rebuild、cancel にはトークンへの `write_builds` の追加が必要です。
-</Info>
-
----
+- エージェントに監視させたい組織にアクセスできる Buildkite アカウント。
+- その組織の API アクセストークンを作成する権限。
 
 ## セットアップ
 
 <Steps>
   <Step title="API アクセストークンを作成する">
-    Buildkite で **Personal Settings → API Access Tokens → New API Access Token**（[buildkite.com/user/api-access-tokens/new](https://buildkite.com/user/api-access-tokens/new)）を開きます:
+    Buildkite で **Personal Settings → API Access Tokens → New API Access Token**（[buildkite.com/user/api-access-tokens/new](https://buildkite.com/user/api-access-tokens/new)）に移動し、次を設定します。
     - **Description**: `cloudthinker`
-    - **Organization access**: CloudThinker がアクセスする組織を選択
-    - **REST API scopes**: `read_organizations`、`read_pipelines`、`read_builds`、`read_build_logs`、`read_artifacts`、`read_agents`、`read_clusters`、`read_user` — ビルド操作を使う場合のみ `write_builds` を追加
-    - **Expiry**: 有効期間を選び、ローテーションを計画
+    - **Organization access**: CloudThinker にアクセスさせる組織
+    - **REST API scopes**: `read_organizations`、`read_pipelines`、`read_builds`、`read_build_logs`、`read_artifacts`、`read_agents`、`read_clusters`、`read_user`。エージェントに再試行、ブロック解除、再ビルド、キャンセルをさせたい場合のみ `write_builds` を追加します。
 
-    トークンは作成直後にコピーしてください — Buildkite は一度しか表示しません。
+    トークンをすぐにコピーしてください。Buildkite は一度しか表示しません。
   </Step>
-  <Step title="CloudThinker で接続を追加する">
-    **Connections → Buildkite** に移動して入力します:
-    - **Token**: 作成した API アクセストークン
+  <Step title="接続を追加する">
+    **Settings → Workspace → Connections** を開き、**Discover** タブを開いて **Buildkite** を選択します。**BUILDKITE_API_TOKEN** にトークンを貼り付け、**Connect** をクリックします。
 
-    **Connect** をクリックします。CloudThinker が認証情報を検証し、**Connected** ステータスを表示します。
+    **成功時の状態:** ダイアログが閉じ、接続に **Connected** と表示されます。
+  </Step>
+  <Step title="トークンが機能することを確認する">
+    [接続の確認](#接続の確認)のプロンプトを実行します。Buildkite は不正なトークンでも接続を受け付け、エージェントが最初に呼び出したときに初めて拒否するため、**Connected** ステータスだけではトークンが有効であることの証明になりません。
   </Step>
 </Steps>
 
-<Warning>
-API アクセストークンは作成直後にコピーしてください。紛失した場合は新しいトークンを作成する必要があります。
-</Warning>
-
----
-
 ## 接続の詳細
 
-| フィールド | 説明 | 例 |
-|-------|-------------|---------|
-| **BUILDKITE_API_TOKEN** | 接続の認証に使用する API アクセストークン | — |
+| フィールド | 説明 |
+|-------|-------------|
+| **BUILDKITE_API_TOKEN** | Buildkite の API アクセストークン。そのスコープによって、どの操作が成功するかが決まります |
 
-<Note>
-CloudThinker はトークンから組織を自動的に解決するため、org slug の設定は不要です。接続には Buildkite がホストする MCP サーバー `https://mcp.buildkite.com/direct` を使用し、トークンはそのまま Buildkite の REST API に渡されます。
-</Note>
-
----
+入力する組織スラッグはありません。エージェントがトークンから解決します。CloudThinker はトークンを Buildkite がホストする MCP サーバー `https://mcp.buildkite.com/direct` に送信し、そのサーバーがトークンを Buildkite REST API に渡します。このサーバーを運用しているのは CloudThinker ではなく Buildkite です。
 
 ## 必要な権限
 
-エージェントに任せたい作業に対応するスコープだけを付与してください。
-
-| スコープ | 用途 |
-|-------|---------|
-| `read_organizations` | トークンが到達できる組織の解決 |
-| `read_pipelines` | パイプラインの一覧と詳細 |
-| `read_builds` | ビルド、ジョブ、アノテーション、失敗サマリー |
-| `read_build_logs` | ジョブログの読み取り、検索、追尾 |
-| `read_artifacts` | ビルドとジョブのアーティファクト |
-| `read_agents` | エージェントの接続状態と空き状況 |
-| `read_clusters` | クラスターとクラスターキュー |
-| `read_user` | `current_user` によるアカウント参照 |
-| `write_builds` | ジョブの再実行、ジョブのアンブロック、リビルド、キャンセル — いずれも CloudThinker 側では[承認](/guide/approvals/overview)ゲートの対象 |
+| スコープ | 必須 | 有効になるもの |
+|-------|----------|---------|
+| `read_organizations` | はい | トークンがアクセスできる組織の解決 |
+| `read_pipelines` | はい | パイプラインの一覧と詳細 |
+| `read_builds` | はい | ビルド、ジョブ、アノテーション、失敗サマリー |
+| `read_build_logs` | はい | ジョブログの閲覧、検索、末尾追跡 |
+| `read_artifacts` | はい | ビルドとジョブのアーティファクト |
+| `read_agents` | はい | エージェントの接続状態とキャパシティ |
+| `read_clusters` | はい | クラスターとクラスターキュー |
+| `read_user` | はい | トークン自身のユーザーの参照 |
+| `write_builds` | いいえ | ジョブの再試行、ジョブのブロック解除、再ビルド、キャンセル |
 
 <Tip>
-最小権限に従ってください: 監視のみの接続では `write_builds` を外します。エージェントは読み取り機能をすべて保持し、4 つの操作は承認ゲートに頼るまでもなく Buildkite 側で失敗します。
+監視専用の接続では `write_builds` を付与しないでください。エージェントはすべての読み取りを維持し、Buildkite 自体があらゆる変更を拒否するため、承認だけに頼らずに済みます。
 </Tip>
-
----
 
 ## エージェントの機能
 
-接続すると、エージェントは Buildkite のパイプライン、ビルド、ログ、アーティファクト、エージェントへの読み取りアクセスを得ます。
+| 機能 | エージェントができること |
+|------------|--------------------|
+| **Discovery** | 組織内のパイプライン、最近のビルド、エージェント、クラスターを一覧表示する |
+| **Pipeline health** | 成功率、連続失敗回数、プロンプトで指定したしきい値（例: 「30 分以上止まっている」）より長く止まっているビルドを報告する |
+| **Failed-build triage** | Buildkite の失敗サマリーをジョブログ、アノテーション、失敗したテストと照合する |
+| **Logs and artifacts** | ジョブのログを閲覧、検索、末尾追跡し、ビルドとジョブのアーティファクトを一覧表示・取得する |
+| **Capacity** | エージェントの接続状態、クラスター、クラスターキューを表示する |
+| **Build controls** | ジョブの再試行、ジョブのブロック解除、ビルドの再ビルド、ビルドのキャンセル。**いずれも Approvals を経由します** |
 
-| 機能 | 説明 |
-|------------|-------------|
-| **組織の探索** | 組織を解決し、パイプライン、直近のビルド、エージェント、クラスターを一覧表示 |
-| **パイプラインの健全性** | 成功率、連続失敗数、しきい値を超えて停滞しているビルド |
-| **失敗ビルドのトリアージ** | 失敗サマリーをジョブログ、アノテーション、失敗テストと突き合わせ |
-| **ログとアーティファクト** | ジョブログの読み取り、検索、追尾。ビルドとジョブのアーティファクト一覧 |
-| **キャパシティ** | エージェントの接続状態、クラスター、クラスターキュー |
-| **ビルド操作** | ジョブの再実行、ジョブのアンブロック、リビルド、キャンセル — **承認が必要** |
+手動のブロックステップで待機中のビルドは、Buildkite API で `passed` と報告されます。エージェントはゲートの有無を確認し、ブロックステップの名前を示し、そのビルドを成功率から除外するため、保留中のデプロイが緑のパイプラインとして表示されることはありません。ブロック解除の前に、エージェントはブロックステップのラベルとビルドのアノテーションを引用するので、どのゲートを解放するのかがわかります。
 
-手動ゲートで待機中のビルドは、Buildkite の API 上では `passed` と報告されます。CloudThinker はそのビルドをゲート待ちとして示し、ブロックステップの名前を伝え、成功率の計算から除外します。そのため、保留中のデプロイが緑のパイプラインとして報告されることはありません。
+エージェントはパイプライン、クラスター、キュー、スケジュールの作成や編集はできず、ジョブの環境変数も読みません。Buildkite Test Engine のデータはこの接続では利用できません。
+
+<ApprovalDefault />
+
+毎回確認を求めるようにするには、[Approval mode](/guide/approvals/approval-mode) で **Manual** を選び、すべての変更を人が承認するようにします。**Ask first** の [Rule](/guide/approvals/rules) を使えば、この接続だけに絞ることもできます。
 
 ### 接続の確認
 
@@ -105,62 +86,56 @@ CloudThinker はトークンから組織を自動的に解決するため、org 
 List my Buildkite pipelines and show the latest build status for each
 ```
 
+各パイプラインがスラッグごとに、最新のビルド状態とともに表示されるはずです。ここで 401 が返る場合は、接続に **Connected** と表示されていてもトークンは無効です。
+
 ### プロンプト例
 
 ```text
-Which Buildkite pipelines are failing right now and report their failure streaks
-Build 42 of the web pipeline failed — pull the logs and annotations, find the cause, and recommend a fix
+Which Buildkite pipelines are failing right now, and how long is each failure streak?
+Build 42 of the web pipeline failed. Pull the logs and annotations and tell me the cause
 Show Buildkite agent capacity and any builds stuck for more than an hour
 ```
 
-パイプラインが多い組織では、単一のパイプラインに絞って依頼すると焦点の合った結果が返ります。
-
----
-
 ## トラブルシューティング
 
-<Accordion title="接続は Connected なのにすべてのリクエストが 401 を返す">
-トークンが無効、期限切れ、または失効しています。MCP のハンドシェイクは不正なトークンでも成功し、ツール実行時に初めて失敗するため、接続ステータスが緑でもトークンが有効である証明にはなりません。新しい API アクセストークンを作成して再接続してください。
+<Accordion title="Connected だが、すべてのリクエストが 401 を返す">
+トークンが無効、期限切れ、または取り消されています。新しい API アクセストークンを作成し、接続の **BUILDKITE_API_TOKEN** を更新してください。
 </Accordion>
 
-<Accordion title="以前は動いていた読み取りが 403 になる">
-トークンにスコープが不足しています。読み取りには `read_organizations`、`read_pipelines`、`read_builds`、`read_build_logs`、`read_artifacts`、`read_agents`、`read_clusters` が必要です。Buildkite でトークンのスコープを編集してください — 新しいトークンを作成する必要はありません。
+<Accordion title="読み取りで 403 になる">
+トークンに読み取りスコープが不足しています。[必要な権限](#必要な権限)と照らし合わせ、Buildkite でトークンのスコープを編集してください。新しいトークンは不要です。
 </Accordion>
 
-<Accordion title="retry、unblock、rebuild、cancel が権限エラーで失敗する">
-トークンに `write_builds` がありません。Buildkite でそのスコープを追加するか、接続を読み取り専用のままにして Buildkite 上で自分で操作してください。
+<Accordion title="再試行、ブロック解除、再ビルド、キャンセルが権限エラーで失敗する">
+トークンに `write_builds` がありません。Buildkite でスコープを追加するか、接続を読み取り専用のままにして、操作は Buildkite でご自身で実行してください。
 </Accordion>
 
-<Accordion title="デプロイが待機中なのにパイプラインが健全に見える">
-それは手動ゲートであり、すでに考慮されています。最新のビルドはゲートで止まっている限り成功率から除外されます。エージェントがゲート状態を **unknown** と報告した場合は、ゲートの確認自体が失敗しています — 多くはレート制限が原因で — その場合もビルドは除外されます。unknown はゲートが無いという意味ではありません。
+<Accordion title="ゲートの状態が unknown と表示される">
+手動ブロックステップの確認が、通常はレート制限のために失敗しました。エージェントはそのビルドを未完了として扱い、成功率から除外します。unknown はゲートがないという意味ではありません。1 分後にもう一度依頼してください。
 </Accordion>
 
 <Accordion title="存在するパイプラインで 404 になる">
-Buildkite が slug を求める箇所でパイプライン名を使っています。エージェントにパイプラインを一覧表示させ、その出力の slug を使ってください。
+Buildkite がスラッグを期待している箇所でパイプライン名が使われました。エージェントにパイプラインを一覧表示させ、その一覧のスラッグを使ってください。
 </Accordion>
 
-<Accordion title="429 レート制限">
-1 回のリクエストでパイプラインまたはビルドが多すぎます。単一のパイプラインに絞るか、直近のビルド数を減らして依頼してください。
+<Accordion title="429 rate limited">
+リクエストの対象となるパイプラインやビルドが多すぎました。質問を 1 つのパイプラインに絞るか、取得する最近のビルドの数を減らしてください。
 </Accordion>
-
----
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **ビルド操作には承認を** — retry、unblock、rebuild、cancel は承認ゲートを維持してください。アンブロックは誰かが意図して置いたゲート、多くはデプロイゲートを解除します。
-- **承認だけでなくトークンのスコープで絞る** — トークンのスコープは Buildkite 側で強制されます。`write_builds` を持たないトークンは CI の状態を一切変更できません。
-
----
+- **承認だけでなくトークンのスコープを絞る**: Buildkite はトークンのスコープを強制します。`write_builds` のないトークンは CI の状態を一切変更できません。
+- **ブロック解除はリリースとして扱う**: ブロックステップは通常、誰かが意図的に追加したデプロイゲートです。エージェントが引用したラベルを読んでからブロック解除を承認してください。
 
 ## 関連情報
 
 <CardGroup cols={2}>
-  <Card title="CircleCI 接続" icon="/images/icons/circleci.svg" href="/ja/guide/connections/circleci">
-    パイプラインステータス、ビルドログトリアージ、承認ゲートの操作
+  <Card title="CircleCI" icon="/images/icons/circleci.svg" href="/ja/guide/connections/circleci">
+    パイプラインのステータス、失敗ログ、不安定なテスト、承認待ちの再実行。
   </Card>
-  <Card title="承認" icon="shield-check" href="/guide/approvals/overview">
-    承認ゲートのアクションの仕組み
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    CloudThinker がどの操作に人の承認が必要かを判断する仕組み。
   </Card>
 </CardGroup>

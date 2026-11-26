@@ -1,193 +1,172 @@
 ---
 title: Elasticsearch
-description: "로그 분석, 인덱스 관리, 검색 성능 최적화를 위해 Elasticsearch를 CloudThinker에 연결하세요"
+description: "Elasticsearch를 연결하면 에이전트가 읽기 전용 접근으로 로그를 검색하고, 매핑을 읽고, ES|QL을 실행하고, 샤드와 클러스터 상태를 확인할 수 있습니다"
 icon: "/images/icons/elasticsearch.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ko/connection-security.mdx';
 
-Elasticsearch 클러스터를 연결하여 CloudThinker 에이전트가 로그를 검색하고, 옵저버빌리티 데이터를 분석하며, 인시던트를 조사할 수 있도록 합니다.
-
-Elasticsearch는 특정 인덱스와 클러스터 권한으로 범위가 지정된 **API 키**로 인증합니다.
-
----
+Elasticsearch 클러스터를 연결하면 CloudThinker 에이전트가 인시던트를 조사하는 동안 인덱스를 나열하고, 필드 매핑을 읽고, DSL 검색과 ES|QL 쿼리를 실행하고, 샤드 할당을 확인할 수 있습니다. 연결은 **API key** 또는 **username and password**로 로그인하며, 연결이 제공하는 모든 도구는 읽기 작업입니다.
 
 ## 사전 요구 사항
 
-- CloudThinker에서 접근 가능한 **Elasticsearch**(7.x, 8.x), **OpenSearch**(1.x, 2.x), **AWS OpenSearch Service**, 또는 **Elastic Cloud** 클러스터.
-- API 키를 생성하기 위한 Kibana(**Stack Management → Security → API Keys**) 또는 Elasticsearch API에 대한 관리자 접근 권한.
-- 클러스터 엔드포인트 URL.
-
----
+- Elastic Cloud 배포나 공개 DNS 이름처럼 CloudThinker가 네트워크로 접근할 수 있는 HTTPS 엔드포인트가 있는 Elasticsearch 클러스터. `localhost`와 사설 주소는 CloudThinker Cloud에서 접근할 수 없습니다.
+- 방화벽이나 Elastic Cloud 트래픽 필터가 클러스터를 보호한다면 CloudThinker의 egress IP를 허용하세요. 이 문서는 CloudThinker의 egress IP 목록을 공개하지 않습니다. CloudThinker 담당자에게 문의하거나 [문의하기](https://cloudthinker.io/contact)를 이용하세요. 다른 방법은 [비공개 서비스 접근](/ko/guide/connections/overview#비공개-서비스-접근)을 참조하세요.
+- API 키(Kibana **Stack Management → Security → API keys** 또는 `_security/api_key` API) 또는 전용 사용자를 만들 수 있는 권한.
+- 에이전트가 읽어야 할 인덱스 패턴(예: `logs-*` 또는 `filebeat-*`).
 
 ## 설정
 
 <Steps>
-  <Step title="Kibana 열기">
-    Kibana 인스턴스로 이동하여 관리자 권한으로 로그인합니다.
+  <Step title="읽기 전용 API 키 만들기">
+    Kibana에서 **Dev Tools**를 열고 아래 요청을 실행합니다. `logs-*`를 사용자의 인덱스 패턴으로 바꾸세요.
+
+    ```http
+    POST /_security/api_key
+    {
+      "name": "cloudthinker",
+      "expiration": "90d",
+      "role_descriptors": {
+        "cloudthinker_read": {
+          "cluster": ["monitor"],
+          "indices": [
+            {
+              "names": ["logs-*"],
+              "privileges": ["read", "view_index_metadata", "monitor"]
+            }
+          ]
+        }
+      }
+    }
+    ```
+
+    응답에서 `encoded` 값을 복사합니다. Elasticsearch는 이 값을 한 번만 표시합니다.
+
+    **Stack Management → Security → API keys**에서 **Create API key**를 클릭하고 **Control security privileges**를 켠 다음 같은 `role_descriptors` 객체를 붙여 넣어 키를 만들 수도 있습니다.
   </Step>
-  <Step title="API 키 메뉴로 이동">
-    **Stack Management → Security → API Keys**로 이동합니다.
-  </Step>
-  <Step title="API 키 생성">
-    **Create API key**를 클릭하고 다음을 입력합니다:
-    - **Name**: `cloudthinker-readonly`
-  </Step>
-  <Step title="권한 설정">
-    읽기 전용 접근을 위한 역할 디스크립터를 추가합니다(전체 JSON은 [필요 권한](#필요-권한) 참고). 최소한 클러스터에 `monitor`, 필요한 인덱스 패턴에 `read` + `view_index_metadata`를 부여합니다.
-  </Step>
-  <Step title="생성 및 복사">
-    **Create API key**를 클릭하고 인코딩된 키를 즉시 복사합니다 — Elasticsearch는 이 키를 다시 표시하지 않습니다.
-  </Step>
-  <Step title="클러스터 엔드포인트 확인">
-    Elasticsearch 엔드포인트를 복사합니다:
-    - 자체 호스팅: `https://elasticsearch.your-domain.com:9200`
-    - Elastic Cloud: 배포 설정에서 확인
-    - AWS OpenSearch: AWS 콘솔의 도메인 엔드포인트
+  <Step title="클러스터 엔드포인트 복사">
+    `https://elasticsearch.example.com:9200`처럼 스킴과 포트를 포함한 전체 URL을 사용합니다. Elastic Cloud에서는 배포 페이지에서 Elasticsearch 엔드포인트를 복사합니다.
   </Step>
   <Step title="CloudThinker에 연결 추가">
-    **Connections → Elasticsearch**로 이동하여 다음을 입력합니다:
-    - **Cluster URL**: Elasticsearch 엔드포인트
-    - **API Key**: 복사한 인코딩 키
-    - **Index patterns**: 접근할 패턴 (예: `logs-*`)
+    **Settings → Workspace → Connections**를 열고 **Elasticsearch**를 선택합니다. **ES_URL**에 엔드포인트를 입력하고, **Authentication**에서 **API key**를 선택한 다음 인코딩된 키를 붙여 넣습니다. 클러스터가 자체 서명 인증서를 사용하지 않는 한 **TLS certificate**는 **Verify**로 둡니다. **Connect**를 클릭합니다.
 
-    **Connect**를 클릭합니다. CloudThinker가 자격 증명을 확인하고 **Connected** 상태를 표시합니다.
+    **성공 상태:** 연결에 **Connecting**과 **Verifying**이 표시된 다음 **Connected**가 표시됩니다. 테스트가 실패하면 연결에 클러스터가 반환한 메시지와 함께 오류가 표시됩니다. [문제 해결](#문제-해결)과 대조해 보세요.
   </Step>
 </Steps>
 
-<Warning>
-생성 직후 API 키를 복사하세요. Elasticsearch는 이후에 키를 다시 표시하지 않으며, 분실 시 새 키를 생성해야 합니다.
-</Warning>
-
----
-
 ## 연결 세부 정보
 
-| 필드 | 설명 | 예시 |
-|------|------|------|
-| **ES_URL** | Elasticsearch 클러스터 URL | `https://your-cluster.es.region.cloud.es.io:9243` |
-| **ES_API_KEY** | Base64로 인코딩된 API 키 | `VnVhQk...` |
+| 필드 | 필수 | 설명 | 예시 |
+|-------|----------|-------------|---------|
+| **ES_URL** | 예 | 스킴과 포트를 포함한 클러스터 엔드포인트 | `https://elasticsearch.example.com:9200` |
+| **Authentication** | 예 | **API key**(기본값) 또는 **Username & password** | **API key** |
+| **API key** | API key만 해당 | 생성 응답의 `encoded` 값 | `VnVhQ2ZHY0JDZGJr...` |
+| **Username** | Username & password만 해당 | 전용 Elasticsearch 사용자 | `cloudthinker` |
+| **Password** | Username & password만 해당 | 해당 사용자의 비밀번호 | |
+| **TLS certificate** | 아니요 | **Verify**(기본값) 또는 **Allow self-signed** | **Verify** |
 
-구성할 일반적인 인덱스 패턴:
+한 가지 방식만 입력하세요. API 키와 사용자 이름 또는 비밀번호를 모두 입력하면 "Choose either an API key or username and password." 메시지와 함께 연결이 거부됩니다.
 
-| 패턴 | 사용 사례 |
-|------|-----------|
-| `logs-*` | 애플리케이션 로그 |
-| `filebeat-*` | Filebeat로 수집된 로그 |
-| `metricbeat-*` | 인프라 메트릭 |
-| `apm-*` | 애플리케이션 성능 데이터 |
-| `kubernetes-*` | Kubernetes 클러스터 로그 |
+## 필수 권한
 
----
+| 에이전트에게 필요한 작업 | 부여할 권한 |
+|----------------|-------|
+| 클러스터 상태 확인 | 클러스터 권한 `monitor` |
+| 인덱스 나열과 샤드 할당 읽기 | 패턴에 대한 인덱스 권한 `monitor` |
+| 필드 매핑 읽기 | 패턴에 대한 인덱스 권한 `view_index_metadata` |
+| DSL 검색과 ES\|QL 쿼리 실행 | 패턴에 대한 인덱스 권한 `read` |
 
-## 필요 권한
+**Username & password**를 사용한다면 같은 권한을 가진 역할과 그 역할을 가진 사용자를 만드세요. **Dev Tools**에서 각 요청을 따로 실행합니다.
 
-### 최소 권한
-
-```json
+```http
+POST /_security/role/cloudthinker_read
 {
   "cluster": ["monitor"],
   "indices": [
     {
-      "names": ["logs-*", "metrics-*"],
-      "privileges": ["read"]
+      "names": ["logs-*"],
+      "privileges": ["read", "view_index_metadata", "monitor"]
     }
   ]
 }
 ```
 
-### 권장 권한
-
-```json
+```http
+POST /_security/user/cloudthinker
 {
-  "cluster": ["monitor", "read_ilm"],
-  "indices": [
-    {
-      "names": ["*"],
-      "privileges": ["read", "view_index_metadata"]
-    }
-  ]
+  "password": "<a long random password>",
+  "roles": ["cloudthinker_read"]
 }
 ```
 
 <Tip>
-CloudThinker에 필요한 인덱스 패턴에만 `read` 권한을 부여하세요. CloudThinker API 키에 `write` 또는 클러스터 관리자 권한을 절대 부여하지 마세요.
+`*` 대신 에이전트에게 필요한 인덱스 패턴을 나열하세요. `logs-*`로 범위가 지정된 키는 검색이 요청하더라도 `customers` 인덱스를 읽을 수 없습니다.
 </Tip>
-
----
 
 ## 에이전트 기능
 
-연결 후 에이전트는 다음을 수행할 수 있습니다:
+| 기능 | 에이전트가 할 수 있는 작업 |
+|------------|--------------------|
+| **인덱스 인벤토리** | 상태와 문서 수와 함께 인덱스를 나열하고, `logs-app-*` 같은 이름 패턴 파악 |
+| **매핑** | 필터링 전에 필드 이름과 유형을 읽어, 쿼리가 존재하는 필드를 사용하도록 함 |
+| **검색** | 시간 범위, 정렬, 결과 크기가 정해진 DSL 쿼리 실행 |
+| **ES\|QL** | 서비스별 오류 수처럼 ES\|QL로 집계하며, 항상 `LIMIT` 사용 |
+| **샤드와 상태** | 할당되지 않은 샤드를 찾고 클러스터 상태를 green, yellow, red로 보고 |
 
-| 기능 | 설명 |
-|------|------|
-| **로그 검색** | 애플리케이션 및 인프라 로그 검색 |
-| **오류 분석** | 오류 패턴 및 이상 징후 탐지 |
-| **인시던트 조사** | 서비스 전반의 이벤트 상관 분석 |
-| **메트릭 쿼리** | 저장된 메트릭 데이터 쿼리 |
+연결에는 쓰기, 삭제 또는 클러스터 설정 변경을 수행하는 도구가 없습니다.
 
 ### 연결 확인
 
 ```text
-Search Elasticsearch for application errors in the last hour
+Check Elasticsearch cluster health and list the five largest indices by document count
 ```
+
+상태, 할당되지 않은 샤드를 포함한 샤드 수, 그리고 문서 수와 함께 다섯 개의 인덱스 이름이 표시되어야 합니다.
 
 ### 예시 프롬프트
 
 ```text
-Search logs for authentication failures in the last 24 hours
-Find error patterns in application logs for the api-gateway service
-Search for pod crash events in Kubernetes logs
+Count ERROR log lines per service in logs-app-* over the last hour
+Search logs-* for authentication failures in the last 24 hours and group them by source IP
+Why is the cluster yellow? List the unassigned shards and the indices they belong to
 ```
-
----
 
 ## 문제 해결
 
-<Accordion title="연결 거부됨">
-- 클러스터 URL이 올바르고 CloudThinker에서 접근 가능한지 확인합니다.
-- 방화벽 규칙이 CloudThinker의 이그레스 IP를 허용하는지 확인합니다.
-- AWS OpenSearch의 경우, 퍼블릭 접근을 활성화하거나 VPC 엔드포인트를 구성합니다.
-- Elasticsearch가 실행 중이고 요청을 수락하고 있는지 확인합니다.
+<Accordion title="시간 초과 또는 connection refused로 연결 실패">
+**ES_URL**이 CloudThinker가 접근할 수 없는 주소를 가리킵니다. 공개 엔드포인트를 사용하고, 스킴과 포트를 포함하고, 방화벽이나 Elastic Cloud 트래픽 필터가 CloudThinker의 egress IP를 허용하는지 확인하세요([사전 요구 사항](#사전-요구-사항) 참조).
 </Accordion>
 
-<Accordion title="인증 실패">
-- API 키가 올바르고 만료되지 않았는지 확인합니다.
-- 키에 필요한 인덱스 및 클러스터 권한이 있는지 확인합니다.
-- AWS OpenSearch의 경우, IAM 역할 또는 액세스 정책이 올바르게 구성되어 있는지 확인합니다.
+<Accordion title="401 Unauthorized">
+API 키가 잘못되었거나, 만료되었거나, 무효화되었거나, 비밀번호가 변경되었습니다. 새 키를 만들고 `id`나 `api_key` 필드만이 아니라 `encoded` 값으로 [자격 증명을 교체](/ko/guide/connections/overview#자격-증명-교체)하세요.
 </Accordion>
 
-<Accordion title="API 키 만료">
-- **Stack Management → Security → API Keys**로 이동합니다.
-- 동일한 권한으로 새 키를 생성합니다.
-- CloudThinker 연결 설정에서 키를 업데이트합니다.
+<Accordion title="한 인덱스에서 security_exception 발생">
+키나 사용자에게 해당 인덱스에 대한 권한이 없습니다. 새 키의 `names`에 해당 패턴을 추가한 다음 연결에서 [자격 증명을 교체](/ko/guide/connections/overview#자격-증명-교체)하세요.
 </Accordion>
 
-<Accordion title="데이터가 반환되지 않음">
-- 인덱스 패턴이 클러스터의 기존 인덱스와 일치하는지 확인합니다.
-- API 키가 해당 인덱스에 `read` 권한을 갖고 있는지 확인합니다.
-- 인덱스에 요청한 시간 범위의 데이터가 있는지 확인합니다.
+<Accordion title="셀프 호스팅 클러스터에서 인증서 오류 발생">
+클러스터가 자체 서명 인증서를 사용합니다. 해당 클러스터를 신뢰하는 경우에만 **TLS certificate**를 **Allow self-signed**로 설정하세요.
 </Accordion>
 
----
+<Accordion title="검색이 아무것도 반환하지 않음">
+인덱스 패턴이 일치하지 않거나, 필드 이름이 프롬프트가 가정한 것과 다르거나, 시간 범위가 비어 있습니다. 에이전트에게 먼저 인덱스를 나열하고 해당 인덱스의 매핑을 읽도록 요청하세요.
+</Accordion>
 
 ## 보안
 
 <ConnectionSecurity />
 
-- **API 키 교체** — 90일마다 API 키를 교체하고, 키 생성 시 만료 날짜를 설정합니다.
-- **제한된 인덱스** — `*`에 대한 접근 권한을 부여하는 대신 CloudThinker가 실제로 필요한 인덱스 패턴으로 키를 제한합니다.
-
----
+- **키에 만료 기간 설정**: `90d` 같은 `expiration`은 유출된 키가 작동하는 기간을 제한합니다. 만료되기 전에 새 키를 만든 다음, 연결을 열고 해당 행의 연필 아이콘을 클릭하고 **Edit Instance**에서 **Replace…**를 클릭합니다. 새 키를 붙여 넣고 **Save and test**를 클릭합니다. 테스트가 실패하면 CloudThinker가 이전 키를 유지하므로, 교체 중에 에이전트가 접근을 잃지 않습니다.
+- **인덱싱된 콘텐츠를 민감 정보로 취급**: 로그에는 애플리케이션이 기록한 토큰이나 개인 데이터가 포함될 수 있습니다. 에이전트가 읽어야 할 인덱스로 키의 범위를 제한하세요.
 
 ## 관련 항목
 
 <CardGroup cols={2}>
-  <Card title="에이전트" icon="shield-check" href="/ko/guide/agents/overview">
-    보안 로그 분석
+  <Card title="근본 원인 분석" icon="magnifying-glass" href="/ko/guide/incident/root-cause-analysis">
+    에이전트가 로그 검색으로 인시던트의 원인을 찾는 방법을 확인하세요.
   </Card>
-  <Card title="Grafana 연결" icon="/images/icons/grafana.svg" href="/ko/guide/connections/grafana">
-    Elasticsearch 데이터 시각화
+  <Card title="Connections 개요" icon="plug" href="/ko/guide/connections/overview">
+    자격 증명을 교체하고, 비공개 서비스에 접근하고, 모든 연결을 확인하세요.
   </Card>
 </CardGroup>

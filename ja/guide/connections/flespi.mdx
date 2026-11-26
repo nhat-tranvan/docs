@@ -1,227 +1,146 @@
 ---
 title: Flespi
-description: "FlespiのIoTテレマティクスをCloudThinkerに接続し、GPSデバイス管理・フリートテレメトリ・IoTデータ分析を行います"
+description: "API トークンで Flespi を接続し、エージェントが Flespi の MCP サーバーを通じてテレマティクスのデバイス、チャネル、メッセージ、ストリームを調べられるようにします"
 icon: "/images/icons/flespi.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
-Flespiアカウントを接続することで、CloudThinkerエージェントがGPSデバイスの管理、テレメトリの監視、チャンネルとストリームの検査、Flespi MCPサーバーを通じたフリートインフラストラクチャの操作を行えるようになります。
-
-Flespiは、Flespiパネルで生成した**APIトークン**（StandardまたはACLタイプ）で認証します。
-
----
+Flespi アカウントを接続すると、[CloudThinker](/ja/guide/agents/overview) がテレマティクスのフリートに関する質問に答えられるようになります。どのデバイスが報告を止めたか、あるデバイスが過去 1 日に何を送信したか、チャネルがデータを受信しているか、ストリームがそれを配信しているか、といった質問です。Flespi は、GPS トラッカーやその他の IoT デバイスからデータを受信するテレマティクスのバックエンドです。CloudThinker は、あなたが作成した 1 つの **Flespi トークン** でサインインし、Flespi 自身がホストする MCP サーバーと通信します。
 
 ## 対応プラットフォーム
 
-| プラットフォーム | サポート |
-|----------|---------|
-| **Flespi Free** | 月1,000 AIクレジット |
-| **Flespi Commercial** | 月1,000 AIクレジット + 有料超過分 |
-
----
+| プラットフォーム | 対応 | 備考 |
+|----------|-----------|-------|
+| **Flespi cloud**（flespi.io） | はい | CloudThinker は `https://flespi.io/ai/mcp/develop` にある Flespi のホスト型 MCP サーバーを呼び出します。アドレスは固定のため、データは Flespi の MCP サーバーから CloudThinker に流れ、他の Flespi エンドポイントは設定できません |
 
 ## 前提条件
 
-- [flespi.io](https://flespi.io/#/) の **Flespiアカウント**。
-- APIトークンを作成・管理するためのFlespiパネルへのアクセス。
-- 本番ワークロードの場合、CloudThinkerが必要とするモジュールにスコープされた権限を持つACLトークン。
+- [flespi.io](https://flespi.io/#/) の Flespi パネルにアクセスできる Flespi アカウント。
+- そのアカウントでトークンを作成する権限。
 
----
+## トークンの種類を選ぶ
+
+| トークンの種類 | アクセス | 用途 |
+|------------|--------|------------|
+| **ACL** | モジュールとメソッドごとに付与するまで何もできません | 本番環境。推奨 |
+| **Standard** | テレマティクスのエンティティへの完全な読み書き | 短期間のテストのみ |
+| **Master** | アカウントの完全な管理 | CloudThinker では決して使わない |
+
+読み取り専用の ACL トークンでは、エージェントに見せる各モジュールに **GET** を付与します。
+
+| ACL モジュール | メソッド | 利用可能になるもの |
+|------------|--------|---------|
+| `gw/devices` | GET | Devices と Telemetry: デバイス一覧、最終報告時刻、デバイスのメッセージ |
+| `gw/channels` | GET | Channels: 設定、プロトコル、受信データ |
+| `gw/streams` | GET | Streams: ステータスと配信 |
+| `gw/geofences` | GET | ジオフェンス |
+| `gw/calcs` | GET | 走行検出などの計算機（calculator） |
+
+エージェントが必要としないモジュールは含めないでください。書き込みメソッド（POST、PUT、DELETE）は、エージェントに変更させたい場合にのみ付与してください。[書き込みアクセス](#書き込みアクセス)を参照してください。
+
+<Info>
+ACL トークンはデフォルトで拒否し、権限は互いを含みません。デバイスへの書き込みアクセスには、読み取りも付与しない限り、デバイスの読み取りは含まれません。
+</Info>
 
 ## セットアップ
 
-CloudThinkerはFlespi APIトークンを使用して、Flespiの公式MCPサーバー経由でFlespiに接続します。
-
 <Steps>
-  <Step title="Flespiアカウントを作成">
-    アカウントをお持ちでない場合は、[flespi.io](https://flespi.io/#/) でサインアップしてください。
-  </Step>
-  <Step title="APIトークンを生成">
-    Flespiパネルで左メニューの **Tokens** に移動し、**「+」** ボタンをクリックします:
-    - **Name**: `CloudThinker Agent`
-    - **Type**: Standard（開発用）またはACL（本番用）
-    - **TTL**: 有効期限を設定（例: `7776000`（90日））。FlespiはすべてのトークンにTTLまたは有効期限の設定を必須としています。
+  <Step title="Flespi でトークンを作成する">
+    Flespi パネルの左メニューで **Tokens** を開き、**+** をクリックします。次を設定します。
 
-    64バイトのトークンをすぐにコピーします。
+    - **Name**: `CloudThinker`
+    - **Type**: **ACL**。ACL エディターで、[ACL の表](#トークンの種類を選ぶ)のモジュールごとにエントリを 1 つ追加し、それぞれで **GET** メソッドを許可します
+    - **Expiration**: Flespi では、すべてのトークンに TTL または有効期限が必要です。90 日の非アクティブ TTL を使ってください。呼び出しのたびにリセットされるため、使用中のトークンは有効なままで、使われていないトークンは削除されます
+
+    トークンを保存し、その値をコピーします。
   </Step>
-  <Step title="CloudThinkerで接続を追加">
-    **Connections → Flespi** に移動し、生成したトークンを入力します。
-  </Step>
-  <Step title="接続をテスト">
-    **Connect** をクリックします。CloudThinkerがトークンを検証し、**Connected** ステータスを表示します。
+  <Step title="CloudThinker で接続を追加する">
+    **Settings → Workspace → Connections** を開き、**Discover** タブを開いて **Flespi** を選びます。トークンを **FLESPI_TOKEN** に貼り付けます。`FlespiToken` のプレフィックスは付けず、トークンの値だけを貼り付けてください。CloudThinker がそのヘッダーを自分で付加します。
+
+    **Connect** をクリックします。
+
+    **成功時の状態:** 接続に **Connecting** と **Verifying** が表示され、その後 **Connected** になります。検証が失敗すると **Failed** と表示され、エラーメッセージが表示されます。メッセージを[トラブルシューティング](#トラブルシューティング)と照合してください。
   </Step>
 </Steps>
 
-<Warning>
-Flespiは認証プレフィックスとして `Bearer` ではなく `FlespiToken` を使用します。CloudThinkerはこれを自動的に処理しますが、APIコールを手動でデバッグする際には留意してください。
-</Warning>
-
----
-
 ## 接続の詳細
 
-| フィールド | 説明 | 例 |
-|-------|-------------|---------|
-| **Flespi Token** | FlespiのAPIトークン（64バイト） | `7Bf3...xK9z` |
+| フィールド | 必須 | 説明 |
+|-------|----------|-------------|
+| **FLESPI_TOKEN** | はい | Flespi の ACL または Standard トークン。CloudThinker はこれを `Authorization: FlespiToken <token>` として Flespi の MCP サーバーに送信します |
 
----
+## エージェントの機能
 
-## 必要な権限
+エージェントができることは、トークンが許可する内容によって決まります。
 
-### トークンタイプ
+| 機能 | エージェントができること | 必要な ACL |
+|------------|--------------------|-----------|
+| **Devices** | デバイスを一覧表示し、それぞれの最終報告時刻を確認し、デバイスの最近のメッセージを読みます | `gw/devices` GET |
+| **Telemetry** | 期間を指定して、デバイスのメッセージから位置、速度、センサーの値を取得します | `gw/devices` GET |
+| **Channels** | チャネルの設定とプロトコル、チャネルがデータを受信しているかを調べます | `gw/channels` GET |
+| **Streams** | ストリームのステータスと、下流のシステムへの配信を確認します | `gw/streams` GET |
+| **Geofences and calculators** | ジオフェンスのゾーンと、走行検出などの計算機の設定を読みます | `gw/geofences` GET、`gw/calcs` GET |
 
-| タイプ | アクセスレベル | 使用場面 |
-|------|-------------|-------------|
-| **Standard** | すべてのTelematicsエンティティ（デバイス、チャンネル、ストリーム、プラグイン、ジオフェンス、カリキュレーター）へのフルCRUD | 開発・テスト |
-| **ACL** | 細粒度 — デフォルトで全拒否、モジュール/メソッド/アイテム単位で付与 | **本番推奨** |
-| **Master** | プラットフォームAPIを含む完全な管理者権限 | **AIエージェントでは絶対に使用しない** |
+Flespi のドキュメント検索など、Flespi の AI 支援ツールの一部は、Flespi アカウントの AI 使用枠を消費します。これらに頼る場合は、Flespi パネルの **AI** タイルを確認してください。通常のデバイス、チャネル、ストリームの読み取りは枠を消費しません。
 
-### トークンの有効期限
-
-Flespiはすべてのトークンに有効期限の設定を**必須**としています。以下のいずれかを設定してください:
-
-- **`ttl`** — 非活動状態になってからの有効期限（秒）（APIコールごとにリセット）
-- **`expire`** — ハード有効期限のUnixタイムスタンプ
-
-<Tip>
-長期的な統合には `ttl`（例: 7776000 = 90日）を使用してください。タイマーはAPIコールのたびにリセットされるため、アクティブなトークンが予期せず期限切れになることはありません。
-</Tip>
-
-### 推奨ACL権限（本番用）
-
-**読み取り専用（最小）:**
-
-| モジュール | メソッド | 目的 |
-|--------|---------|---------|
-| `gw/devices` | GET | デバイス一覧、ステータス、テレメトリ、メッセージ |
-| `gw/channels` | GET | チャンネル一覧、設定、ステータス |
-| `gw/streams` | GET | ストリーム一覧、ヘルス、デリバリー統計 |
-| `gw/calculators` | GET | カリキュレーター設定 |
-| `ai` | POST | MCPツールコールに必要 |
-
-**読み取り/書き込み（書き込み操作が必要な場合）:**
-
-| モジュール | メソッド | 目的 |
-|--------|---------|---------|
-| `gw/devices` | GET, POST, PUT | デバイスの作成/更新 |
-| `gw/channels` | GET, POST, PUT | チャンネルの作成/更新 |
-| `gw/streams` | GET, POST, PUT, DELETE | ストリームのフル管理 |
-
-<Info>
-ACLトークンはデフォルトですべてを拒否します。明示的に付与された権限のみが許可されます。`gw/devices` にPOSTが付与されたトークンは、GETも別途付与されない限りGETを持ちません。
-</Info>
-
----
-
-## エージェント機能
-
-接続後、エージェントは次のことができます:
-
-| 機能 | 説明 |
-|------------|-------------|
-| **デバイス管理** | デバイスの一覧表示、ステータス確認、テレメトリとメッセージ履歴の読み取り |
-| **チャンネル監視** | チャンネルの設定、ステータス、接続プロトコルの検査 |
-| **ストリームヘルス** | ストリームのデリバリー統計とヘルスの監視 |
-| **フリートテレメトリ** | デバイス横断でGPS位置、速度、燃料、センサーデータをクエリ |
-| **ジオフェンス** | ジオフェンスゾーンとトリガーの表示・管理 |
-| **カリキュレーター** | 走行検出、燃料消費などのカリキュレーター設定を検査 |
-
-### 利用可能なMCPツール
-
-**無料ツール（0クレジット）:**
-
-| ツール | 説明 |
-|------|-------------|
-| `search-api-methods` | 自然言語クエリでflespi REST APIメソッドを探索 |
-| `get-api-schema` | 特定APIメソッドの完全なSwaggerスキーマを取得 |
-| `flespi-api-read` | flespi REST APIへの読み取り専用GETリクエストを実行 |
-| `flespi-api-write` | 書き込み操作（POST/PUT/PATCH/DELETE）を実行 |
-
-**有料ツール:**
-
-| ツール | クレジット | 説明 |
-|------|---------|-------------|
-| `search-flespi-documentation` | 5 | flespiプラットフォームドキュメントを検索 |
-| `search-device-documentation` | 10 | デバイス/プロトコルメーカーのドキュメントを検索 |
-| `generate-flespi-expression` | 2 | セレクターやカリキュレーター用のflespi式を生成 |
-| `generate-pvm-code` | 10 | PVM（Protocol Virtual Machine）コードを生成 |
-| `consult-flespi-account` | 30 | アカウント読み取りアクセス付きのflespi AIエキスパートに複雑な分析を委任 |
-
-### AIクレジット
-
-| プラン | 月間無料クレジット | 超過分 |
-|------|-------------------|---------|
-| Free | 1,000 | 翌月まで利用不可 |
-| Commercial | 1,000 | 追加100クレジットあたり€1 |
-
-使用量はFlespiパネルの **AIタイル**、`GET /ai/logs` API、またはMQTTトピック `flespi/log/ai/#` で監視できます。
-
-### 接続を確認
+### 接続を確認する
 
 ```text
-List all Flespi devices and report their last known positions
+List my Flespi devices and when each one last reported
 ```
 
-### プロンプト例
+デバイス名または ID と、それぞれの最終メッセージ時刻の一覧が返されることを確認します。トークンが読めないデバイスは表示されません。
+
+### プロンプトの例
 
 ```text
-Check stream health and identify any delivery failures
-Query telemetry for device 12345 over the last 24 hours
-List geofences and check which devices are inside zone "warehouse-01"
+Which Flespi devices haven't sent a message in the last 6 hours?
+Show the messages from device 12345 over the last 24 hours and flag any gaps
+Are all my Flespi streams delivering, and which ones have errors?
 ```
 
----
+## 書き込みアクセス
+
+推奨される構成は読み取り専用の ACL トークンで、Flespi は許可されていない書き込みをすべて拒否します。書き込みメソッドを付与した場合、エージェントが試みる各書き込みは [Approvals](/guide/approvals/overview) を経由します。Rules と Approval mode によって、実行されるか、人の判断を待つか、拒否されるかが決まります。読み取りには承認は不要です。
 
 ## トラブルシューティング
 
-<Accordion title="アクセストークンが無効または期限切れ">
-- トークンが期限切れになっている可能性があります。Flespiパネルでの TTL と有効期限の設定を確認してください。
-- 新しいトークンを作成して、CloudThinkerの接続を更新してください。
-- 期限切れのトークンはflespiによって**自動的に削除**されます。
+<Accordion title="Invalid or expired token">
+Flespi はトークンが期限切れになると削除します。Flespi パネルでトークンの TTL を確認し、なくなっている場合は新しいトークンを作成して、接続の **FLESPI_TOKEN** を更新してください。
 </Accordion>
 
-<Accordion title="ACLでアクションが許可されていない">
-- ACLトークンに必要なモジュール + HTTPメソッドの組み合わせが不足しています。
-- トークンのACLを更新して、必要な権限を付与してください。
-- ACLはデフォルトで全拒否です。各権限を明示的に付与する必要があります。
+<Accordion title="Action is not permitted by ACL">
+ACL トークンに、そのリクエストのモジュールとメソッドがありません。Flespi パネルでトークンに権限を追加してください。読み取りと書き込みは別々に付与されることに注意してください。
 </Accordion>
 
-<Accordion title="AIツールでHTTP 403">
-- 月間AIクレジットが枯渇しています。
-- Freeプランの場合: 翌月まで待ちます。Commercialプランの場合: 超過設定を確認してください。
-- クレジット使用量は `GET /ai/logs` またはイベントコード `1710` で監視できます。
+<Accordion title="Using token from unauthorized location">
+トークンに、CloudThinker を含まない IP 許可リストが設定されています。Flespi パネルでトークンの IP ホワイトリストに CloudThinker の送信元 IP を追加するか、制限を削除してください。このドキュメントでは CloudThinker の送信元 IP の一覧を公開していません。CloudThinker の担当者に問い合わせるか、[お問い合わせ](https://cloudthinker.io/contact)ください。
 </Accordion>
 
-<Accordion title="HTTP 429レート制限">
-- Flespiは1分あたりのAPI + MQTT + トラフィックの合計使用量を計算します。
-- リクエスト頻度を下げるかバッチ処理を行ってください。
-- 使用量が最も多いトークンが最初にブロックされます。他のトークンは引き続き動作します。
+<Accordion title="HTTP 429 のレート制限">
+Flespi は、アカウントの API、MQTT、トラフィックをまとめて 1 分あたりの使用量を制限しています。範囲を絞るか、一度に扱うデバイスを減らして依頼するか、1 分待ってから再試行してください。
 </Accordion>
 
-<Accordion title="許可されていない場所からのトークン使用">
-- トークンにIPホワイトリストが設定されているが、サーバーIPが含まれていません。
-- FlespiパネルでトークンのIPホワイトリストを更新してください: **Token settings → IPs whitelist**。
+<Accordion title="AI 支援の検索が拒否される">
+その月の Flespi の AI 使用枠を使い切りました。デバイス、チャネル、ストリームの読み取りは引き続き機能します。使用量は Flespi パネルの **AI** タイルで確認してください。
 </Accordion>
-
----
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **専用トークン** — CloudThinker用に別個のトークンを作成し、統合間で共有したり、Masterトークンを使用したりしないでください
-- **本番環境ではACL** — 必要最低限の権限のみを持つACLトークンを使用してください。ACLトークンはデフォルトで全拒否です
+- **CloudThinker 専用のトークンを 1 つ**: 他の連携と共有しないでください。そうすれば単独で取り消せます。
+- **Master トークンは決して使わない**: エージェントが必要とするモジュールとメソッドだけを持つ ACL を使ってください。
+- **90 日の非アクティブ TTL を維持する**: 使用中のトークンは有効なままです。接続がそれだけの期間使われないと、Flespi がトークンを削除し、新しいトークンが必要になります。通常の認証情報のスケジュールでもローテーションしてください。
 
----
-
-## 関連情報
+## 関連ページ
 
 <CardGroup cols={2}>
-  <Card title="MCP 接続" icon="/images/icons/mcp.svg" href="/ja/guide/connections/mcp">
-    カスタムMCP統合
+  <Card title="接続の概要" icon="plug" href="/ja/guide/connections/overview">
+    接続できるすべてのサービスと、接続の仕組みを確認します。
   </Card>
-  <Card title="Kubernetes 接続" icon="/images/icons/kubernetes.svg" href="/ja/guide/connections/kubernetes">
-    IoTワークロード向けコンテナオーケストレーション
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    どの書き込みを実行し、人の判断待ちにし、拒否するかを決めます。
   </Card>
 </CardGroup>

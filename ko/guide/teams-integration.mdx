@@ -1,218 +1,179 @@
 ---
 title: Microsoft Teams 연동
-description: "CloudThinker 에이전트와 상호작용하고, Adaptive Card 알림을 받고, 인시던트를 조율하여 Microsoft Teams에서 클라우드 운영을 실행하세요."
+sidebarTitle: Microsoft Teams
+description: "Microsoft Teams를 연결해 팀 채널에서 CloudThinker에 질문하고 알림과 리뷰 요약을 카드로 받습니다."
 icon: "/images/icons/teams.svg"
 ---
 
-Microsoft Teams 워크스페이스를 클라우드 운영 명령 센터로 전환하세요. CloudThinker 에이전트와 소통하고, 알림을 받고, Teams를 떠나지 않고 운영을 실행하세요.
+import PromptSyntaxBasics from '/snippets/ko/prompt-syntax-basics.mdx';
 
----
+Microsoft Teams를 한 번 연결하면 매핑된 팀의 누구나 채널에서 `@CloudThinker`를 멘션해 클라우드에 대해 질문하고, 스레드에서 대화를 이어갈 수 있습니다. 같은 연결로 알림, 코드 리뷰 요약 같은 [알림](/ko/guide/notifications)이 선택한 채널에 Adaptive Card로 전달됩니다.
 
-## 사전 요구사항
+## 사전 요구 사항
 
-<Warning>
-  초기 설정은 **다음 Azure AD 역할 중 하나를 가진 사용자가 수행해야 합니다**:
-  - **전역 관리자** — 모든 Microsoft 365 서비스에 대한 전체 관리자 액세스
-  - **Teams 관리자** — Microsoft Teams로 범위가 지정된 관리자 액세스
+- CloudThinker 조직 **Owner** 또는 **Admin**. 다른 역할은 Teams 페이지를 볼 수 있지만 연결하거나 변경할 수 없습니다.
+- Team, Scale 또는 Enterprise 플랜. Free 플랜에서는 Microsoft Teams 행에 **Requires Team plan**이 표시되고 **Configure** 버튼이 없습니다. [요금](/ko/guide/billing/pricing)을 참조하세요.
+- Microsoft Entra ID에서 관리자 동의를 부여할 수 있는 Microsoft 365 관리자. CloudThinker는 봇을 조직의 Teams 앱 카탈로그에 게시하며, 이에는 관리자 동의가 필요합니다. 한 사람이 두 역할을 모두 맡을 수 있습니다. Microsoft 365 관리자가 아니라면 CloudThinker Owner 또는 Admin으로 Teams 페이지를 열고 2단계에서 **Connect with Microsoft**를 클릭한 뒤, 함께 작업하며 Microsoft 관리자가 해당 Microsoft 화면에서 로그인하도록 하세요. 관리자가 동의하는 권한은 [보안 및 권한](#보안-및-권한)에 나열되어 있습니다.
+- app.cloudthinker.io에서 호스팅되는 CloudThinker. 셀프 호스팅 설치에서는 행에 **Not available on self-host**가 표시됩니다.
 
-  일반 Microsoft 365 사용자는 설정을 완료할 **수 없습니다**. 이 역할 중 하나가 없는 경우 IT 팀에게 초기 연결(아래 1-3단계)을 수행해달라고 요청하세요. 봇이 게시되면 모든 사용자가 Teams 채널에서 봇과 상호작용할 수 있습니다.
-</Warning>
+각 Microsoft 테넌트는 하나의 CloudThinker 조직에만 연결할 수 있습니다.
 
-### 필수 Azure AD 권한
-
-OAuth 흐름 중 CloudThinker는 다음 Microsoft Graph API 권한을 요청합니다:
-
-| 권한 | 유형 | 목적 |
-|---|---|---|
-| `User.Read` | 사용자 동의 | 로그인한 사용자의 프로필 읽기 |
-| `Channel.ReadBasic.All` | 사용자 동의 | 팀의 채널 나열 |
-| `Team.ReadBasic.All` | 사용자 동의 | 사용자가 속한 팀 나열 |
-| `TeamsAppInstallation.ReadWriteForTeam` | **관리자 동의** | 팀에 봇 설치 |
-| `TeamsAppInstallation.ReadWriteAndConsentForTeam` | **관리자 동의** | 봇 설치 및 리소스별 동의 부여 |
-| `TeamsAppInstallation.ReadWriteSelfForTeam` | **관리자 동의** | 봇 자체 설치 관리 |
-| `AppCatalog.ReadWrite.All` | **관리자 동의** | 조직의 앱 카탈로그에 봇 게시 |
-| `Organization.Read.All` | **관리자 동의** | 조직 정보 읽기 |
-
-**관리자 동의**로 표시된 권한은 전역 관리자 또는 Teams 관리자만 부여할 수 있습니다. OAuth 흐름 중 관리자에게는 **"조직을 대신하여 동의"** 확인란이 표시됩니다:
-
-- **선택됨** — Azure AD 테넌트의 모든 사용자에 대해 테넌트 전체에 권한이 부여됩니다. 나중에 연결하는 다른 관리자는 다시 동의할 필요가 없습니다.
-- **선택 안 됨** — 관리자 자신의 계정에만 권한이 부여됩니다. 관리자가 봇을 게시하는 데 필요한 역할을 개인적으로 보유하므로 설정을 완료하는 데 충분합니다.
-
-### 설정을 수행해야 하는 사람
-
-| 역할 | 해야 할 일 |
-|---|---|
-| **전역 관리자 또는 Teams 관리자** | 전체 설정을 직접 완료할 수 있습니다 — 아래 1단계로 진행하세요 |
-| **일반 사용자** | 전역 관리자 또는 Teams 관리자에게 1-3단계를 완료해달라고 요청하세요. 봇이 게시되면 설치된 채널 어디서나 봇을 사용할 수 있습니다 |
-
----
-
-## 설정
+## Microsoft Teams 연결
 
 <Steps>
-  <Step title="연동으로 이동">
-    [**관리자 설정 → 연동**](https://app.cloudthinker.io/admin-settings/integrations)으로 이동하여 **Microsoft Teams**를 찾습니다
+  <Step title="Teams 연동 열기">
+    **Settings → Organization → Chat integrations**로 이동해 **Microsoft Teams** 행을 찾고 **Configure**를 클릭합니다. Settings를 열려면 사이드바 상단의 워크스페이스 메뉴를 클릭한 뒤 **Settings**를 클릭합니다.
   </Step>
-  <Step title="Teams 연결">
-    **Teams 연결**을 클릭하고 Microsoft OAuth를 통해 인증합니다.
+  <Step title="Connect with Microsoft 클릭">
+    Microsoft 관리자 계정으로 로그인합니다. 권한 화면에서 **Consent on behalf of your organization**을 체크한 뒤 **Accept**를 클릭합니다.
 
-    <Warning>
-      **전역 관리자** 또는 **Teams 관리자** 계정으로 로그인해야 합니다. 일반 사용자인 경우 이 단계가:
-      - Microsoft 동의 화면에서 차단되거나
-      - 성공한 것처럼 보이지만 봇을 조직의 앱 카탈로그에 게시하는 데 자동으로 실패합니다
+    **완료 상태:** **Teams connected successfully** 메시지와 함께 Teams 페이지로 돌아오며, **Authenticate with Microsoft**에 테넌트 이름과 ID가 표시됩니다.
+  </Step>
+  <Step title="팀 추가">
+    **Install bot and configure workspaces** 아래에서 **Add team**을 클릭하고 팀을 검색해 선택합니다. 검색에는 소유한 팀뿐 아니라 입력한 내용으로 이름이 시작하는 테넌트의 모든 팀이 나열되므로, 먼저 팀 소유자와 협의하세요. 팀의 모든 멤버가 봇을 보고 멘션할 수 있습니다. CloudThinker는 해당 팀에 봇을 설치하며, 봇은 그곳에서 채널 메시지를 읽고(`ChannelMessage.Read.Group` 권한) 답글과 카드를 게시할 수 있습니다.
 
-      관리자가 아닌 경우 이 페이지를 IT 팀과 공유하고 이 단계를 수행해달라고 요청하세요.
-    </Warning>
+    **완료 상태:** **CloudThinker bot installed to team** 메시지가 표시되고 팀이 행으로 나타납니다. 더 많은 팀에 반복하려면 **Add another team**을 클릭하세요.
   </Step>
-  <Step title="봇 설치">
-    CloudThinker 봇을 추가할 Teams를 선택하고 설치를 확인합니다. 봇이 조직의 Teams 앱 카탈로그에 게시됩니다 — 이는 일회성 작업입니다.
+  <Step title="각 팀의 워크스페이스 선택">
+    팀 행에서 **Select workspace**를 열고 해당 팀이 사용할 연결을 가진 CloudThinker 워크스페이스를 선택합니다. 팀의 모든 채널이 이 워크스페이스를 사용합니다.
+
+    **완료 상태:** **Workspace mapping updated** 메시지가 표시됩니다.
   </Step>
-  <Step title="Teams를 워크스페이스에 매핑">
-    에이전트가 작동할 클라우드 계정을 알 수 있도록 Microsoft Teams를 CloudThinker 워크스페이스에 매핑합니다
-  </Step>
-  <Step title="알림 구성">
-    선택적으로 각 알림 유형(비용 알림, 보안 결과, 인시던트 업데이트)에 대한 채널을 선택합니다
-  </Step>
-  <Step title="테스트">
-    채널에서 `@CloudThinker show AWS costs`를 입력하여 연결을 확인합니다
+  <Step title="테스트 메시지 보내기">
+    해당 팀의 표준 채널에서 봇을 멘션합니다.
+
+    ```text
+    @CloudThinker What drove our cloud spend up last week?
+    ```
+
+    **완료 상태:** CloudThinker가 스레드에 답합니다. 후속 질문은 그 스레드에 답글로 남기세요. 봇을 다시 멘션할 필요가 없습니다.
   </Step>
 </Steps>
 
----
+<Warning>
+매핑된 팀에 게시할 수 있는 사람은 누구나 CloudThinker에게 해당 워크스페이스의 연결로 작업하도록 요청할 수 있습니다. CloudThinker 계정을 연결한 사람은 해당 사용자로 요청을 실행합니다. 그 외의 모든 사람은 하나의 계정으로 실행합니다. 워크스페이스를 만든 사람, 또는 조직이 소유한 워크스페이스라면 조직 **Owner**입니다. 멤버가 그 액세스 권한을 가져야 하는 팀만 매핑하세요.
+</Warning>
 
-## 문법
+### CloudThinker 계정 연결
 
-Teams에서는 모든 명령에 `@CloudThinker` 접두사를 붙입니다:
+계정을 연결하면 요청이 그 하나의 계정 대신 사용자 본인과 본인의 워크스페이스 역할로 실행됩니다. 원할 때 연결을 시작할 수는 없습니다. CloudThinker는 워크스페이스를 소유한 계정을 찾지 못할 때만 **Link Your CloudThinker Account** 카드를 게시합니다. 카드에서 **Link Account**를 클릭하고 로그인합니다. 완료되면 페이지에 **Account linked successfully!**가 표시됩니다. 2단계에서 로그인한 Microsoft 계정은 **Connect with Microsoft**를 클릭한 CloudThinker 계정에 자동으로 연결되므로, 두 사람이 함께 설정했다면 해당 Microsoft 관리자의 요청은 CloudThinker 관리자로 실행됩니다. 사용자별 연결 해제는 없으며, **Disconnect from Teams**가 연결된 모든 계정을 제거합니다.
 
-```text
-@CloudThinker analyze EC2 spending trends
-@CloudThinker audit security groups for public access
-@CloudThinker check database performance
-@CloudThinker review EKS cluster health
-```
+## Teams에서 CloudThinker에 질문하기
 
-모든 [CloudThinker Language](/guide/commands) 문법이 Teams에서 작동합니다 — `@CloudThinker` 접두사만 추가하면 됩니다.
+팀 채널에서 새 요청은 항상 `@CloudThinker`로 시작합니다. 그 뒤에는 웹 앱에서 입력하는 것과 같은 요청을 작성합니다.
 
----
-
-## 예시
-
-### 빠른 쿼리
+<PromptSyntaxBasics />
 
 ```text
-@CloudThinker what's our AWS spending this week?
-@CloudThinker any critical security findings?
-@CloudThinker why are queries slow on production?
-@CloudThinker check pod status in payment namespace
+@CloudThinker Which EC2 instances ran under 10% CPU for the last 14 days?
+@CloudThinker Summarize open critical security findings for production
+@CloudThinker Why did checkout latency spike at 14:00 UTC today?
 ```
 
-### 출력 형태 요청
+| 표시되는 것 | 의미 |
+| --- | --- |
+| 입력 중 표시 | CloudThinker가 요청을 처리하고 있습니다 |
+| 스레드의 답글 | 답변입니다. 전체 대화는 CloudThinker 웹 앱에도 표시됩니다 |
+| **View in CloudThinker**가 있는 **Permission Required** 카드 | 요청에 [Approvals](/guide/approvals/overview) 설정이 사람에게 맡기는 작업이 필요합니다. 링크를 열어 웹 앱에서 승인하거나 거절하세요. Resolve 인시던트 채널에서는 카드에 대신 **Approve**와 **Reject** 버튼이 있습니다 |
+| **Link Your CloudThinker Account** 카드 | 계정을 연결하지 않았고 CloudThinker가 워크스페이스를 소유한 계정을 찾지 못해 요청이 실행되지 않았습니다. **Link Account**를 클릭하고 CloudThinker에 로그인하세요 |
 
-```text
-@CloudThinker show cost trends by service as a dashboard
-@CloudThinker write a weekly security summary as a report
-@CloudThinker recommend index optimizations for the orders table
-```
+CloudThinker는 팀 채널에서만 작동합니다. 개인 채팅이나 그룹 채팅에서는 요청을 실행하지 않으며, 팀을 찾을 수 없으면 **I can only respond in team channels**라고 답합니다. 메시지의 텍스트를 읽으므로, 파일을 첨부하는 대신 읽히고 싶은 내용을 붙여 넣으세요.
 
-### 여러 영역에 걸친 조사
+## Teams로 알림 보내기
 
-```text
-@CloudThinker coordinate investigation of latency spike
-@CloudThinker analyze database infrastructure costs
-```
+<Steps>
+  <Step title="알림 설정 열기">
+    Teams 페이지의 **Configure notifications** 아래에서 **Go to notification settings**를 클릭합니다. **Settings → Workspace → Notifications**로 이동할 수도 있습니다.
+  </Step>
+  <Step title="워크스페이스 기본 채널 선택">
+    **Delivery channels** 아래에서 Teams 카드를 찾습니다(설정 전에는 **Pick a channel**로 표시됨). 설정 아이콘(**Change Teams channel**)을 클릭한 뒤 **Teams channel** 아래에서 채널을 검색해 선택합니다. 표준 채널만 나열됩니다. 비공개 채널과 공유 채널은 봇 알림을 받을 수 없습니다.
+  </Step>
+  <Step title="알림 유형별 재정의(선택)">
+    **What to send** 아래에서 이벤트의 Teams 셀을 켠 뒤, 옆의 **→** 채널 칩을 클릭해 해당 이벤트를 다른 채널로 보냅니다. **Alerts**와 **Keepers** 행에는 심각도 선택기도 있습니다. 전체 유형 목록은 [알림](/ko/guide/notifications)을 참조하세요.
 
----
+    **완료 상태:** 다음에 일치하는 이벤트가 선택한 채널에 카드로 게시됩니다.
+  </Step>
+</Steps>
 
-## 알림
+## 코드 리뷰 알림
 
-알림은 채팅 프롬프트로 설정하지 않습니다. 알림을 받을 Teams 채널은 **More → Workspace settings → Notifications**에서 선택합니다. **Delivery channels**에서 워크스페이스 기본 채널을 설정한 다음, 이벤트 종류 옆의 **→ #channel** 칩으로 해당 종류만 다른 채널로 보낼 수 있습니다. 목록에는 표준 채널만 나타나며, 비공개 채널과 공유 채널은 봇 알림을 받을 수 없습니다. 자세한 내용은 [알림](/ko/guide/notifications)을 참조하세요.
+[Review](/ko/guide/code-review/overview)가 연결된 리포지토리의 풀 리퀘스트나 머지 리퀘스트를 마치면, CloudThinker가 Teams에 Adaptive Card를 게시할 수 있습니다.
 
----
+- 심각도별 발견 사항 표
+- 제목, 심각도, 파일 경로, 줄 번호가 있는 미해결 발견 사항 최대 5개
+- 이전 발견 사항 중 해결된 수
+- CloudThinker에서 리뷰를 여는 **View Review** 버튼
+- 리뷰에 문제가 없을 때 **No issues found**
 
-## Review 알림
+리뷰의 채널과 심각도 기준은 [알림](/ko/guide/notifications)에서 선택하세요.
 
-AI Review가 완료되면 CloudThinker가 구성된 Teams 채널에 Adaptive Card 알림을 전송합니다. 카드에는 다음이 포함됩니다:
+## 보안 및 권한
 
-- **심각도 FactSet** — 심각도 수준별 수를 보여주는 구조화된 표 (🔴 Critical, 🟠 High, 🟡 Medium, 🟢 Low)
-- **결과 세부 정보** — 제목, 심각도 레이블, 파일 경로, 줄 번호가 포함된 최대 5개의 미해결 결과
-- **해결된 수** — 이전에 식별된 결과 중 해결된 항목 수
-- **Review 보기** 버튼 — 리뷰 대시보드로 직접 이동하는 링크
-- **깨끗한 통과** — 문제가 없는 경우 간단한 "No issues found" 메시지
+| 질문 | 답변 |
+| --- | --- |
+| Microsoft Graph 권한 | 로그인 시 부여되는 위임 권한입니다. 아래 표를 참조하세요 |
+| CloudThinker가 보관하는 토큰의 주인 | Teams를 연결한 Microsoft 관리자입니다. CloudThinker는 해당 관리자의 액세스 토큰과 리프레시 토큰을 암호화해 저장하며, 이를 사용해 팀과 채널을 나열하고 봇을 설치합니다. 관리자가 퇴사하는 등으로 토큰이 작동하지 않으면 팀 추가가 **Teams connection token expired. An admin must reconnect Teams.**와 함께 실패합니다. CloudThinker의 액세스를 취소하려면 Microsoft Entra ID의 **Enterprise applications**에서 관리자 동의를 제거하세요 |
+| 각 팀에서의 봇 권한(애플리케이션, 리소스별) | `ChannelMessage.Read.Group`. 봇이 해당 팀 채널의 메시지를 읽을 수 있습니다 |
+| CloudThinker가 저장하는 것 | 매핑된 워크스페이스에 대화로 저장된 요청과 답글, 그리고 팀-워크스페이스 매핑과 연결된 계정 |
 
-<Info>
-  Review 알림을 받을 Teams 채널을 구성하고 **설정 > 알림 > Review / 파이프라인 모니터링**에서 심각도 임계값을 설정하세요. 자세한 내용은 [알림 센터](/ko/guide/notifications)를 참조하세요.
-</Info>
+| Graph 권한 | 이유 |
+| --- | --- |
+| `User.Read`, `openid`, `profile` | Microsoft 관리자 로그인 |
+| `Organization.Read.All` | Teams 페이지에 표시할 테넌트 이름 읽기 |
+| `Team.ReadBasic.All` | **Add team** 검색에 팀 나열 |
+| `Channel.ReadBasic.All` | 알림 선택기에 채널 나열 |
+| `AppCatalog.ReadWrite.All` | 조직의 Teams 앱 카탈로그에 CloudThinker 봇 게시 |
+| `TeamsAppInstallation.ReadWriteForTeam`, `TeamsAppInstallation.ReadWriteSelfForTeam` | 추가한 팀에 봇을 설치하고, 팀을 제거하면 봇 제거 |
+| `TeamsAppInstallation.ReadWriteAndConsentForTeam` | 봇이 참여하는 각 팀에서 `ChannelMessage.Read.Group` 권한 부여 |
+| `offline_access` | 리프레시 토큰을 받아 CloudThinker가 새 로그인 없이 Graph를 계속 호출 |
 
----
+## 연결 관리
 
-## 채널 패턴
-
-| 채널 | 사용 사례 |
-|---------|----------|
-| `#cloud-ops` | 일반 인프라 운영 및 비용 알림 |
-| `#security` | 보안 결과 및 컴플라이언스 업데이트 |
-| `#incidents` | 활성 인시던트 조사 및 조율 |
-| `#code-reviews` | Review 결과 및 파이프라인 모니터링 |
-| `#reports` | 예약된 보고서 및 요약 |
-
----
+| 작업 | 방법 |
+| --- | --- |
+| 팀을 다른 워크스페이스로 이동 | 행의 **Select workspace**를 변경합니다 |
+| 팀에서 CloudThinker 사용 중지 | Teams 페이지에서 팀 행을 제거합니다. CloudThinker가 해당 팀에서 봇을 제거하고 그 채널을 가리키던 알림 설정을 지웁니다 |
+| 연결 해제 | Teams 페이지 하단의 **Disconnect from Teams**를 클릭합니다. CloudThinker가 매핑된 모든 팀에서 봇을 제거하고 팀 매핑, 연결된 계정, Teams 알림 설정을 삭제합니다 |
 
 ## 문제 해결
 
-<Accordion title="에이전트가 응답하지 않음">
-- CloudThinker 봇이 팀에 설치되어 있는지 확인합니다
-- `@CloudThinker agent` 문법을 사용하고 있는지 확인합니다 (`agent`만 입력하는 것이 아님)
-- CloudThinker 콘솔에서 에이전트가 구성되어 있는지 확인합니다
-- Azure AD 관리자 동의 상태를 확인합니다
-</Accordion>
+<AccordionGroup>
+  <Accordion title="Teams authorization denied">
+    Microsoft 로그인이 거부되었거나 취소되었습니다. **Connect with Microsoft**를 다시 클릭하고 권한을 수락하세요.
+  </Accordion>
+  <Accordion title="팀 추가 시 Missing required permissions">
+    Microsoft 계정이 관리자 동의를 부여하지 않았습니다. Microsoft 365 관리자로 다시 로그인해 **Consent on behalf of your organization**을 체크하거나, Microsoft Entra ID에서 CloudThinker에 관리자 동의를 부여하세요.
+  </Accordion>
+  <Accordion title="봇이 팀에 설치되지 않음">
+    Teams 관리자 설정이 사용자 지정 앱을 차단하고 있을 수 있습니다. Teams 관리 센터에서 **Teams apps → Manage apps**로 이동해, 개발자 CloudThinker가 조직에 게시한 사용자 지정 앱 **CloudThinker**를 검색하세요. 상태가 차단이면 허용으로 설정하고, 앱 권한 정책이 이를 차단하지 않는지 확인하세요. 그런 다음 **Add team**을 다시 클릭하세요.
+  </Accordion>
+  <Accordion title="This tenant is already connected">
+    Microsoft 테넌트가 이미 다른 CloudThinker 조직에 연결되어 있습니다. 먼저 그곳에서 연결을 해제하세요.
+  </Accordion>
+  <Accordion title="This team isn't linked to any workspace">
+    팀에 워크스페이스 매핑이 없습니다. Teams 페이지에서 팀 행의 **Select workspace**를 설정하거나, 팀이 목록에 없으면 **Add team**을 클릭하세요.
+  </Accordion>
+  <Accordion title="봇이 답하지 않음">
+    추가한 팀의 표준 채널에 게시했는지, 새 메시지에서 `@CloudThinker`를 멘션했는지 확인하세요. 멘션이 없는 메시지는 CloudThinker가 이미 시작한 스레드 안에서만 답을 받습니다.
+  </Accordion>
+  <Accordion title="알림 선택기에 채널이 나타나지 않음">
+    표준 채널만 나열됩니다. 같은 팀의 표준 채널을 선택하거나, 팀이 Teams 페이지에 나타나는지 확인하세요.
+  </Accordion>
+</AccordionGroup>
 
-<Accordion title="알림 누락">
-- CloudThinker 설정에서 알림 구성을 확인합니다
-- Teams 채널 알림 설정을 확인합니다
-- 봇이 대상 채널에 게시할 권한이 있는지 확인합니다
-</Accordion>
-
-<Accordion title="권한 오류">
-- **"필수 권한 누락"** — 연결한 사용자가 전역 관리자 또는 Teams 관리자 역할을 보유하지 않습니다. IT 팀에게 초기 연결을 수행해달라고 요청하세요.
-- **"조직을 대신하여 동의"** — OAuth 중 관리자가 이 확인란을 선택하여 테넌트 전체에 권한을 부여할 수 있습니다. 선택 사항입니다 — 연결하는 사용자가 이미 관리자인 경우 개인 동의로 충분합니다.
-- **연결이 성공한 것처럼 보이지만 봇이 작동하지 않음** — 비관리자 사용자가 OAuth 흐름을 완료한 경우 발생할 수 있습니다. 사용자의 개인 인증은 성공하지만 봇을 앱 카탈로그에 게시하는 데 자동으로 실패합니다. 전역 관리자 또는 Teams 관리자에게 다시 연결해달라고 요청하세요.
-- 다른 권한 오류의 경우 CloudThinker에서 워크스페이스 관리자 권한을 확인하거나 팀에서 봇을 제거했다가 다시 추가해 보세요.
-</Accordion>
-
-<Accordion title="관리자가 아닌 경우 — 어떻게 설정하나요?">
-  조직의 **전역 관리자** 또는 **Teams 관리자**가 초기 연결을 완료해야 합니다. 공유할 내용:
-
-  1. CloudThinker에 로그인합니다 (조직에 대한 관리자 액세스가 있는 CloudThinker 계정 필요)
-  2. [**관리자 설정 → 연동 → Microsoft Teams**](https://app.cloudthinker.io/admin-settings/integrations)로 이동합니다
-  3. **Teams 연결**을 클릭하고 Microsoft OAuth 흐름을 완료합니다
-  4. 봇이 조직의 Teams 앱 카탈로그에 게시됩니다
-
-  이는 **일회성 설정**입니다. 관리자가 완료하면 봇이 설치된 채널 어디서나 `@CloudThinker`를 언급하여 Teams 워크스페이스의 모든 사용자가 봇과 상호작용할 수 있습니다.
-</Accordion>
-
----
-
-## 권한
-
-### Azure AD 권한
-
-초기 연결에는 Azure AD의 **전역 관리자** 또는 **Teams 관리자**가 필요합니다. CloudThinker가 조직의 Teams 앱 카탈로그에 봇을 게시해야 하는데, 이는 관리자 수준의 작업이기 때문입니다. 이 설정은 일회성 작업입니다 — 봇이 게시되면 추가 관리자 작업이 필요하지 않습니다.
-
-OAuth 중 관리자는 선택적으로 **"조직을 대신하여 동의"**를 선택하여 테넌트 전체에 권한을 부여할 수 있습니다. 선택하지 않으면 관리자 자신의 계정에만 권한이 부여되며, 이는 여전히 설정을 완료하는 데 충분합니다. 요청된 범위의 전체 목록은 위의 [필수 Azure AD 권한](#필수-azure-ad-권한) 표를 참조하세요.
-
-### CloudThinker 권한
-
-Teams 내에서 사용자는 CloudThinker 계정이 허용하는 에이전트와 클라우드 연결만 접근할 수 있습니다. CloudThinker 워크스페이스 역할은 웹 콘솔에서와 동일하게 적용됩니다.
-
----
-
-## 관련 항목
+## 다음 단계
 
 <CardGroup cols={2}>
-  <Card title="CloudThinker Language" icon="code" href="/guide/commands">
-    모든 명령에 대한 완전한 문법 참조
+  <Card title="CloudThinker Language" icon="terminal" href="/guide/commands">
+    @, #, /로 더 정확한 요청을 작성합니다
   </Card>
-  <Card title="Slack 연동" icon="slack" href="/ko/guide/slack-integration">
-    Slack에서 CloudThinker 설정
+  <Card title="알림" icon="bell" href="/ko/guide/notifications">
+    어떤 이벤트를 어떤 심각도로 Teams에 보낼지 선택합니다
+  </Card>
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    CloudThinker가 실행하기 전에 사람이 필요한 작업을 정합니다
+  </Card>
+  <Card title="Slack" icon="slack" href="/ko/guide/slack-integration">
+    Slack에서 같은 워크플로를 설정합니다
   </Card>
 </CardGroup>

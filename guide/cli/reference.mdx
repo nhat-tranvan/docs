@@ -22,7 +22,8 @@ Put global options before the command name.
 | `--url <URL>` | CloudThinker address. Defaults to the address of your last `login --url`, else `https://app.cloudthinker.io`. Pass the bare origin, with no path or trailing slash: `--url https://ct.example.com` |
 | `--workspace <ID or NAME>` | Use the stored login for this workspace. Can't be combined with `CLOUDTHINKER_TOKEN` except on `review setup` and `doctor` (exit code 2) |
 | `--tui-mode <MODE>` | For a bare `cloudthinker` only: `fullscreen` (default) or `regular`, which keeps the chat in terminal scrollback. With `cloudthinker agent`, pass it after `agent` instead |
-| `--skill [MODULE]` | Print the CLI's operating guide for AI coding agents and exit. Needs no login. With no value it prints the index; modules are `auth`, `chat`, `cloud`, `review`, `cyber`, `cyber-scan`, `cyber-verify`, `cyber-report`, `worker`, and `remote` |
+| `-y`, `--yes` | Run a command that asks first, such as a delete or `connections disconnect`, without asking. Required when no terminal can answer, such as in scripts and CI |
+| `--skill [MODULE]` | Print the CLI's operating guide for AI coding agents and exit. Needs no login. With no value it prints the index; modules are `api`, `auth`, `chat`, `cloud`, `connections`, `policy`, `review`, `cyber`, `cyber-scan`, `cyber-verify`, `cyber-report`, `worker`, and `remote` |
 | `-h`, `--help` | Print help |
 | `-V`, `--version` | Print the CLI version |
 
@@ -33,12 +34,15 @@ Put global options before the command name.
 | `login` | Log in through the browser. Over SSH or without a display, it shows a short code instead |
 | `login --device-auth` | Always use the short-code flow |
 | `login --no-browser` | Print the sign-in URL without opening a browser |
+| `login --token` | Read a personal API token (`ct_pat_`) from stdin, check it with the server, and save it for each workspace it covers: `cloudthinker login --token < token.txt`. On a terminal with no piped input, it exits 2 |
 | `logout` | Clear the login for the selected or active workspace |
 | `logout --all` | Clear every login stored for this host |
 | `whoami [--json]` | Show the account and workspace behind the login, checked live |
 | `auth status [--json]` | List the workspace logins saved on this machine and mark the active one |
 | `auth switch <WORKSPACE>` | Make a saved login the active one |
 | `auth token` | Print the current access token on stdout. It is a secret |
+| `workspace ls [--json]` | List, live, the workspaces you can access in your current login's organization, with your role. It marks the selected workspace and shows whether this machine holds a saved login for each. Listing never changes the active login |
+| `doctor [--json]` | Diagnose this machine: server address and its source, login, API access, recorded Connection tests, the agent and its skills, the newest release, terminal support, `AGENTS.md` or `CLAUDE.md` in this folder, and install paths. Prints one line when all is well, otherwise one row per problem with its fix. It starts no test, repair, or login |
 
 Details and CI patterns: [CLI authentication](/guide/cli/authentication).
 
@@ -58,6 +62,8 @@ The flags below need the `agent` command. Run `cloudthinker agent --session <id>
 | `-n`, `--name <NAME>` | Name this session |
 | `--model <MODE>` | Agent mode: `light`, `pro`, or `ultra` |
 | `--list-models` | List the agent modes your workspace offers |
+| `--add-dir <PATH>` | Let the agent read and edit this extra folder. Repeat for more |
+| `--max-turns <N>` | With `-p`, stop after N model turns and exit with an error |
 | `--tools <NAMES>` | Allow only these local tools, comma-separated |
 | `--exclude-tools <NAMES>` | Turn off these local tools, comma-separated |
 | `--tui-mode <MODE>` | `fullscreen` (default) or `regular`. Same as the global option on a bare `cloudthinker` |
@@ -76,13 +82,17 @@ cloudthinker agent -- --help                 # the agent's own, full help
 
 ### Remote agent
 
-`remote [TARGET]` runs the agent on another machine over SSH and keeps it running when the connection drops or your laptop sleeps. The remote machine's own CLI holds the agent in a background process, so you don't need `tmux`. `TARGET` is a host from `~/.ssh/config`, `user@host`, or `ssh://user@host:port`, and defaults to the last machine you used. The first time, name it: with no target and no earlier machine, the command exits 2 with `Which machine? Run: cloudthinker remote <ssh-host>`. Both machines need the CLI on macOS or Linux.
+`remote [TARGET]` runs the agent on another machine over SSH and keeps it running when the connection drops or your laptop sleeps. The remote machine's own CLI holds the agent in a background process, so you don't need `tmux`. `TARGET` is a host from `~/.ssh/config`, `user@host`, `user@host:port`, or `ssh://user@host:port`, and defaults to the last machine you used. The first time, name it: with no target and no earlier machine, the command exits 2 with `Which machine? Run: cloudthinker remote <ssh-host>`. Both machines need the CLI on macOS or Linux. When a Linux machine has no CLI, or one too old to update itself, your laptop offers to copy the matching build over the same SSH login; the machine needs only `tar`.
 
 | Flag | Description |
 |---|---|
 | `--cwd <DIR>` | Folder on the remote machine, instead of picking one |
 | `--name <NAME>` | Attach to or start the agent with this name |
+| `--detach` | Start the agent without attaching, then print how to return to it. Works without a terminal |
+| `--via <COMMAND>` | Reach the machine with another command, such as `ssh -J`. It is saved with the machine |
 | `-- <AGENT_ARGS>` | Arguments for the agent when it starts |
+
+`remote ls` lists the saved machines, `remote ls <MACHINE> [--json]` lists the agents running there, and `remote forget <MACHINE>` removes a saved machine.
 
 The remote agent runs the remote machine's own `cloudthinker`, so it uses that machine's login and workspace. Run `cloudthinker login` there first; over SSH it shows a short code.
 
@@ -102,6 +112,8 @@ Inside `cloudthinker remote`, Ctrl+Z detaches and leaves the agent running on th
 | `chat -p … --json` | Print one JSON object instead of the plain answer |
 | `chat status <RUN_ID> [--wait] [--timeout <SECS>] [--json]` | Show a run's state and answer; `--wait` polls until it finishes |
 | `chat ls [--conversation <UUID>] [--limit <N>] [--json]` | List recent headless runs, newest first. `--limit` 1 to 50, default 10 |
+| `chat search <QUERY> [--regex \| --fuzzy [--min-score <SCORE>]] [--json]` | Search past conversations you can view. The query is literal text by default, up to 200 characters; `--regex` reads it as a regular expression, and `--fuzzy` finds near matches such as typos (`--min-score` 60 to 100, default 85). It searches titles, message text, tool names, tool inputs and outputs, and attachment names, but not thinking or attachment contents. Each match shows the title, conversation UUID, an excerpt with secrets hidden, and a link. Narrow it with `--since`, `--until`, `--time-field`, and `--type` (repeat for more, such as `chat`, `headless`, or `rca`); `--limit` 1 to 50, default 10. A partial search prints a `--cursor` to continue, and a partial search with no matches exits 1. It starts no agent run and uses no model |
+| `chat trace <CONVERSATION_ID> [--limit <N>] [--json]` | Show a conversation's recent messages, tool names, failures, and usage. Tool arguments, tool output, and thinking are left out, and older messages are capped, so it isn't a complete record. Takes a conversation ID, not a run ID. Agent CLI sessions aren't supported |
 
 Without `--json`, stdout carries only the answer; progress and the `continue_with=` line go to stderr. See [Headless chat](/guide/cli/headless-chat).
 
@@ -115,11 +127,14 @@ Review your local Git changes, or read a [Review](/guide/code-review/overview) C
 | `review --base <REF>` | Review the branch diff from the merge base with `REF`, including uncommitted edits |
 | `review status <MR_URL>` | Summary: provider, title, status, verdict, and finding count |
 | `review findings <MR_URL>` | List findings, worst severity first |
+| `review findings <FINDING_ID>` | Read one finding |
+| `review --no-upload` | Keep the local review's findings on this machine instead of sending them to CloudThinker |
+| `review setup`, `review doctor` | Prepare Loupe on a shared Worker, or check the Worker's prerequisites |
 | `review watch <MR_URL>` | Poll until the review finishes |
 
-Every review command takes `--json`. `review` and `review watch` also take `--timeout <SECS>` (default 2400) and `--fail-on <low|medium|high|critical>`, which exits 6 when a finding is at that severity or worse.
+Every review command takes `--json`. `review` and `review watch` also take `--timeout <SECS>` (default 2400; for a local `review`, the total across every part of a large diff) and `--fail-on <low|medium|high|critical>`, which exits 6 when a finding is at that severity or worse.
 
-A local `review` reads your checkout with read-only tools and prints findings in the terminal. It doesn't post comments, apply fixes, or change your Git index or working tree. It runs on CloudThinker Agent modes, so the diff and any file it reads go to CloudThinker's model gateway, and it uses workspace credits. See [What leaves your machine](/guide/cli/agent#what-leaves-your-machine).
+A local `review` reads your checkout with read-only tools and prints findings in the terminal. It doesn't post comments, apply fixes, or change your Git index or working tree. After it finishes, it sends the findings to CloudThinker, so the first Review of the pull request for this branch credits them; `--no-upload` keeps them on your machine. It runs on the workspace's Code Review model, so the diff and any file it reads go to CloudThinker's model gateway, and it uses workspace credits. See [What leaves your machine](/guide/cli/agent#what-leaves-your-machine).
 
 ```bash
 cloudthinker review --base origin/main --fail-on high
@@ -195,6 +210,23 @@ Every Cyber command takes `--json`.
 
 See [CLI for the Public API](/guide/cli/api).
 
+## Connections, agents, and Policy
+
+A TARGET is a connection ID, alias, or prefix from `connections list`.
+
+| Command | Description |
+|---|---|
+| `connections list [--json]` (alias `ls`) | List the [Connections](/guide/connections/overview) added to the selected workspace |
+| `connections show <TARGET> [--json]` | Show one Connection: its type, status, and where it points. No credential is printed |
+| `connections status <TARGET> [--wait] [--timeout <SECS>] [--json]` | Show the latest test; `--wait` blocks until it ends and exits 1 when it fails |
+| `connections retry <TARGET> [--wait] [--timeout <SECS>] [--json]` | Test a built-in Connection again with its saved credentials (workspace admins) |
+| `connections disconnect <TARGET> [--json]` | Remove a Connection and its saved credentials (workspace admins). It asks first; `--yes` skips the question and is required without a terminal |
+| `connections connect-url <PREFIX> [--wait] [--timeout <SECS>] [--json]` | Print the page that adds a Connection, such as `aws` or `github`, and open it on a desktop. Credentials stay in the browser. `--wait` follows the new Connection's first test |
+| `agents ls [--json]` | List the workspace's agents and whether each can be picked with `chat --agent` |
+| `agents show <UUID_OR_ALIAS> [--json]` | Show one agent's identity, description, and whether it can be picked for chat. Aliases match exactly, ignoring case |
+| `policy export [--output <PATH>]` | Print the workspace Policy as YAML, or write it to a new private file |
+| `policy import <PATH> [--apply] [--prune] [--activate] [--json]` | Preview an import of a YAML or JSON Policy file. Only `--apply` writes. `--prune` dismisses absent Rules and clears omitted overrides; `--activate` turns on imported Allow Rules |
+
 <span id="workers"></span>
 
 ## Environments
@@ -216,6 +248,7 @@ See [CLI for the Public API](/guide/cli/api).
 |---|---|
 | `update` | Install the latest release of the CLI and agent together |
 | `update --force` | Reinstall even when already current |
+| `update --version <VERSION>` | Install that release instead of the latest, older or newer, for example `0.12.2`, to pin hosts or roll back. A version that was never released exits 2 |
 | `update --json` | Print the result as JSON |
 | `completion <bash\|zsh\|fish\|…>` | Print a shell completion script |
 
@@ -235,10 +268,13 @@ If `${fpath[1]}` isn't writable, save the zsh file to a folder of your own and a
 |---|---|
 | `CLOUDTHINKER_URL` | Same as `--url` |
 | `CLOUDTHINKER_WORKSPACE` | Same as `--workspace` |
-| `CLOUDTHINKER_TOKEN` | A personal (`ct_pat_`) or service account (`ct_sat_`) [API token](/guide/api/tokens), or a token from `auth token`, to use instead of stored logins. An API token is meant for `chat` and `api`; most other commands need a login or an `auth token` token. Can't be combined with `--workspace` or `CLOUDTHINKER_WORKSPACE`, except on `review setup` and `doctor` |
+| `CLOUDTHINKER_TOKEN` | A personal (`ct_pat_`) or service account (`ct_sat_`) [API token](/guide/api/tokens), or a token from `auth token`, to use instead of stored logins. An API token is meant for `chat`, `incident ls` and `incident status`, the public API commands, and `api`; most other commands need a login or an `auth token` token. Can't be combined with `--workspace` or `CLOUDTHINKER_WORKSPACE`, except on `review setup` and `doctor` |
 | `CLOUDTHINKER_LOGIN` | `browser` or `device` forces that login flow on this machine |
 | `CLOUDTHINKER_NO_UPDATE_CHECK` | Set to `1` to turn off the update offer |
 | `CLOUDTHINKER_OUTPOST_ID` | Default environment for `worker` commands |
+| `CLOUDTHINKER_CONFIG_DIR` | Keep credentials and worker state in this folder instead of the platform config folder, so people who share one OS account can each keep their own login |
+| `CLOUDTHINKER_RELEASE_URL` | Install the agent from an `https` mirror, a `file://` URL, or a local folder laid out as `<base>/v<version>/<asset>`, with the same checksum checks |
+| `CLOUDTHINKER_REMOTE` | Set to `0` to run a bare `cloudthinker` over SSH in the current shell instead of a background agent that survives a dropped connection |
 | `CLOUDTHINKER_AUTO_BACKGROUND_SECONDS` | Seconds before the agent moves a long shell command to the background. Default 10; `0` turns it off |
 | `NO_COLOR` | Turn off color on stderr. Color is also off when stderr is not a terminal |
 | `HTTPS_PROXY`, `ALL_PROXY` | Send the CLI's traffic through this proxy. Hosts in `NO_PROXY` skip it |
@@ -262,7 +298,7 @@ If `${fpath[1]}` isn't writable, save the zsh file to a folder of your own and a
 | Path | Contents |
 |---|---|
 | `~/.local/bin/cloudthinker` | The binary the installer puts on your `PATH` |
-| `~/Library/Application Support/cloudthinker/credentials.json` (macOS), `$XDG_CONFIG_HOME/cloudthinker/credentials.json` or `~/.config/cloudthinker/credentials.json` (Linux) | One login per workspace for each host |
+| `~/Library/Application Support/cloudthinker/credentials.json` (macOS), `$XDG_CONFIG_HOME/cloudthinker/credentials.json` or `~/.config/cloudthinker/credentials.json` (Linux), or `$CLOUDTHINKER_CONFIG_DIR/credentials.json` when set | One login per workspace for each host |
 | `~/.cloudthinker/agent/` | Agent configuration, including `settings.json` |
 | `~/.cloudthinker/agent/bin/<version>/` | The agent build for that CLI version |
 | `~/.cloudthinker/agent/sessions/` | Local agent session transcripts |

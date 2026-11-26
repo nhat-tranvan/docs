@@ -1,34 +1,41 @@
 ---
 title: Rollbar
-description: "CloudThinker と Rollbar を接続して、エラートリアージ、上位エラーの追跡、デプロイと相関した調査を実現する"
+description: "アクセストークンで Rollbar プロジェクトを接続し、エージェントが上位エラーをランク付けし、デプロイと結び付け、アイテムを更新できるようにします"
 icon: "/images/icons/rollbar.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+import ApprovalDefault from '/snippets/approval-default.mdx';
 
-Rollbar プロジェクトを接続することで、CloudThinker エージェントが 1 つまたは複数のプロジェクトにわたってエラーのトリアージ、上位の問題のランク付け、デプロイのレビュー、セッションリプレイコンテキストの取得、アイテムの更新を行えるようになります。Rollbar は**プロジェクトアクセストークン**で認証します。調査には読み取りスコープのトークンで十分です。承認ゲートが必要なアイテム更新には書き込みスコープのトークンが追加で必要です。
+Rollbar を接続すると、CloudThinker エージェントは上位エラーをランク付けし、新しいエラーを最近のデプロイやバージョンと結び付け、セッションリプレイのコンテキストを取得し、[Approvals](/guide/approvals/overview) を通してアイテムの状態を変更できます。各 Rollbar プロジェクトをそのプロジェクトアクセストークンに対応付ける JSON 設定を 1 つ貼り付けるので、1 つの接続で多くのプロジェクトをカバーできます。
 
 ## 前提条件
 
-- CloudThinker に参照させたいプロジェクトへのアクセスがある **Rollbar アカウント**。
-- 各プロジェクトの**プロジェクトアクセストークン**（調査には読み取りスコープで十分）。
-- アイテム状態の更新をエージェントに行わせたい場合のみ、**書き込みスコープのトークン**（承認ゲート）。
-
-<Info>
-Rollbar のトークンは**プロジェクトごとにスコープ**されます。CloudThinker は 1 つの接続で複数のプロジェクトをサポートします。含めたいプロジェクトごとに 1 つのトークンを入力してください。
-</Info>
+- エージェントに読ませたい各プロジェクトにアクセスできる Rollbar アカウント。
+- それぞれのプロジェクトのプロジェクトアクセストークン。Rollbar のトークンはプロジェクトごとなので、1 つのトークンで 2 つのプロジェクトはカバーできません。
 
 ## セットアップ
 
 <Steps>
   <Step title="プロジェクトアクセストークンを作成する">
-    Rollbar でプロジェクトを開き、**read** スコープの**プロジェクトアクセストークン**を作成（またはコピー）します。アイテムを更新させたい場合は **write** スコープのトークンも追加してください。トークンと設定の詳細については Rollbar の [MCP Server Setup](https://docs.rollbar.com/docs/mcp-server-setup#configuration) を参照してください。
+    Rollbar でプロジェクトを開き、**Settings → Project Access Tokens** に移動します。**Create new access token** をクリックして **read** にチェックを入れ、エージェントにアイテムの状態を変更させたい場合にのみ **write** を追加します。**post_server_item** と **post_client_item** はチェックしないでください。これらは Rollbar にエラーを送信するためのもので、CloudThinker は送信を行いません。プロジェクトごとに繰り返します。
   </Step>
-  <Step title="CloudThinker で接続を追加する">
-    **Connections → Rollbar** に移動して以下を入力します。
-    - **Project config (JSON)**: `projects` 配列。各 Rollbar プロジェクトのエントリに `name` と `token` を記載する
+  <Step title="プロジェクト設定を書く">
+    `projects` 配列を持つ JSON オブジェクトを作り、プロジェクトごとに 1 エントリを入れます。各エントリには `name` と `token` があります。`name` はプロンプトで使う自分用のラベルなので、Rollbar のプロジェクト名と一致させる必要はありません。`backend` のような短い名前が入力しやすいです。
 
-    **Connect** をクリックします。CloudThinker が認証情報を検証し、**Connected** ステータスを表示します。
+    ```json
+    {
+      "projects": [
+        { "name": "backend", "token": "<backend-project-token>" },
+        { "name": "frontend", "token": "<frontend-project-token>" }
+      ]
+    }
+    ```
+  </Step>
+  <Step title="接続を追加する">
+    **Settings → Workspace → Connections** を開き、**Discover** タブで **Rollbar** を選択し、JSON を **ROLLBAR_CONFIG_JSON** に貼り付けて **Connect** をクリックします。
+
+    **成功の状態:** 接続に **Connected** と表示されます。Connect は各トークンで Rollbar を呼び出さないため、無効なトークンは最初のリクエストで初めて判明します。すぐに新しいチャットで[接続を確認する](#接続を確認する)のプロンプトを実行してください。
   </Step>
 </Steps>
 
@@ -36,100 +43,87 @@ Rollbar のトークンは**プロジェクトごとにスコープ**されま�
 
 | フィールド | 説明 | 例 |
 |-------|-------------|---------|
-| **ROLLBAR_CONFIG_JSON** | 各 Rollbar プロジェクトをアクセストークンにマッピングする `projects` 配列。各エントリに `name` と `token` が含まれる | 以下参照 |
+| **ROLLBAR_CONFIG_JSON** | `projects` 配列。各エントリに `name` と `token` があります。キーは `access_token` ではなく `token` です | `{"projects":[{"name":"backend","token":"..."}]}` |
 
-```json
-{
-  "projects": [
-    { "name": "backend",  "token": "tok_abc123" },
-    { "name": "frontend", "token": "tok_xyz789" }
-  ]
-}
-```
-
-<Info>
-トークンフィールドは `token`（`access_token` ではない）で、`projects` は配列です。フォーマットは Rollbar の [MCP マルチプロジェクト設定](https://docs.rollbar.com/docs/mcp-server-setup#configuration)に準拠しています。
-</Info>
+形式は Rollbar の [MCP server multi-project configuration](https://docs.rollbar.com/docs/mcp-server-setup#configuration) と同じです。
 
 ## 必要な権限
 
-読み取り操作（プロジェクト一覧、アイテム、上位エラー、デプロイ、バージョン、リプレイ）は**read** スコープのプロジェクトアクセストークンで機能します。アイテム更新には**write** スコープのトークン **および** CloudThinker での明示的な[承認](/guide/approvals/overview)が必要です。
+| トークンのスコープ | 許可される操作 |
+|-------------|----------------|
+| **read** | プロジェクト、アイテム、上位エラー、デプロイ、バージョン、セッションリプレイ |
+| **write** | アイテムの状態の変更（解決やミュートなど）。各変更は Approvals も通ります |
 
 <Tip>
-最小権限の原則に従ってください。調査には読み取りスコープのトークンを使用し、エージェントがアイテム状態を更新する必要があるプロジェクトにのみ書き込みスコープのトークンを追加してください。
+まずは読み取り専用のトークンで始めてください。write スコープは、エージェントにアイテムを解決またはミュートさせたいプロジェクトにだけ追加します。
 </Tip>
 
 ## エージェントの機能
 
-接続後、エージェントは設定されたプロジェクト全体でエラーの調査と対応を行えます。
+| 機能 | エージェントができること |
+|------------|--------------------|
+| **検出** | 設定済みのプロジェクトを一覧表示し、プロジェクトが 1 つだけの場合は自動で選択します |
+| **エラーのトリアージ** | 現在のアイテムを一覧表示し、アイテムの詳細と発生回数を読み、上位エラーをランク付けします |
+| **リリースのコンテキスト** | 最近のデプロイを確認し、デプロイのリビジョンからバージョンの詳細を取得します |
+| **セッションリプレイ** | 記録済みのリプレイがあるアイテムのリプレイコンテキストを取得します。Rollbar でそのプロジェクトのセッションリプレイを設定しておく必要があります |
+| **アイテムの更新（毎回確認）** | 1 つのアイテムの状態を変更します。プロジェクト、アイテム、希望する変更を指定する必要があります |
 
-### 読み取り機能
+エージェントは、トリアージ、デプロイの確認、リプレイの読み取り中にアイテムを変更することはありません。更新は会話の中で依頼したときにだけ実行され、Approvals を通ります。
 
-| カテゴリ | エージェントができること |
-|----------|----------------------|
-| **プロジェクト** | 設定済みの Rollbar プロジェクトを一覧表示し、単一プロジェクトに自動スコープする |
-| **エラーアイテム** | 現在のアクティブアイテムを一覧表示し、アイテムの詳細と発生シグナルを調査する |
-| **上位エラー** | 最も影響の大きいエラーと現在の本番エラーの状態を表示する |
-| **デプロイ** | プロジェクトごとの最近のデプロイをレビューする |
-| **リリースとバージョン** | バージョンコンテキストを取得し、リリースとエラーアクティビティを相関付ける |
-| **セッションリプレイ** | 記録済みリプレイを持つアイテムのリプレイコンテキストを取得する |
+<ApprovalDefault />
 
-### 書き込み機能
+### 接続を確認する
 
-| カテゴリ | エージェントができること |
-|----------|----------------------|
-| **アイテム更新** | アイテムの状態を変更する（例: 解決、ミュート）— **承認が必要** |
-
-<Warning>
-アイテム更新は実行前に明示的なユーザー承認が必要であり、プロジェクト、アイテム、希望する変更を指定する必要があります。
-</Warning>
-
-### 接続の確認
+新しいチャットで CloudThinker に次のように聞きます:
 
 ```text
-List my Rollbar projects and show the current top errors
+List my Rollbar projects and show the top errors in each
 ```
+
+設定にあるすべてのプロジェクト名が、それぞれ影響の大きいアイテム、そのレベル、発生回数とともに表示されるはずです。表示されないプロジェクトは、貼り付けた JSON に含まれていません。
 
 ### プロンプト例
 
 ```text
-Triage current Rollbar items and rank them by impact
-Show the top errors that appeared after the latest deployment
-Review recent deployments and correlate them with new error activity
+Which errors in backend first appeared after the latest deployment?
+Rank the active items in frontend by impact and show replay context for the top one
+Resolve item #1042 in backend
 ```
+
+複数のプロジェクトを設定している場合は、プロンプトでプロジェクト名を指定してください。指定しないと、エージェントがどれを使うか尋ねます。アイテム番号には、Rollbar がアイテムに表示する `#` 番号を使います。
 
 ## トラブルシューティング
 
-<Accordion title="認証が失敗するかクエリが空で返る">
-貼り付けたプロジェクト設定が無効な JSON か、リクエストされたプロジェクト名が含まれていないか、プロジェクトが期限切れのトークンにマッピングされています。アイテムやデプロイが「データなし」として扱う前に、まず設定済みプロジェクトを一覧表示してください。
+<Accordion title="呼び出しが 401 Unauthorized で失敗する、または空で返る">
+貼り付けた設定が無効な JSON であるか、指定したプロジェクトが含まれていないか、Rollbar で取り消し、無効化、またはレート制限されたトークンが入っています。エージェントに設定済みのプロジェクトを一覧表示させてから、接続を編集して JSON またはトークンを修正してください。
 </Accordion>
 
-<Accordion title="エージェントがどのプロジェクトを使用するか確認してくる">
-複数のプロジェクトが設定されている場合に発生します。エージェントがクエリをスコープできるよう、プロンプトにプロジェクト名を指定してください（例: 「my-app の場合」）。
+<Accordion title="エージェントがどのプロジェクトを使うか尋ねてくる">
+複数のプロジェクトが設定されていて、プロンプトでプロジェクトを指定していません。設定にあるプロジェクト名を追加してください（例: "in backend"）。
 </Accordion>
 
-<Accordion title="アイテムにリプレイが存在しない">
-セッションリプレイコンテキストは記録済みリプレイを持つアイテムにのみ存在します。リプレイのないアイテムはリプレイデータを返しません。これは予期された動作であり、エラーではありません。
+<Accordion title="アイテムにリプレイがない">
+リプレイのコンテキストは、セッションリプレイが記録されたアイテムにだけ存在します。リプレイのないアイテムはリプレイデータを返しません。これは想定どおりの動作で、エラーではありません。
 </Accordion>
 
-<Accordion title="アイテム更新がブロックされる">
-更新は承認ゲートであり、**write** スコープのトークンが必要です。そのプロジェクトのトークンに書き込みスコープがあることを確認し、プロンプトが表示されたらアクションを承認してください。
+<Accordion title="アイテムの更新がブロックされる、または失敗する">
+そのプロジェクトのトークンに write スコープがないか、承認を拒否しました。Rollbar でトークンに write スコープを追加し、接続を更新して、もう一度依頼してください。
 </Accordion>
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **最小権限のトークン** — 調査には読み取りスコープのプロジェクトトークンを使用し、エージェントがアイテム状態を更新する必要があるプロジェクトにのみ書き込みスコープを追加してください。
-- **ローテーション** — プロジェクトアクセストークンを定期的にローテーションし、CloudThinker で更新してください。
+- **一時的な設定ファイル**: トークンは暗号化して保存されます。エージェントが Rollbar を使うとき、その Rollbar プロセスは、そのプロセスだけが読める一時ファイルからトークンを読み込み、プロセスが停止するとファイルは削除されます。
+- **ローテーションと新しいプロジェクト**: 接続を編集するとき、保存済みの JSON は表示されません。トークンをローテーションするときやプロジェクトを追加するときは、すべてのプロジェクトを含む JSON 全体をもう一度貼り付けてください。
 
 ## 関連情報
 
 <CardGroup cols={2}>
-  <Card title="Datadog 接続" icon="/images/icons/datadog.svg" href="/ja/guide/connections/datadog">
-    ログ、メトリクス、インシデント調査
+  <Card title="Sentry" icon="bug" href="/guide/connections/sentry">
+    OAuth 経由での issue、イベント、トレース。
   </Card>
-  <Card title="承認" icon="shield-check" href="/guide/approvals/overview">
-    承認ゲートアクションの仕組み
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    アイテムの更新を実行する前に CloudThinker が確認する仕組み。
   </Card>
 </CardGroup>

@@ -1,48 +1,48 @@
 ---
-title: Azure
-description: "マルチクラウド運用、コスト分析、コンプライアンス監視のためにMicrosoft AzureをCloudThinkerに接続します"
+title: Microsoft Azure
+description: "サービスプリンシパルで Microsoft Azure を接続し、CloudThinker がリソースの読み取り、アクセスの監査、Optimize での支出レポートを行えるようにします。"
 icon: "/images/icons/azure.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
-Azureサブスクリプションを接続して、CloudThinkerエージェントがコスト分析、コンプライアンス監査、Microsoft Azure全体のインフラ管理を実行できるようにします。
-
-Azureの認証は**サービスプリンシパル**（アプリ登録 + クライアントシークレット + テナントID）で行います。プリンシパルのロール割り当てが各エージェントの読み取り範囲を決定します。
-
----
+Azure を接続すると、CloudThinker が仮想マシン、AKS クラスター、データベース、ストレージ、ネットワークのインベントリを作成し、ID とロールの割り当てを確認し、Azure Cost Management から支出を読み取れるようになります。Azure は **サービスプリンシパル**（クライアントシークレットを持つ、Microsoft Entra ID のアプリ ID）で認証し、そのロールの割り当てによって CloudThinker が見られる範囲が決まります。
 
 ## 前提条件
 
-- OwnerまたはUser Access Administrator権限を持つAzureサブスクリプション。
-- Microsoft Entra IDでアプリ登録を作成する権限。
-- アカウントに登録済みの多要素認証。セキュリティ既定値は、多要素認証なしのアプリ登録をブロックします。
+- ロールを割り当てられるよう、**Owner** または **User Access Administrator** を持っている Azure サブスクリプション。
+- Microsoft Entra ID でアプリの登録を作成する権限: **Application Developer** ロール、または Entra ID のユーザー設定で **Users can register applications** が **Yes** になっていること。
+- アカウントに多要素認証が登録されていること。セキュリティの既定値は、多要素認証なしでのアプリ登録をブロックします。
 
-<Info>
-ReaderとCost Management Readerがあれば、読み取り専用のエージェントはすべて動作します。エージェントにAzureリソースを変更させる場合のみ書き込みロールを追加してください。
-</Info>
+### 最初に知っておくべき制限
 
----
+- **クライアントシークレットのみ。** ダイアログはクライアントシークレットを受け付けます。証明書やフェデレーション資格情報の入力欄はありません。
+- **ワークスペースごとに 1 テナント。** Azure 接続はワークスペースごとに 1 つで、1 つのテナント内でサービスプリンシパルが読み取れるすべてのサブスクリプションをカバーします。別の開発用テナントなど 2 つ目のテナントには、独自の Rules とチャットを持つ専用のワークスペースが必要です。
+- **ルールは 1 セット。** Azure は単一接続のサービスのため、**Environment** は **Not set** のままです。いずれにせよ、[Approval rules](/guide/approvals/rules) は環境を読みません。Azure の書き込みを別扱いにするには、[この接続を指定する Rule](/guide/approvals/rules#what-a-rule-contains) を作成します。
 
 ## セットアップ
 
 <Tabs>
   <Tab title="Azure CLI">
     <Steps>
-      <Step title="サブスクリプションを選択する">
+      <Step title="サブスクリプションを選ぶ">
         ```bash
         az login
         az account set --subscription <subscription-id>
         ```
       </Step>
-      <Step title="サービスプリンシパルを作成する">
+      <Step title="Reader を持つサービスプリンシパルを作成する">
+        <Warning>
+        `cloudthinker` という名前のアプリがすでに存在する場合、`create-for-rbac` はそれを再利用して認証情報をリセットするため、それを使っている稼働中の接続が壊れます。先に `az ad sp list --display-name cloudthinker` で確認してください。結果が返った場合は、一意の名前を選ぶか、`az ad sp credential reset --id <appId> --append` で既存のアプリにシークレットを追加します。
+        </Warning>
+
         ```bash
         az ad sp create-for-rbac --name cloudthinker \
           --role Reader \
           --scopes /subscriptions/<subscription-id>
         ```
 
-        出力をコピーしてください。`password`は一度しか表示されません。
+        今すぐ出力をコピーしてください。Azure は `password` を一度しか表示しません。シークレットはデフォルトで 1 年後に期限切れになります。変更するには `--years 2`（または別の値）を追加し、[ローテーション](#クライアントシークレットをローテーションする)のリマインダーを設定してください。
 
         ```json
         {
@@ -60,149 +60,224 @@ ReaderとCost Management Readerがあれば、読み取り専用のエージェ�
           --scope /subscriptions/<subscription-id>
         ```
       </Step>
-      <Step title="CloudThinkerで接続を追加する">
-        **Connections → Azure** に移動し、`appId`を**APP_ID**、`password`を**CLIENT_SECRET**、`tenant`を**TENANT_ID**に入力します。**AZURE_DEFAULT_REGION**を選択して**Connect**をクリックします。
+      <Step title="任意: さらにサブスクリプションをカバーする">
+        見えるすべてのサブスクリプションでサービスプリンシパルに両方のロールを付与するには、ループで処理します。明示的な一覧が得られるため、これが推奨される方法です。
 
-        **成功状態:** 接続が**Connected**ステータスで表示されます。
+        ```bash
+        for SUB in $(az account list --query "[].id" -o tsv); do
+          for ROLE in Reader "Cost Management Reader"; do
+            az role assignment create --assignee <appId> --role "$ROLE" --scope /subscriptions/$SUB
+          done
+        done
+        ```
+
+        管理グループへの割り当てにはトレードオフがあります。新しいサブスクリプションを自動でカバーしますが、CloudThinker に読ませたくないものも含まれる可能性があります。それを望む場合にのみ使ってください。
+
+        ```bash
+        for ROLE in Reader "Cost Management Reader"; do
+          az role assignment create --assignee <appId> --role "$ROLE" \
+            --scope /providers/Microsoft.Management/managementGroups/<management-group-id>
+        done
+        ```
+      </Step>
+      <Step title="CloudThinker で接続を追加する">
+        **Settings → Workspace → Connections** を開き、**Microsoft Azure** を選んで **Connect** をクリックします。Azure はワークスペースごとに 1 つの接続しか許可しないため、ダイアログには 4 つのフィールドがあり、**Alias** と **Description** はありません。次のように入力してから **Connect** をクリックします。
+
+        | CLI の出力 | ポータルの値 | ダイアログのフィールド |
+        |---|---|---|
+        | `appId` | Application (client) ID | **APP_ID** |
+        | `password` | クライアントシークレットの **Value** | **CLIENT_SECRET** |
+        | `tenant` | Directory (tenant) ID | **TENANT_ID** |
+        | 該当なし | メインのリージョン | **AZURE_DEFAULT_REGION**（一覧から選択） |
+
+        **成功時の状態:** 接続に **Connecting** と **Verifying** が表示され、その後 **Connected** のステータスになります。この接続で Optimize がまだオンになっていない場合、CloudThinker は詳細調査を開始する代わりに **Turn on Optimize?** と尋ねます。**Turn on Optimize** をクリックして最初のコストスキャンを開始するか、**Not now** をクリックしてください。エージェントに接続を探索させるには、カードの **More** メニューを開き、**Try in chat** を選択します。[What happens after you connect](/ja/guide/connections/overview#接続した後に起こること) を参照してください。
       </Step>
     </Steps>
   </Tab>
-  <Tab title="Azureポータル">
+  <Tab title="Azure portal">
     <Steps>
       <Step title="アプリケーションを登録する">
-        [Azure Portal](https://portal.azure.com/) → **Microsoft Entra ID → App registrations → New registration** に移動します。名前を`cloudthinker`にし、既定のアカウント種類のまま**Register**をクリックします。
+        [Azure portal](https://portal.azure.com/) で、**Microsoft Entra ID → App registrations → New registration** に移動します。名前を `cloudthinker` とし、アカウントの種類はデフォルトのまま、**Register** をクリックします。
       </Step>
       <Step title="識別子をコピーする">
-        アプリの概要ページで**Application (client) ID**と**Directory (tenant) ID**をコピーします。
+        アプリの概要ページで、**Application (client) ID** と **Directory (tenant) ID** をコピーします。
       </Step>
       <Step title="クライアントシークレットを作成する">
-        **Certificates & secrets → New client secret** に移動します。有効期限を12か月に設定して**Add**をクリックし、シークレットの**Value**をすぐにコピーします。
+        **Certificates & secrets → New client secret** に移動し、有効期限を設定して（180 日または 365 日が適度なバランスです）、**Add** をクリックします。**Secret ID** ではなく **Value** 列をすぐにコピーしてください。Azure がこの値を再表示することはありません。期限切れになる前に[ローテーション](#クライアントシークレットをローテーションする)するリマインダーを設定してください。
       </Step>
       <Step title="ロールを割り当てる">
-        **Subscriptions → 対象のサブスクリプション → Access control (IAM) → Add role assignment** に移動します。アプリ登録に**Reader**を割り当て、**Cost Management Reader**でも同じ手順を繰り返します。
+        **Subscriptions → your subscription → Access control (IAM) → Add → Add role assignment** に移動します。**Reader** を選んで **Next** をクリックします。**Members** で **User, group, or service principal** を選び、**Select members** をクリックして `cloudthinker` を検索・選択し、**Review + assign** をクリックします。**Cost Management Reader** についても繰り返します。
       </Step>
-      <Step title="CloudThinkerで接続を追加する">
-        **Connections → Azure** に移動し、クライアントIDを**APP_ID**、シークレット値を**CLIENT_SECRET**、ディレクトリIDを**TENANT_ID**に入力します。**AZURE_DEFAULT_REGION**を選択して**Connect**をクリックします。
+      <Step title="CloudThinker で接続を追加する">
+        **Settings → Workspace → Connections** を開き、**Microsoft Azure** を選んで **Connect** をクリックします。次のようにフィールドに入力してから **Connect** をクリックします。
 
-        **成功状態:** 接続が**Connected**ステータスで表示されます。
+        | ポータルの値 | ダイアログのフィールド |
+        |---|---|
+        | Application (client) ID | **APP_ID** |
+        | クライアントシークレットの **Value** | **CLIENT_SECRET** |
+        | Directory (tenant) ID | **TENANT_ID** |
+        | メインのリージョン | **AZURE_DEFAULT_REGION**（一覧から選択） |
+
+        **成功時の状態:** 接続に **Connecting** と **Verifying** が表示され、その後 **Connected** のステータスになります。この接続で Optimize がまだオンになっていない場合、CloudThinker は詳細調査を開始する代わりに **Turn on Optimize?** と尋ねます。**Turn on Optimize** をクリックして最初のコストスキャンを開始するか、**Not now** をクリックしてください。エージェントに接続を探索させるには、カードの **More** メニューを開き、**Try in chat** を選択します。[What happens after you connect](/ja/guide/connections/overview#接続した後に起こること) を参照してください。
       </Step>
     </Steps>
   </Tab>
 </Tabs>
 
-<Warning>
-クライアントシークレットは作成直後にコピーしてください。Azureは二度と表示しません。新しいシークレットが必要な場合は`az ad sp credential reset --id <appId>`を実行します。
-</Warning>
+### Microsoft Customer Agreement の請求
 
-### Microsoft Customer Agreementの請求
+Microsoft Customer Agreement のサブスクリプションで Optimize を使う場合にのみ必要です。オンラインで購入した従量課金制のサブスクリプションは、通常 Microsoft Customer Agreement（MCA）に属しています。Cost Management はこれらに対するサブスクリプションレベルのクエリを `Given subscription doesn't have valid WebDirect/AIRS offer type` で拒否するため、[Optimize](/ja/guide/cost-optimization/overview) は代わりに請求プロファイルで支出を読み取ります。
 
-オンラインで購入した従量課金サブスクリプションはMicrosoft Customer Agreement（MCA）を使用します。Cost ManagementはMCAサブスクリプションに対して`Given subscription doesn't have valid WebDirect/AIRS offer type`を返すため、Optimizeは請求プロファイルのスコープでコストを読み取ります。
+MCA かどうかを確認するには、次を実行します。MCA の場合は `MicrosoftCustomerAgreement` と表示されます。
 
-サービスプリンシパルにそのスコープへのアクセスを付与してください。**Cost Management + Billing → 請求アカウント → Billing profiles → 対象のプロファイル → Access control (IAM) → Add** に移動し、アプリ登録に**Billing profile reader**を割り当てます。サブスクリプションのロール割り当ては請求スコープを含みません。
+```bash
+az billing account list --query "[].{name:displayName, type:agreementType}" -o table
+```
 
----
+請求プロファイルの読み取りを許可するには、**Cost Management + Billing → your billing account → Billing profiles → your profile → Access control (IAM) → Add** に移動し、`cloudthinker` アプリに **Billing profile reader** を割り当てます。サブスクリプションのロール割り当ては請求スコープには及びません。うまくいったかを確認するには、Optimize を開いて Azure の支出が読み込まれることを確認します。
 
 ## 接続の詳細
 
-| フィールド | 説明 | 例 |
-|-------|-------------|---------|
-| **APP_ID** | アプリ登録のApplication (client) ID | `00000000-0000-0000-0000-000000000000` |
-| **CLIENT_SECRET** | Certificates & secretsで作成したシークレット値 | — |
-| **TENANT_ID** | Microsoft Entra IDのDirectory (tenant) ID | `00000000-0000-0000-0000-000000000000` |
-| **AZURE_DEFAULT_REGION** | Azure CLI呼び出しの既定リージョン | `East US` |
+| フィールド | 入力する内容 | 例 |
+|-------|---------------|---------|
+| **APP_ID** | アプリ登録の Application (client) ID | `00000000-0000-0000-0000-000000000000` |
+| **CLIENT_SECRET** | **Certificates & secrets** のシークレットの値 | 該当なし |
+| **TENANT_ID** | Microsoft Entra ID の Directory (tenant) ID | `00000000-0000-0000-0000-000000000000` |
+| **AZURE_DEFAULT_REGION** | Azure CLI 呼び出しのデフォルトリージョン。表示名の一覧から選びます。デフォルトは **East US** で、Azure CLI では `eastus` と呼ばれます。 | `East US` |
 
-サブスクリプションは接続フィールドではありません。CloudThinkerはサービスプリンシパルが読み取れるすべてのサブスクリプションを検出します。
-
----
+サブスクリプションのフィールドはありません。CloudThinker は、サービスプリンシパルが読み取れるすべてのサブスクリプションで動作します。複数を読み取れる場合、Optimize を初めて開いたときに **Choose an Azure billing scope** を求められます。
 
 ## 必要な権限
 
-| ロール | スコープ | 付与される範囲 |
-|------|-------|--------|
-| **Reader** | サブスクリプション | リソースインベントリ、セキュリティ監査、パフォーマンス分析 |
-| **Cost Management Reader** | サブスクリプション | Optimizeの支出、予測、コスト推奨 |
-| **Billing profile reader** | MCA請求プロファイル | Microsoft Customer AgreementサブスクリプションでのOptimize |
-| **Contributor** | サブスクリプション | 任意。承認ゲート付きのリソース書き込み操作 |
+| ロール | スコープ | 利用可能になるもの |
+|------|-------|-----------------|
+| **Reader** | サブスクリプション | リソースのインベントリ、ロールとポリシーの確認、ヘルスチェック、Azure Monitor のメトリクス |
+| **Cost Management Reader** | サブスクリプション | Optimize での支出、予測、コストの検出事項 |
+| **Billing profile reader** | MCA の請求プロファイル | Microsoft Customer Agreement のサブスクリプションでの Optimize |
+| **Contributor** | サブスクリプションまたはリソースグループ | 任意。CloudThinker にリソースの変更を許可します。[書き込みアクセス](#書き込みアクセス)を参照してください。 |
 
-Readerだけではコストデータを取得できません。Readerは`*/read`を付与しますが、Cost Managementのクエリは`*/read`に一致しないPOSTアクションです。
+Reader だけではコストデータは返りません。Reader は `*/read` を付与しますが、Cost Management のクエリは `*/read` ではカバーされない POST アクションです。
 
 <Tip>
-エージェントにリソースを変更させる場合のみContributorを割り当ててください。書き込み呼び出しはすべてチャットでの承認を待ちます。
+まずは Reader と Cost Management Reader から始めてください。変更が必要な場合は、サブスクリプション全体の Contributor よりも、1 つのリソースグループにスコープを限定した **Virtual Machine Contributor** などの範囲の狭い組み込みロールを優先してください。
 </Tip>
-
----
 
 ## エージェントの機能
 
-接続後、エージェントはAzureリソースの分析と最適化を実行できます。
+CloudThinker は読み取り専用の Azure CLI コマンドを確認なしで実行します。変更は[書き込みアクセス](#書き込みアクセス)のモデルに従います。
 
-| 分野 | CloudThinker ができること（Azure） |
-|-------|-------------------|
-| コスト | コスト分析、VMの適正サイズ調整、リザーブドインスタンスの推奨、リソース最適化 |
-| セキュリティ | Security Centerのファインディング、Microsoft Entra ID監査、コンプライアンスチェック、ポリシー違反 |
-| データベース | SQL Databaseパフォーマンス、Cosmos DB最適化、PostgreSQLチューニング |
-| コンテナ | AKSクラスター管理、コンテナ最適化、ワークロード分析 |
+| 領域 | CloudThinker が行うこと |
+|------|------------------------|
+| **Cost** | Cost Management から支出（税抜き、通貨付き）を読み取り、未使用のリソースや使用率の低い VM を見つけます |
+| **Identity and governance** | Azure RBAC のロール割り当てと Azure Policy を確認します。Reader は Microsoft Entra のユーザー、グループ、アプリ登録をカバーしません。 |
+| **Compute and containers** | VM、App Service、AKS クラスターを調べます |
+| **Data and storage** | SQL などのデータベース、ストレージアカウント、バックアップを調べます |
+| **Networking** | ネットワーク境界、DNS ゾーン、接続された Log Analytics ワークスペースを確認します |
+| **Monitoring** | VM の CPU などの Azure Monitor のメトリクスを読み、急増を説明したりリソースのサイズを決めたりします |
+| **Changes** | **Allow writes** がオンで、サービスプリンシパルのロールが許可し、承認設定が許可する場合にのみ、Azure CLI の書き込みを実行します |
 
 ### 接続を確認する
 
 ```text
-Run an Azure account check and list the connected subscriptions and resource groups
+List the Azure subscriptions and resource groups you can access
 ```
 
-### プロンプト例
+回答には、実際のサブスクリプション名と ID が一覧表示されます。
+
+### プロンプトの例
 
 ```text
-Analyze Azure VM costs over the last 30 days and recommend right-sizing opportunities
-Audit Azure Security Center findings and flag high-severity policy violations
-Check AKS cluster health and report any failing pods or resource pressure
+Which Azure resources look unused, and what did each cost last month?
+Show VMs with low CPU over the last 14 days and suggest a smaller size for each
+List role assignments with Owner or Contributor on the production subscription
 ```
 
----
+## 書き込みアクセス
+
+接続の詳細パネルにある **Allow writes** は、エージェントが Azure で何かを変更してよいかを制御します。デフォルトでオンですが、Reader と Cost Management Reader は何も変更できないため、権限を追加するまで Azure がすべての書き込みを拒否します。
+
+| Azure のロール | Allow writes | 結果 |
+|---|---|---|
+| 読み取りロールのみ | オンまたはオフ | 読み取り専用。Azure がすべての変更を拒否します。 |
+| 書き込みロールを付与 | オフ | 読み取り専用。CloudThinker が Azure に届く前にすべての変更を拒否します。 |
+| 書き込みロールを付与 | オン | エージェントが変更を提案できます。各変更は [Rules と Approval mode](/guide/approvals/overview) が判断します。 |
+
+CloudThinker 側でも書き込みをロックするには、**Settings → Workspace → Connections** で **Microsoft Azure** を開き、詳細パネルの **Allow writes** スイッチをオフにします。
+
+## クライアントシークレットをローテーションする
+
+Azure は単一接続のサービスのため、正常な状態では鉛筆アイコンや **Edit Instance** ダイアログはありません。
+
+| タイミング | 方法 |
+|---|---|
+| シークレットの期限切れ前 | 新しいシークレットを作成し、**Microsoft Azure** の詳細パネルで **Disconnect** をクリックしてから、新しい値で再接続します。その後、古いシークレットを削除します。 |
+| 期限切れ後（接続に **Error** と表示される） | 新しいシークレットを作成し、詳細パネルで **Replace credentials** をクリックして新しい値を保存します。 |
+
+早めのローテーションは期限切れのシークレットを置き換えるより手間がかかりますが、その手間を省くためにシークレットを期限切れにしないでください。期限切れのシークレットは、置き換えるまで障害を意味します。落ち着いた時期に早めにローテーションしてください。再接続すると新しい接続が開始されます。
+
+- 切断から再接続までの間、エージェント、オートメーション、Optimize は Azure を使えません。
+- 新しい接続のときと同じように、CloudThinker が再度 **Turn on Optimize?** と尋ねます。
+- **Allow writes** はオンに戻ります。オフにしていた場合は、もう一度オフにしてください。
+- Azure 接続を指定している [Rules](/guide/approvals/rules) が、引き続きその接続を含んでいることを確認してください。
+
+新しいシークレットを作成するには、`az ad sp credential reset --id <appId> --append` を実行するか、**Microsoft Entra ID → App registrations → your app → Certificates & secrets** を使います。`--append` を付けないとリセットで既存のシークレットが削除され、すぐに接続が壊れます。
 
 ## トラブルシューティング
 
-<Accordion title="セキュリティ既定値によるサインインのブロック">
-`az login`またはポータルが`AADSTS530035: Access has been blocked by security defaults`を返します。セキュリティ既定値は、アプリを登録する前に多要素認証を要求します。[aka.ms/mfasetup](https://aka.ms/mfasetup)で認証方法を登録してから再度サインインしてください。`--use-device-code`と`--allow-no-subscriptions`では回避できません。
+<Accordion title="セキュリティの既定値によってサインインがブロックされる">
+`az login` またはポータルが `AADSTS530035: Access has been blocked by security defaults` を返します。セキュリティの既定値では、アプリを登録する前に多要素認証が必要です。[aka.ms/mfasetup](https://aka.ms/mfasetup) で認証方法を登録し、もう一度サインインしてください。`--use-device-code` や `--allow-no-subscriptions` フラグでは回避できません。
 </Accordion>
 
-<Accordion title="認証失敗">
-APP_ID、CLIENT_SECRET、TENANT_IDを確認します。シークレットが期限切れでないこと、アプリ登録が入力したテナントにあることを確認してください。条件付きアクセスポリシーがサービスプリンシパルのサインインをブロックしていないことも確認してください。
+<Accordion title="Authentication failed">
+**原因:** APP_ID、CLIENT_SECRET、TENANT_ID の誤り、期限切れのシークレット、または条件付きアクセスポリシー。Microsoft Entra のエラーコードでどれかが分かります。
+
+| コード | 意味 | 対処 |
+|---|---|---|
+| `AADSTS7000215` | 無効なクライアントシークレット | **Secret ID** ではなくシークレットの **Value** を貼り付けるか、新しいシークレットを作成します |
+| `AADSTS700016` | テナントにアプリが見つからない | **APP_ID** と、入力したテナントにアプリが登録されていることを確認します |
+| `AADSTS90002` | テナントが見つからない | **TENANT_ID** を確認します |
+
+**対処:** 値が正しい場合は、条件付きアクセスポリシーがサービスプリンシパルのサインインをブロックしていないことを確認します。
 </Accordion>
 
 <Accordion title="クライアントシークレットの期限切れ">
-`az ad sp credential reset --id <appId>`を実行するか、**Microsoft Entra ID → App registrations → 対象のアプリ → Certificates & secrets** で新しいシークレットを作成します。接続のCLIENT_SECRETを更新してください。
+**原因:** シークレットが有効期限に達しました（CLI からの場合、デフォルトで 1 年）。
+
+**対処:** 新しいシークレットを作成し、**Microsoft Azure** の詳細パネルで **Replace credentials** をクリックして保存します。[クライアントシークレットをローテーションする](#クライアントシークレットをローテーションする)を参照してください。
 </Accordion>
 
-<Accordion title="Optimizeにコストデータがない">
-Optimizeが**Azure Cost Management is not readable**と表示します。サブスクリプションに**Cost Management Reader**を割り当ててください。サブスクリプションがMicrosoft Customer Agreementの場合は、請求プロファイルに**Billing profile reader**も割り当てます。ロール割り当ての反映には数分かかります。
+<Accordion title="Optimize に Azure Cost Management is not readable と表示される">
+**原因:** サービスプリンシパルにコストへのアクセス権がありません。
+
+**対処:** サブスクリプションに **Cost Management Reader** を割り当てます。Microsoft Customer Agreement のサブスクリプションでは、請求プロファイルに **Billing profile reader** も割り当てます。ロールの割り当ての反映には数分かかるため、その後に再試行してください。
 </Accordion>
 
-<Accordion title="Cost Managementが429を返す">
-新しいサブスクリプションではCost Managementのスロットリングが強く、クエリが`429 Too many requests`を返します。設定の誤りではありません。数分待ってからOptimizeを再読み込みしてください。
+<Accordion title="Cost Management が 429 を返す">
+**原因:** Cost Management は新しいサブスクリプションを強くスロットリングするため、クエリが `429 Too many requests` を返します。設定の誤りではありません。
+
+**対処:** 数分待ってから Optimize を再読み込みします。
 </Accordion>
 
-<Accordion title="リソースがない">
-表示したいすべてのサブスクリプションに**Reader**ロールが割り当てられていることを確認します。サービスプリンシパルが読み取れないサブスクリプションのリソースは表示されません。
-</Accordion>
+<Accordion title="リソースやサブスクリプションが見つからない">
+**原因:** サービスプリンシパルがそのサブスクリプションを読み取れません。
 
----
+**対処:** 表示されるべきすべてのサブスクリプションに **Reader** を割り当てます。Azure CLI タブの任意のループ手順で一度に行えます。ロールの割り当ての適用には最大 10 分ほどかかることがあるため、待ってから再度質問してください。
+</Accordion>
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **シークレットの有効期限を設定** — クライアントシークレットには常に有効期限を設定し、期限前にローテーションしてください。
-- **ロールのスコープを絞る** — ReaderとCost Management ReaderはCloudThinkerが必要とするサブスクリプションに割り当て、既定で管理グループレベルには割り当てないでください。
+- **シークレットに期限を設けてローテーションする**: クライアントシークレットには必ず有効期限を設定し、期限切れになる前に[ローテーション](#クライアントシークレットをローテーションする)してください。
+- **ロールのスコープを限定する**: CloudThinker が必要とするサブスクリプションにロールを割り当ててください。トレードオフについては[さらにサブスクリプションをカバーする](#セットアップ)ステップを参照してください。
 
----
-
-## 関連
+## 関連ページ
 
 <CardGroup cols={2}>
-  <Card title="AWS接続" icon="/images/icons/aws.svg" href="/ja/guide/connections/aws">
-    Amazon Web Servicesを接続
+  <Card title="Optimize クイックスタート" icon="chart-line" href="/guide/cost-optimization/quickstart">
+    Azure の支出と最初のコストの検出事項を確認します。
   </Card>
-  <Card title="エージェント" icon="shield-check" href="/ja/guide/agents/overview">
-    CloudThinker と、その作業の仕組み
+  <Card title="接続の概要" icon="plug" href="/ja/guide/connections/overview">
+    接続、テスト、最初の詳細調査の仕組み。
   </Card>
 </CardGroup>

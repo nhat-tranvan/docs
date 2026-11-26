@@ -1,173 +1,146 @@
 ---
 title: GitGuardian
-description: "GitGuardian を CloudThinker に接続してコード全体のシークレット検出、インシデント調査、ハニートークン監視を行う"
+description: "GitGuardian を接続し、エージェントがシークレットのインシデントをトリアージし、漏洩した認証情報の出所を追跡し、ハニートークンを確認できるようにします"
 icon: "/images/icons/gitguardian.svg"
 ---
 
+import ApprovalDefault from '/snippets/approval-default.mdx';
+
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
-GitGuardian ワークスペースを接続して、CloudThinker エージェントがリポジトリ全体のシークレットインシデントの参照、漏洩した認証情報の調査、ハニートークンの監視を行えるようにします。GitGuardian は **Personal Access Token（PAT）** で認証します。CloudThinker はダッシュボード URL から適切なエンドポイントを自動的に判別するため、US、EU、セルフホストのいずれのインスタンスでも同じセットアップ手順で動作します。
-
----
-
-## 対応プラットフォーム
-
-| プラットフォーム | URL |
-|----------|-----|
-| **GitGuardian US（SaaS）** | `https://dashboard.gitguardian.com` |
-| **GitGuardian EU（SaaS）** | `https://dashboard.eu1.gitguardian.com` |
-| **GitGuardian セルフホスト** | インスタンス URL（例：`https://gitguardian.your-company.com`） |
-
----
+GitGuardian のワークスペースを接続すると、CloudThinker のエージェントがシークレットのインシデントを一覧表示・トリアージし、漏洩した各認証情報をそのソースと出現箇所まで追跡し、ハニートークンを確認できるようになります。接続は GitGuardian の **Personal Access Token（PAT）** とダッシュボードの URL でサインインするため、同じセットアップが US、EU、セルフホストのインスタンスで機能します。
 
 ## 前提条件
 
-- レビューしたいインシデントへのアクセス権を持つ **GitGuardian ワークスペース**。
-- CloudThinker がアクセスすべきデータのスコープを持つ **Personal Access Token**。
-- ハニートークンの作成には：ワークスペースの **Manager** ロール。
+- エージェントに読ませたいインシデントを持つ GitGuardian ワークスペース。
+- そのワークスペースで Personal Access Token を作成する権限。
+- 接続を追加・編集できる、CloudThinker ワークスペースの **Admin** ロール。[Roles](/guide/security/roles) を参照してください。
+- ダッシュボードの URL。サインインしているアドレスを使います。
 
-<Info>
-PAT は付与したスコープと、作成したワークスペースメンバーのロールを継承します。CloudThinker が必要とする範囲をカバーしつつも最小権限のメンバーから発行してください。
-</Info>
-
----
+| インスタンス | GitGuardian の URL |
+|----------|-----------------|
+| US（SaaS） | `https://dashboard.gitguardian.com` |
+| EU（SaaS） | `https://dashboard.eu1.gitguardian.com` |
+| セルフホスト | インスタンスの URL（例: `https://gitguardian.example.com`） |
 
 ## セットアップ
 
 <Steps>
-  <Step title="GitGuardian を開く">
-    GitGuardian ダッシュボード（US、EU、またはセルフホスト URL）にサインインします。
-  </Step>
   <Step title="Personal Access Token を作成する">
-    サイドバーで **Settings** をクリックし、**API → Personal Access Tokens** に移動して **Create token** をクリックします：
+    GitGuardian にサインインします。サイドバーで **Settings → API → Personal Access Tokens** を開き、**Create token** をクリックします。
+
     - **Name**: `cloudthinker`
-    - **Expiration**: ローテーション期間を設定
-    - **Scopes**: CloudThinker がアクセスすべきデータのスコープを選択（まずは `incidents` から始めることを推奨）
+    - **Expiration**: ローテーションのポリシーに合った日付を選びます
+    - **Scopes**: `incidents`、`secrets`、`sources` の読み取り用（例: `incidents:read`）にチェックを入れます。これで確認用とプロンプト例のプロンプトをカバーできます。必要な場合にのみ、[必要な権限](#必要な権限)の他のスコープを追加します。
 
-    トークンを直ちにコピーします — 一度しか表示されません。
+    トークンはすぐにコピーしてください。GitGuardian は一度しか表示しません。
   </Step>
-  <Step title="CloudThinker に接続を追加する">
-    **Connections → GitGuardian** に移動し、以下を入力します：
-    - **GitGuardian URL**: ダッシュボードまたはインスタンスの URL
-    - **Personal Access Token**: 作成したトークン
+  <Step title="CloudThinker で接続を追加する">
+    **Settings → Workspace → Connections** を開き、**Discover** タブを開いて **GitGuardian** を選びます。次を入力します。
 
-    **Connect** をクリックします。CloudThinker がトークンを検証し、**Connected** ステータスを表示します。
+    - **GITGUARDIAN_URL**: 上の表のダッシュボードまたはインスタンスの URL
+    - **GITGUARDIAN_PERSONAL_ACCESS_TOKEN**: 作成したトークン
+
+    **Connect** をクリックします。
+
+    **成功時の状態:** Connections の一覧で GitGuardian に **Connected** と表示されます。その後、新しいチャットを開いて[確認用のプロンプト](#接続を確認する)を送り、トークンのスコープを確認します。
   </Step>
 </Steps>
 
 <Warning>
-Personal Access Token は作成直後にコピーしてください。GitGuardian は一度しか表示しないため、紛失した場合は新しいものを発行する必要があります。
+トークンを紛失すると、再表示できません。GitGuardian で新しいトークンを作成し、接続に貼り付けてください。
 </Warning>
-
----
 
 ## 接続の詳細
 
 | フィールド | 説明 | 例 |
 |-------|-------------|---------|
-| **GITGUARDIAN_URL** | GitGuardian ダッシュボードまたはインスタンスの URL | `https://dashboard.gitguardian.com` |
-| **GITGUARDIAN_PERSONAL_ACCESS_TOKEN** | GitGuardian Personal Access Token | — |
+| **GITGUARDIAN_URL** | ダッシュボードまたはセルフホストのインスタンスの URL。CloudThinker がそこから API のエンドポイントを導き出します。 | `https://dashboard.eu1.gitguardian.com` |
+| **GITGUARDIAN_PERSONAL_ACCESS_TOKEN** | ワークスペースの Personal Access Token | `<your-token>` |
 
-<Note>
-CloudThinker は URL から API エンドポイントを自動的に判別するため、US、EU、セルフホストのいずれの形式でも追加設定なしに動作します。
-</Note>
-
----
+2 つ目の GitGuardian ワークスペースに到達するには、独自のトークンを持つ別の接続として追加してください。
 
 ## 必要な権限
 
-GitGuardian のアクセスは **スコープ駆動型** です。各 PAT スコープが対応する機能ファミリーを解放します。機能が欠けている場合、接続の問題ではなくトークンにそのスコープが不足していることがほとんどです。
+PAT の各スコープが、エージェントの機能のグループを 1 つずつ利用可能にします。GitGuardian が `:read` と `:write` の両方を提供している場合は、`:read` を選んでください。エージェントが何かをできないと言う場合、たいていトークンにそのスコープがありません。
 
-CloudThinker がアクセスすべきデータのスコープを選択してください。インシデントのトリアージには `incidents` から始め、必要に応じて追加してください。
-
-| スコープ | 有効になる機能 |
+| スコープ | 利用可能になるもの |
 |-------|---------|
-| `scanning` | コンテンツに対してシークレットおよびセキュリティスキャンを実行する |
-| `incidents` | シークレットインシデントの参照、確認、管理 |
-| `secrets` | 検出されたシークレットとその発生場所の詳細にアクセスする |
-| `sources` | 監視中のソース（リポジトリ）を一覧表示・確認する |
+| `incidents` | シークレットのインシデントの一覧表示、調査、トリアージ。最低限のセット。 |
+| `secrets` | 検出されたシークレットと、それぞれの出現箇所の読み取り。最低限のセット。 |
+| `sources` | 監視対象のソース（リポジトリ）の一覧表示と調査。最低限のセット。 |
+| `scan` | 依頼に応じてコンテンツのシークレットをスキャン |
+| `honeytokens` | 読み取りでハニートークンを一覧表示。書き込みで作成。 |
 | `custom_tags` | カスタムタグの読み取りと管理 |
-| `honeytokens` | ハニートークンの一覧表示と作成 |
-| `members` | ワークスペースメンバーの表示と管理 |
-| `teams` | チームの表示と管理 |
 | `audit_logs` | ワークスペースの監査ログの読み取り |
-| `api_tokens` | API トークンの表示と管理 |
-| `ip_allowlist` | IP 許可リストの表示と管理 |
-| `health_checks` | 接続とトークンのヘルスを検証する |
 
 <Tip>
-CloudThinker が必要なスコープのみ付与してください。多くのスコープは個別の **読み取り** および **書き込み** アクセスを提供しています — 書き込み機能が必要でなければ読み取り専用を選択してください。
+PAT は、作成した人のワークスペースロールも継承します。必要なアクセス権を持つ中で最も権限の小さいメンバーから作成し、スコープに読み取りがある場合は常に読み取りを選んでください。
 </Tip>
-
----
 
 ## エージェントの機能
 
-接続後、エージェントは GitGuardian ワークスペースへのスコープ制御アクセスを持ちます。
+| 機能 | エージェントができること | 必要なスコープ | 承認 |
+|------------|--------------------|--------------|----------|
+| **Incident triage** | シークレットのインシデントを、ステータスと重大度とともに一覧表示・調査します | `incidents` | 不要 |
+| **Incident investigation** | 漏洩した認証情報の背後にあるソースと出現箇所を示します | `incidents`、`secrets`、`sources` | 不要 |
+| **Token inspection** | 接続されたトークンが持つスコープを報告します | 任意 | 不要 |
+| **Honeytokens** | ハニートークンとそのステータスを一覧表示します | `honeytokens` の読み取り | 不要 |
+| **Honeytoken creation** | 新しいハニートークンを作成します | `honeytokens` の書き込み | Approvals を経由 |
 
-| 機能 | 説明 |
-|------------|-------------|
-| **インシデントの参照** | シークレットインシデントの一覧表示・確認（ステータスと深刻度を含む） |
-| **インシデントの調査** | トリアージのために漏洩した認証情報、ソース、発生場所をレビューする |
-| **ハニートークン** | ハニートークンの一覧表示。Manager ロールがあれば新規作成も可能 |
-| **トークンの確認** | 接続済みトークンのスコープと機能を報告する |
+読み取りは確認なしで実行されます。ハニートークンの作成には `honeytokens:write` と **Manager** が作成したトークンが必要で、あなたが依頼した場合にのみ行われます。
 
-<Warning>
-ハニートークンの作成はワークスペースの状態を変更します。CloudThinker は書き込みを実行する前に明示的な[承認](/guide/approvals/overview)と Manager ロールのトークンを必要とします。
-</Warning>
+<ApprovalDefault />
+
+ハニートークンを作成するたびに確認されるようにするには、**Manual** を選びます。**Ask first** の [Rule](/guide/approvals/rules) を使えば、ハニートークンの作成だけを対象にできます。
 
 ### 接続を確認する
 
 ```text
-Verify the GitGuardian connection: confirm the token is valid and report which scopes it carries
+Check the GitGuardian connection, list the scopes on the token, and count open secret incidents
 ```
 
-### プロンプト例
+トークンのスコープの一覧と、オープン中のインシデント（**Triggered** または **Assigned** のステータスのインシデント）の件数が返されることを確認します。期待したスコープが表示されない場合は、トークンの更新が必要です。
+
+### プロンプトの例
 
 ```text
-List open GitGuardian secret incidents and alert on anything touching production repos
-Investigate the most recent secret incident and summarize the exposed credential and its sources
-Report which scopes the connected GitGuardian token carries
+List open GitGuardian incidents sorted by severity, with the repository for each one
+Investigate the newest GitGuardian incident and summarize the exposed credential and its sources
 ```
-
----
 
 ## トラブルシューティング
 
-<Accordion title="一部の GitGuardian ツールが表示されない">
-PAT に対応するスコープが不足しています。必要な GitGuardian スコープを追加して再発行または更新し、再接続してください。
+<Accordion title="Connect が失敗する、またはリクエストが 401 を返す">
+トークンが誤っている、期限切れ、または取り消されています。新しい Personal Access Token を作成します。**Settings → Workspace → Connections** で **GitGuardian** を開き、接続の行の鉛筆アイコンをクリックし、**Replace…** をクリックしてトークンを **GITGUARDIAN_PERSONAL_ACCESS_TOKEN** に貼り付け、**Save and test** をクリックします。
 </Accordion>
 
-<Accordion title="GitGuardian から 401 Unauthorized が返る">
-PAT が無効、期限切れ、または失効しています。新しい Personal Access Token を作成して CloudThinker の接続を更新してください。
+<Accordion title="リクエストが 403 を返す">
+トークンにそのリクエストのスコープがないか、作成者のワークスペースロールが不十分です。GitGuardian でスコープを追加し（ハニートークンの作成には **Manager** が必要です）、新しいトークンで接続を更新してください。
 </Accordion>
 
-<Accordion title="GitGuardian から 403 Forbidden が返る">
-トークンのスコープまたはワークスペースのロールが不十分です。必要なスコープまたはワークスペースロールを付与してください。ハニートークンへの書き込みには **Manager** ロールが必要です。
+<Accordion title="エージェントが機能を利用できないと言う">
+トークンに対応するスコープがありません。リクエストを[必要な権限](#必要な権限)と照合し、そのスコープを持つトークンを作成して、接続を更新してください。
 </Accordion>
 
-<Accordion title="リージョンまたはインスタンスが間違っている">
-インシデントが空になるか、エンドポイントに到達できません。**GitGuardian URL** がワークスペースのリージョン（US、EU）またはセルフホストインスタンスと一致していることを確認してください。
+<Accordion title="インシデントがない、またはエンドポイントに到達できない">
+**GITGUARDIAN_URL** が誤ったリージョンまたはインスタンスを指しています。US のトークンは EU のダッシュボードでは機能しません。サインインしている正確なアドレスを使ってください。
 </Accordion>
-
----
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **スコープ駆動型アクセス** — CloudThinker が必要なスコープのみ付与してください。スコープで読み取り専用アクセスが提供されている場合は読み取り専用を優先してください。
-- **書き込みには Manager ロール** — ハニートークンを作成する必要があるセットアップのために Manager ロールのトークンを確保し、ハニートークンの作成を承認ゲート付きに維持してください。
+- **まず読み取りスコープから**: `honeytokens:write` や Manager ロールのトークンは、エージェントにハニートークンを作成させたい場合にのみ追加してください。
+- **専用のトークン**: `cloudthinker` という名前にすれば、他のツールを壊さずに GitGuardian で取り消せます。
 
----
-
-## 関連
+## 関連ページ
 
 <CardGroup cols={2}>
-  <Card title="SonarQube 接続" icon="/images/icons/sonarqube.svg" href="/ja/guide/connections/sonarqube">
-    コード品質とセキュリティスキャン
+  <Card title="Semgrep Connection" icon="/images/icons/semgrep.svg" href="/guide/connections/semgrep">
+    ファイルをスキャンし、Semgrep のコードの検出事項を読みます。
   </Card>
-  <Card title="Atlassian 接続" icon="/images/icons/atlassian.svg" href="/ja/guide/connections/atlassian">
-    インシデントを Jira 課題として追跡する
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    どの GitGuardian の変更を人の判断待ちにするかを制御します。
   </Card>
 </CardGroup>

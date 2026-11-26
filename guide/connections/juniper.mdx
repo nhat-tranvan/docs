@@ -1,0 +1,146 @@
+---
+title: Juniper Junos
+description: "Connect a Junos router, switch, or SRX firewall so agents can check interfaces, BGP peers, and alarms, and change an interface with approval"
+icon: "/images/icons/juniper.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+import ApprovalDefault from '/snippets/approval-default.mdx';
+
+Connect a Juniper device that runs Junos, such as an MX router, EX switch, or SRX firewall, so CloudThinker agents can find down interfaces, BGP peers and OSPF neighbors that aren't up, and chassis alarms. Through your [Approvals](/guide/approvals/overview), agents can also disable or enable one interface, set its description, or clear its counters. The connection signs in to the Junos REST API with a Junos login.
+
+## Prerequisites
+
+- A Junos device with the REST API service on HTTPS. The REST API listens on port 3443 unless you set another port. See [Juniper's REST API configuration guide](https://www.juniper.net/documentation/us/en/software/junos/rest-api/topics/task/rest-api-configuring.html).
+- An HTTPS address CloudThinker can reach. Network devices usually sit on a private network, so follow [Reaching private services](/guide/connections/overview#reaching-private-services).
+- A Junos administrator who can create a login class and a user.
+- The **Admin** role in your CloudThinker workspace. See [Roles](/guide/security/roles).
+
+The connection covers one device. To add the next device, open the card's **More** menu and choose **Add another**.
+
+## Setup
+
+<Steps>
+  <Step title="Create the login in Junos">
+    On the device, create a login class with only the permission flags you need, then a user in that class, such as `cloudthinker`. See [Required permissions](#required-permissions) and [Juniper's access privilege guide](https://www.juniper.net/documentation/us/en/software/junos/user-access/topics/topic-map/junos-os-access-privileges.html).
+  </Step>
+  <Step title="Connect in CloudThinker">
+    Open **Settings → Workspace → Connections**, open the **Discover** tab, and select **Juniper Junos**. Click **Connect**, fill in the fields below, then click **Connect** in the dialog. CloudThinker reads the device's software version to check the login.
+
+    **Success state:** the connection shows a **Connected** status and the message `Juniper Junos connected and runs Junos <version>.` CloudThinker then opens a chat that takes a read-only deep look at the connection ("Often takes about 15 min. You can leave the chat."). To run it again later, open the card's **More** menu and choose **Try in chat**.
+  </Step>
+</Steps>
+
+## Connection details
+
+| Field | Required | Description |
+|---|---|---|
+| **Junos REST API URL** | Yes | The HTTPS address of the device's REST API service, with its port and no path, such as `https://router1.example.com:3443` |
+| **Username** | Yes | A Junos login. It can't contain a colon |
+| **Password** | Yes | The password of that login |
+| **CA certificate (optional)** | No | The PEM of the private CA that issued the device certificate, up to 64 KiB. Leave it empty to use public trust. CloudThinker always checks the certificate and hostname |
+
+CloudThinker refuses redirects, so enter the exact address and port the REST API answers at.
+
+## Required permissions
+
+Junos permission flags are not cumulative, so the login class must list every flag it needs.
+
+| Goal | Permission flags |
+|---|---|
+| Read interfaces, routing, alarms, and the software version | `view` |
+| Disable or enable an interface, or set its description | `view`, `configure`, and `interface-control` |
+| Clear an interface's counters | `view` and `clear` |
+
+<Tip>
+Start with `view` only. Add the other flags when you want agents to make interface changes, and keep **Allow writes** off until then.
+</Tip>
+
+## Agent capabilities
+
+| Capability | What agents can do | Checked by Approvals |
+|---|---|---|
+| **Device overview** | Read the host name, model, Junos version, chassis and system alarms, interface totals, and BGP peers that are down | No |
+| **Interfaces** | List interfaces that are down, or read one interface's speed, MTU, last flap, packets, errors, drops, and addresses | No |
+| **Routing** | Read BGP peers with AS, state, uptime, flaps, and prefixes, OSPF neighbors, and route counts per table | No |
+| **Interface state** | Disable or enable one physical interface | Yes |
+| **Interface description** | Set or clear one interface's description | Yes |
+| **Interface counters** | Clear one interface's counters | Yes |
+
+Interface counters count from the last boot or the last clear, not from a time window.
+
+## Write access
+
+Before it asks, the agent names the device, the interface, its current admin and link state, and the change. It makes one change on one physical interface per approval, then reads the interface again and reports the state before and after. To disable or enable an interface, CloudThinker commits with a confirmed commit that Junos rolls back after 5 minutes unless the read-back confirms the change.
+
+Disabling an interface drops every link and session on it. Agents can't change management or loopback interfaces, other configuration, or routing policy, and they can't roll back or reboot the device. Make those changes on the device.
+
+**Allow writes** starts on. To lock writes, open **Juniper Junos** in **Settings → Workspace → Connections** and turn off **Allow writes** on its detail panel. Two or more Juniper connections in one workspace turn writes off for all of them, because an approved change can't name which device it targets.
+
+<ApprovalDefault />
+
+### Verify the connection
+
+```text
+Summarize my Juniper device: model, Junos version, active alarms, interfaces that are down, and BGP peers that are not established.
+```
+
+### Example prompts
+
+```text
+Which interfaces on my Juniper router are enabled but link down, and what do their descriptions say?
+Show input errors, drops, and the last flap for ge-0/0/1
+Disable interface ge-0/0/5 on my Juniper switch
+```
+
+## Troubleshooting
+
+<Accordion title="The device rejected the username and password.">
+Check both values on the device, then edit the connection and connect again.
+</Accordion>
+
+<Accordion title="The login signed in, but its class cannot run operational commands. Give it view permissions.">
+Add the `view` permission flag to the login's class, then connect again. During a change, a permission error means the class lacks `configure`, `interface-control`, or `clear`.
+</Accordion>
+
+<Accordion title="That address has no Junos REST API. Check the URL and port, and that system services rest https is configured.">
+Check the port in **Junos REST API URL** and that the REST API is turned on for HTTPS on the device.
+</Accordion>
+
+<Accordion title="The device certificate is not trusted. Install a certificate issued by a trusted authority, or paste your private CA certificate.">
+The REST API uses a self-signed or private certificate. Paste the CA certificate that issued it into **CA certificate (optional)**.
+</Accordion>
+
+<Accordion title="The CA certificate must be PEM certificate blocks only, up to 64 KiB. Paste the CA certificate that issued the device certificate, then test again.">
+Paste the full certificate, including its `BEGIN CERTIFICATE` and `END CERTIFICATE` lines, and nothing else.
+</Accordion>
+
+<Accordion title="The device answered with a redirect. Use the exact HTTPS address of the Junos REST API service, including its port.">
+Enter the `https://` address and port the REST API serves directly.
+</Accordion>
+
+<Accordion title="Could not reach the device over HTTPS. Check the URL, the port, and that the sandbox can reach it.">
+CloudThinker couldn't open a connection to the device. Check the address and port, and that your firewall lets CloudThinker reach it.
+</Accordion>
+
+<Accordion title="The device refused a change">
+Another user may hold the configuration lock, or the commit check failed. The agent reports the error and doesn't retry. Fix the cause on the device, then ask again.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- Give the login only the flags it needs, and keep it out of the `super-user` class.
+- Keep **Allow writes** off on production devices unless you want agents to change interfaces.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    Decide which changes run, wait for a person, or are refused.
+  </Card>
+  <Card title="F5 BIG-IP" icon="/images/icons/f5.svg" href="/guide/connections/f5">
+    Review applications, firewall policies, DNS, and device state.
+  </Card>
+</CardGroup>

@@ -1,143 +1,139 @@
 ---
 title: AWX
-description: "Ansible AWX を CloudThinker に接続してジョブテンプレートの起動、ジョブの監視、インベントリ管理、自動化ワークフローのオーケストレーションを行う"
+description: "Ansible AWX を接続して、エージェントが失敗したジョブの特定、インベントリとプロジェクトの確認、Approvals を経たジョブテンプレートの起動を行えるようにします"
 icon: "/images/icons/awx.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
-Ansible AWX サーバーを接続して、CloudThinker エージェントがジョブテンプレートの起動、ジョブの監視、インベントリとホストの管理、プロジェクトの同期、自動化ワークフローのオーケストレーションを行えるようにします。AWX は読み取りまたは書き込み操作にスコープされた **ユーザーアクセストークン** で認証します。
-
----
+AWX を接続すると、CloudThinker エージェントが失敗したジョブを見つけてその出力を読み、インベントリ、ホスト、プロジェクトを確認し、承認を経てジョブテンプレートを起動できるようになります。この接続は 1 つの AWX **access token** でサインインし、サーバーに対して `awx` コマンドラインツールを実行します。
 
 ## 前提条件
 
-- CloudThinker から HTTPS でアクセス可能な **セルフホスト AWX または Ansible Automation Platform**（Controller/Tower）インスタンス。
-- CloudThinker がアクセスすべき組織とインベントリへのアクセス権を持つ **AWX ユーザー**。
-
----
+- CloudThinker から HTTPS で到達できる AWX サーバー、または Ansible Automation Platform コントローラー。プライベートネットワーク上のサーバーについては、[Reaching private services](/ja/guide/connections/overview#プライベートサービスへの到達) を参照してください。
+- エージェントにアクセスさせる組織、インベントリ、テンプレートへのアクセス権を持つ、CloudThinker 用の AWX ユーザー。
 
 ## セットアップ
 
 <Steps>
-  <Step title="AWX にサインインする">
-    AWX の Web インターフェースにサインインします。CloudThinker が必要とする組織とインベントリのみにスコープされた専用ユーザーを使用してください。
+  <Step title="CloudThinker 用のユーザーを作成する">
+    AWX で `cloudthinker` などのユーザーを作成し、エージェントに必要なリソースにのみロールを付与します（[必要な権限](#必要な権限)を参照）。専用ユーザーにすることで、トークンの到達範囲を小さく保ち、失効させやすくなります。
   </Step>
   <Step title="アクセストークンを作成する">
-    **Access → Users** に移動し、ユーザーを開いて **Tokens** タブを選択し、**Add** をクリックします：
-    - **Application**: 空白のまま
-    - **Scope**: 全操作の場合は **Write**、監視のみの場合は **Read**
+    そのユーザーでサインインします。ユーザーメニューを開いて **User Details** を選択し、**Tokens** タブで **Add** をクリックします。
 
-    トークンをコピーします — AWX に表示されるのは一度だけです。
+    - **Application**: 空のまま
+    - **Scope**: 監視のみの場合は **Read**、エージェントに起動や変更をさせる場合は **Write**
+
+    トークンをコピーしてください。AWX は一度しか表示しません。トークンは AWX の OAuth 2 設定で定めた期間が過ぎると失効するため、日付を控えておき、それまでに新しいトークンを作成してください。
   </Step>
-  <Step title="CloudThinker に接続を追加する">
-    **Connections → AWX** に移動し、以下を入力します：
-    - **TOWER_HOST**: AWX のアドレス（例：`https://awx.your-domain.com`）
-    - **TOWER_OAUTH_TOKEN**: 前のステップで取得したトークン
+  <Step title="CloudThinker で接続を追加する">
+    **Settings → Workspace → Connections** を開き、**Discover** タブを開いて **AWX** を選択します。次を入力します。
 
-    **Connect** をクリックします。CloudThinker が認証情報を検証し、**Connected** ステータスを表示します。
+    - **TOWER_HOST**: AWX のアドレス（例: `https://awx.example.com`）
+    - **TOWER_OAUTH_TOKEN**: コピーしたトークン
+
+    **Connect** をクリックします。CloudThinker はトークンで `awx me` を実行し、サインインできることを確認します。
+
+    **成功時の状態:** ダイアログが閉じ、接続に **Connected** と表示されます。下の確認用プロンプトを実行してください。
   </Step>
 </Steps>
-
----
 
 ## 接続の詳細
 
 | フィールド | 説明 | 例 |
 |-------|-------------|---------|
-| **TOWER_HOST** | AWX インスタンスのベース URL | `https://awx.your-domain.com` |
-| **TOWER_OAUTH_TOKEN** | AWX ユーザーアクセストークン | — |
-
----
+| **TOWER_HOST** | AWX サーバーのベース URL（HTTPS） | `https://awx.example.com` |
+| **TOWER_OAUTH_TOKEN** | CloudThinker ユーザーの AWX パーソナルアクセストークン。フィールド名には AWX の旧称 Tower が残っています | `<your-token>` |
 
 ## 必要な権限
 
-エージェントができることはトークンのスコープによって異なります。
+エージェントができることは、トークンのスコープと AWX でのユーザーのロールの 2 つで決まります。トークンがユーザー以上の操作をすることはできません。**Write** トークンでは、ユーザーのロールが上限となり、その範囲内で Approvals が各操作を判断します。CloudThinker 側でもすべての書き込みをブロックするには、AWX 接続の詳細パネルで **Allow writes** スイッチをオフにしてください。
 
-- **Read** — ジョブの一覧表示、インベントリの確認、プロジェクトのステータス確認、スケジュールの確認、設定の閲覧。
-- **Write** — すべての読み取り操作に加えて、ジョブの起動、アドホックコマンドの実行、実行中ジョブの制御、プロジェクトの同期、ホスト・グループ・スケジュールの管理。
+| 目的 | トークンのスコープ | ユーザーの AWX ロール |
+|------|-------------|------------------------|
+| ジョブ、インベントリ、プロジェクトの監視 | **Read** | 監視する組織またはリソースに対する **Read** |
+| 選択したジョブテンプレートの起動 | **Write** | 対象のジョブテンプレートまたはワークフローテンプレートに対する **Execute** |
+| プロジェクトの同期 | **Write** | 対象プロジェクトに対する **Update** |
+| ホストとグループの変更 | **Write** | 対象インベントリに対する **Admin** |
 
 <Tip>
-監視のみの場合は Read スコープのトークンを使用してください。エージェントがリソースの起動や変更を行う必要がある場合は Write スコープを追加し、CloudThinker でそれらのアクションに承認ゲートを設定してください。
+まず Read トークンから始めてください。エージェントに実行させたいテンプレートがある場合にのみ Write に切り替え、組織全体のロールではなくテンプレートごとに **Execute** を付与してください。
 </Tip>
-
----
 
 ## エージェントの機能
 
-エージェントができることはトークンのスコープによって異なります。
+| 機能 | エージェントができること | 承認 |
+|------------|--------------------|----------|
+| **Discovery** | サインイン中のユーザー、組織、インベントリ、プロジェクト、ジョブテンプレート、ワークフローテンプレート、最近のジョブの概要をまとめる | 不要 |
+| **Jobs** | ジョブとワークフロージョブをステータス別に一覧表示し、ジョブの詳細と完了したジョブの出力を読む | 不要 |
+| **Inventories** | インベントリ、ホスト、グループを確認する | 不要 |
+| **Projects** | プロジェクトのソース管理と同期ステータスを確認する | 不要 |
+| **Templates and credentials** | ジョブテンプレート、ワークフローテンプレート、認証情報のメタデータを読む。認証情報のシークレットは返されません | 不要 |
+| **Launch** | 追加変数を指定してジョブテンプレートまたはワークフローテンプレートを起動し、完了まで追跡する。テンプレートで **Variables** の **Prompt on launch** がオンになっている必要があります | 必要 |
+| **Control and sync** | 実行中のジョブをキャンセルする、またはソース管理からプロジェクトを同期する | 必要 |
+| **Change resources** | ホスト、グループ、その他の AWX リソースを作成、変更、削除する | 必要 |
 
-**Read — 監視・確認：**
+すべての書き込みは [Approvals](/guide/approvals/overview) を経由し、却下されたリクエストは再試行されません。Read トークンでは、承認後であっても AWX が書き込みを拒否します。
 
-| 機能 | 説明 |
-|------------|-------------|
-| **ジョブの監視** | ジョブとワークフロー実行の一覧表示、ステータス確認、出力の読み取り |
-| **インベントリの確認** | インベントリ、ホスト、グループの表示。到達不能または無効なホストの特定 |
-| **プロジェクトのステータス確認** | 同期ステータスとソースコントロールの状態を確認 |
-| **スケジュールの確認** | スケジュールと今後の実行を一覧表示 |
-| **設定の確認** | ジョブテンプレート、ワークフローテンプレート、インベントリソース、クレデンシャルタイプを表示 |
-
-**Write — 操作を追加（承認が必要）：**
-
-| 機能 | 説明 |
-|------------|-------------|
-| **ジョブの起動** | 追加変数を指定してジョブテンプレートを実行し、完了まで監視する |
-| **アドホックコマンドの実行** | テンプレートなしでホストに対して単発コマンドを実行する |
-| **実行中ジョブの制御** | 実行中のジョブをキャンセルし、失敗したジョブを再起動する |
-| **プロジェクト・インベントリの同期** | ソースコントロールからプロジェクト更新を取得し、動的インベントリをリフレッシュする |
-| **ホスト・グループ・スケジュールの管理** | 追加、更新、削除、ホストの有効/無効切り替え |
-| **ワークフローのオーケストレーション** | ワークフロージョブテンプレートを起動し、承認ノードを承認または拒否する |
-
-管理リソース（組織、チーム、ユーザー、RBAC）はエージェント操作の対象外です。
-
-### 接続を確認する
+### 接続の確認
 
 ```text
-List all AWX inventories and show any unreachable hosts
+Run AWX discovery and summarize my organizations, inventories, job templates, and the last few jobs with their status
 ```
+
+CloudThinker がサインインしたユーザー、各リソースタイプの名前と件数、そして **successful** や **failed** などのステータス付きの最近のジョブが表示されるはずです。
 
 ### プロンプト例
 
 ```text
-List failed AWX jobs in the last 24 hours and report their output
-Launch the deploy-production job template with version=2.1.0 and monitor it
-Check all AWX projects for sync failures and recommend updates
+List AWX jobs that failed in the last 24 hours and show the error from each job's output
+Which AWX projects failed their last source control sync?
+Launch the deploy-web job template with extra vars version=2.1.0 and tell me when it finishes
 ```
 
----
+実際のテンプレート名、インベントリ名、プロジェクト名を使ってください。エージェントは先に名前を検索し、ID を推測しません。
 
 ## トラブルシューティング
 
-<Accordion title="接続または認証に失敗した">
-AWX の URL が CloudThinker から HTTPS でアクセス可能か確認してください。トークンが期限切れまたは失効していないか確認し、必要であれば新しいトークンを作成して再接続してください。
+<Accordion title="Connect が Failed to connect to AWX で失敗する">
+CloudThinker が **TOWER_HOST** に対して `awx me` を実行できませんでした。サーバーに到達できない場合もトークンが不正な場合も、ダイアログには同じメッセージが表示されるため、両方を確認してください。まず、ネットワークの外からブラウザで **TOWER_HOST** を開きます。HTTPS で読み込める必要があります。読み込める場合は、トークンが失効しているか取り消されています。新しいトークンを作成し、接続を編集して貼り付けてください。
 </Accordion>
 
-<Accordion title="権限が拒否された">
-トークンのスコープが要求されたアクションを許可していません。起動、同期、管理操作には Write スコープのトークンを使用し、ユーザーが対象の組織またはインベントリへのアクセス権を持っているか確認してください。
+<Accordion title="リクエストが 401 を返す">
+トークンがないか、失効しているか、取り消されています。CloudThinker ユーザーの新しいトークンを作成し、**TOWER_OAUTH_TOKEN** を更新してください。
 </Accordion>
 
-<Accordion title="結果が空になる">
-トークンのユーザーが要求したリソースへの可視性を持っていません。AWX で関連する組織とインベントリへのアクセスを付与してから再試行してください。
+<Accordion title="起動や同期が拒否される">
+トークンのスコープが **Read** であるか、ユーザーにテンプレートの **Execute** またはプロジェクトの **Update** がありません。Write トークンを作成するか AWX でロールを付与してから、もう一度依頼してください。
 </Accordion>
 
----
+<Accordion title="一覧が空で返ってくる">
+ユーザーがそれらのリソースを参照できません。エージェントにアクセスさせる組織またはインベントリに **Read** を付与してください。再接続は不要です。ロールは次のリクエストから適用されます。
+</Accordion>
+
+<Accordion title="起動時に追加変数が無視される">
+テンプレートが許可していない限り、AWX は追加変数を破棄します。ジョブテンプレートを編集して **Variables** の **Prompt on launch** をオンにし、もう一度起動してください。
+</Accordion>
+
+<Accordion title="ジョブの出力が空">
+AWX はジョブの完了後にのみ出力を返します。ジョブのステータスが **successful** または **failed** になってから、もう一度依頼してください。
+</Accordion>
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **必要な場合のみ Write スコープを使用** — 監視には Read スコープのトークンを使用し、エージェントがリソースを起動または変更する必要がある場合のみ Write スコープを有効化してください。
-- **HTTPS のみ** — 常に HTTPS の AWX URL を使用してください。平文接続はアクセストークンを漏洩させる危険があります。
+- **まず Read スコープ**: エージェントに起動や変更をさせる場合にのみ Write トークンを使い、ユーザーのロールをそれらのテンプレートに限定してください。
+- **HTTPS のみ**: **TOWER_HOST** には常に HTTPS を使ってください。プレーンな HTTP ではトークンが平文で送信されます。
 
----
-
-## 関連
+## 関連情報
 
 <CardGroup cols={2}>
-  <Card title="ArgoCD 接続" icon="/images/icons/argocd.svg" href="/ja/guide/connections/argocd">
-    GitOps 運用とアプリケーション管理
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    どの AWX 起動を人の承認待ちにするかを決めます。
   </Card>
-  <Card title="Jenkins 接続" icon="/images/icons/jenkins.svg" href="/ja/guide/connections/jenkins">
-    CI/CD パイプラインの監視とジョブ操作
+  <Card title="Automation" icon="clock" href="/guide/automation/automations">
+    毎日の失敗ジョブレポートなど、AWX のチェックをスケジュールで実行します。
   </Card>
 </CardGroup>

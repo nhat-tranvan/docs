@@ -1,150 +1,263 @@
 ---
 title: Agent CLI
-description: "自分のリポジトリでローカルコーディングエージェントを実行し、CloudThinker Sandbox とワークスペースの承認を通じてクラウドを読み書きします"
+description: "リポジトリで CloudThinker Agent を実行し、ローカルでコードを編集しながら、承認付きのワークスペース接続を通じてクラウドにアクセスします。"
 icon: laptop-code
 ---
 
+CloudThinker Agent は、ターミナルで動作するコーディングエージェントです。あなたのマシン上でファイルを編集しコマンドを実行し、クラウドにはワークスペースの[接続](/ja/guide/connections/overview)を通じてのみアクセスします。そのため、クラウドの認証情報がノート PC に置かれることはありません。
+
 <Note>
-**プレビュー** — `cloudthinker agent` は macOS と Linux 向けの CloudThinker CLI に同梱され、有料のワークスペースプランが必要です。プレビューへの参加は[こちらからお問い合わせ](https://cloudthinker.io/contact)ください。
+エージェントは macOS と Linux（x86_64 と arm64）で動作します。CLI は Windows にもインストールできますが、エージェントの Windows ビルドはありません。有料プラン（Team、Scale、Enterprise）が必要です。Free のワークスペースでは、セッションの開始がアップグレードの案内とともに拒否されます。[料金](/ja/guide/billing/pricing)を参照してください。
 </Note>
 
-`cloudthinker agent` はターミナルで動くコーディングエージェントで、[pi](https://github.com/earendil-works/pi) を基盤にしています。ファイルの編集とコマンド実行は自分のマシンで行い、クラウドへはワークスペースのコネクションを使って CloudThinker Sandbox 経由でのみ到達します。
+## 前提条件
 
-## Agent CLI を使う理由
-
-- **リポジトリはローカルのまま。** モデルのループ、ファイル編集、シェルコマンドはすべて手元のノート PC で動きます。
-- **クラウド認証情報をマシンに置かない。** クラウドコマンドは CloudThinker Sandbox で実行され、コネクションの認証情報はその実行のためだけに注入されます。
-- **ワークスペースのルールが適用される。** クラウドへの書き込みは、チャットと同じ [Rules](/guide/approvals/rules) と [Approval mode](/guide/approvals/approval-mode) に従います。
-- **すべてのセッションがミラーされる。** チームメイトはブラウザーでセッションを閲覧でき、ワークスペースが監査と課金を行います。
+- CloudThinker CLI がインストールされ、ログイン済みであること。[CLI](/ja/guide/cli/overview) と [CLI 認証](/ja/guide/cli/authentication)を参照してください。
+- エージェントにクラウドを操作させたい場合は、ワークスペースに少なくとも 1 つの接続（[AWS](/ja/guide/connections/aws) や [Kubernetes](/ja/guide/connections/kubernetes) など）。ローカルの作業には不要です。
 
 ## セッションを開始する
 
 <Steps>
-  <Step title="インストールしてログインする">
-    [CloudThinker CLI](/ja/guide/cli/overview) をインストールし、`cloudthinker login` を実行します。認証情報がない場合はエージェントがブラウザーログインを実行します。
-  </Step>
-  <Step title="リポジトリでエージェントを実行する">
+  <Step title="リポジトリを開いてエージェントを実行する">
     ```bash
     cd my-terraform-repo
-    cloudthinker agent
+    cloudthinker
     ```
 
-    初回実行時に、CLI がプラットフォーム向けのエージェントバンドルをダウンロードし、チェックサムを検証します。
-  </Step>
-  <Step title="ヘッダーを読む">
-    ヘッダーにはワークスペース、ユーザー、セッションのリンク、そしてワークスペースの承認モードが `· Auto` または `· Manual` として表示されます。
+    引数なしの `cloudthinker` と `cloudthinker agent` は同じ動作です。まだログインしていない場合、エージェントがブラウザでのログインを開始します。他のコマンドはそうしません。終了コード 3 で終了し、`cloudthinker login` を実行するよう案内します。
 
-    **成功状態:** フッターに `◆ 0.00 credits` が表示され、最初のプロンプトを入力できます。
+    初回実行時、CLI はプラットフォーム用のエージェントビルドをダウンロードし、リリースの SHA-256 チェックサムで検証して、`~/.cloudthinker/agent/bin/<version>/` にインストールします。以降の実行ではそれを再利用します。このステップが失敗すると、原因とともに `agent install failed:` が表示され、終了コード 1 で終了します。プロキシ環境では `HTTPS_PROXY` を設定し、プロキシが HTTPS を再署名する場合は `SSL_CERT_FILE` も設定します。[Environment variables](/ja/guide/cli/reference#環境変数) を参照してください。
+  </Step>
+  <Step title="起動画面を確認する">
+    ヘッダーには、ワークスペース、ユーザー、セッションリンク、ワークスペースの Approval mode（`· Auto` または `· Manual`）が表示されます。その下の 2 行に、作業が実行される場所が表示されます。
+
+    - `[L] this machine <folder>` とローカルツール
+    - `[C] sandbox workspace <name> - <N> connections` とクラウドツール。これらはワークスペースマシン上で実行されます（起動行では sandbox workspace と呼ばれます。[作業が実行される場所](#作業が実行される場所)を参照）
+
+    **成功時の状態:** プロンプトが入力可能になり、フッターにワークスペース、Approval mode、`◆ 0.00 credits`、接続が表示されます。
+  </Step>
+  <Step title="タスクを与える">
+    やりたいことを平易な言葉で入力します。エージェントが初めての場合は、`/skill:tour` を実行してください。ローカルとクラウドの作業、接続、承認を説明するガイド付きの初回セッションです。
+
+    クラウドの調査の例です。`[C]` の読み取り行の後、リポジトリを読む `[L]` の行が続きます。
+
+    ```text
+    Why is the api deployment in staging restarting? Check the pod events and logs, then tell me which commit in this repo is the likely cause.
+    ```
+
+    ローカル編集の例です。`[L]` の読み取りと編集の行が表示され、クラウドへの書き込みはありません。
+
+    ```text
+    Add a lifecycle rule to the logs bucket in main.tf that expires objects after 90 days. Don't apply it.
+    ```
+
+    セッションを終了するには `/quit`（または `/exit`）と入力します。クラウドですでに実行中の作業は継続します。終了時、エージェントはこのセッションを再開するコマンド `cloudthinker agent --session <id>` を表示します。
   </Step>
 </Steps>
 
-## 2 つの実行環境
+## 作業が実行される場所
 
-エージェントは 2 つの場所で動作でき、どちらを使っているかを常に示します。
+すべてのツール呼び出しの行は `[L]` または `[C]` で始まるため、どのマシンが作業したかが常に分かります。
 
-| 環境 | そこで動くもの | 認証情報 |
-|---|---|---|
-| **自分のマシン** | pi のローカルツール: bash、read、write、edit、grep、find、ls | CloudThinker からの認証情報はなし |
-| **CloudThinker Sandbox** | `ct_sandbox_read` と `ct_sandbox_write` | ワークスペースのコネクション認証情報。実行ごとに注入され、マシンには決して送られません |
+<Frame caption="ローカルツールはあなたのマシンで実行されます。エージェントが読んだ内容はモデルに送られ、接続の認証情報はワークスペースマシンにとどまります。">
+  <img src="/images/cli/diagram-where-work-runs-light.svg" alt="Local tools run as your OS user on your machine and send prompts and what they read to the model gateway and the Agent CLI mirror, while connection credentials stay on the workspace machine" className="block dark:hidden" style={{width: '100%'}} />
+  <img src="/images/cli/diagram-where-work-runs-dark.svg" alt="Local tools run as your OS user on your machine and send prompts and what they read to the model gateway and the Agent CLI mirror, while connection credentials stay on the workspace machine" className="hidden dark:block" style={{width: '100%'}} />
+</Frame>
 
-コネクションは Sandbox が使える認証情報であり、3 つ目の環境ではありません。エージェントはチャットで CloudThinker が見るのと同じコネクション情報を、毎ターン更新して参照します。ブラウザーで追加したコネクションは次のプロンプトから使えます。
+| タグ | 場所 | 実行されるもの | 認証情報 |
+|---|---|---|---|
+| `[L]` | あなたのマシン | ローカルツール: `bash`、`read`、`write`、`edit`、`grep`、`find`、`ls` | CloudThinker からは提供されません。コマンドはあなたの OS ユーザーとして実行されます。**Manual** では、ファイル編集や何かを変更する可能性のあるコマンドの前に確認されます |
+| `[C]` | ワークスペースマシン | クラウドの読み取り、クラウドへの書き込み、委任された作業 | ワークスペース接続の認証情報。その実行に使われ、あなたのマシンには送られません |
 
-1 つのコマンドで、名前付きの AWS と GCP のコネクションを GitLab と組み合わせて使えます。どのエイリアスを使うかをエージェントに伝えてください。クラウド実行ごとに認証情報とローカルのファイル変更は分離され、新たに宣言された出力ファイルだけがワークスペースに戻り、既存ファイルは上書きされません。
+ワークスペースマシン（起動時に `sandbox workspace` と表示され、クラウドツールが `ct_sandbox_*` という名前なのはこのためです）は、ワークスペース全体で共有する CloudThinker ホストのマシンです。使い捨てのシェルではありません。ワークスペースのメモリ、スキル、以前の実行が残したファイルを保持します。各セッションにはそこに専用のフォルダーが割り当てられますが、マシンは共有されているため、実行がそこに書き込んだファイルはチームメイトの実行からも見えると考えてください。各接続の CLI がそこにインストールされ、その接続の認証情報で認証されています。ワークスペースのデータの保存方法は [Data protection](/guide/security/data-protection) を参照してください。
 
-## クラウドツール
+エージェントは、チャットと同じワークスペースの接続一覧を受け取り、毎ターンの前に更新します。認証情報は含まれません。ブラウザで追加した接続は、次のプロンプトから利用できます。
 
-| ツール | 用途 | 実行場所 |
-|---|---|---|
-| `ct_sandbox_read` | バケットの一覧やデプロイの詳細確認など、範囲を限定した読み取り専用の調査 | CloudThinker Sandbox |
-| `ct_sandbox_write` | ロールアウトの再起動など、名前を挙げられる状態変更コマンド 1 つ | ワークスペースの判断後に CloudThinker Sandbox |
-| `ct_ask` | 過去インシデントの記憶、専門エージェント、依存関係のある複数手順など、ワークスペース自体が必要な作業 | CloudThinker、リンクされた会話の中で |
+<Warning>
+`[L]` ツールは承認 Rules を経由しません。**Auto** では確認なしで実行されます。**Manual** では、ファイルの編集や書き込み、何かを変更する可能性のあるコマンドの前に、ターミナルに **Manual mode: local change** が表示され、**Run**（`y`）または **Decline**（`n`）を選びます。`ls`、`cat`、`rg`、`git status`、`kubectl get`、`aws describe`/`list`/`get` などの読み取り専用コマンドは確認なしで実行されます。ローカルの `bash` は、`AWS_PROFILE` や kubeconfig など、シェルがすでに持っているものを使って実行されます。読み取り専用のセッションにするには `cloudthinker agent --tools read,grep,find,ls` でエージェントを起動するか、`--exclude-tools bash,write,edit` でツールをオフにします。
+</Warning>
 
-`ct_ask` はセッションごとに CloudThinker のスレッドを 1 つ開き、それを再利用します。`ct_run_status` は承認後に一時停止した実行を再開します。
+セッションを完全にローカルに保つには、`/cloud off` を実行します。クラウドツールと委任が非表示になります。クラウドですでに実行中の作業は継続します。`/cloud on` で元に戻ります。
 
-## クラウド書き込みを承認する
+## エージェントがクラウドでできること
 
-クラウドへの書き込みは呼び出しではなく、ワークスペースが判断するリクエストです。まず [Rules](/guide/approvals/rules) が判断し、次に [Approval mode](/guide/approvals/approval-mode) が判断します。エージェントが書き込みを要求すると、ターミナルはエディターの上に理由、コネクション、コマンド、ブラウザーリンクを載せたカードを固定表示します。
+| ツール | 用途 | 例 | 承認 |
+|---|---|---|---|
+| `ct_sandbox_read` | 読み取り専用のコマンド 1 つ | S3 バケットの一覧、デプロイメントの describe、CloudWatch ログの読み取り | 承認不要 |
+| `ct_sandbox_write` | 名前を挙げられる状態変更コマンド 1 つ | `kubectl rollout restart deployment/api` | 常にワークスペースが判断します。[クラウドへの書き込みを承認する](#クラウドへの書き込みを承認する)を参照 |
+| `ct_ask` | 委任: エージェントが複数ステップの調査や変更をクラウドの CloudThinker に引き渡し、CloudThinker はワークスペースの[メモリ](/guide/memory)、ツール、インシデント履歴を使って作業します | "Compare this outage with past incidents on the same service" | 内部の書き込みは、チャットと同様にワークスペースの Approval mode に従います。承認待ちになると、ターミナルに **CloudThinker Agent needs your approval** が表示され、承認者は承認、理由付きの却下、またはブラウザでの判断ができます |
+
+`ct_ask` の結果行は `CloudThinker Agent answered`、`waiting for approval in browser → <link>`、または `failed` です。セッションごとに 1 つの CloudThinker 会話を開き、それを再利用します。
+
+エージェントは読み取り・書き込みコマンドごとにタイムアウトを自分で設定します。デフォルトは 60 秒、最大 120 秒です。それより長いコマンドはバックグラウンドで実行され、エージェントが後で出力を確認します。（リファレンスの `CLOUDTHINKER_AUTO_BACKGROUND_SECONDS` は、ローカルの `bash` コマンド用の別の設定です。）
+
+クラウドツールはワークスペース内のどの[接続](/ja/guide/connections/overview)でも使え、1 つのコマンドで複数を使うこともできます。同じ種類の接続が複数ある場合は、`#` を入力して選びます。プロンプトに `#connection/<prefix>/<alias>` が挿入されます。
+
+## クラウドへの書き込みを承認する
+
+クラウドへの書き込みは、エージェントが自分で実行するものではなく、ワークスペースが判断するリクエストです。まず[承認 Rules](/guide/approvals/rules) が判断し、次に [Approval mode](/guide/approvals/approval-mode) が判断します。あなたのマシン上のコマンドは Rules を経由しません。**Manual** では、ローカルの変更の前にターミナルが確認します。
+
+書き込みの結果行は判定から始まります。
 
 | 結果行 | 意味 |
 |---|---|
-| `auto: allowed (trusted command) · ran in CloudThinker Sandbox · 2.0s` | 信頼済みコマンドがその場で実行された |
-| `auto: allowed (…)` | Rule または AI の判断が許可し、その場で実行された |
-| `auto: needs approval` | 書き込みは人の判断を待っている |
-| `manual: needs approval` | セッションが **Manual** のため、すべての書き込みが人の判断を待つ |
-| `auto: denied` | Rule、Always blocked、または **Refuse** モードが拒否した。どの承認でも実行できない |
+| `auto: allowed (<reason>) · ran on the workspace machine · …` | ルールまたは [AI チェック](/guide/approvals/approval-mode)が許可し、すぐに実行されました。理由が表示されます |
+| `auto: needs approval · waiting for approval in browser → <link>` | 書き込みが人の判断を待っています |
+| `manual: needs approval · …` | ワークスペースが **Manual** のため、すべての書き込みが人の判断を待ちます |
+| `… · approved by <name> · ran on the workspace machine · …` | 人が承認し、実行されました |
+| `… · declined by <name>` | 人が却下しました。何も実行されていません |
+| `auto: denied · <reason>` | ルールまたは Approval mode が拒否しました。何も実行されず、承認しても実行できません |
+| `… · execution outcome unknown; do not replay` | コマンドが開始された可能性がありますが、CloudThinker は結果を確認できていません。下の Warning を参照してください |
 
-カードでは次のいずれかを選びます。
+書き込みに承認が必要な場合、ターミナルに **Cloud write needs your approval** が、理由、接続、コマンド、ブラウザのリンクとともに表示されます。次のいずれかを選びます。
 
 | オプション | キー | 動作 |
 |---|---|---|
-| **Approve and run** | `y` | この書き込みを 1 回だけ実行する |
-| **Approve and trust this command** | `a` | この書き込みを実行し、ワークスペースでそのコマンドを信頼する |
-| **Decline** | `n` | 書き込みを拒否する。エージェント向けに理由を入力できる |
-| **Decide in the browser** | `b` | カードをブラウザーで開いたままにする |
+| **Approve and run** | `y` | この書き込み 1 件を実行します |
+| **Decline** | `n` | 書き込みを拒否します。エージェントへの理由を入力できます |
+| **Decide in the browser** | `b` | 判断をブラウザのカードに任せます。ターミナルに **Waiting for approval in the browser…** が表示され、最大 10 分間数秒ごとに確認した後、結果行を表示します。それまでに誰も判断しなかった場合、エージェントは後で同じ書き込みを再開できます |
 
-Escape で拒否します。承認できるのは[承認者](/guide/approvals/approvers)だけで、承認者であるチームメイトにはブラウザーにも同じカードが表示されます。
+Escape でも却下になります。承認者であるチームメイトがブラウザでセッションを開くと、同じカードが表示されます。
 
-**Approve and trust this command** はそのコマンドをワークスペースのポリシーに記録します。次回から、その同じコマンドは停止せずに実行されます。コマンドを信頼できるのは、ワークスペースの管理者だけです。信頼できない場合、ターミナルはそのオプションなしで再度確認します。
+保留中の書き込みは、リクエストされたときの接続をそのまま保持します。後から接続を追加しても範囲は広がらず、アクセスを削除するとブロックされます。応答のない書き込みは 1 時間で期限切れになります。期限切れ自体の結果行は表示されません。その後に判断しようとすると `Cloud write is expired, so it cannot be decided` で失敗するため、エージェントにもう一度依頼してください。
 
-承認は、書き込みが要求された時点で選ばれていたコネクションをそのまま保持します。コネクションを追加しても保留中の書き込みの範囲は広がりません。アクセス権の削除や、選択済み ID の変更は実行をブロックします。書き込みの結果が不明と報告された場合は、再度要求する前に影響を確認してください。リクエストの再開はコマンドを自動で再実行しません。
+<Warning>
+書き込みの結果が不明と報告された場合は、もう一度依頼する前に、クラウドでその影響を確認してください。エージェントが書き込みを自動で再実行することはありません。
+</Warning>
 
-## ターミナルでの Approval mode
+### 誰が何をできるか
 
-Agent CLI のセッションは **Chat** 実行タイプのモードを使います。**Chat** が **Same as workspace** のとき、セッションはワークスペースのモードを使います。ターミナルはこのモードを表示するだけで、独自のモードは持ちません。
+| 操作 | 実行できる人 |
+|---|---|
+| クラウドへの書き込みを承認または却下する | ワークスペースの[承認者](/guide/approvals/approvers) |
+| `/cloudthinker:auto` で Approval mode を変更する | ワークスペースの Admin |
+| ブラウザで Agent CLI の会話を読む | Viewer を含むすべてのワークスペースメンバー |
+| Agent CLI の会話を削除する | セッションを開始した本人のみ。Admin を含め、他の人はできません |
 
-- `/cloudthinker auto` を実行すると、モードを表示します。
-- `/cloudthinker auto on` を実行すると、ワークスペースを **Auto · Rules + AI · Ask me** にします。すでに Auto モードのワークスペースは、その選択を保ちます。
-- `/cloudthinker auto off` を実行すると、ワークスペースを **Manual** にします。
+ロールについては [Roles](/guide/security/roles) で説明しています。
 
-切り替えにはワークスペースの Admin ロールが必要で、監査ログに記録されます。その他の Auto の選択肢は、ブラウザーの **Approvals → Approval mode** で設定します。
+### 承認できないときは承認者に依頼する
 
-セッション単位の上書きはなく、ノート PC から承認を迂回するフラグもありません。マシン上のローカルコマンドは CloudThinker のゲートを通らず、pi があなたとして実行します。
+カードがすでに目の前にあるため、エージェントは承認通知を自動では送りません。あなたが承認者でない場合は、`/cloudthinker:notify` を実行すると、承認者が[通知](/ja/guide/notifications)で設定したチャネルに、リクエストが 1 回送信されます。実行するたびに再送信されます。
 
-## 通知
+## ターミナルから Approval mode を変更する
 
-Agent CLI のセッション自体は承認通知を送りません。カードはすでにターミナルとブラウザーの目の前にあるからです。セッションの `ct_ask` スレッドで CloudThinker が出す承認についても同じです。
+セッションはワークスペースの Approval mode を使います。セッション単位で上書きする方法や、ノート PC から承認をスキップするフラグはありません。
 
-自分が承認者でない場合は、`/cloudthinker notify` を実行すると、[通知](/ja/guide/notifications)で設定されたチャネル宛に承認リクエストを 1 回だけ送れます。
-
-## コマンド
+<Warning>
+`/cloudthinker:auto on` と `off` はワークスペース全体のモードを変更するため、ワークスペースのモードを使うチームメイト全員のチャットとセッションが新しいモードに従います。切り替えられるのはワークスペースの Admin だけで、各切り替えは[監査ログ](/guide/security/audit-logs)に記録されます。
+</Warning>
 
 | コマンド | 動作 |
 |---|---|
-| `/cloudthinker about` | バージョン、pi のクレジット、設定ディレクトリ、セッションリンク |
-| `/cloudthinker session` | このセッションのファイル数、メッセージ数、トークン数、最後に課金クレジット |
-| `/cloudthinker auto [on\|off]` | 承認モードを表示する。またはワークスペースを Auto と Manual で切り替える |
-| `/cloudthinker notify` | 保留中の承認リクエストをワークスペースの承認者へ 1 回送信 |
-| `/open` | このセッションをブラウザーで開く |
-| `/cloud` | Cloud のオン・オフ、ワークスペース、コネクション、ミラーの状態を表示 |
-| `/cloud on\|off` | このセッションのクラウドツールと CloudThinker への委任を有効または無効にする。進行中のリモート作業は継続 |
-| `/where` | ローカル作業とクラウド作業を実行するマシンを表示 |
-| `/tour` | ローカルでの読み取りと、Cloud がオンの場合は読み取り専用のクラウド実行を一度ずつ試す |
+| `/cloudthinker:auto` | 現在のモードを表示します |
+| `/cloudthinker:auto on` | ワークスペースを **Auto · Rules + AI · Ask me** に設定します。まずルールが判断し、次に AI チェックが判断し、それでも不明なものは人の判断を待ちます。すでに Auto モードのワークスペースは、その選択を維持します |
+| `/cloudthinker:auto off` | ワークスペースを **Manual** に設定します。すべての書き込みが人の判断を待ちます |
 
-`/model`、`/fork`、`/settings` など pi 自身のコマンドはそのまま使えます。`/share` と `/thinking` は削除されています。
+その他の Auto の選択肢は、ブラウザで **Settings → Workspace → Autonomy → Rules** を開き、**When no Rule matches** セクションで設定します。それぞれの説明は [Approval mode](/guide/approvals/approval-mode) にあります。
 
-## セッションミラー
+## エージェント内のコマンド
 
-すべてのセッションは **Agent CLI** 会話としてワークスペースにミラーされます。ブラウザーで開くと、リポジトリ、ブランチ、ツール呼び出し、リンクされた CloudThinker スレッドを含む読み取り専用ビューアーが表示されます。セッションを所有するターミナルだけが書き手なので、誰も入力はできません。閲覧権限を持つワークスペースメンバーは読むことができ、削除できるのはワークスペースの管理者だけです。
+`/` を入力するとすべてのコマンドが表示されます。CloudThinker のコマンドは次のとおりです。
 
-トランスクリプトは pi のセッションファイルとして自分のマシンに残ります。そのファイルを再開すると同じ会話が伸び、`/fork` は親を記録した新しい会話を開きます。
+| コマンド | 動作 |
+|---|---|
+| `/cloud` | Cloud のオン・オフ、ワークスペース、接続、セッションリンクを表示します |
+| `/cloud on`、`/cloud off` | このセッションのクラウドツールと委任をオン・オフします |
+| `/cloud retry` | 失敗したクラウドリンクを今すぐ再試行します |
+| `/where` | エージェントが作業する 2 つの場所を表示します |
+| `/open` | このセッションをブラウザで開きます |
+| `/model` | エージェントのモード（`light`、`pro`、`ultra`）を選びます。`cloudthinker agent --list-models` でワークスペースが提供するモードが分かります |
+| `/skill:tour` | ガイド付きの初回セッション: ローカルとクラウドの作業、接続、承認 |
+| `/rewind` | 直前のターンを取り消します。エージェントが編集または作成したファイルを元に戻し、会話を巻き戻します。それらのファイルのいずれかがその後に変更されている場合は拒否されます |
+| `/doctor` | `cloudthinker doctor` を実行し、チェックが失敗した場合はエージェントが問題を説明して修正方法を提案します |
+| `/quit`、`/exit` | セッションを終了します。クラウドですでに実行中の作業は継続します |
+| `/share` | このセッションの CloudThinker リンクをコピーします（ワークスペースメンバーのみ） |
+| `/cloudthinker:workspace` | 別のワークスペースに切り替え、そこで新しいセッションを開始します |
+| `/cloudthinker:session` | このセッションのメッセージ、トークン、クレジットを表示します |
+| `/cloudthinker:auto [on\|off]` | ワークスペースの Approval mode を表示または変更します |
+| `/cloudthinker:notify` | クラウドへの書き込みが待機中であることを承認者に知らせます |
+| `/cloudthinker:about` | バージョン、設定フォルダー、セッションリンクを表示します |
+| `/login`、`/logout` | CloudThinker にサインインまたはサインアウトします |
+| `/changelog`、`/bug` | 新機能を表示するか、ブラウザで CloudThinker CLI の GitHub リポジトリに新しい issue を開きます。下書きに含まれるのはエージェントのバージョン、プラットフォーム、アーキテクチャだけです。会話は添付されず、送信するまで何も投稿されません |
 
-## クレジット
+ターミナルウィンドウがバックグラウンドにある間にターンが終了するか承認が待機中になると、エージェントはベルを鳴らしてデスクトップ通知を表示します。これは `/settings` → **Notifications** でオフにできます。フォーカスを報告しないターミナルでは通知されません。
 
-フッターはこのセッションに課金されたクレジットを表示します。例: `◆ 1.75 credits`。エージェントがモデルを通貨で価格表示することはありません。フッターにミラーの状態が追加されるのは、`✕ mirror offline, 3 pending` のように対応が必要なときだけです。
+`@` を入力すると、カスタムエージェント、接続、リポジトリ内のファイルをメンションできます。`#` は接続一覧だけを開きます。エージェントはリポジトリの `AGENTS.md` または `CLAUDE.md` からプロジェクトの指示を読み込みます。
 
-## 関連
+## 画面なしでエージェントを実行する
+
+`agent -p` は、このフォルダーについてローカルエージェントに質問し、回答を表示して終了します。ローカルファイルが必要なスクリプトで使います。代わりにクラウドの CloudThinker に質問するには、[ヘッドレスチャット](/ja/guide/cli/headless-chat)を使います。
+
+```bash
+cloudthinker agent -p "Summarize what changed in src/ since main"
+git diff | cloudthinker agent -p "Review this change"
+cloudthinker agent --tools read,grep,find,ls -p "Review src/ without editing"
+```
+
+`--max-turns <n>` を追加すると、`-p` の実行を n 回のモデルターンで停止します。その場合は終了コード 1 で終了します。同じセッションで別のフォルダーでも作業するには、`--add-dir <path>` を追加します（複数ある場合は繰り返します）。エージェントはそのフォルダーの `AGENTS.md` または `CLAUDE.md` も読み込みます。
+
+`-p` でもクラウドツールはオンのままです。承認が必要なクラウドへの書き込みはターミナルのカードを表示できないため、エージェントは stderr に `waiting for approval in the browser → <link>` を表示し、誰かがブラウザで判断するまで最大 10 分待ちます。**Manual** では、`-p` はローカルのファイル編集と何かを変更する可能性のあるコマンドをブロックし、その理由をエージェントに伝えます。無人で実行する場合は、`--tools read,grep,find,ls` でローカルに限定するか、CI ジョブが終了コードで分岐できる[ヘッドレスチャット](/ja/guide/cli/headless-chat)で CloudThinker に質問します。すべてのフラグは [CLI reference](/ja/guide/cli/reference#agent) にあります。
+
+## マシンの外に出るもの
+
+| データ | CloudThinker に送信されるか | 送信先 |
+|---|---|---|
+| プロンプトと、エージェントがコンテキストに読み込んだすべてのもの（ファイルの内容、ローカルコマンドの出力） | はい | CloudThinker のモデルゲートウェイ。組織の [BYOK](/ja/guide/byok) キーが設定されていればまずそれで応答し、なければ CloudThinker のモデルプロバイダーを使います |
+| セッションのトランスクリプト: プロンプト、回答、ツール呼び出しとその結果 | はい | ワークスペースの **Agent CLI** 会話（ミラー）。サーバーはエントリを保存する前に認証情報を秘匿化します。メールアドレス、IP、ホスト名は保持されます。1 MB を超えるエントリは構造を保ったまま、最も長いテキストが収まるまで切り詰められ、切り詰め済みとマークされます |
+| どのツールも読んでいないファイル | いいえ | あなたのマシンにとどまります |
+| クラウド接続の認証情報 | あなたのマシンには来ません | ワークスペースマシンにとどまります |
+
+<Warning>
+エージェントが読んだものは、シークレットを含めてすべてモデルに送られます。`.env` ファイル、kubeconfig、キーを出力するコマンドの結果などです。ミラーはエントリを保存する前に認識できる認証情報を秘匿化しますが、それだけに頼らないでください。Viewer を含むすべてのワークスペースメンバーがミラーを読むことができ、削除できるのはセッションを開始した本人だけです（Admin でもできません）。シークレットは手の届かない場所に置いてください。`--exclude-tools bash` で起動し、認証情報ファイルを読むようエージェントに依頼しないでください。
+</Warning>
+
+CloudThinker がワークスペースのデータをどのように保存・保護するかは、[Data protection](/guide/security/data-protection) を参照してください。
+
+## セッション履歴とクレジット
+
+すべてのセッションは、ワークスペースに **Agent CLI** 会話として表示されます。これはミラーと呼ばれる、セッションのブラウザ上のコピーです。`/open` を実行するとすぐに開けます。ブラウザでは、リポジトリ、ブランチ、ツール呼び出し、リンクされた CloudThinker 会話を読み取り専用で表示します。ミラーのエントリは追記のみです。誰も編集できず、会話を削除できるのはセッションを開始した本人だけです（Admin でもできません）。
+
+ローカルのコピーは、プロジェクトごとに 1 つのフォルダーとして `~/.cloudthinker/agent/sessions/` に保存されます。`cloudthinker agent -c` はこのフォルダーの最新のセッションを続行し、`-r` でセッションを選べます。
+
+フッターには、このセッションで課金されたクレジットが表示されます（例: `◆ 1.75 credits`）。[使用量](/ja/guide/billing/usage)を参照してください。
+
+## トラブルシューティング
+
+<AccordionGroup>
+  <Accordion title="フッターにクラウドリンクが失敗したと表示される">
+    メッセージに、サインアウト、アクセス拒否、ホストに到達できないなどの原因が表示されます。オフラインやサーバーエラーは自動で再試行されます。今すぐ再試行するには `/cloud retry` を、サインアウトしている場合は `/login` を実行します。
+  </Accordion>
+  <Accordion title="Only a workspace approver can approve a cloud write">
+    あなたは承認者ではありません。`/cloudthinker:notify` を実行するか、カードのブラウザリンクを承認者に送ってください。
+  </Accordion>
+  <Accordion title="エージェントはローカルでは動くが、クラウドにアクセスできない">
+    `/cloud` を実行します。Cloud がオフなら `/cloud on` を実行します。接続が 1 つも表示されない場合は、[Connections](/ja/guide/connections/overview) で追加してから、次のプロンプトを送信します。
+  </Accordion>
+  <Accordion title="agent install failed">
+    初回のダウンロードまたはその SHA-256 チェックが失敗しました。メッセージに原因が表示されます。社内プロキシの環境では `HTTPS_PROXY` を設定し、プロキシが HTTPS を再署名する場合は `SSL_CERT_FILE` も設定してから、もう一度 `cloudthinker` を実行します。[Environment variables](/ja/guide/cli/reference#環境変数) を参照してください。
+  </Accordion>
+  <Accordion title="No CloudThinker Agent mode is loaded, so the message was not sent">
+    エージェントがワークスペースからモードを読み込めませんでした。`/cloud retry` を実行してから ↑ を押し、メッセージを再送信します。`cloudthinker agent --list-models` でワークスペースが提供するモードが分かります。
+  </Accordion>
+  <Accordion title="フッターに mirror offline と表示される">
+    このセッションのブラウザ上のコピー（ミラー）が同期できませんでした。作業は続けてください。保留中のエントリはあなたのマシンで待機し、リンクが復旧したとき、または次に `cloudthinker agent -c` でこのセッションを続行したときにアップロードされます。
+  </Accordion>
+</AccordionGroup>
+
+## 次のステップ
 
 <CardGroup cols={2}>
-  <Card title="CLI" icon="terminal" href="/ja/guide/cli/overview">
-    CloudThinker CLI をインストールしてログイン
+  <Card title="ヘッドレスチャット" icon="message-code" href="/ja/guide/cli/headless-chat">
+    スクリプトや CI ジョブから CloudThinker にプロンプトを 1 つ送信します
   </Card>
-  <Card title="Approval mode" icon="bolt" href="/guide/approvals/approval-mode">
-    ワークスペース、実行タイプ、または 1 つのチャットで Manual か Auto を選ぶ
+  <Card title="Approval mode" icon="shield-check" href="/guide/approvals/approval-mode">
+    ワークスペースでクラウドへの書き込みをどう判断するかを選びます
   </Card>
-  <Card title="承認" icon="shield-check" href="/guide/approvals/overview">
-    承認者とツールの権限
+  <Card title="CLI リファレンス" icon="book" href="/ja/guide/cli/reference">
+    すべてのコマンド、フラグ、変数、終了コード
   </Card>
-  <Card title="コネクション" icon="plug" href="/ja/guide/connections/overview">
-    Sandbox が使えるコネクションを設定する
+  <Card title="接続" icon="plug" href="/ja/guide/connections/overview">
+    エージェントが使えるクラウドアカウントとツールを追加します
   </Card>
 </CardGroup>

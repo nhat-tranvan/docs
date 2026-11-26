@@ -1,107 +1,168 @@
 ---
 title: Neon
-description: "OAuth 連携の MCP を使って Neon Postgres を CloudThinker に接続し、プロジェクト検出、スキーマ検査、データベース操作を実現"
+description: "OAuth で Neon を接続し、CloudThinker がプロジェクトとブランチの把握、スキーマの調査、遅いクエリの監査を行えるようにします"
 icon: "/images/icons/neon.svg"
 ---
 
+import ApprovalDefault from '/snippets/approval-default.mdx';
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
 
-Neon アカウントを接続して、CloudThinker エージェントが Neon のホスト型 MCP サーバーを通じて Neon プロジェクトの検査、データベーススキーマのレビュー、低速クエリの分析、承認済みデータベース操作の支援を行えるようにします。
+Neon を接続すると、CloudThinker のエージェントがプロジェクト、ブランチ、コンピュートを一覧表示し、テーブルのスキーマを調べ、遅いクエリを見つけられるようになります。さらに、ワークスペースの Approvals を経て、SQL の実行、ブランチの変更、マイグレーションの適用も行えます。Neon は Neon がホストする MCP サーバー（MCP はエージェントがサービスのツールを呼び出すためのプロトコルです）を通じて **OAuth** で接続するため、API キーを作成したり貼り付けたりする必要はありません。
 
-Neon は **OAuth** を使用するため、Neon API キーの作成や CloudThinker へのクレデンシャルの貼り付けは不要です。
+<Warning>
+Neon の認可ページには **Allow writes** のチェックボックスがあります。チェックを入れたままにすると、デフォルトの Approval mode では、ブランチの削除やリセットなどの書き込みを AI が単独で承認できます。本番のプロジェクトを持つアカウントでは、認可時に **Allow writes** のチェックを外すか、**Manual** を選んで、すべての書き込みを人の判断待ちにしてください。[Ask first または Deny の Rule](#書き込みアクセス) を使えば、この接続だけに同じことができます。
+</Warning>
 
 ---
 
 ## 前提条件
 
-- CloudThinker で検査するプロジェクトへのアクセス権を持つ **Neon アカウント**。
-- Neon の OAuth フローで CloudThinker を承認する権限。
-- Neon がまだ接続されていない CloudThinker ワークスペース。
-
-<Info>
-CloudThinker はワークスペースごとに 1 つの Neon 接続のみサポートします。アカウントを切り替えるには、既存の Neon 接続を削除して再接続してください。
-</Info>
+- 調査したいプロジェクトを閲覧できる Neon アカウント。
+- 接続を追加するための、CloudThinker のワークスペース Admin ロール。[How access works](/ja/guide/connections/overview#アクセスの仕組み) を参照してください。
+- 任意: 遅いクエリを分析したいデータベースでの `pg_stat_statements` 拡張機能。Neon Console の **SQL Editor**（または任意の Postgres クライアント）で、分析したい各データベースに対して一度 `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` を実行します。
 
 ---
 
 ## セットアップ
 
 <Steps>
-  <Step title="CloudThinker を開く">
-    CloudThinker ワークスペースで **Connections → Neon** に移動します。
+  <Step title="Neon の接続を開く">
+    **Settings → Workspace → Connections** を開きます。**Discover** タブで **Neon** を検索し、**Connect** をクリックします。
   </Step>
-  <Step title="OAuth フローを開始する">
-    **Connect** をクリックして Neon の認可ページを開きます。
-  </Step>
-  <Step title="CloudThinker を承認する">
-    CloudThinker に使用させたいプロジェクトを所有する（またはアクセス権を持つ）Neon アカウントにサインインし、アクセスを承認します。
+  <Step title="Neon で CloudThinker を認可する">
+    CloudThinker が新しいウィンドウで Neon を開きます。プロジェクトを所有している、またはアクセスできる Neon アカウントでサインインし、アクセスを承認します。読み取り専用で接続するには、Neon の認可ページで **Allow writes** のチェックを外します。その場合、エージェントはプロジェクトの一覧表示、スキーマの読み取り、遅いクエリの一覧表示ができ、ブランチの変更、マイグレーション、その他の書き込みは提示されません。SQL は異なります。CloudThinker は、Neon の SQL ツールを通じたすべてのステートメントを、`SELECT` も含めて変更として扱うため、チェックボックスの設定にかかわらず、それぞれが Approvals を経由します。[書き込みアクセス](#書き込みアクセス)を参照してください。**Allow writes** にチェックを入れた場合、CloudThinker はそのアカウントと同じアクセス権を得ます。
+
+    ウィンドウが開かない場合は、ブラウザがポップアップをブロックしています。CloudThinker が代わりにダイアログを表示するので、そこで **Open Neon** をクリックします。
   </Step>
   <Step title="CloudThinker に戻る">
-    承認後、CloudThinker は OAuth トークンを保存し、**Connected** ステータスを表示します。
+    CloudThinker のタブに戻ります。**Open Neon** のダイアログを使った場合は、接続の準備ができると自動で閉じます。
+
+    **成功時の状態:** Neon に **Connected** のステータスが表示されます。
+  </Step>
+  <Step title="確認用のプロンプトを実行する">
+    [確認用のプロンプト](#接続を確認する)を実行し、認可したアカウントで期待どおりのプロジェクトが見えることを確認します。
+
+    **成功時の状態:** CloudThinker が Neon の組織とプロジェクトを、ブランチとコンピュートとともに一覧表示します。
   </Step>
 </Steps>
 
 ---
 
-## 接続詳細
+## 接続の詳細
 
-Neon は OAuth を使用するため、手動で入力する接続フィールドはありません。CloudThinker は認可フロー完了後に OAuth アクセストークンとリフレッシュトークンを自動的に保存します。
+Neon には入力するフィールドはありません。Neon が認可時に OAuth トークンを発行し、CloudThinker が保存します。
 
-| フィールド | 説明 |
-|-------|-------------|
-| **OAuth トークン** | Neon が発行し自動的に保存されます。手動での入力は不要です |
+ワークスペースが持てる Neon 接続は 1 つです。別の Neon アカウントを使うには、Neon の接続で **Disconnect** をクリックしてから、**Connect** をクリックして別のアカウントでサインインします。
 
 ---
 
 ## 必要な権限
 
-CloudThinker は OAuth 時に付与された Neon のアクセス権を引き継ぎます。
+CloudThinker は、認可した Neon アカウントのアクセス権を得ます。Neon の認可ページで **Allow writes** のチェックを外した場合は、読み取りに限られます。いずれにせよ、アカウントは意図して選んでください。
 
-- **読み取り操作**には、プロジェクトの一覧表示、スキーマの検査、メタデータのレビュー、低速クエリの分析が含まれます。
-- SQL 実行・ブランチ変更・マイグレーション・Neon Auth の変更・Data API のプロビジョニングなどの**書き込み操作**には、対応する Neon アクセス権と CloudThinker での明示的な[承認](/guide/approvals/overview)が必要です。
+| エージェントができること | 必要なもの |
+|------------|-------|
+| プロジェクト、ブランチ、コンピュート、テーブルの一覧表示、スキーマの読み取り | Neon でのプロジェクトへのアクセス |
+| 遅いクエリの分析 | プロジェクトへのアクセスと、データベースで有効化された `pg_stat_statements` |
+| `SELECT` と `EXPLAIN` を含む SQL の実行 | プロジェクトへのアクセスと、ステートメントごとの [Approvals](/guide/approvals/overview) の通過。スキーマやデータを変更するステートメントには、Neon での書き込みアクセスと、認可時に **Allow writes** にチェックが入っていることも必要です |
+| ブランチの作成・削除、ブランチのリセット、マイグレーションの適用、クエリのチューニング、Neon Auth や Data API のセットアップ | Neon での書き込みアクセス、認可時に **Allow writes** にチェックが入っていること、そして [Approvals](/guide/approvals/overview) の通過 |
+
+Neon の組織のメンバーは全員、その組織のすべてのプロジェクトを閲覧できます。エージェントの到達範囲を制限するには、組織に属していない別の Neon アカウントで認可し、エージェントが必要とするプロジェクトだけをそのアカウントと共有します。それらは共有プロジェクトとして表示されます。本番環境では、それが安全なデフォルトです。エージェントが必要とするプロジェクトだけを共有した専用アカウントを使い、接続前に **Manual** を選んで、すべてのステートメントを人が承認するようにします。
 
 ---
 
 ## エージェントの機能
 
-接続後、エージェントは以下を実行できます：
-
 | 機能 | 説明 |
 |------------|-------------|
-| **プロジェクト検出** | Neon プロジェクト・共有プロジェクト・組織・コンピュート・テーブルの検出 |
-| **スキーマ検査** | スキーマとテーブルメタデータの検査 |
-| **クエリ分析** | 低速クエリのレビューと最適化の提案 |
-| **SQL 実行** | 明示的なユーザー承認後のみ SQL またはトランザクションを実行 |
-| **ブランチ管理** | ブランチ・マイグレーション・Neon Auth の管理 — それぞれ承認が必要 |
+| **Project discovery** | 組織、自分のプロジェクトと共有プロジェクト、ブランチのコンピュート、データベースのテーブルを一覧表示します |
+| **Schema audit** | プロジェクトとそのテーブルのスキーマを説明します |
+| **Slow query audit** | 最も遅いクエリを一覧表示し、`SELECT` ステートメントに `EXPLAIN` を実行します。一覧表示に承認は不要です。`EXPLAIN` は Neon の SQL ツールを通じて実行されるため、他のステートメントと同様に承認を求めることがあります |
+| **SQL** | ステートメントまたはトランザクションを実行します。CloudThinker はまず正確な SQL を示し、スキーマやデータを変更するかどうかを伝えます。 |
+| **Branches** | ブランチの作成、削除、親からのリセットを行います |
+| **Migrations and tuning** | マイグレーションやクエリのチューニングを準備し、結果を示してから、別の承認済みステップとして完了させます |
+| **Neon Auth and Data API** | [Neon Auth](https://neon.com/docs/neon-auth/overview)（アプリのユーザー向けの、データベースに保存されるマネージドなサインイン）をプロビジョニング・設定し、[Data API](https://neon.com/docs/data-api/get-started)（データベースのテーブル上の HTTP API）をプロビジョニングします。どちらも、アプリのユーザーのサインイン方法やデータへの到達方法を変える書き込みのため、Approvals を経由します |
+
+ゼロにスケールしたコンピュートで SQL や `EXPLAIN` を実行するとコンピュートが起動し、実行中のコンピュート時間が Neon で課金されます。
+
+CloudThinker は、マイグレーションを準備したのと同じステップでそれを完了させることはありません。何かが適用される前に、何が変わるかを確認できます。
+
+<Tip>
+Neon Auth と Data API は、アプリのユーザーが到達できる範囲を変えます。AI の判断に任せるのではなく、**Manual** を選んでそれぞれを人が承認するようにしてください。**Ask first** の Rule を使えば、その 2 つだけを対象にできます。
+</Tip>
 
 ### 接続を確認する
 
 ```text
-List my Neon projects and summarize their schemas
+Check my Neon connection: list my organizations and projects with their branches and computes
 ```
 
-### プロンプト例
+**成功時の状態:** CloudThinker が Neon の組織とプロジェクトを、ブランチとコンピュートとともに一覧表示します。
+
+### プロンプトの例
 
 ```text
-Review slow queries on the production-db project and recommend optimizations
-Inspect the schema for the users table in the main branch
-List all available tables and branches on the analytics project
+Find the slowest queries on my production-db Neon project and suggest indexes
+Describe the schema of the users table on the main branch of production-db
+Prepare a migration on production-db that adds a last_login_at column to users, and show me the plan first
 ```
+
+---
+
+## 書き込みアクセス
+
+Neon の読み取り専用のオプションは、認可ページの **Allow writes** のチェックボックスです。後で変更するには、**Disconnect** をクリックしてから再度 **Connect** をクリックし、チェックボックスを設定します。書き込みを許可すると、各 SQL ステートメント、ブランチの変更、マイグレーションが変更として扱われます。
+
+<ApprovalDefault />
+
+それぞれの選択の効果は [The two modes](/guide/approvals/approval-mode#the-two-modes) を参照してください。
+
+- **本番環境のすべての書き込みを承認する**: **Manual** を選び、すべての SQL ステートメント、ブランチの変更、マイグレーションを人が承認するようにします。
+- **Neon アカウント自体が変更できる範囲を制限する**: **Allow writes** のチェックを外して再接続します。`SELECT` は承認されれば引き続き実行され、プロジェクト、ブランチ、テーブルの一覧表示、スキーマの読み取り、遅いクエリの一覧は引き続き機能します。
+
+Rule を使えば、それを絞り込めます。
+
+- **Rule で本番環境の書き込みを承認する**: Neon の接続に **Ask first** の Rule を追加し、すべての SQL ステートメントとマイグレーションを人が承認するようにします。
+- **接続後に実質的に読み取り専用にする**: Neon の接続に、すべての操作を対象とする **Deny** の Rule を追加します。Neon の SQL ツールを通じたすべてのステートメントは、`SELECT` も含めて変更として扱われるため、Deny はすべての SQL を止めます。これは **Allow writes** のチェックを外しても実現できないことです。
+
+どちらの Rule も、次の手順で作成します。
+
+<Steps>
+  <Step title="Rule を依頼する">
+    チャットで `/creating-policy Ask first for every write on the Neon connection` と入力します。ブロックする場合は、**Deny** の Rule を依頼します。
+  </Step>
+  <Step title="提案を確認する">
+    **Settings → Workspace → Autonomy → Rules** を開き、**Needs review** に切り替えて Rule を開きます。**Effect** が **Ask first**（または **Deny**）であること、Rule に **Every operation** のバッジがあること、**Connections** に Neon の接続が指定されていることを確認します。**What would change** には、最近の Neon の書き込みが事前確認（または拒否）になることが示されるはずです。
+  </Step>
+  <Step title="受け入れる">
+    Rule を選び、**Accept** をクリックします。
+
+    **成功時の状態:** 受け入れた Rule を確認するトーストが表示され、Rule が **Active** タブに移動します。
+  </Step>
+</Steps>
 
 ---
 
 ## トラブルシューティング
 
-<Accordion title="OAuth フローが完了しない">
-誤った Neon アカウントにサインインしているか、ブラウザセッションが Neon にサインインしていない可能性があります。対象の Neon アカウントにサインインして、CloudThinker の Neon 接続フローをやり直してください。
+<Accordion title="認可ウィンドウは閉じたが、Neon に Connected と表示されない">
+ブラウザが別の Neon アカウントにサインインしているか、ポップアップがブロックされた可能性があります。同じブラウザで正しい Neon アカウントにサインインしてから、もう一度 **Connect** をクリックしてください。
 </Accordion>
 
-<Accordion title="CloudThinker が Neon はすでに接続済みと表示する">
-ワークスペースごとに許可される OAuth Neon 接続は 1 つのみです。既存の Neon 接続を使用するか、再接続する前に削除してください。
+<Accordion title="エージェントが期待したプロジェクトを見つけられない">
+そのプロジェクトへのアクセス権のない Neon アカウントで認可しました。**Disconnect** をクリックしてから、そのプロジェクトを閲覧できるアカウントで **Connect** してください。あなたと共有されたプロジェクトは共有プロジェクトとして表示されます。
 </Accordion>
 
-<Accordion title="エージェントが期待する Neon プロジェクトを見つけられない">
-OAuth フローが、それらのプロジェクトへのアクセス権を持たない Neon アカウントで完了した可能性があります。プロジェクトを所有する（またはアクセス権を持つ）Neon アカウントを使って再接続してください。
+<Accordion title="遅いクエリの分析が何も返さない、または失敗する">
+データベースで `pg_stat_statements` が有効になっていません。`CREATE EXTENSION IF NOT EXISTS pg_stat_statements;` を実行し、しばらくトラフィックを流してから、もう一度質問してください。スキーマの調査と SQL はそれがなくても機能します。
+</Accordion>
+
+<Accordion title="静かな期間の後、遅いクエリの結果が空になる">
+Neon はコンピュートがゼロにスケールすると `pg_stat_statements` のデータを保持しないため、起動するたびに履歴が最初からになります。より長い履歴が必要な場合は、調査するコンピュートのゼロへのスケールをオフにしてください。
+</Accordion>
+
+<Accordion title="以前は機能していたのに Neon がエラーを表示する">
+Neon で OAuth の認可が期限切れになったか、取り消されました。接続のエラーアラートの **Connect** をクリックして、再度認可してください。
 </Accordion>
 
 ---
@@ -110,18 +171,20 @@ OAuth フローが、それらのプロジェクトへのアクセス権を持�
 
 <ConnectionSecurity />
 
-- **書き込みの承認** — SQL・ブランチ・マイグレーション・Auth・Data API の変更は CloudThinker で承認制を維持してください
-- **慎重な再接続** — Neon アカウントを切り替える前に、ワークスペースの既存の接続を削除してください
+- **デフォルトでは接続文字列を取得しない**: エージェントは、あなたが依頼しない限りデータベースの接続文字列を取得しません。接続文字列にはデータベースのパスワードが含まれ、チャットに表示されるため、会話を読める人なら誰でも読めてしまいます。
+- **データの経路**: エージェントは `https://mcp.neon.tech/mcp` にある Neon のホスト型 MCP サーバーを呼び出します。SQL、ブランチ、マイグレーションのリクエストとその結果はそこを通過し、結果はチャットに表示されるため、会話とともに保存されます。CloudThinker は OAuth トークンを保存します。
+- **アクセスの遮断**: Neon の接続で **Disconnect** をクリックします。代わりに Neon 側で許可が取り消された場合、誰かが再度認可するまで接続はエラーを表示します。
+- **却下は最終的**: SQL ステートメントやマイグレーションを却下すると、CloudThinker はそれを再試行しません。どう進めたいかをあなたに尋ねます。
 
 ---
 
-## 関連
+## 関連ページ
 
 <CardGroup cols={2}>
-  <Card title="MCP 接続" icon="/images/icons/mcp.svg" href="/ja/guide/connections/mcp">
-    MCP でカスタムツールとサービスを接続
+  <Card title="Supabase Connection" icon="bolt" href="/guide/connections/supabase">
+    OAuth で接続する Postgres のプロジェクト、マイグレーション、ログ
   </Card>
-  <Card title="エージェント" icon="database" href="/ja/guide/agents/overview">
-    CloudThinker と、その作業の仕組み
+  <Card title="PostgreSQL 接続" icon="/images/icons/postgresql.svg" href="/ja/guide/connections/postgresql">
+    任意の Postgres データベースに直接接続します
   </Card>
 </CardGroup>

@@ -1,217 +1,227 @@
 ---
 title: Runbooks
-description: "インシデント発生時にAIエージェントが修復手順を検索・実行できるよう、チームのオペレーショナルランブックを接続します"
+description: "Confluence、GitHub、GitLab、または Markdown のアップロードからチームの修正手順を Resolve に渡し、Resolve が実行するすべての Runbook アクションをレビューします。"
 icon: book-open
+tag: "Legacy"
 ---
 
-本番環境でインシデントが発生すると、チームにはランブック—ポッドの再起動、データベースフェイルオーバー、スケーリング操作といった一般的な障害に対するステップバイステップの手順—があります。問題は、深夜3時に適切なランブックを見つけ、プレッシャーの中で正確に実行することです。
+import ApprovalDefault from '/snippets/approval-default.mdx';
 
-CloudThinker Runbooksはそのギャップを解消します。[RCA調査](/ja/guide/incident/root-cause-analysis)中、AIエージェントが接続されたランブックソースを自動検索し、関連する手順を見つけて修復コマンドを実行します—破壊的な操作には人間の関与を保つポリシー駆動の承認コントロールが付随します。
+**Runbook** とは、「checkout の Pod を再起動する」「データベースをフェイルオーバーする」など、既知の問題を修正するための文書化された手順です。Runbook を Resolve に接続すると、CloudThinker は根本原因分析 (RCA) の間にそれを読み込み、その場で修正を考え出す代わりに、該当する修正を提案します。
 
-<Frame>
-  <img src="/images/incidents/runbooks/02-runbook-sources-dashboard.jpg" alt="手動アップロードとGitHub接続ソース、有効/無効トグルを備えたRunbook Sourcesダッシュボード" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>手動アップロードと接続リポジトリを持つRunbook Sourcesダッシュボード</p>
+<Note>
+**Legacy.** Runbooks には、サイドバーとページ上部の名前の横に **Legacy** ラベルが付いています。ここで説明するとおりに機能し、後継機能や削除日は発表されていません。接続したソースは Confluence、GitHub、GitLab に残るため、このページがどうなっても手順は引き続き使えます。どの程度投資するかを検討している場合は、[support@cloudthinker.io](mailto:support@cloudthinker.io) にお問い合わせください。
+</Note>
 
----
+## 仕組み
 
-## ランブックの仕組み
+1. **Runbook ソース** を追加します。Confluence のスペース、GitHub または GitLab のリポジトリ、またはアップロードした Markdown ファイルです。
+2. [根本原因分析](/ja/guide/incident/root-cause-analysis) の間に、CloudThinker は有効なソースから、見つけた問題に合う手順を検索します。
+3. 手順に何かを変更するコマンドが含まれる場合、各変更は他のエージェントの書き込みと同じく、ワークスペースの [Approvals](/guide/approvals/overview) を通ります。人の判断が必要な場合、実行は承認を待ち、インシデントは **Resolve → Issues** の **Approval needed** フィルターに一致します。
+4. すべての試行は、ポリシーの判定、承認、結果とともに **Execution history** タブに記録されます。
+
+<ApprovalDefault />
+
+読み取り専用のコマンド (`kubectl get pods` のように確認するだけのもの) は、アップロードでも接続ソースでも、Runbook の承認を待つことはありません。`kubectl rollout restart` のようにインフラを変更するコマンドは Approvals を通ります。Runbook 独自の効果がどう関わるかは [コマンドの効果を制御する](#コマンドの効果を制御する) で説明しています。
+
+## CloudThinker が Runbook を見つける方法
+
+CloudThinker は、見つけた問題の説明を使って、有効な各ソースを検索します。
+
+| ソース | 検索方法 |
+|---|---|
+| **Confluence** | 設定したスペースとラベル内のページを全文検索します。影響を受けたサービスに言及しているページが上位になります。 |
+| **GitHub**、**GitLab** | ブランチ (既定は `main`) 上で **Path Prefix** の下にあり **File Patterns** に一致するファイルを一覧表示して読み込み、それぞれの関連性を判断します。影響を受けたサービスに言及しているファイルが上位になります。 |
+| **Upload** | 選ぶ際に、各アップロードの最初の 200 文字を参照します |
+
+CloudThinker は有効なすべてのソースから候補を集め、修正を計画する前に最も一致するものを読み込みます。
+
+そのため、Runbook はアラートの文面に合わせて書いてください。タイトルと最初の数行に症状とサービス名を入れます。たとえば `# Procedure 7` ではなく `# checkout-api pods in CrashLoopBackOff` とします。アップロードの場合、CloudThinker が選ぶ際に参照するのはほぼ最初の数行だけです。1 ページまたは 1 ファイルにつき 1 つの手順にしてください。
+
+## コマンドが実行される場所
+
+Runbook のコマンドは他のエージェントのコマンドと同じく、対象システムの [connection](/ja/guide/connections/overview) を通じて、その接続の認証情報と権限で実行されます。範囲は認証情報で決まります。読み取り専用の認証情報では、Runbook に何が書かれていても書き込みはできず、**Allow writes** がオフの接続も書き込みを拒否します。すべての書き込みは、決して実行されない呼び出しの一覧も含めて、[Approvals](/guide/approvals/overview#how-a-write-is-decided) も通ります。コマンドが実行されるマシンについては [エージェントが実行される場所](/ja/guide/security/overview#エージェントが実行される場所) を参照してください。
+
+## 前提条件
+
+- ソースを追加、編集、公開、削除するには、ワークスペースの **Admin** ロールが必要です。Developer と Viewer はソースと **Execution history** を閲覧できます。[Roles](/guide/security/roles) を参照してください。
+- Runbook アクションの承認者は、Admin ロールではなく Approvals の設定に従います。[approvers](/guide/approvals/approvers) を参照してください。
+- Confluence、GitHub、GitLab の場合: Runbook を読み取れる、動作中の接続が必要です。接続がないとソースのフォームを保存できません。
+  - Confluence: [Atlassian 接続](/ja/guide/connections/atlassian#必要な権限) を認可したアカウントがそのスペースを開けること。
+  - GitHub: CloudThinker アプリが [リポジトリにインストールされている](/guide/connections/github#required-permissions) こと。
+  - GitLab: サインインしたユーザーまたはアクセストークンがプロジェクトを読み取れること。[GitLab の権限](/guide/connections/gitlab#required-permissions) を参照してください。
+- アップロードの場合: コマンドをフェンス付きコードブロックに入れた `.md` ファイルの手順。
+
+## ソースの種類を選ぶ
+
+| ソースの種類 | 最適な場合 | 絞り込める項目 |
+|---|---|---|
+| **Confluence** | Runbook が Wiki のスペースにある場合。 | **Confluence Space Key** (空の場合はすべてのスペースを検索) と **Labels** |
+| **GitHub** | Runbook がリポジトリ内のファイルである場合。 | **Repository**、**Branch**、**Path Prefix**、**File Patterns** |
+| **GitLab** | GitHub と同じで、GitLab 上にある場合。 | **Repository**、**Branch**、**Path Prefix**、**File Patterns** |
+| **Upload a runbook** | 手順が少なく、それを置く Wiki やリポジトリがない場合。 | 絞り込む項目はありません。CloudThinker がファイルをワークスペースに保存します |
+
+接続したソースは元のシステムに残ります。CloudThinker は RCA の時点でそれを読み込むため、Confluence での編集や Git でマージされた変更は、再同期なしで次の調査に反映されます。
+
+ソースを追加する前に、その手順の置き場所として Runbook ソースが適切か確認してください。[Teach CloudThinker](/guide/teach-cloudthinker) では、Runbook ソースと CloudThinker に教える他の方法を比較しています。
+
+## Confluence、GitHub、GitLab のソースを接続する
 
 <Steps>
-  <Step title="ソースを接続する">
-    既存のランブックリポジトリ（Confluence、GitHub、GitLab）をリンクするか、Markdownファイルを直接アップロードします。
+  <Step title="Runbooks を開く">
+    サイドバーで **Resolve → Runbooks** (**Configuration** の下) を開きます。ページには **Runbook sources** と **Execution history** の 2 つのタブがあります。まだソースがない場合、ページには各ソースの種類が一覧表示されます。接続済みのものには接続名が、未接続のものには **Connect first** が表示されます。
   </Step>
-  <Step title="RCA中のエージェント検索">
-    インシデントが[Root Cause Analysis](/ja/guide/incident/root-cause-analysis)をトリガーすると、AIエージェントはインシデントのコンテキストと影響を受けたサービスに基づき、接続されたソースから関連ランブックを検索します。
+  <Step title="ソースを追加する">
+    **Add source** (または空の状態に表示されるソースの種類) をクリックします。**Add Runbook Source** で **Source Name** (たとえば `SRE Runbooks`) を入力し、**Source Type** を選び、接続を選択します。
   </Step>
-  <Step title="ポリシー評価">
-    コマンドを実行する前に、ワークスペースの[承認ポリシー](/guide/approvals/overview)に照らして評価します。ポリシーに応じて、コマンドは自動実行・承認待ちキュー・ブロックのいずれかになります。
-  </Step>
-  <Step title="承認付き実行">
-    承認が必要なコマンドについては、メール・Slack・アプリ内通知でお知らせします。任意のチャンネルから直接承認または拒否できます。承認されたコマンドはただちに実行されます。
+  <Step title="CloudThinker の検索範囲を絞り込む">
+    Confluence の場合は、`SRE` などの **Confluence Space Key** と、必要に応じて **Labels** を設定します。GitHub または GitLab の場合は **Repository** を選び、必要に応じて **Branch**、`docs/runbooks` などの **Path Prefix**、`*.md` などの **File Patterns** を設定します。**Add Source** をクリックします。
   </Step>
 </Steps>
 
----
+**成功時の状態:** ソースが種類と範囲 (たとえば `GitHub · acme/runbooks · docs/runbooks`) とともに一覧に表示され、トグルがオンになっています。
 
-## ランブックソースの接続
+接続したページについては、アップロードの場合のようにコマンドを抽出したり分類したりはしません。フォームの注記には、ソースのすべてのコマンドに承認が必要と表示されます。実際には、変更を伴うすべてのコマンドが対象です。読み取り専用のコマンドは Runbook の承認なしで実行され、変更はワークスペースの Approvals を通ります。これらのソースには、コマンドごとに設定する効果はありません。
 
-**Resolve > Runbooks** に移動してソースを管理します。CloudThinkerは4種類のソースタイプをサポートしており、それぞれ異なるワークフローに対応しています。
+## Markdown の Runbook をアップロードする
 
-<Frame>
-  <img src="/images/incidents/runbooks/01-add-runbook-source-dialog.jpg" alt="ソース名、タイプ選択、Confluence設定フィールドを持つランブックソース追加ダイアログ" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Confluence設定を使った新しいランブックソースの追加</p>
+<Steps>
+  <Step title="アップロードのダイアログを開く">
+    **Resolve → Runbooks** で **Upload runbook** (または空の状態では **Upload a runbook**) をクリックします。
+  </Step>
+  <Step title="ファイルを追加する">
+    `.md` ファイルを最大 20 個、各 5 MB までドラッグします。各ファイルには **Runbook name** が付き、アップロード前に編集できます。
+  </Step>
+  <Step title="アップロードする">
+    **Upload** をクリックします。CloudThinker がコードブロックからコマンドを取り出す間、各ファイルには **Uploading...**、続いて **Extracting commands...** と表示されます。
+  </Step>
+</Steps>
 
-### Confluence
+**成功時の状態:** 各ファイルが個別のソースとして一覧に表示され、すぐに公開され検索可能になります。アップロードが下書きとして作成されることはありません。行の本のアイコンをクリックすると読み取り専用のプレビューが開き、元の Markdown をダウンロードする **Download** ボタンがあります。
 
-ConfluenceナレッジベースをAIエージェントに接続し、オペレーション手順のウィキページを検索できるようにします。
+次のように書かれた Runbook は、CloudThinker に明確で切り分けやすいコマンドを渡します。
 
-**セットアップ:**
-1. Runbooksページで **Add Source** をクリック
-2. 名前を入力（例：「SRE Runbooks」）
-3. ソースタイプとして **Confluence** を選択
-4. Atlassianの接続を選択（[Connections > Atlassian](/ja/guide/connections/atlassian) で設定）
-5. オプションで特定の **Space Key**（例：`SRE`）に検索範囲を限定
-6. **Labels** を追加してページをフィルタリング（例：`runbook`、`incident-response`）
-7. **Add Source** をクリック
+````md
+# Checkout pods in CrashLoopBackOff
 
-**エージェントの検索方法：** RCA中、エージェントはConfluenceのCQLクエリ言語を使用し、設定済みのスペースおよびラベルフィルタ内でインシデントのコンテキストに一致するページを検索します。
+## Check
+```bash
+kubectl get pods -n checkout
+kubectl logs deploy/checkout-api -n checkout --tail=200
+```
 
-### GitHub
+## Fix
+```bash
+kubectl rollout restart deploy/checkout-api -n checkout
+```
+````
 
-GitHubリポジトリにあるランブックのMarkdownファイルをエージェントに指定します。
+このファイルから、CloudThinker は `kubectl rollout restart` を承認が必要な、変更を伴うコマンドとして記録します。2 つの読み取り専用コマンドは記録されず、CloudThinker は RCA の間に Runbook の承認なしでそれらを実行できます。
 
-**セットアップ:**
-1. **Add Source** をクリック
-2. ソースタイプとして **GitHub** を選択
-3. GitHubの接続を選択（[Connections](/ja/guide/connections/overview) で設定）
-4. ランブックを含む **repository** を選択
-5. **branch** を設定（デフォルトは `main`）
-6. オプションで **path prefix** を設定して検索範囲を制限（例：`docs/runbooks/`）
-7. **file patterns** を設定してマッチするファイルを指定（デフォルトは `*.md`）
-8. **Add Source** をクリック
+アップロード時に、CloudThinker のバックエンドが呼び出す AI モデルがフェンス付きコードブロックを読み、何かを変更するコマンドだけを残します。パイプラインは、どこか一部でも書き込みを行えば変更を伴うものとして数えます。残す各コマンドはコードブロック内にある必要があるため、本文の文章からは何も記録されません。モデルのステップが失敗した場合は、確認専用のコマンドの固定リスト (`kubectl get`、`kubectl logs`、`cat`、`grep` など) で判定し、リストにないものはすべて変更を伴うものとして扱います。モデルの呼び出し先については [CloudThinker が扱うデータ](/ja/guide/security/overview#cloudthinker-が扱うデータ) を参照してください。
 
-**エージェントの検索方法：** エージェントはGitHub APIを使用してパスとパターンフィルタに一致するファイルを一覧・読み込みし、現在のインシデントとの関連性を分析します。
+誤って分類されたコマンドが承認を回避することはありません。モデルが見逃した書き込みも、他のエージェントの書き込みと同じく、接続の認証情報と **Allow writes** の設定、そして [Approvals](/guide/approvals/overview) を通って実行されます ([コマンドが実行される場所](#コマンドが実行される場所) を参照)。ワークスペースで Runbook のコマンド効果が有効な場合は、記録されたコマンドをレビューできます。[コマンドの効果を制御する](#コマンドの効果を制御する) を参照してください。
 
-### GitLab
+アップロードした Runbook を変更するには、そのソースを削除して新しいバージョンをアップロードします。アップロードをその場で編集する方法はありません。古い **Execution history** の行には Runbook のタイトルが残りますが、削除されたソースとの関連付けはなくなります。
 
-GitHubと同じワークフローで、GitHubの代わりにGitLabの接続を使用します。
+<Warning>
+新しいアップロードには新しいポリシーが割り当てられるため、すべてのコマンドが再び **Require Approval** から始まります。古いアップロードで設定した **Allow** や **Deny** は失われます。
+</Warning>
 
-**セットアップ:**
-1. **Add Source** をクリック
-2. ソースタイプとして **GitLab** を選択
-3. GitLabの接続を選択
-4. **repository**・**branch**・**path prefix**・**file patterns** を選択
-5. **Add Source** をクリック
+## コマンドの効果を制御する
 
-**エージェントの検索方法：** エージェントはGitLab APIを使用してリポジトリから一致するファイルを検索・取得します。
+**効果 (effect)** とは、変更を伴うコマンドに対する Runbook 独自のルールです。ワークスペースの [Approvals](/guide/approvals/overview) のモードもすべての変更に適用されます。Runbook のコマンド効果がオフの場合 (ほとんどのデプロイメントがこれに該当します)、効果は適用されず、Approvals だけが判定します。既定の **Auto · Rules + AI · Ask me** モードでは、AI の判断によって確認なしで変更が実行されることがあり、Allow の [Rule](/guide/approvals/rules) でも同様です。すべての Runbook の変更で人を待たせるには **Manual** を選びます。使える効果はソースの種類によって異なります。
 
-### 手動アップロード
+| ソースの種類 | 効果 | 既定値 |
+|---|---|---|
+| Confluence、GitHub、GitLab | 常に **Require Approval** | Require Approval |
+| Upload | Runbook のコマンド効果が有効な場合のみ、コマンドごとに **Allow**、**Require Approval**、**Deny**。ほとんどのデプロイメントでは **Require Approval** のみ。 | Require Approval |
 
-外部システムに手順が保存されていない場合は、Markdownのランブックファイルを直接アップロードします。
+| 効果 | 何が起きるか |
+|---|---|
+| **Allow** | 確認なしで実行します |
+| **Require Approval** | 人が承認または拒否するまで待ちます |
+| **Deny** | 実行しません |
 
-**セットアップ:**
-1. Runbooksページで **Upload Runbook** をクリック
-2. `.md` ファイルをドラッグ＆ドロップ（最大20ファイル、各5 MB）
-3. 確認前に必要に応じてファイル名を編集
-4. **Confirm Upload** をクリック
+各アップロードには `Manual Runbook: <runbook name>` という名前の独自のポリシーが割り当てられ、抽出されたコマンドごとに 1 つのステートメントがあります。Runbook のコマンド効果は、ほとんどのデプロイメントでオフです。オンの場合は **Settings → Workspace → Autonomy → Runbooks** にあり、そこでポリシーを開いてコマンドの効果を変更できます。たとえば、頻繁に実行する安全な再起動を **Allow** にできます。この機能がない場合、すべてのコマンドはポリシー上 **Require Approval** のままで、変更が待機するかどうかは Approvals のモードが決めます。お使いのデプロイメントで有効にできるか問い合わせるには、[support@cloudthinker.io](mailto:support@cloudthinker.io) にメールしてください。
 
-アップロード後、CloudThinkerはMarkdownのコードブロックから書き込みコマンド（`kubectl apply`・`aws` のミューテーション・`helm install` など）を自動抽出します。この抽出されたコマンドが[コマンドごとのパーミッション](#コマンドごとのパーミッション)の基礎となります。
+## Runbook アクションを承認する
 
----
+インシデント中に CloudThinker が変更を伴うコマンドを実行しようとすると、インシデントは承認を待ち、**Resolve → Issues** の **Approval needed** フィルターに一致します。
 
-## コマンドごとのパーミッション
+<Steps>
+  <Step title="会話を開く">
+    インシデントで **More actions** を開き、**Open AI Conversation** をクリックします。
+  </Step>
+  <Step title="判断する">
+    承認カードで提案されたコマンドを読み、**Approve** または **Decline** をクリックします。承認すると実行が続行されます。拒否するとそのアクションは停止します。カードにはコマンドを編集する欄はありません。別のことを実行させたい場合は、拒否してから会話で希望を伝えてください。
+  </Step>
+</Steps>
 
-手動ランブックには独自の安全機能—**コマンドごとのパーミッションコントロール**—が備わっています。Markdownファイルをアップロードすると、CloudThinkerのAIがコードブロックを読み取り、すべての書き込み/変更コマンドを抽出します。これにより、エージェントが自律的に実行できる操作を細かく制御できます。
+**成功時の状態:** インシデントが **Approval needed** に一致しなくなり、**Execution history** タブで実行に **Approved** と表示されます。拒否したアクションはそこに **Rejected** と表示されます。
 
-<Frame>
-  <img src="/images/incidents/runbooks/03-per-command-permissions.jpg" alt="個別の承認要否ドロップダウンを持つkubectlコマンドが表示されたコマンドごとのパーミッションダイアログ" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>pod-crashloopbackoffランブックのコマンドごとのパーミッションコントロール</p>
+誰かが判断するまで、実行はそのステップで待機します。承認できる人はワークスペースの承認設定に従います。[approvers](/guide/approvals/approvers) を参照してください。承認できない場合、カードには承認者を待っていると表示されます。会話を開始した人には **Notify approvers** ボタンも表示されます。承認リクエストをメールやチャットで受け取るには、[Notifications](/ja/guide/notifications) で **Agent approvals** をオンにします。
 
-### 仕組み
+## 実行内容をレビューする
 
-1. **自動抽出**：アップロード後、システムはすべてのコードブロックを解析し、インフラを変更するシェルコマンド（例：`kubectl set resources`・`kubectl rollout restart`・`kubectl delete`）を特定します
-2. **読み取り専用コマンドはスキップ**：`kubectl get`・`kubectl describe`・`kubectl logs` などのコマンドは抽出されません—エージェントは常に読み取り専用コマンドを実行できます
-3. **各コマンドにパーミッションを割り当て**：抽出されたすべての書き込みコマンドはデフォルトで **Require Approval** から始まります
+**Resolve → Runbooks** の **Execution history** タブを開きます。各行が 1 つの Runbook アクションです。
 
-### パーミッションレベル
+| 列 | 値 | 分かること |
+|---|---|---|
+| **Runbook** | Runbook のタイトル (ソースへのリンク付き) | CloudThinker が使った手順 |
+| **Policy** | Auto Execute、Requires Approval、Denied、Per Command | 誰かに確認する前にポリシーが何を決めたか: **Auto Execute** はアクションを許可し、**Requires Approval** は人に回し、**Denied** はブロックしました。**Per Command** はアップロードした Runbook を示し、各コマンドは実行時にそれぞれの効果と照合されます。 |
+| **Approval** | Pending、Approved、Rejected | 確認を求められた場合に、人が何を決めたか |
+| **Status** | 下の表を参照 | 実行時に何が起きたか |
+| **Created** | タイムスタンプ | CloudThinker が提案した日時 |
 
-| パーミッション | 動作 |
-|------------|----------|
-| **Allow** | エージェントが人間の承認なしにコマンドを即時実行します |
-| **Require Approval** | エージェントは実行前に承認をリクエストします。メール・Slack・アプリ内で通知されます |
-| **Deny** | エージェントはこのコマンドを実行できません |
+| Status | 意味 |
+|---|---|
+| 空 | 何も実行されていません。アクションが人を待っているか、拒否されたか、ポリシーで拒否されました |
+| **Not Started** | 承認済み、またはポリシーで許可されています。実行中を示す別のステータスはないため、キューに入っているか、まだ実行中の可能性があります。更新すると **Completed** または **Failed** が表示されます。このままの場合は、インシデントを開き、**More actions** → **Open AI Conversation** でコマンドがまだ実行中か確認してください。 |
+| **Completed** | コマンドが実行され、完了しました |
+| **Failed** | コマンドが実行され、エラーを返しました。再試行する前に結果を読んでください。 |
 
-### コマンドの管理
+インシデントをクローズする前に **Status** を確認してください。**Approved** は人が許可したことを意味します。コマンドが実行されたことを意味するのは **Completed** だけです。
 
-ランブック詳細ダイアログから：
+## ソースを管理する
 
-- **すべてのパーミッションを一括変更**：「Set all to...」ドロップダウンを使用して、すべてのコマンドをAllow・Require Approval・Denyに一括変更します
-- **個別パーミッションの変更**：任意のコマンドの横のドロップダウンをクリックしてパーミッションレベルを調整します
-- **コマンドの追加**：新しいコマンドパターンを入力してEnterを押すと、リストに追加されます
-- **コマンドの削除**：削除アイコンをクリックしてポリシーからコマンドを削除します
-- **コマンドの全文表示**：展開矢印をクリックして複数行または長いコマンドを全文表示します
+ソースの行にカーソルを合わせると、アクションが表示されます。
 
-<Note>
-  コマンドごとのパーミッションは現在、手動アップロードのランブックで利用可能です。外部ソース（Confluence、GitHub、GitLab）では、すべてのコマンドがデフォルトで承認必須となります。外部ソースへのコマンドごとのコントロールは近日公開予定です。
-</Note>
+| アクション | 内容 |
+|---|---|
+| トグル | 削除せずにソースをオフにします。CloudThinker は無効なソースを検索しません。 |
+| Edit | 接続ソースの名前または範囲を変更します。 |
+| Preview (本のアイコン) | アップロードした Runbook の内容を表示します。 |
+| Publish | まだ **Draft** と表示されている古いアップロードのソースにのみ表示されます。新しいアップロードは常に公開されます。Admin が公開するまで、CloudThinker は下書きを検索しません。 |
+| Delete | 確認のあとにソースを削除します。 |
 
----
+## トラブルシューティング
 
-## 承認ワークフロー
-
-RCA中にエージェントが関連ランブックを見つけ、ポリシーが承認を必要とする場合、次のフローが実行されます。
-
-### 承認フロー
-
-1. **エージェントがランブックを発見**：調査中、エージェントはソースを検索して一致する手順を特定します
-2. **ポリシー評価**：システムはワークスペースの承認ポリシーをランブックとそのコマンドに照らして確認します
-3. **通知の送信**：承認が必要な場合、設定されたすべてのチャンネルで通知が届きます：
-   - **メール**：ランブックのタイトル、ソースリンク、ポリシーの理由
-   - **Slack**：インシデントのコンテキストを含むインタラクティブ通知
-   - **アプリ内**：承認待ちを示すインシデントのバッジ
-4. **承認または拒否**：承認をクリックしてエージェントの続行を許可するか、拒否をクリックして実行をブロックします
-5. **エージェントが続行**：承認されるとエージェントはランブックコマンドを実行します。拒否された場合、エージェントはそのランブックを実行せず調査を続けます
-
-### 承認ステータス
-
-| ステータス | 意味 |
-|--------|---------|
-| **Pending** | 人間の承認待ち—エージェントはこのステップで一時停止中 |
-| **Approved** | 人間が承認済み—コマンドが実行中または完了 |
-| **Rejected** | 人間が拒否—エージェントはこのランブックをスキップして調査を継続 |
-
-### 実行ステータス
-
-承認後、各実行はその結果を追跡します：
-
-| ステータス | 意味 |
-|--------|---------|
-| **Not Started** | 承認済みだがコマンドがまだ実行されていない |
-| **Completed** | すべてのコマンドが正常に実行された |
-| **Failed** | 実行中に1つ以上のコマンドが失敗した |
-| **Skipped** | 実行がスキップされた（例：承認の有効期限切れまたは上書き） |
-
-### 実行履歴の確認
-
-Runbooksページの **Execution History** タブに切り替えると、インシデントをまたいだすべてのランブック実行を確認できます。以下の操作が可能です：
-
-- ランブックタイトルで検索
-- ポリシーの決定・承認ステータス・実行結果を確認
-- どのランブックがどのインシデントに使用されたかを追跡
-
----
-
-## ベストプラクティス
-
-**ソースの整理：**
-- ソースにわかりやすい名前を付ける（例：「K8s Emergency Runbooks」「Database Failover Procedures」）
-- パスプレフィックスとファイルパターンを使用して検索を集中・高速化する
-- Confluenceではラベルでドメイン別にランブックを分類する（例：`kubernetes`・`database`・`networking`）
-
-**パーミッション戦略：**
-- 信頼が構築されるまで、すべてのコマンドを（デフォルトの）**Require Approval** から始める
-- 十分にテストされた低リスクのコマンド（スケーリング操作・ログ収集など）を徐々に **Allow** に移行する
-- 破壊的なコマンド（delete・drop・force）は永続的に **Require Approval** に維持する
-- 自動化してはならないコマンド（本番データベースのdropなど）には **Deny** を使用する
-
-**ランブックの品質：**
-- シェル言語ヒント付きの明確なコードブロックでMarkdownのランブックを作成する（` ```bash `）
-- 最良の抽出結果のために1行に1コマンドを使用する
-- 各手順をいつ使用すべきかのコンテキストを含める—エージェントはこれをランブックとインシデントのマッチングに使用する
-- ランブックは集中させる：すべてを1つのドキュメントにまとめるより、1ファイルに1手順の方が効果的
-
----
+<AccordionGroup>
+  <Accordion title="ソースの種類がグレー表示になっている、または Connect first と表示される">
+    ソースのフォームには、そのプラットフォームの接続が必要です。行をクリックして接続するか、[Connections](/ja/guide/connections/overview) から追加し、戻って **Add source** をクリックしてください。
+  </Accordion>
+  <Accordion title="RCA の間に CloudThinker が Runbook を使わなかった">
+    ソースのトグルがオンで、**Draft** と表示されていないことを確認してください。次に範囲を確認します。**Confluence Space Key**、**Path Prefix**、**File Patterns** の値が誤っていると、ファイルが見えなくなります。Runbook には症状とサービスを示すタイトルを付けてください。[CloudThinker が Runbook を見つける方法](#cloudthinker-が-runbook-を見つける方法) を参照してください。
+  </Accordion>
+  <Accordion title="アップロードが拒否された">
+    受け付けるのは 5 MB までの `.md` ファイルだけで、1 回のアップロードにつき最大 20 個です。大きな Runbook は手順ごとに 1 ファイルに分割してください。
+  </Accordion>
+  <Accordion title="アップロードからコマンドが取り込まれなかった">
+    コマンドはフェンス付きコードブロック内にある必要があります。通常の段落内のコマンドや、読み取り専用のコマンドだけの場合、承認対象は何も生成されません。
+  </Accordion>
+  <Accordion title="インシデントが待機したまま進まない">
+    Runbook アクションが保留中です。インシデントを開き、**More actions** → **Open AI Conversation** をクリックして、**Approve** または **Decline** をクリックしてください。
+  </Accordion>
+</AccordionGroup>
 
 ## 次のステップ
 
 <CardGroup cols={2}>
-  <Card title="Root cause analysis" icon="magnifying-glass" href="/ja/guide/incident/root-cause-analysis">
-    AIエージェントがインシデントを調査する方法と、分析ワークフロー中にランブックがトリガーされるタイミングを学びます。
+  <Card title="RCA での Runbook の使われ方を見る" icon="magnifying-glass" href="/ja/guide/incident/root-cause-analysis">
+    証拠から修正の提案までの調査の流れを追います。
   </Card>
-  <Card title="承認ポリシー" icon="shield-check" href="/guide/approvals/overview">
-    エージェントが自律的に実行できる操作を制御するワークスペースレベルの承認ポリシーを設定します。
+  <Card title="承認を設定する" icon="circle-check" href="/guide/approvals/overview">
+    変更を伴うアクションを誰がどのように承認するかを決めます。
   </Card>
 </CardGroup>

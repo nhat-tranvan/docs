@@ -1,150 +1,161 @@
 ---
 title: SSH
-description: "鍵認証とホスト鍵検証を使って CloudThinker がシェルコマンドを実行できるよう、自分のサーバーを SSH 経由で接続"
+description: "SSH でサーバーを接続し、CloudThinker が鍵ベースのログインでディスク、メモリ、プロセス、サービス、ログを確認できるようにします"
 icon: "/images/icons/ssh.svg"
 ---
 
 import ConnectionSecurity from '/snippets/ja/connection-security.mdx';
+import ApprovalDefault from '/snippets/approval-default.mdx';
 
-SSH 経由でサーバーを接続して、[CloudThinker](/ja/guide/agents/overview)がホスト上でシェルコマンドを実行できるようにします。ディスク使用量の確認、ログの追跡、サービスの検査、問題の診断をサーバー上で直接行えます。
+SSH でサーバーを接続すると、[CloudThinker](/ja/guide/agents/overview) がそこでシェルコマンドを実行できるようになります。ディスクとメモリの確認、ログの読み取り、プロセスとサービスの調査などです。秘密鍵でサインインし、CloudThinker は初回接続時にサーバーのホスト鍵を固定するため、ID の変化を検出できます。
 
 ## 前提条件
 
-| 要件 | 詳細 |
-|-------------|--------|
-| **到達可能なホスト** | サーバーが SSH ポートで CloudThinker からのインバウンド SSH を受け入れる必要があります |
-| **ログインユーザー** | シェルアクセスを持つ既存のユーザーアカウント |
-| **認証済み鍵** | そのユーザーの `~/.ssh/authorized_keys` に公開鍵が登録されていること |
-| **鍵認証の有効化** | そのユーザーに対して `sshd` が公開鍵認証を許可していること |
+- SSH ポートで CloudThinker からの受信 SSH を受け付けるサーバー。CloudThinker は **Host** に直接接続し、ジャンプホストや踏み台のフィールドはありません。ファイアウォールの背後にあるサーバーや公開アドレスのないサーバーについては、Environment の選択肢を [Reaching private services](/ja/guide/connections/overview#プライベートサービスへの到達) で確認してください。このドキュメントでは CloudThinker の送信元 IP の一覧を公開していません。CloudThinker の担当者に問い合わせるか、[お問い合わせ](https://cloudthinker.io/contact)ください。
+- シェルアクセスを持ち、`sshd` で公開鍵認証が有効になっているログインユーザー。
+- 公開鍵がそのユーザーの `~/.ssh/authorized_keys` にある鍵ペア。
+- 接続の追加に必要な、CloudThinker ワークスペースの **Admin** ロール。[Roles](/guide/security/roles) を参照してください。
 
 ## セットアップ
 
 <Steps>
-  <Step title="鍵ペアを準備する">
-    既存の鍵ペアを使用するか、CloudThinker 専用の鍵を生成します：
+  <Step title="専用の鍵ペアを作成する">
+    CloudThinker だけが使う鍵を生成すれば、他に影響を与えずに取り消せます。
 
     ```bash
     ssh-keygen -t ed25519 -C "cloudthinker" -f ./cloudthinker_key
     ```
 
-    これにより `cloudthinker_key`（秘密鍵）と `cloudthinker_key.pub`（公開鍵）が生成されます。OpenSSH 形式（`-----BEGIN OPENSSH PRIVATE KEY-----`）と PEM 形式（`-----BEGIN RSA/EC PRIVATE KEY-----`）の両方に対応しており、`ed25519`・`rsa`・`ecdsa` 鍵が使用できます。
+    `cloudthinker_key`（秘密鍵）と `cloudthinker_key.pub`（公開鍵）が書き出されます。OpenSSH または PEM 形式の既存の RSA や ECDSA の鍵も使えます。
   </Step>
-  <Step title="公開鍵を承認する">
-    サーバー上のログインユーザーの authorized keys に公開鍵を追加します：
-
+  <Step title="サーバーで公開鍵を許可する">
     ```bash
-    ssh-copy-id -i ./cloudthinker_key.pub user@server.example.com
-    # または cloudthinker_key.pub を手動で ~/.ssh/authorized_keys に追記
+    ssh-copy-id -i ./cloudthinker_key.pub ubuntu@server.example.com
     ```
-  </Step>
-  <Step title="CloudThinker に接続を追加する">
-    **Connections → SSH** に移動し、以下を入力します：
-    - **Host**：ホスト名または IP（例：`server.example.com` または `10.0.0.5`）
-    - **User**：ログインユーザー（例：`ubuntu`）
-    - **Port**：SSH ポート（任意、デフォルト `22`）
-    - **Private key**：`BEGIN`/`END` 行を含む秘密鍵全体
-    - **Passphrase**：任意。秘密鍵にパスフレーズが設定されている場合のみ必要
 
-    CloudThinker は接続をテストし、成功すると **Connected** ステータスを表示します。
+    または、`cloudthinker_key.pub` の内容をユーザーの `~/.ssh/authorized_keys` に手動で追記します。
+  </Step>
+  <Step title="CloudThinker で接続を追加する">
+    **Settings → Workspace → Connections** を開き、**SSH** を選んで **Connect** をクリックし、**Host**、**User**、**Port**、**Private key** を入力します。鍵にパスフレーズがある場合にのみ **Passphrase** を追加します。**Connect** をクリックします。
+
+    CloudThinker が接続し、サーバーのホスト鍵を記録して、テストを実行します。テストは通常 30 秒以内に終わり、45 秒でタイムアウトします。
+
+    **成功時の状態:** ダイアログに **Connected** と "SSH connection verified and saved." が表示されます。
   </Step>
 </Steps>
 
-### ホスト鍵の検証
+各サーバーはそれぞれ独立した SSH 接続です。CloudThinker に到達させたいサーバーごとに、最後のステップを繰り返してください。プロンプトを 1 つのサーバーに向けるには、プロンプトボックスで `#` を使ってその接続を選びます。
 
-初回接続時、CloudThinker はサーバーのホスト鍵を記録します。以降の接続では鍵が一致しているか毎回確認されるため、サーバーの識別情報が予期せず変わった場合に警告が表示されます。
+## 接続の詳細
 
-鍵が変わると接続は停止し、CloudThinker は以前に信頼されていたフィンガープリントと新しいフィンガープリントの両方を表示します。これは通常、サーバーの再構築や SSH 鍵のローテーション後に発生します。変更が意図したものであると確認できたら、**Trust new host key** を選択して続行してください。
-
-<Warning>
-サーバーの識別情報が変わることを想定していなかった場合は、すぐに新しい鍵を信頼しないでください。予期しない変更は、接続が傍受されている可能性を示しています。まずサーバー側で新しいフィンガープリントを確認してください。
-</Warning>
-
-## 接続詳細
-
-| フィールド | 説明 | 例 |
-|-------|-------------|---------|
-| **Host** | 対象サーバーのホスト名または IP アドレス | `server.example.com` |
-| **User** | シェルアクセスを持つログインユーザー | `ubuntu` |
-| **Port** | SSH ポート | `22` |
-| **Private key** | `BEGIN`/`END` ヘッダーを含む秘密鍵全体 | `-----BEGIN OPENSSH PRIVATE KEY-----...` |
-| **Passphrase** | 鍵が暗号化されている場合のパスフレーズ | — |
+| フィールド | 必須 | 説明 | 例 |
+|-------|----------|-------------|---------|
+| **Host** | はい | ホスト名または IP アドレス | `server.example.com` または `203.0.113.10` |
+| **User** | はい | シェルアクセスを持つログインユーザー | `ubuntu` |
+| **Port** | いいえ | SSH のポート。デフォルトは `22` | `22` |
+| **Private key** | はい | `BEGIN` と `END` の行を含む鍵全体 | `-----BEGIN OPENSSH PRIVATE KEY-----` |
+| **Passphrase** | いいえ | 暗号化された鍵の場合のみ。それ以外は空欄にします | 非表示 |
 
 ## 必要な権限
 
-CloudThinker はログインユーザーの権限でコマンドを実行します。エージェントが特権コマンドを実行する必要がない限り、root アクセスは不要です。
+コマンドはログインユーザーとして、そのユーザーの権限のとおりに実行されます。そのユーザーの権限が、CloudThinker がサーバーでできることの実際の境界です。
 
 <Tip>
-ログインユーザーをエージェントが必要とするコマンドとパスのみに絞ってください。`authorized_keys` の `command=` および `from=` オプションを使用して、鍵で実行できる操作と接続元を制限できます。
+CloudThinker 用に、必要なログとパスへの読み取りアクセスを持ち、本番のパスへの書き込みアクセスを持たない、root 以外のユーザーを作成してください。ほとんどのヘルスチェックとログの読み取りには、それ以上は必要ありません。
 </Tip>
+
+コマンドはターミナルなしで実行されるため、`sudo` のパスワードのプロンプトには応答できません。CloudThinker に特権コマンドを実行させたい場合は、`/etc/sudoers.d/` でそのコマンドだけをパスワードなしで許可します。
+
+```text
+cloudthinker ALL=(root) NOPASSWD: /usr/bin/systemctl restart nginx
+```
 
 ## エージェントの機能
 
-接続後、CloudThinker は SSH 経由でサーバー上のシェルコマンドを実行できます。
-
-| 機能 | 説明 |
-|------------|-------------|
-| **システム検査** | ディスク・メモリ・CPU・プロセス・サービスの状態 |
-| **ログ分析** | アプリケーションおよびシステムログの読み取りと検索 |
-| **診断** | ホスト上の障害・接続性・設定の調査 |
-| **運用確認** | 読み取り専用コマンドでサーバーの状態を報告 |
+| 機能 | CloudThinker が行うこと | 承認 |
+|------------|------------------------|----------|
+| **System inspection** | ディスク、メモリ、CPU、稼働時間、プロセス、サービスのステータスを確認します | 不要 |
+| **Log analysis** | アプリケーションとシステムのログを読み、検索します | 不要 |
+| **Diagnostics** | ホスト上の障害、接続性、設定を調査します | 不要 |
+| **Changes** | サービスの再起動など、サーバーを変更するコマンドを実行します | 必要 |
 
 ### 接続を確認する
 
 ```text
-show system uptime, disk usage, and top memory processes on the server
+Show uptime, disk usage per filesystem, and the top 5 processes by memory on the server
 ```
 
-### プロンプト例
+稼働時間、ファイルシステムとその使用量の表、メモリ使用量付きの 5 つのプロセスが返されることを確認します。
+
+### プロンプトの例
 
 ```text
-check disk usage on all filesystems and flag anything above 80%
-tail /var/log/app/error.log and summarize the last 100 error lines
-show which processes are using the most CPU and memory right now
+Flag any filesystem above 80% full and list the largest directories on it
+Summarize the last 100 lines of /var/log/app/error.log and group them by error type
+Is nginx running, and when did it last restart?
 ```
 
+## 書き込みアクセス
+
+読み取りコマンドは確認なしで実行されます。サーバーを変更するコマンドは Approvals を経由し、CloudThinker はリクエストにそのコマンドを表示します。
+
+<ApprovalDefault />
+
+シェルコマンドは自由形式で、どれが変更にあたるかは CloudThinker が判断します。承認のステップは二重のチェックとして扱い、CloudThinker に決してさせてはならないことのブロックは、ログインユーザーの権限に頼ってください。
+
+## ホスト鍵の検証
+
+初回接続時、CloudThinker はサーバーのホスト鍵を信頼して記録します。それ以降のすべての接続で、鍵が引き続き一致することを確認します。CloudThinker はフィンガープリントを表示しないため、初回接続で正しいサーバーに到達していることを確認してください。
+
+鍵が変わると接続は停止し、**Host key changed** と表示されます。これはサーバーの再構築やホスト鍵のローテーションの後には想定どおりです。新しい鍵を受け入れるには、サーバーの横のシールドアイコン（**Trust new host key**）をクリックし、**Trust** で確定します。
+
 <Warning>
-コマンドはログインユーザーの権限で実行されます。エージェントが実際に必要とする操作のみにユーザーを制限してください。
+予期していない新しいホスト鍵は信頼しないでください。予期しない変更は、誰かが接続を傍受していることを意味する場合があります。まず、信頼できるコンソールからサーバーでフィンガープリントを確認してください。
+
+```bash
+for f in /etc/ssh/ssh_host_*_key.pub; do ssh-keygen -lf "$f"; done
+```
 </Warning>
 
 ## トラブルシューティング
 
-<Accordion title="認証に失敗した">
-- ログインユーザーの `~/.ssh/authorized_keys` に公開鍵があることを確認してください
-- **User** がその鍵で認証されているアカウントと一致しているか確認してください
-- `BEGIN`/`END` 行を含む秘密鍵全体が貼り付けられているか確認してください
-- 鍵にパスフレーズが設定されている場合は **Passphrase** を入力してください
+<Accordion title="Authentication failed">
+- 公開鍵がログインユーザーの `~/.ssh/authorized_keys` にあることを確認します。
+- **User** が、鍵が許可されているアカウントであることを確認します。
+- `BEGIN` と `END` の行を含め、秘密鍵全体を貼り付けます。
+- 鍵にパスフレーズがある場合は **Passphrase** を入力します。
 </Accordion>
 
-<Accordion title="ホストに到達できなかった">
-- **Host** と **Port** が正しいか確認してください
-- サーバーが CloudThinker からの SSH を受け入れているか確認してください（ファイアウォール、セキュリティグループ、許可リスト）
-- SSH デーモンが起動中でそのポートでリッスンしているか確認してください
+<Accordion title="Could not reach the host">
+- **Host** と **Port** を確認します。
+- ファイアウォール、セキュリティグループ、または許可リストで、CloudThinker からの受信 SSH を許可します。
+- `sshd` が稼働していて、そのポートで待ち受けていることを確認します。
+- 45 秒を超えて実行されたテストは、これと同じアドバイスとともにタイムアウトします。
 </Accordion>
 
-<Accordion title="ホスト鍵が変更された">
-- サーバーの再構築や SSH 鍵のローテーション後は想定内です。新しいフィンガープリントを確認して **Trust new host key** を選択してください
-- 変更が予期しないものである場合は、再信頼する前に調査してください
+<Accordion title="Host key changed">
+再構築や鍵のローテーションの後であれば想定どおりです。サーバーでフィンガープリントを確認してから、**Trust new host key** を選んでください。予期していなかった場合は、信頼する前に調査してください。
 </Accordion>
 
-<Accordion title="リモートコマンドが失敗した">
-- 接続は正常ですが、コマンドがゼロ以外の終了コードを返しました
-- コマンド、ユーザーの権限、リモートホスト上のパスを確認してください
+<Accordion title="リモートコマンドが 0 以外のコードで終了した">
+SSH は機能しましたが、サーバーでコマンドが失敗しました。コマンド、パス、ログインユーザーにそれを実行する権限があるかを確認してください。
 </Accordion>
 
 ## セキュリティ
 
 <ConnectionSecurity />
 
-- **専用鍵** — CloudThinker 専用の鍵ペアを生成することで、独立して失効させることができます。
-- **ローテーションと検証** — 鍵を定期的に更新し、再信頼する前に必ずホスト鍵の変更を確認してください。
+- **専用の鍵を使う。** CloudThinker だけが使う鍵は、他の人に影響を与えずに `authorized_keys` から削除できます。
+- **鍵をローテーションする。** 新しい鍵ペアを生成し、新しい公開鍵を `authorized_keys` に追加します。**Settings → Workspace → Connections** を開き、**SSH** を選んで、サーバーの横の鉛筆アイコンをクリックし、**Edit SSH Connection** の **Rotate private key** に新しい鍵を貼り付けて、**Save** をクリックします。確認用のプロンプトを実行し、機能したら古い公開鍵をサーバーから削除します。
+- **再信頼する前に確認する。** フィンガープリントを確認するまでは、すべてのホスト鍵の変更を疑わしいものとして扱ってください。
 
-## 関連
+## 関連ページ
 
 <CardGroup cols={2}>
-  <Card title="エージェント" icon="cloud" href="/ja/guide/agents/overview">
-    CloudThinker と、その作業の仕組み
+  <Card title="Approvals" icon="shield-check" href="/guide/approvals/overview">
+    サーバーを変更する前に CloudThinker がどのように確認するかを制御します。
   </Card>
   <Card title="Kubernetes 接続" icon="/images/icons/kubernetes.svg" href="/ja/guide/connections/kubernetes">
-    ワークロード分析と運用のためのクラスター接続
+    クラスターを接続し、ワークロードを調べます。
   </Card>
 </CardGroup>

@@ -1,102 +1,131 @@
 ---
 title: Pulse 분석
-description: "시간에 따른 신호 볼륨, 노이즈 감소, 클러스터 해결 시간, 소스 전환율을 측정합니다"
-icon: chart-bar
+description: "Pulse가 원시 알림을 조치 가능한 클러스터로 얼마나 잘 바꾸는지 측정하고, 먼저 고칠 가치가 있는 노이즈 소스를 찾습니다."
+icon: chart-line
 ---
 
-Pulse 분석 탭은 신호 파이프라인의 성능을 한눈에 확인할 수 있게 해줍니다 — 얼마나 많은 노이즈가 제거되고 있는지, 클러스터 해결에 얼마나 걸리는지, 어떤 소스가 가장 실행 가능한지(또는 그렇지 않은지).
+Pulse 분석은 알림 파이프라인이 유용한 일을 하고 있는지 알려 줍니다. 한 탭에서 원시 이벤트가 몇 개 들어왔는지, Pulse가 노이즈로 몇 개를 보류했는지, 몇 개가 인시던트에 도달하거나 해결되었는지, 어떤 소스가 가장 많은 양을 보내는지 확인할 수 있습니다.
 
-Pulse 헤더의 **View trends** 버튼으로 접근합니다.
+이 페이지에서 사용하는 몇 가지 용어:
 
----
+- **Raw event**: Datadog 알림 하나나 CloudWatch 알람 하나처럼 Pulse가 받은 알림 하나.
+- **Signal**: 노이즈 억제를 통과한 이벤트.
+- **Suppressed event**: Pulse가 노이즈로 판단했지만 집계할 수 있도록 보관한 이벤트(Rate limit, Snooze, Verdict). 버려진 중복은 보관되지 않습니다.
+- **Stored events**: 신호와 억제된 이벤트의 합.
+- **Cluster**: Pulse가 하나의 문제로 취급하는 관련 신호 묶음.
+- **Reached an outcome**: 클러스터가 인시던트에 연결되었거나 해결된 신호. **Correlation yield**와 **Clusters routed** 열이 모두 이를 집계합니다(자동 종료 포함, [자동 해결된 클러스터](#자동-해결된-클러스터) 참조).
 
-## 핵심 지표
+전체 수명 주기는 [Clusters](/ko/guide/pulse/clusters)를 참조하세요.
 
-| 지표 | 의미 |
+## Signal quality 열기
+
+<Steps>
+  <Step title="Insights로 이동">
+    사이드바에서 **Live Operations** 아래의 **Resolve → Insights**를 엽니다. 워크스페이스 Admin, Developer, Viewer 역할 모두 열 수 있습니다.
+  </Step>
+  <Step title="Signal quality 탭 선택">
+    **Signal quality** 탭을 클릭합니다. 다른 탭(**Reliability**와 **Accuracy and trust**)은 [Resolve insights](/guide/incident/insights)에서 다룹니다.
+  </Step>
+  <Step title="시간 창 설정">
+    오른쪽 상단의 창 선택기를 사용합니다. 옵션은 **Last 1 hour**부터 **Last 30 days**까지입니다. 기본값은 **Last 7 days**입니다. 각 카드는 아래 **창 필터 기준** 열에 나열된 서로 다른 시간으로 필터링합니다. 8일 전에 형성되어 어제 해결된 클러스터는 **Last 7 days**의 **Cluster MTTR**에서 빠지지만, 최근 7일간의 신호는 여전히 **Correlation yield**에 집계됩니다.
+
+    **성공 상태:** 메트릭 카드 네 개와 그 아래 **Top noisy sources** 표가 나타납니다. 창 안에 도착한 이벤트가 없으면 표에 "No signals ingested in this period"가 표시됩니다.
+  </Step>
+</Steps>
+
+숫자는 탭이 로드될 때 계산됩니다. 새로 고치려면 다시 로드하세요. 내보내기는 없습니다.
+
+## 각 메트릭의 의미
+
+| 카드 | 측정 대상 | 계산 방식 | 창 필터 기준 |
+|---|---|---|---|
+| **Correlation yield** | 알림량 중 결과에 도달한 비율 | 결과에 도달한 신호를 전체 저장된 이벤트로 나눈 값. 클러스터가 아닌 이벤트를 집계하며, (상위 10개뿐 아니라) 모든 소스를 포함합니다. | 신호 시간 |
+| **Cluster MTTR** | 문제가 열린 상태로 머무는 시간 | 클러스터의 첫 신호부터 해결됨으로 표시된 시점까지의 중앙값(자동 종료 포함, [자동 해결된 클러스터](#자동-해결된-클러스터) 참조). | 클러스터가 처음 형성된 시점 |
+| **Signals ingested** | 원시 볼륨 | 저장하지 않고 버린 중복을 포함하여 Pulse가 받은 모든 전송. 웹훅의 속도 제한을 넘은 전송은 집계되지 않습니다(아래 경고 참조). | 전송이 도착한 시간대 |
+| **Noise suppressed** | Pulse가 걸러 낸 양 | 억제된 이벤트를 저장된 이벤트로 나눈 값. 버려진 중복은 저장되지 않으므로 **Signals ingested**에는 집계되지만 여기에는 집계되지 않습니다. 부제에는 `1,240 signals → 38 clusters`처럼 신호가 클러스터로 합쳐지는 모습이 표시됩니다. | 신호 시간 |
+
+버려진 중복 때문에 **Signals ingested**는 보통 다른 카드의 바탕이 되는 저장된 이벤트 수보다 큽니다.
+
+**Cluster MTTR**은 클러스터에 대한 중앙값입니다. **Reliability** 탭의 **MTTR**은 인시던트에 대한 평균입니다. 둘은 다를 수 있습니다.
+
+<Warning>
+웹훅의 속도 제한(기본 시간당 1,000건)을 넘은 전송은 조용히 버려지고, 여전히 `200`을 반환하며, 이 탭 어디에도 나타나지 않습니다. Resolve는 버려진 개수를 표시하지 않습니다. 급증 시의 알림이 누락되었다면 그 시간에 도구가 보낸 수를 **Signals ingested**와 비교한 다음, 웹훅의 제한을 높이거나 모니터를 나누세요. [Limits and responses](/ko/guide/incident/webhook-integrations/overview#제한과-응답)를 참조하세요.
+</Warning>
+
+### 자동 해결된 클러스터
+
+새 신호 없이 12시간이 지난 클러스터는 스스로 닫히고 해결된 것으로 집계됩니다. 이는 세 숫자에 영향을 줍니다.
+
+- **Correlation yield**와 **Clusters routed**는 아무도 보지 않았더라도 이를 결과에 도달한 것으로 집계합니다. 높은 yield는 모든 알림이 중요했다는 뜻이 아니라, 알림이 끝난 클러스터로 정리되었다는 뜻입니다. 인시던트, 사람, 또는 에이전트가 맡고 있는 열린 클러스터를 보여 주는 **Resolve → Signals**의 **Handled** 레인과 함께 읽으세요.
+- **Cluster MTTR**은 마지막 신호가 아니라 자동 종료 시간까지를 측정합니다.
+
+<Warning>
+손대지 않은 클러스터는 해결되는 데 최소 12시간이 걸리므로 **Cluster MTTR**에 12시간 이상을 더합니다. 대부분의 클러스터가 스스로 닫힌다면 중앙값은 주로 그 타이머를 반영합니다. MTTR이 실제 복구를 추적하게 하려면 문제가 끝났을 때 클러스터 패널에서 **Resolve**를 클릭하세요. [Action reference](/ko/guide/pulse/clusters#작업-참조)를 참조하세요.
+</Warning>
+
+<Note>
+**Noise suppressed**는 **Reliability** 탭의 **Event → incident reduction**과 같은 숫자가 아닙니다. Reliability는 원시 이벤트가 인시던트로 합쳐지는 정도를 측정합니다. Signal quality는 저장된 이벤트 대비 억제된 이벤트를 측정합니다. 각 숫자는 시간에 따른 자기 자신과만 비교하세요.
+</Note>
+
+## Top noisy sources
+
+표는 창 안에서 가장 많은 이벤트를 보낸 소스 10개의 순위를 매깁니다.
+
+| 열 | 의미 |
 |---|---|
-| **Correlation Yield** | 인시던트로 라우팅되거나 클러스터를 통해 해결된 신호의 비율. 낮은 수율(예: 8%)은 대부분의 신호가 실행 불가능으로 올바르게 필터링되고 있음을 의미합니다 — 잘 조정된 설정에서는 정상적이고 건강한 상태입니다. |
-| **Cluster MTTR** | 선택된 기간 동안 해결된 모든 클러스터의 평균 해결 시간. 팀(및 AI 에이전트)이 상관된 이벤트를 얼마나 빠르게 종료하는지 추적합니다. |
+| **Source** | `webhook.datadog`이나 계정과 리전이 포함된 CloudTrail 스트림 같은 원시 소스 이름. 긴 이름은 마우스를 올리면 전체가 보입니다. |
+| **Signals** | 이름과 달리, 창 안에서 해당 소스의 모든 저장된 이벤트 — 신호만이 아니라 신호와 Pulse가 보관한 억제된 이벤트의 합. 버려진 중복은 집계되지 않습니다. |
+| **Suppressed** | 해당 소스의 저장된 이벤트 중 Pulse가 억제한 비율 |
+| **Clusters routed** | 이름과 달리, 해당 소스의 저장된 이벤트 중 클러스터가 인시던트에 연결되었거나 **또는** 해결된 비율(자동 종료 포함, [자동 해결된 클러스터](#자동-해결된-클러스터) 참조). 누군가 맡고 있는 열린 클러스터는 **Resolve → Signals**의 **Handled** 레인을 사용하세요. |
 
----
+하나의 통합이 여러 행으로 나타날 수 있습니다. 예를 들어 AWS 연결 하나는 계정과 리전마다 별도의 스트림을 만들 수 있습니다.
 
-## 신호 볼륨
+## 결과 읽기
 
-<Frame>
-  <img src="/images/pulse/03-pulse-analytics-overview.jpg" alt="Correlation Yield 8%, Cluster MTTR 3410분, 일별 신호 볼륨 누적 막대 차트, 주별 클러스터 라이프사이클 영역 차트, 상위 노이즈 소스 테이블이 표시된 분석 페이지" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>분석 개요 — KPI, 심각도별 신호 볼륨, 클러스터 라이프사이클, 상위 노이즈 소스</p>
+숫자를 사용하여 조정 시간을 어디에 쓸지 결정하세요. 소스에 따라 다르기 때문에 건강한 비율에 대한 기준은 없습니다. 각 숫자를 주별 자체 추세와 비교하세요.
 
-**Signal Volume** 차트는 Critical, High, Medium, Low, Info 심각도별로 분류된 일별 신호 수를 보여줍니다. **Stacked / Share %** 토글을 사용하여 절대 수와 비율 보기 사이를 전환하세요.
+| 보이는 것 | 보통 의미하는 것 | 할 일 |
+|---|---|---|
+| **Signals**가 높고 **Clusters routed**가 0%에 가까운 소스 | 많이 보내지만 거의 아무것도 인시던트나 해결에 도달하지 않음 | **Resolve → Signals**를 열고 소스 필터(선택하기 전까지 **All sources**로 표시)에서 해당 소스를 고르세요. 소스에서 알림을 강화하세요. 알림을 고치는 동안 음소거하려면 클러스터 행에서 **Snooze**를 클릭하세요. [Noise suppression](/ko/guide/pulse/clusters#노이즈-억제)을 참조하세요 |
+| 전체적으로 낮은 **Correlation yield** | 대부분의 이벤트가 인시던트나 해결에 도달하지 않음 | 먼저 상위 소스가 노이즈인지 확인하세요. 그렇지 않다면 각 웹훅이 한 장애의 반복이 묶이도록 **Resource ID Path**를, 한 서비스에 대한 서로 다른 알림이 합쳐질 수 있도록 **Service Path**를 단일 서비스 이름에 매핑하는지 확인하세요. [How signals join a cluster](/ko/guide/pulse/clusters#신호가-클러스터에-합류하는-방식)를 참조하세요. |
+| **Cluster MTTR**이 주마다 증가 | 문제가 더 오래 열린 상태로 머무름 | [On-call](/guide/incident/oncall)에서 담당과 라우팅을 확인하고, 아무도 맡지 않은 클러스터를 찾아보세요 |
+| 한 소스의 **Noise suppressed**가 갑자기 급증 | 새로운 이벤트 패턴, 또는 이제 너무 많이 일치하는 snooze(표 아래의 점검 참조) | **Resolve → Signals**의 **History** 레인을 열고, 소스 필터에서 해당 소스를 고르고, 그 신호 몇 개를 여세요. 신호의 세부 정보 패널에 Pulse가 억제했는지와 그 이유가 나옵니다. snooze가 원인이라면 일치하는 신호에서 **Unsnooze**를 클릭하세요. [Noise suppression](/ko/guide/pulse/clusters#노이즈-억제)을 참조하세요 |
 
-이 차트의 급증은 실제 문제보다 인프라 이벤트(배포, 비용 이상 기간, 보안 발견)에 해당하는 경우가 많습니다 — Cluster Lifecycle 차트와 교차 참조하여 해당 급증이 실제로 실행 가능한 클러스터를 얼마나 생성했는지 확인하세요.
+Pulse는 네 가지 점검으로 이벤트를 억제합니다.
 
----
+- 반복 전송의 중복 제거
+- 소스별 속도 제한
+- 누군가 설정한 **Snooze**
+- 학습한 노이즈 패턴
 
-## 클러스터 라이프사이클
+각 점검의 세부 내용은 [Noise suppression](/ko/guide/pulse/clusters#노이즈-억제)에 있습니다.
 
-**Cluster Lifecycle** 차트는 시간에 따라 클러스터가 상태(Forming, Active, Routed, Resolved)별로 어떻게 분포했는지 보여줍니다. 건강한 패턴은 대부분의 클러스터가 Routed로 에스컬레이션되지 않고 Active → Resolved로 이동하는 것입니다.
+예를 들어 `webhook.datadog`, **Signals** 4,800, **Suppressed** 92%, **Clusters routed** 1%인 행은 Datadog이 반복을 많이 보내고 그중 거의 아무것도 어디로도 이어지지 않는다는 뜻입니다. **Resolve → Signals**에서 그 신호 몇 개를 열어 원인이 되는 모니터를 찾은 다음, Datadog에서 임계값을 높이거나 끄세요.
 
-Routed 클러스터가 해당하는 Resolved 항목 없이 쌓이고 있다면, 인시던트가 생성되었지만 종료되지 않고 있을 수 있습니다 — 인시던트 목록에서 오래된 열린 인시던트를 확인해 보세요.
+이 숫자들은 판정이 아니라 단서로 취급하세요. 소스나 snooze를 바꾸기 전에 실제 클러스터와 신호를 살펴보세요.
 
----
+## 문제 해결
 
-## 억제 원인별 현황
-
-<Frame>
-  <img src="/images/pulse/04-pulse-suppression-heatmap.jpg" alt="중복, 플래핑, 노이즈 시그니처, 전송률 제한, 심각도 정규화, 스누즈, 연쇄의 주간 트렌드를 보여주는 억제 원인별 라인 차트와 요일·시간대별 전환율 히트맵" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>시간에 따른 억제 분류 현황과 시간대별 신호-인시던트 전환율</p>
-
-**Suppression by Reason** 차트는 7개 억제 레이어 중 어느 것이 얼마나 많이 발생하고 있는지 보여줍니다. 주요 확인 사항:
-
-- **Duplicate 지배** — 정상; 소스가 예상대로 중복 이벤트를 내보내고 있음
-- **Rate Limited 급증** — 소스가 잘못 구성되었거나 알림 폭풍이 발생 중
-- **Flapping 증가** — 리소스가 진동하고 있음; 근본 원인 조사 필요
-- **Snoozed 증가** — 팀이 수동으로 노이즈를 관리 중; 영구적인 노이즈 시그니처 규칙이 도움이 될지 검토 필요
-
----
-
-## 전환율 히트맵
-
-히트맵은 요일 및 시간대별로 분류된 신호-인시던트 전환율을 보여줍니다. 녹색 셀(100%)은 해당 기간의 모든 신호가 인시던트가 되었음을 의미하며, 빈 셀은 신호가 없었음을 의미합니다.
-
-이를 통해 가장 실행 가능한 신호가 언제 도착하는지 파악할 수 있습니다 — 온콜 일정 수립과 패턴 파악(예: 배치 작업 실행 후 주말 오전에 안정적으로 나타나는 비용 이상)에 유용합니다.
-
----
-
-## 상위 노이즈 소스
-
-**Top Noisy Sources** 테이블은 신호 볼륨 기준으로 소스를 세 개의 열로 랭킹합니다:
-
-| 열 | 알 수 있는 내용 |
+| 문제 | 해결 |
 |---|---|
-| **Signals** | 선택 기간 동안 이 소스의 총 신호 수 |
-| **% Suppressed** | 해당 소스 출력 중 노이즈로 필터링된 비율 |
-| **% Clusters Routed** | 클러스터 중 인시던트로 에스컬레이션된 비율 |
+| 모든 카드가 0이거나 비어 있음 | 창 안에 도착한 이벤트가 없습니다. 창을 넓히거나, [Connect Pulse sources](/ko/guide/pulse/setup)에서 소스가 보내고 있는지 확인하세요. |
+| **Cluster MTTR**이 비어 있음 | 창 안에 해결된 클러스터가 없습니다. 클러스터가 해결되면 채워집니다. |
+| "Failed to Load Signals Analysis" | **Retry**를 클릭하세요. 계속 실패하면 페이지를 다시 로드하세요. 그래도 실패한다면 워크스페이스 이름, 선택한 시간 창, 오류 발생 시간, 오류 텍스트를 적어 [support@cloudthinker.io](mailto:support@cloudthinker.io)로 이메일을 보내세요. |
+| **Insights** 대신 설정 화면이 보임 | 워크스페이스에 아직 인시던트가 없고 아무도 Resolve 설정을 마치지 않았습니다. **Connect monitoring**을 클릭하거나([Connect Pulse sources](/ko/guide/pulse/setup) 참조), Admin이 **Skip for now**를 클릭할 수 있습니다. |
 
-높은 신호 볼륨, 낮은 억제율, 낮은 라우팅 비율을 가진 소스(예: `aws.config.us-east-1`의 0% 라우팅)는 실제 조치로 이어지지 않는 많은 신호를 생성하고 있습니다 — 특정 패턴을 조정하거나 스누즈할 후보입니다. 높은 라우팅 비율을 가진 소스(예: `webhook.grafana`의 65% 라우팅)는 실행 가능성이 높으며 투자할 가치가 있습니다.
-
----
-
-## 필터
-
-모든 차트는 분석 페이지 상단의 필터 바에 응답합니다:
-
-- **Date range** — 메인 피드와 동일한 프리셋(1h~30d, 또는 사용자 지정)
-- **Severity** — Critical/High만 집중하여 가장 긴급한 신호 패턴 측정
-- **Source** — 단일 소스를 격리하여 노이즈 프로필 감사
-- **Category** — 비용, 보안, 컴퓨팅 신호를 별도로 검사
-- **Show suppressed** — 볼륨 카운트에 억제된 신호 포함
-
----
-
-## 관련 문서
+## 다음 단계
 
 <CardGroup cols={2}>
-  <Card title="클러스터 & 억제" icon="layer-group" href="/ko/guide/pulse/clusters">
-    Pulse가 신호를 클러스터로 그룹화하는 방식과 7개 억제 레이어를 이해합니다.
+  <Card title="클러스터와 억제 조정" icon="layer-group" href="/ko/guide/pulse/clusters">
+    노이즈 소스 표가 보여 주는 내용에 따라 조치합니다.
   </Card>
-  <Card title="Pulse 설정" icon="bolt" href="/ko/guide/pulse/setup">
-    모니터링 소스를 연결하고 워크스페이스의 감지 규칙을 구성합니다.
+  <Card title="Connect Pulse sources" icon="plug" href="/ko/guide/pulse/setup">
+    Pulse에 데이터를 보내는 소스를 추가하거나 수정합니다.
+  </Card>
+  <Card title="Resolve insights" icon="chart-mixed" href="/guide/incident/insights">
+    Signal quality와 함께 안정성과 정확도 결과를 확인합니다.
+  </Card>
+  <Card title="Investigation and RCA" icon="magnifying-glass" href="/ko/guide/incident/root-cause-analysis">
+    라우팅된 클러스터를 따라 조사로 이동합니다.
   </Card>
 </CardGroup>

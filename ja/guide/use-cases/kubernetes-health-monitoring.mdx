@@ -1,97 +1,276 @@
 ---
 title: "Kubernetesヘルスモニタリング"
-description: "CloudThinker を使ってEKSクラスターの健全性を監視し、リソースの無駄を発見し、問題が本番に到達する前にHPA推奨事項を取得する。"
+description: "Kubernetes クラスターを接続し、その健全性を普通の言葉で確認し、kubectl を手で実行せずに失敗しているポッドを調査します。"
 icon: heart-pulse
 ---
 
-CloudThinker はAmazon EKSクラスターを継続的に監視し、過剰にプロビジョニングされたポッド、活用不足のノード、オートスケーリングポリシーの欠落を、障害が発生する前に発見します。
+CloudThinker は読み取り専用のサービスアカウントを通じて Kubernetes クラスターを読み取り、チャットで回答します。そのため、イベント、再起動、使用量を突き合わせるために何十ものポッドに対して `kubectl get`、`describe`、`logs` を実行する必要がなくなります。このウォークスルーでは、空のワークスペースから始めて、約 15 分でクラスターのヘルスチェックと失敗しているポッドの調査まで進みます。
 
-## シナリオ
+## 必要なもの
 
-あるプラットフォームチームが複数のネームスペースにまたがる本番EKSクラスターを運用しています。CPUアラートは断続的に発生していますが、調査は遅い——エンジニアが何百ものポッドに対して手動で `kubectl` コマンドを実行し、ログ・メトリクス・イベントを相関させる必要があるからです。
+| 要件 | 理由 |
+|-------------|-----|
+| CloudThinker がインターネット経由で API サーバーに到達できるクラスター | コマンドは CloudThinker のクラウドで実行されるため、プライベート専用のエンドポイントでは接続テストが失敗します。API アクセスを制限している場合（EKS public access CIDRs、GKE authorized networks、AKS authorized IP ranges）は、`0.0.0.0/0` に開放するのではなく、CloudThinker の送信元 IP を許可リストに追加してください。最新のリストは CloudThinker の担当者にお問い合わせください。[プライベートなサービスに到達する](/ja/guide/connections/overview#プライベートサービスへの到達)を参照してください。 |
+| ネームスペース、ClusterRole、ClusterRoleBinding を作成できる `kubectl` アクセス | CloudThinker がサインインに使う読み取り専用アカウントを作成するため |
+| 任意: [Metrics Server](https://github.com/kubernetes-sigs/metrics-server) | なくてもポッドのステータス、イベント、ノードの状態は取得できますが、CPU とメモリのリアルタイムの数値は取得できません |
 
-<Frame>
-  <img src="/images/use-cases/kubernetes-health-monitoring/01-manual-troubleshooting-challenges.jpg" alt="ネームスペースとリソースをまたいだKubernetesの手動トラブルシューティングの課題" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>Kubernetesの手動トラブルシューティングの課題</p>
+<Info>
+1 つのワークスペースが持てる Kubernetes 接続は **1 つ** で、CloudThinker は kubeconfig の **current context** で動作します。調査したいクラスターを 1 つ選んでください。複数のクラスターがある場合は、クラスターごとに 1 つのワークスペースを使うか、Rancher が管理するクラスター全体のインベントリと健全性を見るために [Rancher 接続](/guide/connections/rancher)を追加してください。
+</Info>
 
-チームは CloudThinker にクラスター全体のエンドツーエンドの評価、リソースの無駄の特定、オートスケーリングポリシーが欠けている箇所への推奨を依頼します。
-
-## ウォークスルー
+## ステップ 1: クラスターを接続する
 
 <Steps>
+  <Step title="読み取り専用のサービスアカウントを作成する">
+    以下のマニフェストを `cloudthinker-reader.yaml` として保存し、適用します:
 
-### CloudThinker をクラスターに接続する
+    ```bash
+    kubectl apply -f cloudthinker-reader.yaml
+    ```
 
-[Kubernetes接続ガイド](/ja/guide/connections/kubernetes)に従い、CloudThinker にEKSクラスターへのアクセス権を付与します。接続が**Connected**と表示されたら、CloudThinker はクラスターを直接クエリできます。
+    これにより、`cloudthinker` ネームスペース、`cloudthinker-reader` サービスアカウント、それにバインドされた ClusterRole、有効期限のないトークン Secret が作成されます。このロールが許可するのは `get`、`list`、`watch` だけで、Secrets に対しては一切許可しません:
 
-### ポッドのリソース使用率を分析する
+    | API グループ | リソース |
+    |---|---|
+    | core (`""`) | pods, pods/log, nodes, namespaces, services, endpoints, events, configmaps, persistentvolumeclaims, persistentvolumes, resourcequotas, limitranges, serviceaccounts, replicationcontrollers |
+    | `apps` | deployments, replicasets, statefulsets, daemonsets |
+    | `batch` | jobs, cronjobs |
+    | `autoscaling` | horizontalpodautoscalers |
+    | `networking.k8s.io` | ingresses, networkpolicies |
+    | `policy` | poddisruptionbudgets |
+    | `storage.k8s.io` | storageclasses |
+    | `rbac.authorization.k8s.io` | roles, rolebindings, clusterroles, clusterrolebindings |
+    | `metrics.k8s.io` | pods, nodes（`get` と `list`） |
 
-```text
-Analyze pod resource utilization in the production namespace and write it up as a report
-```
+    <Accordion title="cloudthinker-reader.yaml">
+      ```yaml
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: cloudthinker
+      ---
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: cloudthinker-reader
+        namespace: cloudthinker
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: cloudthinker-reader
+      rules:
+      - apiGroups: [""]
+        resources: ["pods", "pods/log", "nodes", "namespaces", "services", "endpoints", "events", "configmaps", "persistentvolumeclaims", "persistentvolumes", "resourcequotas", "limitranges", "serviceaccounts", "replicationcontrollers"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["apps"]
+        resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["batch"]
+        resources: ["jobs", "cronjobs"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["autoscaling"]
+        resources: ["horizontalpodautoscalers"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["networking.k8s.io"]
+        resources: ["ingresses", "networkpolicies"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["policy"]
+        resources: ["poddisruptionbudgets"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["storage.k8s.io"]
+        resources: ["storageclasses"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+        verbs: ["get", "list", "watch"]
+      - apiGroups: ["metrics.k8s.io"]
+        resources: ["pods", "nodes"]
+        verbs: ["get", "list"]
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: cloudthinker-reader
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: cloudthinker-reader
+      subjects:
+      - kind: ServiceAccount
+        name: cloudthinker-reader
+        namespace: cloudthinker
+      ---
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: cloudthinker-reader-token
+        namespace: cloudthinker
+        annotations:
+          kubernetes.io/service-account.name: cloudthinker-reader
+      type: kubernetes.io/service-account-token
+      ```
+    </Accordion>
 
-<Frame>
-  <img src="/images/use-cases/kubernetes-health-monitoring/02-pod-resource-utilization.jpg" alt="CPUとメモリの使用パターンを示すポッドリソース使用率分析" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>ポッドリソース使用率分析</p>
+    トークン Secret が自動で失効することはありません。ローテーションするには、Secret を削除し、マニフェストを再度適用し、kubeconfig を作り直して CloudThinker で差し替えます。コマンドとアクセスの取り消し方法については [Security](/ja/guide/connections/kubernetes#セキュリティ) を参照してください。
+  </Step>
+  <Step title="そのアカウント用の kubeconfig を作成する">
+    現在の `kubectl` コンテキストが対象クラスターになっているシェルからこれを実行します。サーバー URL はそのコンテキストから、トークンと CA 証明書は Secret から読み取るため、入力するものはありません。`cloudthinker-kubeconfig.yaml` が書き出されます:
 
-<Frame>
-  <img src="/images/use-cases/kubernetes-health-monitoring/03-pod-analysis-visualization.jpg" alt="パフォーマンス推奨事項を伴うポッド分析の可視化" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>パフォーマンス推奨事項を伴うポッド分析の可視化</p>
+    ```bash
+    SERVER=$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')
+    CA=$(kubectl get secret cloudthinker-reader-token -n cloudthinker -o jsonpath='{.data.ca\.crt}')
+    TOKEN=$(kubectl get secret cloudthinker-reader-token -n cloudthinker -o jsonpath='{.data.token}' | base64 --decode)
 
-CloudThinker は3つの知見を表面化します。auth-serviceとnotification-workerは過剰プロビジョニング（CPU使用率18〜21%）、api-gatewayとcache-redisは適切なサイズ、そしてpayment-processorはCPU 80〜86%・メモリ 88〜94%と危険なほど過小プロビジョニングされており、OOMキルとサービス障害の高リスク状態にあります。
+    cat > cloudthinker-kubeconfig.yaml <<EOF
+    apiVersion: v1
+    kind: Config
+    clusters:
+    - name: target
+      cluster:
+        server: ${SERVER}
+        certificate-authority-data: ${CA}
+    users:
+    - name: cloudthinker-reader
+      user:
+        token: ${TOKEN}
+    contexts:
+    - name: cloudthinker
+      context:
+        cluster: target
+        user: cloudthinker-reader
+    current-context: cloudthinker
+    EOF
+    ```
 
-### 活用不足のノードを特定する
+    古い macOS では、`base64 --decode` を `base64 -D` に置き換えてください。次に、ファイルをテストします:
 
-```text
-Show nodes with less than 30% CPU utilization
-```
+    ```bash
+    kubectl --kubeconfig cloudthinker-kubeconfig.yaml get nodes
+    ```
 
-<Frame>
-  <img src="/images/use-cases/kubernetes-health-monitoring/04-node-cpu-utilization.jpg" alt="活用不足のインスタンスとコストの無駄を示すノードCPU使用率分析" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>活用不足のインスタンスを示すノードCPU使用率分析</p>
+    ノードが `STATUS` `Ready` で一覧表示されれば、CloudThinker の接続テストも成功します。接続テストは同じコマンドを実行します。
+  </Step>
+  <Step title="CloudThinker でアップロードする">
+    **Settings → Workspace → Connections** を開き、**Kubernetes** を選択し、**KUBECONFIG** フィールドでファイルをアップロードして **Connect** をクリックします。
 
-CloudThinker は平均CPU使用率が30%未満（最低12〜15%のものもある）の5つのノードを発見し、月額約573ドルを無駄にしていることを特定します。軽量ワークロードで動作する過大サイズのt3.xlargeインスタンスと不適切なポッドスケジューリングの組み合わせにより、一部のノードにはポッドが2〜3個しかない一方、他のノードには8〜9個が集中しています。
-
-### HPA推奨事項を取得する
-
-```text
-Recommend HPA policies for the web deployments
-```
-
-<Frame>
-  <img src="/images/use-cases/kubernetes-health-monitoring/05-hpa-policy-recommendations.jpg" alt="Webデプロイメントのオートスケーリング設定に対するHPAポリシー推奨事項" />
-</Frame>
-<p style={{textAlign: 'center', fontSize: '0.9em', color: '#666', marginTop: '8px'}}>オートスケーリングのためのHPAポリシー推奨事項</p>
-
-CloudThinker はpayment-processorをクリティカルリスクとして特定します——レプリカが2つのみでCPU使用率は80〜86%、オートスケーリングは未設定です。api-gatewayにはトラフィックスパイクに対応するHPAの追加を推奨し、user-serviceとauth-serviceからは余剰キャパシティの削除を推奨します。
-
+    ステータスは **Connecting** と **Verifying** を経て **Connected** になります。テストが失敗すると、ダイアログにクラスターからのエラーとともに **Failed** または **Timed out** が表示されます。[トラブルシューティング](#トラブルシューティング)を参照してください。
+  </Step>
 </Steps>
 
-## 成果の要因
+<Warning>
+普段使っている kubeconfig はアップロードしないでください。ローカルパスを参照するファイルや、`exec` プラグイン（クラウド CLI など）でサインインするファイルは、手元のマシンのツールに依存するため、CloudThinker では失敗します。**そのアカウント用の kubeconfig を作成する** で作成したトークンベースのファイルなら、どちらの問題も避けられます。
+</Warning>
 
-- **[CloudThinker](/ja/guide/agents/overview)** がクラスターAPIを直接クエリし、手動の `kubectl` セッションとツール切り替えを置き換えます。
-- **クロスレイヤー相関**により、ポッドの使用率・ノードキャパシティ・スケジューリングパターンを単一の分析パスでリンクします。
-- **出力の形を言葉で指定すること**（「レポートとして」）が、CloudThinker が知見を表面化する前に推論できる構造化された出力を生成します。
-- **推奨を言葉で求めること**が、生のメトリクスダンプではなく、実行可能なHPAポリシー変更を生成します。
-- **[Automations](/guide/automation/automations)** でこの分析を再実行し、オンコール通知の前に問題を確認できます。
+## ステップ 2: クラスターの健全性を確認する
 
-## 試してみる
+まず、接続が想定どおりのものを見ているかを簡単に確認します:
+
+```text
+Check the Kubernetes connection: list the namespaces, the node count, and any nodes that are not Ready
+```
+
+ネームスペースの一覧、ノード数、各ノードのステータスが返ってきます。使用量の数値がない場合は、Metrics Server がインストールされていないことが回答に示されます。
+
+次に、より広い全体像を尋ねます。以下のプロンプトは、それぞれクラスターの 1 つの層を対象にしています:
+
+| 目的 | プロンプト例 | 返ってくるもの |
+|------|----------------|-------------------|
+| ノードの逼迫 | `Which nodes are under memory or disk pressure, and what is using the most memory?` | ノードの状態、キャパシティと割り当て可能なリソース、使用量の多いもの（Metrics Server がある場合） |
+| サイジング | `Analyze pod resource utilization in the payments namespace` | リクエストとリミットを実際の使用量と比較し、過剰または過少にプロビジョニングされたポッドを示します |
+| 余剰キャパシティ | `Show nodes with less than 30% CPU utilization` | 使用率の低いノードと、それらへのポッドの分散状況 |
+| オートスケーリング | `Recommend HPA policies for the deployments in the payments namespace` | オートスケーラーがない、またはレプリカが少なすぎるデプロイメントと、推奨されるポリシー |
+
+各プロンプトでは、ネームスペースか `app.kubernetes.io/part-of=web` のようなラベルを指定してください。「the web deployments」のようなあいまいな表現では、CloudThinker が意図を推測することになります。
+
+あるチームの `payments` ネームスペースでは、サイジングのプロンプトによって、CPU 約 20% で動作している 2 つのサービス（過剰プロビジョニング）と、CPU 80% 超でメモリリミットに近い `payment-processor` が見つかりました。このポッドは OOM（メモリ不足）キルのリスクがありました。続いてオートスケーリングのプロンプトで、このポッドのレプリカが 2 つしかなく、Horizontal Pod Autoscaler（HPA）もないことがわかりました。
+
+## ステップ 3: 失敗しているポッドを調査する
+
+すでに何かが壊れている場合は、ネームスペースを指定して症状を説明します:
+
+```text
+Which pods in the payments namespace are crash-looping, and what do their logs say?
+```
+
+CloudThinker はクラッシュループ、保留中、または再起動を繰り返しているポッドを見つけ、そのログと警告イベントを読み、考えられる原因を 1 つの回答で説明します。同じ会話で続けて質問し、原因を絞り込みます:
+
+```text
+Why can't the pending pods in payments be scheduled?
+Compare the memory limit of payment-processor with its current usage
+```
+
+スケジューリングの問題では、回答はポッドのリクエストと各ノードでまだ割り当て可能な量を比較します。再起動では、再起動をログ、イベント、リソースリミットに結び付けます。
+
+### 修正を適用する
+
+読み取り専用ロールでは、`scale`、`rollout restart`、`cordon`、`drain`、`apply` などの変更コマンドは、承認した後でも `403` で失敗します。変更を許可するには、まず必要な verb だけを持つ Role をバインドし、CloudThinker が尋ねたときにコマンドを承認します。この Role は、CloudThinker が `payments` 内のデプロイメントだけをスケールおよび再起動できるようにします:
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cloudthinker-scale
+  namespace: payments
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments", "deployments/scale"]
+  verbs: ["patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cloudthinker-scale
+  namespace: payments
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cloudthinker-scale
+subjects:
+- kind: ServiceAccount
+  name: cloudthinker-reader
+  namespace: cloudthinker
+```
+
+cordon と drain はノードに作用するため、ClusterRole が必要です。[Write access](/ja/guide/connections/kubernetes#書き込みアクセス) と [Approvals](/guide/approvals/overview) を参照してください。
+
+## スケジュールで実行する
+
+プロンプトで役に立つ回答が得られたら、それをスケジュールで再実行し、誰かが呼び出される前にヘルスチェックが届くようにします。サイドバーで **Automations** を開き、**New automation** を選択します。**What should the agent do for you?** ボックスにジョブを説明します（またはチャットで `/creating-automation` と入力します）。例:
+
+```text
+Every weekday at 08:00, check the payments namespace for crash-looping or pending pods and nodes under memory or disk pressure, and summarize what changed since yesterday
+```
+
+デフォルトでは、各実行は新しい会話を開始し、実行結果はその Automation 自体のページに表示されます。結果や失敗を Slack、Teams、Google Chat、メールで受け取るには、[通知](/ja/guide/notifications)を設定してください。[Automations](/guide/automation/automations) を参照してください。
+
+## トラブルシューティング
+
+<AccordionGroup>
+  <Accordion title="接続テストがクラスターに到達できない">
+    kubeconfig の API サーバーのアドレスにインターネットから到達できません。VPN 専用になっていないか確認してください。許可リストを使っている場合（EKS public access CIDRs、GKE authorized networks、AKS authorized IP ranges）は、CloudThinker の送信元 IP を追加してください。最新のリストは CloudThinker の担当者にお問い合わせください。
+  </Accordion>
+  <Accordion title="回答に CPU やメモリの数値がない">
+    Metrics Server がインストールされていないか、準備ができていません。`kubectl top nodes` を実行して確認してください。ポッドのステータス、イベント、ノードの状態は、Metrics Server がなくても取得できます。
+  </Accordion>
+  <Accordion title="回答で一部のリソースの 403 に言及される">
+    ClusterRole がそのリソースをカバーしていません。エラーにリソース名が示されるので、ロールに追加してください（または、Secrets のように意図的に除外したままにします）。
+  </Accordion>
+  <Accordion title="回答が別のクラスターについてのものになる">
+    CloudThinker は kubeconfig の current context を使います。対象のクラスターからファイルを作り直してください。次に、Connections で **Kubernetes** を開き、接続の行にある鉛筆アイコンをクリックし、**Edit Instance** で **Replace…** をクリックして新しいファイルをアップロードし、**Save and test** をクリックします。
+  </Accordion>
+  <Accordion title="テストが exec プラグインまたは file not found のエラーで失敗する">
+    ローカルコマンド（`aws`、`gcloud`、`kubelogin` など）でサインインする kubeconfig、またはローカルファイルを参照する kubeconfig をアップロードしています。ステップ 1 でトークンベースの kubeconfig を作成し、代わりにそれをアップロードしてください。`aws eks update-kubeconfig` と `gcloud container clusters get-credentials` が作成するデフォルトの kubeconfig はどちらも `exec` プラグインを使うため、アップロードしないでください。
+  </Accordion>
+</AccordionGroup>
+
+## 次のステップ
 
 <CardGroup cols={2}>
-  <Card title="エージェント" icon="robot" href="/ja/guide/agents/overview">
-    CloudThinker と、その作業の仕組み
-  </Card>
   <Card title="Kubernetes接続" icon="/images/icons/kubernetes.svg" href="/ja/guide/connections/kubernetes">
-    CloudThinkerをEKSクラスターに接続するステップバイステップガイド
+    完全なセットアップ、権限マニフェスト、アクセスの取り消し方法
   </Card>
-  <Card title="Pulse クラスター" icon="diagram-project" href="/ja/guide/pulse/clusters">
-    関連する Kubernetes シグナルをインシデントになる前にまとめる
-  </Card>
-  <Card title="Automations" icon="calendar-check" href="/guide/automation/automations">
-    この Kubernetes 分析を定期スケジュールで実行する
+  <Card title="Approvals" icon="circle-check" href="/guide/approvals/overview">
+    スケールや再起動などの変更を Approval mode がどう判断するか
   </Card>
 </CardGroup>

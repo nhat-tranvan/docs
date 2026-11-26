@@ -1,0 +1,140 @@
+---
+title: Checkmk
+description: "Connect a Checkmk site with an automation user so agents check hosts and services, then acknowledge problems or set downtime."
+icon: "/images/icons/checkmk.svg"
+---
+
+import ConnectionSecurity from '/snippets/connection-security.mdx';
+import ApprovalDefault from '/snippets/approval-default.mdx';
+
+Connect a Checkmk site so [CloudThinker](/guide/agents/overview) can check hosts, services, problems, and downtimes, and, if you allow it, acknowledge a problem or set downtime. The connection signs in to the Checkmk REST API with an automation user and its secret, and can do only what that user's role allows.
+
+## Prerequisites
+
+- A Checkmk site that CloudThinker can reach over HTTPS. For a private address, follow [Reaching private services](/guide/connections/overview#reaching-private-services).
+- A Checkmk administrator who can create users and assign roles.
+- The **Admin** role in your CloudThinker workspace. See [Roles](/guide/security/roles).
+
+## Setup
+
+<Steps>
+  <Step title="Create an automation user">
+    In Checkmk, go to **Setup → Users → Users** and add a user with a clear name, such as `cloudthinker`. In the **Security** section, choose **Automation secret for machine accounts** and generate a secret. Copy the secret. See [Checkmk's user guide](https://docs.checkmk.com/latest/en/wato_user.html).
+  </Step>
+  <Step title="Choose its role">
+    Give the user a role that can see the hosts and services agents should check. See [Required permissions](#required-permissions) to pick one.
+  </Step>
+  <Step title="Connect in CloudThinker">
+    Open **Settings → Workspace → Connections**, open the **Discover** tab, and select **Checkmk**. Click **Connect**, fill in the fields below, then click **Connect** in the dialog.
+
+    **Success state:** the connection shows a **Connected** status with your Checkmk version. CloudThinker then opens a chat that takes a read-only deep look at the connection ("Often takes about 15 min. You can leave the chat."). To run it again later, open the card's **More** menu and choose **Try in chat**.
+  </Step>
+</Steps>
+
+## Connection details
+
+| Field | Required | Description |
+|---|---|---|
+| **Site URL** | Yes | The HTTPS address of your Checkmk site, including the site name, such as `https://monitor.example.com/mysite`. Leave off `/check_mk`, credentials, query strings, and fragments |
+| **Automation user** | Yes | The user name of the automation user |
+| **Automation secret** | Yes | The automation secret of that user |
+| **CA certificate (optional)** | No | The PEM of the private certificate authority that issued the Checkmk certificate. Leave it empty to use public trust. CloudThinker always checks the certificate and hostname |
+
+CloudThinker refuses redirects, so enter the exact site address Checkmk answers at.
+
+## Required permissions
+
+The user's role decides which hosts and services agents see and whether they can acknowledge problems and set downtimes. Checkmk ships three roles:
+
+| Checkmk role | What agents get |
+|---|---|
+| **Guest user** | Sees everything, changes nothing. Agents can investigate but every change fails |
+| **Normal monitoring user** | Sees only the hosts and services the user is a contact for |
+| **Administrator** | Sees everything and can acknowledge problems and set downtimes, but also holds every other Checkmk permission |
+
+For changes without full admin rights, clone a role under **Setup → Users → Roles & permissions** and keep only the permissions agents need. See [Checkmk's REST API guide](https://docs.checkmk.com/latest/en/rest_api.html).
+
+<Tip>
+Start with **Guest user**. Agents can still investigate every host, and no approval, mistaken or automatic, can change anything in Checkmk.
+</Tip>
+
+## Agent capabilities
+
+| Capability | What agents can do |
+|---|---|
+| **Overview** | Report the site version, host totals and hosts not up, service problems by state, unhandled problems, and downtimes |
+| **Problems** | List hosts not up and services in a problem state, worst first, with how long and the check output. Acknowledged problems and problems in downtime are left out unless you ask |
+| **One host** | Read a host's state, address, and output, its services worst first, and its downtimes |
+| **Changes** | Acknowledge one host or service problem or remove its acknowledgement, set downtime on one host or service, or end one downtime |
+
+Reads run without asking. Each change targets one host or service, and the agent reads it again afterwards to confirm the change. A downtime starts at once and lasts from 1 minute to 7 days. Before it asks, the agent says that a downtime on a host covers every service on that host.
+
+Agents cannot change hosts, rules, or folders, or activate changes. Make those changes in Checkmk.
+
+Writes also need **Allow writes** on, which starts on. To lock writes in CloudThinker, open **Checkmk** in **Settings → Workspace → Connections** and turn off the **Allow writes** switch on its detail panel.
+
+<ApprovalDefault />
+
+### Verify the connection
+
+```text
+Give me a Checkmk overview: site version, hosts not up, service problems by state, and current downtimes
+```
+
+Expect your site version with real host and service names. A failed section is unavailable data, not zero problems.
+
+### Example prompts
+
+```text
+Which Checkmk hosts are down and which services are CRIT right now?
+How is app-prod-02 doing in Checkmk? Show its services worst first
+Acknowledge the filesystem problem on db-prod-01 with the comment "disk cleanup in progress"
+```
+
+## Troubleshooting
+
+<Accordion title="Checkmk rejected the automation user or its secret.">
+Check the user name and secret. If needed, generate a new automation secret for the user in Checkmk, then edit the connection and paste it.
+</Accordion>
+
+<Accordion title="The automation user signed in, but its role cannot use the REST API.">
+Give the user a role that allows REST API access, then connect again. If hosts are missing later, the role sees only hosts the user is a contact for.
+</Accordion>
+
+<Accordion title="That address has no Checkmk REST API. Check the site name in the URL, such as https://monitor.example.com/mysite.">
+The site name in the address is wrong or missing. Enter the address up to and including the site name, and leave off `/check_mk`.
+</Accordion>
+
+<Accordion title="Checkmk answered with a redirect. Use the exact https site address, such as https://monitor.example.com/mysite.">
+Enter the final HTTPS site address Checkmk serves directly, not an address that forwards to it.
+</Accordion>
+
+<Accordion title="The Checkmk certificate is not trusted.">
+Install a certificate from a trusted authority, or paste the issuing CA certificate into **CA certificate (optional)**. If CloudThinker says the CA certificate is not valid PEM, paste the full certificate, including its `BEGIN` and `END` lines.
+</Accordion>
+
+<Accordion title="Could not reach Checkmk over HTTPS. Check the URL and that the sandbox can reach it.">
+CloudThinker could not open a connection to that address. Confirm the URL starts with `https://` and that your firewall lets CloudThinker reach the site. Browser access from your laptop alone is not enough.
+</Accordion>
+
+<Accordion title="An agent says the Checkmk write tool is off">
+**Allow writes** is off on this connection, so the change was refused and nothing changed. Turn it on in the connection's detail panel, or make the change in Checkmk.
+</Accordion>
+
+## Security
+
+<ConnectionSecurity />
+
+- Use a dedicated automation user for CloudThinker, so you can change its secret or remove it without touching other integrations.
+- Avoid the **Administrator** role. A custom role with only the permissions agents need limits what a leaked secret can do.
+
+## Related
+
+<CardGroup cols={2}>
+  <Card title="Approval rules" icon="shield-check" href="/guide/approvals/rules">
+    Decide which Checkmk changes run, wait for a person, or are refused.
+  </Card>
+  <Card title="Icinga" icon="/images/icons/icinga.svg" href="/guide/connections/icinga">
+    Check hosts and services in Icinga 2, then acknowledge or recheck one.
+  </Card>
+</CardGroup>
